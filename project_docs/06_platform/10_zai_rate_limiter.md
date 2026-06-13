@@ -11,6 +11,7 @@ code_paths:
   - src/universal_agent/services/zai_observability.py
   - src/universal_agent/services/zai_control.py
   - src/universal_agent/services/zai_status.py
+  - src/universal_agent/services/zai_function_catalog.py
   - src/universal_agent/scripts/zai_token_report.py
   - src/universal_agent/services/zai_activity_control.py
   - src/universal_agent/services/zai_activity_health.py
@@ -413,6 +414,37 @@ gracefully to a request-count proxy (`token_events_seen` distinguishes "no data 
 from "genuinely 0"). The CLI `scripts/zai_token_report.py` (`python -m
 universal_agent.scripts.zai_token_report --hours 24`) renders the same aggregation as a
 terminal table — the operator's on-demand "where did our tokens go" snapshot.
+
+### 5.4 Stage catalog + the token panel (zero-runtime-LLM explanations)
+
+The token panel attributes spend to a `caller_fn` stage, but a name like
+`_detect_clusters_llm_async` doesn't tell the operator *what the stage does* or
+*whether its model tier is justified*. Rather than have the running product call an LLM
+to explain each stage (a recurring inference tax we explicitly avoid), the explanations
+are **pre-built once** (in an interactive Claude session that reads the code) and stored
+as a committed JSON lookup — `services/zai_function_catalog.json` — that the product
+reads with a pure-Python dict lookup. `services/zai_function_catalog.py` provides
+`load_catalog` / `lookup` (exact `file::function` then file-level fallback) /
+`function_source_hash` (AST-extracts a described function's source and hashes it) /
+`annotate_stale` (flags entries whose stored `source_sha` no longer matches the current
+source — i.e. the function was refactored and its description may have rotted) /
+`coverage` (observed stages with no entry — the "N stages undescribed" signal driving an
+occasional re-population pass). Each entry carries a `role`, the `tier_current`, and a
+`tier_verdict` (`appropriate` | `review`) — the trade-off assessment baked into the
+reference, so the panel can flag tier-misallocation candidates (e.g. an `opus`
+extraction/evaluation stage that a cheaper tier would serve). Regenerate the JSON after
+editing descriptions so `source_sha` stays current (guarded by
+`test_zai_function_catalog.py::test_committed_catalog_not_stale`).
+
+`zai_status.py::build_token_usage` joins the catalog onto the aggregation, and the
+gateway serves it at **`GET /api/v1/ops/zai/token-usage?hours=N`** (`gateway_server.py::
+ops_zai_token_usage`, `asyncio.to_thread`-offloaded, on-demand — NOT the 5s status
+poll). The dashboard renders a sixth section on the ZAI-Control tab
+(`web-ui/app/dashboard/zai-control/page.tsx::TokenPanel`): a window selector
+(1h/6h/24h/3d/6d), a **Refresh** button (no live polling — operator-driven), and a
+per-process table (calls, reject %, in/out/total tokens, retry-multiplier, dormancy
+spend) whose rows expand to the per-stage breakdown with each stage's catalog
+description, role, tier, and `review`/`stale`/`undescribed` badges.
 
 ### 5.2 The watchdog (`zai_inference_health.py`)
 

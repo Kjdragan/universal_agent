@@ -1,0 +1,186 @@
+{
+  "version": 1,
+  "generated_at": "2026-06-13",
+  "entries": {
+    "universal_agent/api/routers/csi_watchlist.py::_classify_channel_llm": {
+      "label": "YouTube channel classifier",
+      "description": "Classifies a watchlist YouTube channel into one of ~10 taxonomy categories (one bounded label, max_tokens=100). Runs on add_channel + /reclassify; serialized to concurrency-1.",
+      "role": "classifier",
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "opus->sonnet 2026-06-13 (#982) — was the single largest 429 source (100% opus, ~67% reject).",
+      "source_sha": "c3c7699b5ddd632a"
+    },
+    "universal_agent/services/proactive_convergence.py::_refine_cluster_with_llm": {
+      "label": "Convergence — cluster judge",
+      "description": "Judges whether a SQL-recalled bucket of recent videos from different channels is a genuine converging theme. One bounded LLM call per candidate bucket.",
+      "role": "judge",
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "opus->sonnet 2026-06-10 after a 30-bucket A/B: equal precision, ~35% faster, less FUP pressure. Validate tier changes with scripts/convergence_model_ab.py.",
+      "source_sha": "a37d172f6fe5622c"
+    },
+    "universal_agent/services/proactive_convergence.py::track_b_ideation_synthesis": {
+      "label": "Convergence — ideation/brief synthesis",
+      "description": "Generative synthesis of an idea brief from a batch of CSI candidate signals (max_tokens=1500). The 'Track B' ideation sweep that feeds Atlas's evaluate-and-author-intel-brief.",
+      "role": "writer",
+      "tier_current": "opus",
+      "tier_verdict": "review",
+      "notes": "Falls through to _call_llm's opus default (no model override). Generative synthesis makes opus defensible, BUT this is a 429 hotspot (~44% reject in 24h). Consider a sonnet A/B or pacing.",
+      "source_sha": "113fde4571aaeb65"
+    },
+    "universal_agent/services/proactive_convergence.py::_run_triage_llm": {
+      "label": "Convergence — candidate triage",
+      "description": "Triages CSI candidates for convergence/ideation eligibility (max_tokens=400). Cheap recall filter ahead of the judge.",
+      "role": "triage",
+      "tier_current": "haiku",
+      "tier_verdict": "appropriate",
+      "notes": "Driven by triage_candidate (resolve_haiku). Index bounded to UA_INTEL_TRIAGE_INDEX_MAX_CHARS (default 12000) after a 100K-token bloat incident.",
+      "source_sha": "0217d2d58db4cfb3"
+    },
+    "universal_agent/services/proactive_convergence.py::extract_topic_signature_from_text": {
+      "label": "Convergence — topic signature extraction",
+      "description": "Extracts a compact topic signature from candidate text (max_tokens=900) used for clustering/dedup.",
+      "role": "extractor",
+      "tier_current": "haiku",
+      "tier_verdict": "appropriate",
+      "notes": "",
+      "source_sha": "f59e2c6b62dbbaa0"
+    },
+    "universal_agent/services/mission_control_chief_of_staff.py::synthesize_readout": {
+      "label": "Mission Control — Chief of Staff readout",
+      "description": "Synthesizes the operator-facing Mission Control readout from system state. Direct messages.create (not the classifier seam).",
+      "role": "writer",
+      "tier_current": "mid",
+      "tier_verdict": "appropriate",
+      "notes": "Dedicated glm-4.7 lane (2026-06-12 consolidation). Up-to-3x retry on an ~18k-token prompt — a retry-multiplier watch target.",
+      "source_sha": "a59de1a681ffe7ce"
+    },
+    "universal_agent/services/mission_control_tier1.py::discover_tier1_cards": {
+      "label": "Mission Control — Tier-1 card discovery",
+      "description": "Discovers Tier-1 priority cards from recent system signals. Direct messages.create.",
+      "role": "synthesis",
+      "tier_current": "mid",
+      "tier_verdict": "appropriate",
+      "notes": "",
+      "source_sha": "a819bf211aa06d7d"
+    },
+    "universal_agent/services/llm_classifier.py::classify_priority": {
+      "label": "Task priority classifier",
+      "description": "Classifies a task/communication into a priority tier. Bounded label.",
+      "role": "classifier",
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "Uses _classifier_default_model (sonnet, env UA_LLM_CLASSIFIER_DEFAULT_MODEL).",
+      "source_sha": "5974ba7dfffa62b6"
+    },
+    "universal_agent/services/llm_classifier.py::classify_agent_route": {
+      "label": "Agent routing classifier",
+      "description": "Routes a task to the appropriate VP/agent rather than defaulting to Simone. Bounded label.",
+      "role": "classifier",
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "Uses _classifier_default_model (sonnet).",
+      "source_sha": "393697329df7dbb8"
+    },
+    "universal_agent/services/llm_classifier.py::generate_calendar_task_description": {
+      "label": "Calendar task description generator",
+      "description": "Generates a short human description for a calendar-derived task.",
+      "role": "writer",
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "",
+      "source_sha": "ffaf995a7470427c"
+    },
+    "universal_agent/services/llm_classifier.py::extract_due_at": {
+      "label": "Due-date extractor",
+      "description": "Extracts a structured due-at timestamp from free text.",
+      "role": "extractor",
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "",
+      "source_sha": "59a73a7eb10e74bd"
+    },
+    "universal_agent/services/llm_classifier.py::extract_disjointed_tasks": {
+      "label": "Disjointed-task extractor",
+      "description": "Extracts multiple discrete tasks from a single unstructured message.",
+      "role": "extractor",
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "",
+      "source_sha": "d40bf08b2083fdc6"
+    },
+    "universal_agent/services/llm_classifier.py::classify_tutorial_buildability": {
+      "label": "Tutorial buildability judge",
+      "description": "Binary buildable/not judgment for a tutorial candidate.",
+      "role": "judge",
+      "tier_current": "haiku",
+      "tier_verdict": "appropriate",
+      "notes": "Binary judgment — haiku tier intentional (UA_TUTORIAL_BUILDABILITY_MODEL).",
+      "source_sha": "f076854af294caf0"
+    },
+    "universal_agent/services/proactive_work_recap.py::_call_llm_recap_evaluator": {
+      "label": "Proactive work-recap evaluator",
+      "description": "Evaluates proactive work recaps for quality/usefulness (max_tokens=900).",
+      "role": "evaluator",
+      "tier_current": "opus",
+      "tier_verdict": "review",
+      "notes": "Defaults to opus (UA_PROACTIVE_RECAP_LLM_MODEL or resolve_opus). Evaluation/judgment task — likely sonnet-able like the convergence judge; candidate for an opus->sonnet A/B.",
+      "source_sha": "ade7797c354c9657"
+    },
+    "universal_agent/services/session_dossier.py::_async_call_llm": {
+      "label": "Session dossier generator",
+      "description": "Generates a session dossier summary. Direct messages.create, haiku tier.",
+      "role": "writer",
+      "tier_current": "haiku",
+      "tier_verdict": "appropriate",
+      "notes": "",
+      "source_sha": "c5e7422f2042649d"
+    },
+    "universal_agent/wiki/llm.py::extract_entities": {
+      "label": "Wiki — entity extraction",
+      "description": "Extracts named entities from wiki source material.",
+      "role": "extractor",
+      "tier_current": "opus",
+      "tier_verdict": "review",
+      "notes": "wiki/llm._call_llm defaults to opus. Bounded extraction — sonnet/haiku likely sufficient; opus->sonnet A/B candidate.",
+      "source_sha": "2265d0f4f6007010"
+    },
+    "universal_agent/wiki/llm.py::extract_concepts": {
+      "label": "Wiki — concept extraction",
+      "description": "Extracts key concepts/topics from wiki source material.",
+      "role": "extractor",
+      "tier_current": "opus",
+      "tier_verdict": "review",
+      "notes": "wiki/llm._call_llm defaults to opus. Bounded extraction — cheaper-tier candidate.",
+      "source_sha": "20c55c284099350b"
+    },
+    "universal_agent/wiki/llm.py::generate_summary": {
+      "label": "Wiki — summary generation",
+      "description": "Generates a prose summary for a wiki entity/topic.",
+      "role": "writer",
+      "tier_current": "opus",
+      "tier_verdict": "review",
+      "notes": "wiki/llm._call_llm defaults to opus. Generative — opus more defensible than the extraction stages, but verify it needs flagship quality.",
+      "source_sha": "9bcc1490f4b40e4c"
+    },
+    "universal_agent/discord_intelligence/relevance_filter.py::classify_batch": {
+      "label": "Discord intel — relevance filter (batch)",
+      "description": "Batch-classifies discord intelligence items for relevance. Small prompts (~26 in / 32 out observed), haiku tier.",
+      "role": "classifier",
+      "tier_current": "haiku",
+      "tier_verdict": "appropriate",
+      "notes": "",
+      "source_sha": "dba5f44e998451b3"
+    },
+    "universal_agent/discord_intelligence/triage.py::run_triage_batch": {
+      "label": "Discord intel — triage (batch)",
+      "description": "Batch-triages discord intelligence items into action lanes. Direct messages.create.",
+      "role": "triage",
+      "tier_current": "haiku",
+      "tier_verdict": "appropriate",
+      "notes": "",
+      "source_sha": "c6652f0171586929"
+    }
+  }
+}

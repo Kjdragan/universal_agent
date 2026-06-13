@@ -16946,6 +16946,37 @@ async def ops_zai_status(request: Request):
         return {"error": f"status_unavailable: {type(exc).__name__}", "events": {}, "control": {}}
 
 
+@app.get("/api/v1/ops/zai/token-usage")
+async def ops_zai_token_usage(request: Request):
+    """Per-process ZAI token-use + churn over a window, for the ZAI-Control token
+    panel. On-demand (the panel fetches on load / Refresh — NOT the 5s status
+    poll), read-only, PURE PYTHON (no LLM): aggregates the observability JSONL by
+    process/stage/tier and joins the pre-built function catalog. Query param
+    ``hours`` (default 24, clamped to [0.05, 168] — the JSONL retains ~6 days)."""
+    _require_ops_auth(request)
+    try:
+        hours = float(request.query_params.get("hours", "24") or "24")
+    except (TypeError, ValueError):
+        hours = 24.0
+    hours = max(0.05, min(168.0, hours))
+    try:
+        top = int(request.query_params.get("top", "25") or "25")
+    except (TypeError, ValueError):
+        top = 25
+    top = max(1, min(100, top))
+    try:
+        from universal_agent.services.zai_status import build_token_usage
+
+        # Reads + JSON-parses the events file (~6 days, larger than the status
+        # window) — offload off the event loop so an on-demand panel fetch can't
+        # starve the gateway (the 2026-05-26 event-loop-starvation class).
+        return await asyncio.to_thread(build_token_usage, int(hours * 3600), top)
+    except Exception as exc:  # noqa: BLE001 — must degrade, not crash
+        logger.warning("ops_zai_token_usage: aggregator raised", exc_info=True)
+        return {"error": f"token_usage_unavailable: {type(exc).__name__}",
+                "processes": [], "totals": {}, "catalog": {}}
+
+
 class ZaiControlRequest(BaseModel):
     """A single emergency-lever action against the ZAI control plane."""
     action: str  # set_level | set_global_pause | set_tier_caps | set_tier_pause | clear
