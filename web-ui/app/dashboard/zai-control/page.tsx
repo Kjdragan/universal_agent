@@ -44,6 +44,14 @@ type StatusPayload = {
   error?: string;
 };
 
+type ActivityHealth = {
+  status: "healthy" | "degraded" | "critical" | "no_probe" | "unknown";
+  source: "invariant" | "systemd" | "none";
+  detail: string;
+  deep_probe: boolean;
+  finding_id?: string | null;
+};
+
 type ActivityItem = {
   unit: string;
   label: string;
@@ -60,6 +68,7 @@ type ActivityItem = {
   is_masked: boolean;
   last_run: string;
   next_run: string;
+  health?: ActivityHealth; // per-process health verdict (optional — degrades if backend is older)
 };
 
 type InprocLoop = {
@@ -68,6 +77,7 @@ type InprocLoop = {
   env_var: string;
   enabled: boolean;
   note: string;
+  health?: ActivityHealth;
 };
 
 type ActivitiesPayload = {
@@ -114,6 +124,39 @@ function pctColor(pct: number): string {
   if (pct >= 20) return "text-amber-500";
   if (pct > 0) return "text-yellow-400";
   return "text-emerald-500";
+}
+
+// Per-process HEALTH badge. GREEN ("ok") means a real last-run success AND a deep
+// invariant covers the job. "ok?" (zinc) = running but output not deeply verified
+// (the blind-spot class — green systemd, no deep probe). "no probe" = no signal at
+// all. Returns null when health is absent (older backend) so nothing renders.
+function healthBadge(h?: ActivityHealth): { text: string; cls: string } | null {
+  if (!h) return null;
+  switch (h.status) {
+    case "critical":
+      return { text: "critical", cls: "bg-red-500/15 text-red-400" };
+    case "degraded":
+      return { text: "degraded", cls: "bg-amber-500/15 text-amber-500" };
+    case "healthy":
+      return h.deep_probe
+        ? { text: "ok", cls: "bg-emerald-500/15 text-emerald-500" }
+        : { text: "ok?", cls: "bg-zinc-500/15 text-zinc-400" };
+    case "no_probe":
+      return { text: "no probe", cls: "bg-zinc-500/15 text-zinc-400" };
+    default:
+      return { text: "—", cls: "bg-zinc-500/10 text-zinc-500" };
+  }
+}
+
+function HealthBadge({ health }: { health?: ActivityHealth }) {
+  const hb = healthBadge(health);
+  if (!hb) return null;
+  const tip = health?.detail ? `${health.status}: ${health.detail}` : health?.status;
+  return (
+    <span className={`shrink-0 rounded px-1 text-[10px] font-medium ${hb.cls}`} title={tip}>
+      {hb.text}
+    </span>
+  );
 }
 
 export default function ZaiControlPage() {
@@ -497,6 +540,7 @@ export default function ZaiControlPage() {
                     <span className={`inline-block h-2 w-2 rounded-full ${l.enabled ? "bg-emerald-500" : "bg-zinc-500"}`} />
                     <span>{l.label}</span>
                     <code className="rounded bg-muted px-1 text-xs">{l.env_var}</code>
+                    <HealthBadge health={l.health} />
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {l.enabled ? "enabled" : "disabled"} · {l.note}
@@ -562,6 +606,7 @@ function ActivityRow({
         {a.is_masked ? (
           <span className="shrink-0 rounded bg-purple-500/15 px-1 text-[10px] text-purple-400">masked</span>
         ) : null}
+        <HealthBadge health={a.health} />
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <span className="hidden text-xs text-muted-foreground sm:inline">

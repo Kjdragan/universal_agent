@@ -12,10 +12,12 @@ code_paths:
   - src/universal_agent/services/zai_control.py
   - src/universal_agent/services/zai_status.py
   - src/universal_agent/services/zai_activity_control.py
+  - src/universal_agent/services/zai_activity_health.py
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/utils/model_resolution.py
   - src/universal_agent/infisical_loader.py
-last_verified: 2026-06-11
+  - web-ui/app/dashboard/zai-control/page.tsx
+last_verified: 2026-06-13
 ---
 
 # ZAI Rate Limiter & Inference Governance
@@ -661,6 +663,43 @@ in-process loops (heartbeat/cron) **read-only** with their Infisical-flag state.
 > Toggling is **live but not deploy-durable**: a deploy re-arms the timers (`systemctl enable
 > --now`), so for durable suppression across a deploy use the L4 pause (control file survives
 > deploys) or the `UA_DISABLE_HEARTBEAT`/`UA_DISABLE_CRON` Infisical flags, not a panel `stop`.
+
+### 9.5 Per-process HEALTH column
+
+Each activity row also carries a **`health`** verdict, folded onto the `/api/v1/ops/zai/activities`
+response by `gateway_server.py::_list_activities_with_health` and computed by the pure resolver
+`services/zai_activity_health.py::resolve_activity_health`. It exists because the operational state
+(`active_state`/`running`) only answers *"did the process run and exit 0?"* — never *"did the job
+produce its expected output?"*. The motivating bug: `csi-quality-assessment` ran green/exit-0 nightly
+while grading an empty DB.
+
+The verdict is the **worst of two independent signals, never an inference**:
+
+- **systemd baseline — the ONLY source of `healthy` (green).** For a long-running *service* row:
+  `ActiveState`/`NRestarts` (active→`healthy`, failed→`critical`, ≥3 restarts→`degraded`). For a
+  oneshot *timer* row: the **sibling `.service`**'s last-run `Result`/`ExecMainStatus`
+  (`zai_activity_control.py::sibling_service_unit` + `get_last_run_results`; the `.timer` itself only
+  reports `waiting`). Green is produced **only** by a real last-run success — never by the absence of
+  an invariant finding (pipeline invariants `return None` both when healthy *and* when outside their
+  active window, e.g. `proactive_reports_daily_trio` is silent before 5 PM, so "no finding = healthy"
+  would false-green at 3 AM).
+- **invariant overlay — escalation only.** A mapped deep invariant from
+  `proactive_health.py::build_proactive_health_payload` (its `"invariants"` list) escalates the row
+  to `degraded`/`critical` when a finding fires; it never produces green. Shared invariants drill into
+  their `observed_value` so they escalate only the relevant row (`proactive_reports_daily_trio` →
+  `periods_missing`; `csi_source_liveness` → `stale_sources[].source`). The `cron_staleness` /
+  `cron_consecutive_failures` aggregates overlay any unit whose pipeline appears in their failing-job
+  list. The unit→invariant map is `zai_activity_health.py::_UNIT_INVARIANT`.
+
+The `health.deep_probe` flag records whether a deep invariant covers the unit; a systemd-green row with
+`deep_probe=False` renders **`ok?`** (zinc) rather than `ok` (emerald) — the *running-but-unverified*
+blind spot (13 of the 28 units today have no deep probe). `health.status` ∈ `{healthy, degraded,
+critical, no_probe, unknown}`; `no_probe` (a timer that never ran this boot / an in-process loop) is a
+first-class, deliberately-surfaced state. The whole enrichment is **additive and fail-soft** — any
+exception leaves `health.status="unknown"` and never breaks the panel — and the expensive
+`build_proactive_health_payload` call is **TTL-cached** (`_ACTIVITY_HEALTH_TTL_SECONDS`) so the
+dashboard's 10s poll doesn't re-run the full invariant suite (DB + filesystem) each tick. The frontend
+badge is `web-ui/app/dashboard/zai-control/page.tsx::HealthBadge`.
 
 ## 10. Related docs
 

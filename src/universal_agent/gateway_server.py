@@ -17032,17 +17032,118 @@ def _require_ops_auth_for_sudo_surface(request: Request) -> None:
     _require_ops_auth(request)
 
 
+# Per-process health (the deep proactive_health invariant signal) is folded onto
+# each activity row. build_proactive_health_payload opens the activity + CSI DBs
+# and scans the filesystem, so it must NOT run on every 10s panel poll — cache it.
+_ACTIVITY_HEALTH_TTL_SECONDS = 45.0
+_activity_health_cache: dict[str, Any] = {"ts": 0.0, "payload": None, "sibling": None}
+_ACTIVITY_HEALTH_UNKNOWN = {
+    "status": "unknown", "source": "none", "detail": "health unavailable",
+    "deep_probe": False, "finding_id": None,
+}
+
+
+def _gather_activity_health_inputs(activities: list[dict[str, Any]]):
+    """Build (proactive_health payload, sibling-service systemd props) for the
+    health resolver. Mirrors ops_proactive_health's gather block (same handles +
+    _cron_service None-guards) and TTL-caches the expensive payload across the
+    dashboard's 10s polls. Runs in a worker thread."""
+    nowm = time.monotonic()
+    cache = _activity_health_cache
+    if cache["payload"] is not None and (nowm - cache["ts"]) < _ACTIVITY_HEALTH_TTL_SECONDS:
+        return cache["payload"], cache["sibling"]
+
+    from universal_agent.services.proactive_health import build_proactive_health_payload
+    from universal_agent.services.zai_activity_control import (
+        get_last_run_results,
+        sibling_service_unit,
+    )
+
+    activity_conn: Optional[sqlite3.Connection] = None
+    try:
+        activity_conn = _task_hub_open_conn()
+    except Exception:  # noqa: BLE001
+        logger.warning("activity_health: failed to open activity store", exc_info=True)
+    cron_jobs: list[Any] = []
+    try:
+        cron_jobs = list(_cron_service.list_jobs()) if _cron_service else []
+    except Exception:  # noqa: BLE001
+        logger.warning("activity_health: failed to list cron jobs", exc_info=True)
+    csi_db_path: Optional[Path] = None
+    try:
+        csi_db_path = _csi_default_db_path()
+    except Exception:  # noqa: BLE001
+        logger.warning("activity_health: failed to resolve CSI DB path", exc_info=True)
+    cron_persistence_path: Optional[Path] = None
+    try:
+        if _cron_service is not None:
+            cron_persistence_path = _cron_service.store.jobs_path
+    except Exception:  # noqa: BLE001
+        cron_persistence_path = None
+
+    try:
+        payload = build_proactive_health_payload(
+            activity_conn=activity_conn,
+            cron_jobs=cron_jobs,
+            csi_db_path=csi_db_path,
+            cron_persistence_path=cron_persistence_path,
+        )
+    finally:
+        if activity_conn is not None:
+            try:
+                activity_conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    # The service each timer ACTUALLY triggers (its ``triggers``/Unit — a shared
+    # service for the report timers), falling back to the by-name sibling.
+    sibling_units = sorted({
+        (a.get("triggers") or sibling_service_unit(a["unit"]))
+        for a in activities
+        if str(a.get("unit", "")).endswith(".timer")
+    })
+    sibling_props = get_last_run_results(sibling_units) if sibling_units else {}
+
+    cache.update(ts=nowm, payload=payload, sibling=sibling_props)
+    return payload, sibling_props
+
+
+def _list_activities_with_health() -> dict[str, Any]:
+    """list_activities() + a per-row health verdict folded onto each activity and
+    in-process loop. Health is ADDITIVE — any failure leaves an 'unknown' health
+    and never breaks the panel. Runs in a worker thread."""
+    from universal_agent.services.zai_activity_control import list_activities
+    from universal_agent.services.zai_activity_health import (
+        inprocess_health,
+        resolve_activity_health,
+    )
+
+    result = list_activities()
+    activities = result.get("activities", []) or []
+    try:
+        payload, sibling_props = _gather_activity_health_inputs(activities)
+        verdicts = resolve_activity_health(activities, payload, sibling_props)
+        for row in activities:
+            row["health"] = verdicts.get(row.get("unit")) or dict(_ACTIVITY_HEALTH_UNKNOWN)
+        for loop in result.get("inprocess", []) or []:
+            loop["health"] = inprocess_health(loop)
+    except Exception:  # noqa: BLE001 — health is additive; never break the panel
+        logger.warning("activity_health: enrichment failed", exc_info=True)
+        for row in activities:
+            row.setdefault("health", dict(_ACTIVITY_HEALTH_UNKNOWN))
+    return result
+
+
 @app.get("/api/v1/ops/zai/activities")
 async def ops_zai_activities(request: Request):
     """Live state of the controllable proactive activities (the allowlisted
     ZAI-consuming systemd timers + continuous services) plus the read-only
-    in-process loop states. Read-only; shells ``systemctl show`` N times so it
-    is offloaded off the event loop and fails soft per unit."""
+    in-process loop states, each annotated with a per-process HEALTH verdict
+    (deep proactive_health invariant signal + systemd last-run). Read-only;
+    offloaded off the event loop and fails soft per unit + on health enrichment."""
     _require_ops_auth_for_sudo_surface(request)
     try:
-        from universal_agent.services.zai_activity_control import list_activities
-
-        return await asyncio.to_thread(list_activities)
+        return await asyncio.to_thread(_list_activities_with_health)
     except Exception as exc:  # noqa: BLE001 — must degrade, not crash the dashboard
         logger.warning("ops_zai_activities: aggregator raised", exc_info=True)
         return {"error": f"activities_unavailable: {type(exc).__name__}", "activities": []}
