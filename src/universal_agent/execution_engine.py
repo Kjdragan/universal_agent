@@ -397,6 +397,7 @@ def _format_system_events_for_prompt(events: list[dict[str, Any]]) -> str:
             try:
                 text = json.dumps(evt, ensure_ascii=True, sort_keys=True)
             except Exception:
+                logger.debug("Failed to serialize event to JSON, falling back to str()", exc_info=True)
                 text = str(evt).strip()
         if not text:
             continue
@@ -650,7 +651,7 @@ class ProcessTurnAdapter:
                 _gateway_trace_id_hex = format(raw_tid, "032x")
                 self._trace["trace_id"] = _gateway_trace_id_hex
             except Exception:
-                pass
+                logger.debug("Failed to extract Logfire trace_id for gateway span", exc_info=True)
         
         # Create event callback for real-time streaming
         event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
@@ -664,7 +665,7 @@ class ProcessTurnAdapter:
                     event.data.setdefault("source", run_source)
                 event_queue.put_nowait(event)
             except Exception:
-                pass
+                logger.debug("event_callback: failed to enqueue %s event", getattr(event, "type", "?"), exc_info=True)
         
         # Setup input proxy
         async def remote_input_proxy(question: str, category: str, options: Optional[List[str]]) -> str:
@@ -706,6 +707,7 @@ class ProcessTurnAdapter:
                     try:
                         runtime_db_conn.execute("SELECT 1")
                     except Exception:
+                        logger.warning("Runtime DB health check failed, will reconnect", exc_info=True)
                         needs_runtime_db_reset = True
 
                 if needs_runtime_db_reset:
@@ -805,7 +807,7 @@ class ProcessTurnAdapter:
                                 log_handle.write(f"\n[{ts}] 👤 USER: {user_input}\n")
                                 log_handle.flush()
                             except Exception:
-                                pass
+                                logger.debug("Failed to write user input to run.log", exc_info=True)
 
                             # Wrap callback to log events
                             def logging_callback(event: AgentEvent) -> None:
@@ -834,7 +836,7 @@ class ProcessTurnAdapter:
                                     
                                     log_handle.flush()
                                 except Exception:
-                                    pass
+                                    logger.debug("Failed to write event to run.log", exc_info=True)
 
                             result = await process_turn(
                                 client=client,
@@ -874,7 +876,7 @@ class ProcessTurnAdapter:
                         logger.warning("Resetting SDK client after guardrail: %s", type(e).__name__)
                         await self.reset()
                 except Exception:
-                    pass
+                    logger.debug("SDK client reset after guardrail failed", exc_info=True)
                 # Dead SDK subprocesses (common during service restarts) should
                 # be torn down so the next turn can recreate a clean client.
                 if _is_terminated_process_error(e):
@@ -882,7 +884,7 @@ class ProcessTurnAdapter:
                         logger.warning("Resetting SDK client after terminated process error")
                         await self.reset()
                     except Exception:
-                        pass
+                        logger.debug("SDK client reset after terminated-process error failed", exc_info=True)
             finally:
                 # Signal completion
                 await event_queue.put(AgentEvent(
@@ -969,7 +971,7 @@ class ProcessTurnAdapter:
                     try:
                         await engine_task
                     except Exception:
-                        pass
+                        logger.debug("Exception during engine_task cancel after timeout", exc_info=True)
                     yield AgentEvent(
                         type=EventType.ERROR,
                         data={
@@ -1003,7 +1005,7 @@ class ProcessTurnAdapter:
             try:
                 _gateway_span.__exit__(None, None, None)
             except Exception:
-                pass
+                logger.debug("Failed to close gateway Logfire span", exc_info=True)
         
         # Clear handler
         set_input_handler(None)
@@ -1063,6 +1065,7 @@ class ProcessTurnAdapter:
                         if isinstance(tail, dict):
                             latest_stop_reason = tail.get("stop_reason")
                 except Exception:
+                    logger.debug("Failed to extract stop_reason from sdk_result_messages", exc_info=True)
                     latest_stop_reason = None
                 yield AgentEvent(
                     type=EventType.ITERATION_END,
@@ -1140,7 +1143,7 @@ class ProcessTurnAdapter:
             try:
                 await self._client.__aexit__(None, None, None)
             except Exception:
-                pass
+                logger.debug("SDK client __aexit__ failed during reset", exc_info=True)
             self._client = None
         logger.info("Session reset: client history cleared")
 
@@ -1153,6 +1156,7 @@ class ProcessTurnAdapter:
         try:
             return json.loads(json.dumps(status, default=str))
         except Exception:
+            logger.debug("Failed to serialize MCP status, returning empty", exc_info=True)
             return {"mcpServers": []}
 
     async def add_mcp_server(self, server_name: str, server_config: dict[str, Any]) -> dict[str, Any]:
