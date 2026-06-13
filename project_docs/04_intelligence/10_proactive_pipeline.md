@@ -12,9 +12,10 @@ code_paths:
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - src/universal_agent/services/hourly_intel_digest.py
   - src/universal_agent/scripts/hourly_intel_digest_cron.py
+  - src/universal_agent/scripts/proactive_signal_card_sync.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-10
+last_verified: 2026-06-11
 ---
 
 # Proactive Pipeline
@@ -159,6 +160,17 @@ run finishes under the cron's `timeout_seconds`
      prompt and stalled the promoter — see the pre-Task-Hub triage note below) /
      `UA_LLM_CALL_MAX_RETRIES` (`llm_classifier.py::_get_anthropic_client`) so a
      stalled ZAI proxy can't hang a call for the SDK-default ~10 min.
+   - **FUP circuit breaker (2026-06-11).** When a per-bucket refine fails with a
+     ZAI Fair-Usage signal (matched by `rate_limiter._is_fup_error` —
+     `[1313]`/Fair-Usage/concurrency-limit bodies), `_refine_cluster_with_llm`
+     re-raises it and `_detect_clusters_llm_async` trips a one-shot breaker:
+     every remaining bucket returns `None` immediately (checked right after the
+     local semaphore is acquired, alongside the deadline check) instead of
+     grinding through ~60 more doomed LLM calls. One `logger.warning` summarizes
+     how many buckets were skipped; the next hourly run re-detects them
+     (candidate writes are idempotent). The breaker is **not** applied to the
+     ideation sweep. Non-FUP refine errors still fail closed (no candidate) and
+     do **not** trip the breaker.
 4. **Ideation sweep (Track B).** When `UA_IDEATION_SWEEP_ENABLED=1` (default),
    `_run_ideation_sweep` → `track_b_ideation_synthesis` runs an LLM over the
    recent signature corpus looking for *non-obvious* abstract patterns
@@ -262,10 +274,84 @@ within YouTube, no LLM) were retired — they duplicated, more weakly, what the
 convergence pipeline already does cross-channel with an LLM judge. An empirical
 dry-run also showed feeding diamond cards into the convergence/brief pipeline
 yields almost nothing net-new (≈1 of 20 diamonds isn't already in a cluster),
-so no card→brief feeder was added. To stop un-triaged cards piling up,
-`sync_generated_cards` now calls `expire_stale_pending_cards` each run
-(soft-deletes `pending` cards not refreshed within `UA_PROACTIVE_CARD_TTL_DAYS`,
-default 14; operator-triaged cards are never touched).
+so no card→brief feeder was added.
+
+**Card hygiene — every sweep runs two cleaners** (`generate_signal_cards`, shared
+by the tick and the dashboard load):
+- `expire_stale_pending_cards` **soft-deletes** `pending` cards not refreshed
+  within `UA_PROACTIVE_CARD_TTL_DAYS` (default **3**) → `status='deleted'`: the
+  row stays in the DB but drops off the live/pending tab. Keyed on `updated_at`
+  (last surfaced), NOT `created_at` — a card's `created_at` is the *video's*
+  publish time, so a `created_at` TTL would instantly expire cards for any video
+  ingested late (RSS backfill). Net shelf life ≈ time-in-feed (≤~2 days) + 3.
+  Operator-triaged cards are never touched.
+- `purge_aged_terminal_cards` **hard-deletes** terminal/non-live rows
+  (`actioned`/`rejected`/`promoted`/`deleted`, never `pending`/`tracking`) whose
+  `updated_at` is older than `UA_PROACTIVE_CARD_PURGE_DAYS` (default **7**), so
+  the rejected/deleted ledger doesn't accumulate forever. Resurface-safe: keyed
+  on `updated_at`, which is always > the ~2-day CSI regeneration window before a
+  row becomes purgeable, so a purged card can't be re-INSERTed as `pending`.
+
+**Default tab view = `live`** (= `pending` + `tracking`; `list_cards(status="live")`).
+The dashboard defaults here so the tab shows the active triage set, not the
+rejected/promoted/deleted history. `all` (excludes only `deleted`) and the
+per-status filters remain available.
+
+**How `proactive_signal_cards` are generated — two triggers (autonomous tick + pull-on-open).**
+There are two callers that produce cards from the CSI/Discord feedstock, sharing
+one card-only core, `proactive_signals.py::generate_signal_cards` (YouTube diamond
+cards + Discord cards + the TTL sweep — pure SQLite, **no** LLM/convergence):
+
+1. **Autonomous tick (the primary path).** The systemd timer
+   `universal-agent-proactive-signal-card-sync.timer` fires
+   `proactive_signals.py::generate_signal_cards` **hourly** via
+   `scripts/proactive_signal_card_sync.py`, so the card list stays fresh without
+   anyone opening the dashboard. It runs 24/7 at the timer level but **gates to
+   the Houston active window in the script** (`dormancy_aware`;
+   `UA_PROACTIVE_CARD_SYNC_24_7=true` runs around the clock). Deliberately NOT the
+   full `sync_generated_cards` — the convergence/topic-signature and tutorial
+   syncs are LLM-bearing and have their own `csi-convergence-sync` timer, so the
+   tick would double-run them and burn quota.
+2. **Pull-on-open (the dashboard path).** `proactive_signals.py::sync_generated_cards`
+   runs when the proactive-signals dashboard is loaded with a sync request — its
+   single caller is `gateway_server.py::dashboard_proactive_signals`, gated on
+   `?sync` / `force_sync` and a cooldown (`UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS`,
+   default 300s). As of **2026-06-11** this is the **card-only core** too:
+   `sync_generated_cards` now just calls `generate_signal_cards` and no longer
+   invokes the LLM-bearing `sync_topic_signatures_from_csi`. It still returns the
+   historical 6-key counts shape for back-compat, but `topic_signatures`,
+   `convergence_events`, and `tutorial_build_tasks` are **always 0** here — the
+   convergence/topic-signature lane is produced **solely** by the hourly
+   `universal-agent-csi-convergence-sync` timer (single-producer pattern, same as
+   the tutorial-build lane). The dashboard-tick invoker was removed because the
+   300s cooldown re-fired the full LLM convergence fan-out every ~5 minutes
+   whenever the dashboard was open (verified bursts of ~200 ZAI calls/min),
+   feeding ZAI Fair-Usage 429 pressure for no benefit (the hourly timer already
+   produces the same candidates).
+
+Before the autonomous tick existed (added 2026-06), generation was pull-on-open
+only — so if no one opened the dashboard, no new cards appeared even though the
+CSI `events` table kept filling, and the 03:15 `nightly_wiki` consumer found
+nothing to build. The hourly tick closes that gap.
+
+**Card status lifecycle — nothing auto-rejects.** The complete writer set for
+`proactive_signal_cards.status` is documented in the `proactive_signals.py` module
+docstring; the load-bearing facts: new cards are `pending`; `'rejected'` is written
+**only** by the operator "Reject" button (the dashboard feedback endpoint via
+`record_feedback`) — there is **no batch/automatic rejecter anywhere**. The only
+*automatic* mutations are the two hygiene sweeps above: `expire_stale_pending_cards`
+(`pending` → `'deleted'`, soft) and `purge_aged_terminal_cards` (aged terminal rows
+hard-deleted). A pile of `rejected` rows means operators clicked Reject; a pile of
+`deleted` rows means the TTL sweep ran. Do not attribute rejections to a preference
+model or a sweeper (a 2026-06 investigation made that wrong call).
+
+**The `nightly_wiki` consumer runs via a systemd timer, not the in-process cron.**
+`nightly_wiki_agent` reads `pending` cards at 03:15 America/Chicago and is **not**
+disabled — it was migrated to `universal-agent-nightly-wiki.timer` (S5 Phase A), so
+its in-process `cron_jobs.json` row is a `"enabled": false` tombstone. Before
+concluding it is off, see
+[`03_agents/04_cron_and_scheduling.md`](../03_agents/04_cron_and_scheduling.md)
+§ "Is this scheduled job actually running?".
 
 ### 3. Reflection engine (autonomous ideation) — WIRED (idle-only)
 
@@ -596,6 +682,17 @@ the triage verdict + dispatch path (candidate→task), not this artifact→task 
 > `convergence_candidates` table with an active-hours gate matching the real
 > `0 6-21` cron. The `proactive_brief_task_funnel` source_kinds were likewise
 > repointed off the dead `convergence_detection`/`insight_detection` kinds.
+
+> **Probe correction (2026-06-10).** `paper_to_podcast_email_delivery` previously
+> matched `subject LIKE '%Papers%'` — any email whose LLM-varied title happened to
+> contain "Papers" reset the watchdog, including a false "podcast produced"
+> disclosure that `cron_artifact_notifier` built from a 2-day-old manifest after a
+> deploy-killed run. It now matches the notifier's deterministic bracketed-job-id
+> subject prefix (`subject LIKE '[<job_id>]%'`, constant
+> `proactive_pipeline_invariants.py::PAPER_TO_PODCAST_JOB_ID`, env override
+> `UA_PAPER_TO_PODCAST_JOB_ID`), and the notifier's run-freshness gate guarantees
+> a matching email implies artifacts written by *that* run. Recipient filter
+> unchanged.
 
 ---
 

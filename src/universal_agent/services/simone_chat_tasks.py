@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 SOURCE_KIND = "simone_chat"
 PROJECT_KEY = "immediate"
-DEFAULT_LABELS = ["simone-chat", "agent-ready"]
+DEFAULT_LABELS = ["simone-chat", task_hub.TASK_LABEL_AGENT_READY]
 TASK_ID_PREFIX = "simone_chat:"
 TITLE_MAX_LEN = 120
 

@@ -247,6 +247,92 @@ def test_other_source_rows_are_ignored(tmp_path: Path) -> None:
     assert findings == []
 
 
+def _seed_db_days(
+    db_path: Path, days: Iterable[tuple[int, int, int]], *, prefix: str = "d"
+) -> None:
+    """Seed per-day analysis rows: iterable of (age_days, ok_count, missing_count)."""
+    conn = _connect(db_path)
+    try:
+        for age_days, ok_count, missing_count in days:
+            for i in range(ok_count):
+                conn.execute(
+                    "INSERT INTO rss_event_analysis "
+                    "(event_id, source, transcript_status, analyzed_at) "
+                    "VALUES (?, 'youtube_channel_rss', 'ok', datetime('now', ?))",
+                    (f"{prefix}{age_days}-ok{i}", f"-{age_days} days"),
+                )
+            for i in range(missing_count):
+                conn.execute(
+                    "INSERT INTO rss_event_analysis "
+                    "(event_id, source, transcript_status, analyzed_at) "
+                    "VALUES (?, 'youtube_channel_rss', 'missing', datetime('now', ?))",
+                    (f"{prefix}{age_days}-miss{i}", f"-{age_days} days"),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_recovered_pipeline_downgrades_residue_to_warn(tmp_path: Path) -> None:
+    """Recovered-guard: when the 2 most recent populated days are BOTH at/
+    above the floor, the offending older days are residue aging out of the
+    7-day window — the finding downgrades from critical (pages via the
+    email digest) to warn (dashboard-only) and says so. Context: the
+    pipeline recovered 2026-06-07 but the Jun 5–7 residue kept paging
+    4 emails/day until it left the window."""
+    db = tmp_path / "csi.db"
+    _seed_db_days(
+        db,
+        [
+            (0, 5, 0),   # today: healthy
+            (1, 5, 0),   # yesterday: healthy
+            (3, 0, 5),   # residue: broken day aging out
+        ],
+    )
+    findings = run_invariants({"csi_db_path": db})
+    matches = _only_finding_with_id(findings, "youtube_transcript_coverage")
+    assert len(matches) == 1
+    f = matches[0]
+    assert f.severity == "warn"
+    assert "RECOVERED" in (f.recommendation or "")
+    assert f.metadata.get("recovered") is True
+
+
+def test_not_recovered_when_most_recent_day_below_floor(tmp_path: Path) -> None:
+    """Still broken today → stays critical, no downgrade."""
+    db = tmp_path / "csi.db"
+    _seed_db_days(
+        db,
+        [
+            (0, 0, 5),   # today: broken
+            (1, 5, 0),   # yesterday: healthy
+        ],
+    )
+    findings = run_invariants({"csi_db_path": db})
+    matches = _only_finding_with_id(findings, "youtube_transcript_coverage")
+    assert len(matches) == 1
+    f = matches[0]
+    assert f.severity == "critical"
+    assert f.metadata.get("recovered") is False
+
+
+def test_single_healthy_day_after_incident_stays_critical(tmp_path: Path) -> None:
+    """One healthy day isn't recovery — both of the 2 most recent populated
+    days must clear the floor before downgrading."""
+    db = tmp_path / "csi.db"
+    _seed_db_days(
+        db,
+        [
+            (0, 5, 0),   # today: healthy
+            (1, 0, 5),   # yesterday: still broken
+        ],
+    )
+    findings = run_invariants({"csi_db_path": db})
+    matches = _only_finding_with_id(findings, "youtube_transcript_coverage")
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+
+
 def test_table_missing_emits_probe_error(tmp_path: Path) -> None:
     # DB file exists but has no rss_event_analysis table → sqlite.Error
     # → transcript_coverage runner converts to probe_error finding (warn).

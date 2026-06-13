@@ -12,7 +12,7 @@ code_paths:
   - scripts/_claude_launcher.py
   - scripts/claude_with_mcp_env.sh
   - src/universal_agent/services/invariants/zai_inference_health.py
-last_verified: 2026-06-10
+last_verified: 2026-06-11
 ---
 
 # Model Choice & Resolution
@@ -69,6 +69,18 @@ ZAI_MODEL_MAP = {
 - If that env var is set and non-empty, the env value wins. **Otherwise** it falls
   back to `ZAI_MODEL_MAP[tier]` (defaulting to the sonnet entry for unknown tiers).
 
+**The reverse map — `model_resolution.py::model_id_to_tier` (added 2026-06-11):**
+given a WIRE-LEVEL model id (the string actually sent to the proxy), returns the ZAI
+rate-limiter's tier bucket (`opus`/`sonnet`/`mid`/`haiku`; `mid` covers the
+Mission-Control `glm-4.7` lane and the `glm-4.6` literal, which bypass
+`ZAI_MODEL_MAP`). Precedence is deliberately the INVERSE of `resolve_model`:
+**wire identity first** (reverse-`ZAI_MODEL_MAP`, then literals), env intent vars
+only for otherwise-unknown ids, unknown → `sonnet`. Rationale: an env override
+expresses one caller's intent, but ZAI's limits follow the model actually on the
+wire — env-first bucketing would let one variable capture every caller of that id
+and invert the limiter's protection (e.g. `ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5.1`
+must NOT run the flagship at haiku-tier concurrency).
+
 The thin wrappers express intent at call sites:
 
 | Resolver | Returns (default) | Notes |
@@ -76,6 +88,7 @@ The thin wrappers express intent at call sites:
 | `resolve_haiku()` | `glm-4.5-air` | `model_resolution.py::resolve_haiku` |
 | `resolve_sonnet()` | `glm-5-turbo` | `model_resolution.py::resolve_sonnet` |
 | `resolve_opus()` | `glm-5.1` | `model_resolution.py::resolve_opus` |
+| `resolve_goal_eval_model(cody_mode)` | `glm-5-turbo` on ZAI, `None` on anthropic | `model_resolution.py::resolve_goal_eval_model` |
 | `resolve_claude_code_model(default="sonnet")` | tier passthrough | the string passed to claude-agent-sdk |
 
 ### Haiku and sonnet resolve to different models
@@ -87,6 +100,35 @@ classifier) on the haiku tier, which is why the haiku tier exists as its own lan
 `resolve_haiku()` is kept as a separate function so the haiku tier can be tuned without
 touching every caller. The haiku tier is operator-locked to `glm-4.5-air`; do not
 remap it.
+
+### The `/goal` completion evaluator runs a stronger judge — without touching the haiku lock
+
+Claude Code's built-in `/goal` loop judges its completion condition after every turn with
+the CC **"small fast model"**, which current Claude Code reads from
+`ANTHROPIC_DEFAULT_HAIKU_MODEL` (`ANTHROPIC_SMALL_FAST_MODEL` is deprecated — ref the
+[Claude Code model-config docs](https://code.claude.com/docs/en/model-config)). On the ZAI
+routing that is the operator-locked `glm-4.5-air` — too weak to adjudicate demo-build
+acceptance reliably. `model_resolution.py::resolve_goal_eval_model` returns a **stronger**
+evaluator model (sonnet tier → `glm-5-turbo`) that `claude_cli_client.py::_execute_cli_session`
+injects as `ANTHROPIC_DEFAULT_HAIKU_MODEL` **on the `/goal` work-turn subprocess's env dict
+only** (threaded from `claude_cli_client.py::_run_goal_loop_mission`, recorded as
+`payload.goal_eval_model`). This never writes `os.environ` and never mutates `ZAI_MODEL_MAP`
+— the global haiku operator-lock is untouched; only that one child process (its evaluator
+plus its own SDK background calls) runs on the stronger model. Resolution precedence:
+`cody_mode == "anthropic"` → `None` (a Claude-Max session keeps the real Haiku evaluator;
+never inject a ZAI id into an `api.anthropic.com` session); else `UA_GOAL_EVAL_MODEL`
+(explicit model id, or an `off`/`none`/`default`/`haiku`/`disable` opt-out token → `None`);
+else `resolve_sonnet()` (`glm-5-turbo`).
+
+> Why ride the haiku knob at all? Claude Code exposes **no separate small-fast-model lever** —
+> the legacy `ANTHROPIC_SMALL_FAST_MODEL` was folded into `ANTHROPIC_DEFAULT_HAIKU_MODEL`, and
+> the `/goal` slash command takes only a condition, no model parameter. A per-subprocess env
+> override is therefore the only way to upgrade the evaluator without a global remap. Note this
+> tightens the gate UA already (transitively) relies on — the `/goal` Stop hook blocks the
+> subprocess from exiting until the evaluator returns `ok:true`, and the mission outcome keys on
+> that exit (`claude_cli_client.py::_monitor_cli_output`). It does **not** capture the structured
+> met/not-met verdict, nor close the "OR stop after N turns" cap-clause escape — those are
+> separate, tracked follow-ons.
 
 ### Gotcha: `resolve_sonnet()` no longer secretly returns opus
 

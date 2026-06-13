@@ -141,6 +141,34 @@ def _is_deploy_window_active() -> bool:
         pass
     return False
 
+
+def _is_llm_deploy_kill_result(result: Any) -> bool:
+    """True iff a gateway LLM result carries the deploy-kill signature.
+
+    When a deploy restart SIGTERMs the SDK's `claude` CLI subprocess
+    mid-run, the SDK logs "Fatal error in message reader: Command failed
+    with exit code 143" internally and the message stream simply ends —
+    no exception propagates into ``gateway.run_query``, which returns a
+    ``GatewayResult`` with empty ``response_text``, zero ``tool_calls``,
+    and no collected errors (the transcript shows "No tools called").
+    Without detection, the Phase F.1 close computes ``_f_rc_equiv_llm=0``
+    and mis-paints the kill as ``clean_exit_zero`` — the run is marked
+    completed and the artifact notifier discloses stale artifacts as
+    fresh (observed live 2026-06-09/10, paper_to_podcast).
+
+    This predicate is the *signature* only; callers must AND it with
+    ``_is_deploy_window_active()`` before downgrading — mirroring the
+    `!script` branch's guardrail that the deploy-window predicate is the
+    ONLY thing allowed to downgrade a failure-shaped outcome.
+    """
+    response_text = (getattr(result, "response_text", "") or "").strip()
+    try:
+        tool_calls = int(getattr(result, "tool_calls", 0) or 0)
+    except (TypeError, ValueError):
+        tool_calls = 0
+    return not response_text and tool_calls == 0
+
+
 _CRON_MEDIA_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -538,6 +566,7 @@ def parse_run_at(
 
 @dataclass
 class CronJob:
+    """Scheduled job definition supporting interval, cron-expression, and one-shot scheduling."""
     job_id: str
     user_id: str
     workspace_dir: str
@@ -648,6 +677,7 @@ class CronJob:
 
 @dataclass
 class CronRunRecord:
+    """Record of a single cron job execution attempt."""
     run_id: str
     job_id: str
     status: str
@@ -681,12 +711,22 @@ class CronRunRecord:
 
 
 class CronStore:
+    """File-backed persistence for cron job definitions and run history."""
     def __init__(self, jobs_path: Path, runs_path: Path):
         self.jobs_path = jobs_path
         self.runs_path = runs_path
+        # In-flight marker sidecar (next to cron_jobs.json). Persists
+        # {job_id: {scheduled_at, marked_at}} for runs dispatched by the
+        # scheduler so a deploy-restart that hard-kills the gateway leaves
+        # durable evidence of the interrupted run. Without it, a killed
+        # in-flight run writes no cron_runs.jsonl record and is invisible
+        # to the startup backfill (which only inspects persisted
+        # next_run_at). See the 2026-06-09/10 paper_to_podcast incident.
+        self.inflight_path = jobs_path.with_name("cron_inflight.json")
         self.jobs_path.parent.mkdir(parents=True, exist_ok=True)
 
     def load_jobs(self) -> dict[str, CronJob]:
+        """Load all persisted jobs from disk, skipping malformed entries."""
         if not self.jobs_path.exists():
             return {}
         try:
@@ -704,8 +744,25 @@ class CronStore:
         return jobs
 
     def save_jobs(self, jobs: Iterable[CronJob]) -> None:
+        """Persist the full job registry to disk."""
         data = {"jobs": [job.to_dict() for job in jobs]}
         self.jobs_path.write_text(json.dumps(data, indent=2))
+
+    def load_inflight(self) -> dict[str, dict[str, Any]]:
+        """Read the in-flight marker sidecar. Returns {} on any error."""
+        if not self.inflight_path.exists():
+            return {}
+        try:
+            payload = json.loads(self.inflight_path.read_text())
+        except Exception as exc:
+            logger.error("Failed to read cron in-flight markers: %s", exc)
+            return {}
+        markers = payload.get("inflight")
+        return markers if isinstance(markers, dict) else {}
+
+    def save_inflight(self, markers: dict[str, dict[str, Any]]) -> None:
+        self.inflight_path.parent.mkdir(parents=True, exist_ok=True)
+        self.inflight_path.write_text(json.dumps({"inflight": markers}, indent=2))
 
     def append_run(self, record: CronRunRecord) -> None:
         self.runs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -713,6 +770,7 @@ class CronStore:
             handle.write(json.dumps(record.to_dict()) + "\n")
 
     def read_runs(self, job_id: Optional[str] = None, limit: int = 200) -> list[dict[str, Any]]:
+        """Read run records, optionally filtered by job_id, newest last."""
         if not self.runs_path.exists():
             return []
         rows: list[dict[str, Any]] = []
@@ -732,6 +790,8 @@ class CronStore:
 
 
 class CronService:
+    """Manages scheduled cron job lifecycle: registration, dispatch, retry, and persistence."""
+
     @staticmethod
     def _workflow_admission_service() -> WorkflowAdmissionService:
         return WorkflowAdmissionService()
@@ -818,7 +878,54 @@ class CronService:
         if _needs_save:
             self.store.save_jobs(self.jobs.values())
 
+        # ── Deploy-interrupted in-flight recovery ──────────────────────
+        # The scheduler persists an in-flight marker at dispatch
+        # (``_mark_inflight``) and clears it when the run finalizes
+        # (except deploy-restart cancellations, which keep it on purpose).
+        # Any marker still present at construction time is a run that was
+        # killed mid-flight by the previous shutdown. For jobs that opted
+        # into ``catch_up_on_restart`` we requeue the interrupted slot —
+        # markers for other jobs (or stale/deleted ones) are dropped.
+        self._inflight_requeue: list[tuple[str, float]] = []
+        _leftover_inflight = self.store.load_inflight()
+        if _leftover_inflight:
+            for _marker_job_id, _marker in _leftover_inflight.items():
+                _marker_job = self.jobs.get(_marker_job_id)
+                try:
+                    _interrupted_at = float((_marker or {}).get("scheduled_at"))
+                except (TypeError, ValueError):
+                    _interrupted_at = None
+                if (
+                    _marker_job is not None
+                    and _marker_job.enabled
+                    and _marker_job.catch_up_on_restart
+                    and _interrupted_at is not None
+                    and (_now_ts - _interrupted_at) < _backfill_max_age
+                ):
+                    self._inflight_requeue.append((_marker_job_id, _interrupted_at))
+                    logger.info(
+                        "🔄 Queued in-flight recovery for job %s "
+                        "(interrupted run was scheduled %s)",
+                        _marker_job_id,
+                        datetime.fromtimestamp(_interrupted_at).isoformat(),
+                    )
+                else:
+                    logger.info(
+                        "Dropping stale/ineligible cron in-flight marker for job %s",
+                        _marker_job_id,
+                    )
+            # Markers are consumed at startup; the requeue dispatch in
+            # ``start()`` re-marks the jobs it actually fires.
+            try:
+                self.store.save_inflight({})
+            except Exception as _inflight_exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to clear consumed cron in-flight markers: %s",
+                    _inflight_exc,
+                )
+
     async def start(self) -> None:
+        """Start the scheduler loop and optionally fire queued backfill runs."""
         if self.running:
             return
         self.running = True
@@ -828,6 +935,47 @@ class CronService:
         self._loop = asyncio.get_running_loop()
         self.task = asyncio.create_task(self._scheduler_loop())
         logger.info("⏱️ Chron service started (%d jobs)", len(self.jobs))
+        # Requeue deploy-interrupted in-flight runs for catch_up_on_restart
+        # jobs — ALWAYS, even when UA_CRON_BACKFILL_ON_RESTART=0. That
+        # global default exists to prevent a startup stampede of EVERY
+        # missed slot (see the 2026-05-16 incident below); interrupted
+        # IN-FLIGHT runs of explicitly opted-in jobs are a bounded set
+        # (at most UA_CRON_MAX_CONCURRENCY were in flight at the restart)
+        # and must recover — see the 2026-06-09/10 paper_to_podcast
+        # incident where two consecutive 9 PM runs were deploy-killed and
+        # never re-ran. The dispatch key is deliberately NOT the original
+        # ``scheduled:`` key: the interrupted attempt's workflow run may
+        # still sit in status=running (the gateway died before finalize),
+        # and re-admitting under the same dedup key would
+        # attach_to_existing and silently skip the recovery run.
+        for _ifq_job_id, _ifq_interrupted_at in self._inflight_requeue:
+            _ifq_job = self.jobs.get(_ifq_job_id)
+            if (
+                _ifq_job
+                and _ifq_job.enabled
+                and _ifq_job.job_id not in self.running_jobs
+            ):
+                logger.info(
+                    "🔄 Dispatching in-flight recovery run for job %s "
+                    "(interrupted run was scheduled %s)",
+                    _ifq_job_id,
+                    datetime.fromtimestamp(_ifq_interrupted_at).isoformat(),
+                )
+                self.running_jobs.add(_ifq_job.job_id)
+                self._mark_inflight(_ifq_job.job_id, _ifq_interrupted_at)
+                _ifq_dispatch_key = (
+                    f"inflight:{_ifq_job.job_id}:{int(_ifq_interrupted_at)}:"
+                    f"{uuid.uuid4().hex[:8]}"
+                )
+                asyncio.create_task(
+                    self._run_job(
+                        _ifq_job,
+                        scheduled_at=_ifq_interrupted_at,
+                        reason="backfill",
+                        dispatch_key=_ifq_dispatch_key,
+                    )
+                )
+        self._inflight_requeue.clear()
         # Fire queued backfill runs for jobs that missed their window during
         # restart — but ONLY if explicitly enabled via env var. Default is
         # OFF because firing every missed heavy cron simultaneously at
@@ -864,6 +1012,7 @@ class CronService:
         self._backfill_queue.clear()
 
     async def stop(self) -> None:
+        """Cancel the scheduler loop and wait for it to finish."""
         if not self.running:
             return
         self.running = False
@@ -898,6 +1047,7 @@ class CronService:
         catch_up_on_restart: bool = False,
         metadata: Optional[dict[str, Any]] = None,
     ) -> CronJob:
+        """Register a new cron job with validated scheduling parameters."""
         every_seconds = _parse_duration_seconds(every_raw, 0) if every_raw else 0
 
         # Validate scheduling - must have at least one method
@@ -952,6 +1102,7 @@ class CronService:
         return job
 
     def update_job(self, job_id: str, updates: dict[str, Any]) -> CronJob:
+        """Apply partial updates to an existing job and recalculate its schedule."""
         job = self.jobs[job_id]
         if "command" in updates:
             job.command = updates["command"]
@@ -1005,6 +1156,7 @@ class CronService:
         return job
 
     def delete_job(self, job_id: str) -> None:
+        """Remove a job from the registry and cancel any in-flight retry tasks."""
         if job_id in self.jobs:
             self._emit_event({"type": "cron_job_deleted", "job_id": job_id})
             del self.jobs[job_id]
@@ -1030,6 +1182,44 @@ class CronService:
         if scheduled_at is not None:
             return f"scheduled:{job.job_id}:{int(float(scheduled_at))}"
         return f"manual:{job.job_id}:{uuid.uuid4().hex[:12]}"
+
+    def _mark_inflight(self, job_id: str, scheduled_at: float) -> None:
+        """Persist a durable in-flight marker for a dispatched run.
+
+        Written BEFORE the ``_run_job`` task is created so a deploy
+        restart that hard-kills the gateway mid-run leaves evidence the
+        startup recovery pass (``__init__``) can requeue. Best-effort —
+        marker failures must never block dispatch.
+        """
+        try:
+            markers = self.store.load_inflight()
+            markers[job_id] = {
+                "scheduled_at": float(scheduled_at),
+                "marked_at": time.time(),
+            }
+            self.store.save_inflight(markers)
+        except Exception as exc:  # noqa: BLE001 — never block dispatch
+            logger.warning(
+                "Failed to persist cron in-flight marker for job %s: %s",
+                job_id, exc,
+            )
+
+    def _clear_inflight(self, job_id: str) -> None:
+        """Remove a job's in-flight marker after its run finalizes.
+
+        Deliberately NOT called for deploy-restart cancellations — those
+        keep their marker so the next gateway boot requeues the slot.
+        """
+        try:
+            markers = self.store.load_inflight()
+            if job_id in markers:
+                del markers[job_id]
+                self.store.save_inflight(markers)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.debug(
+                "Failed to clear cron in-flight marker for job %s: %s",
+                job_id, exc,
+            )
 
     def _build_workflow_trigger(self, job: CronJob, *, dispatch_key: str) -> WorkflowTrigger:
         payload = {
@@ -1274,6 +1464,7 @@ class CronService:
         scheduled_at: Optional[float] = None,
         background: bool = False,
     ) -> CronRunRecord:
+        """Immediately dispatch a job, either blocking or in the background."""
         job = self.jobs[job_id]
         if job.job_id in self.running_jobs:
             raise ValueError(f"Job {job.job_id} is already running")
@@ -1316,6 +1507,11 @@ class CronService:
                     # _run_job acquires the semaphore.
                     self.running_jobs.add(job.job_id)
                     self.store.save_jobs(self.jobs.values())
+                    # Durable in-flight marker: save_jobs above already
+                    # advanced last_run_at/next_run_at, so a restart-killed
+                    # in-flight run would otherwise leave NO persisted
+                    # evidence that this slot never actually completed.
+                    self._mark_inflight(job.job_id, scheduled_at)
                     dispatch_key = self._dispatch_key_for_job(job, reason="schedule", scheduled_at=scheduled_at)
                     asyncio.create_task(
                         self._run_job(job, scheduled_at=scheduled_at, reason="schedule", dispatch_key=dispatch_key)
@@ -1371,6 +1567,7 @@ class CronService:
             )
             self.running_jobs.discard(job.job_id)
             self.running_job_scheduled_at.pop(job.job_id, None)
+            self._clear_inflight(job.job_id)
             return CronRunRecord(
                 run_id=uuid.uuid4().hex[:12],
                 job_id=job.job_id,
@@ -1417,6 +1614,7 @@ class CronService:
                     self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
                     self.running_jobs.discard(job.job_id)
                     self.running_job_scheduled_at.pop(job.job_id, None)
+                    self._clear_inflight(job.job_id)
                     return record
                 if decision.action == "escalate_review":
                     record = CronRunRecord(
@@ -1436,6 +1634,7 @@ class CronService:
                     self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
                     self.running_jobs.discard(job.job_id)
                     self.running_job_scheduled_at.pop(job.job_id, None)
+                    self._clear_inflight(job.job_id)
                     return record
             record = CronRunRecord(
                 run_id=uuid.uuid4().hex[:12],
@@ -1487,6 +1686,7 @@ class CronService:
                 )
                 self.running_jobs.discard(job.job_id)
                 self.running_job_scheduled_at.pop(job.job_id, None)
+                self._clear_inflight(job.job_id)
                 return record
 
             timeout_seconds = self._resolve_job_timeout_seconds(job)
@@ -2246,6 +2446,20 @@ class CronService:
                                 # See plans/2026-05-13_proactivity_gap_findings.md
                                 # Contributing Factor #3.
                                 _f_was_cancelled = False
+                                # Tracks the deploy-kill signature: the SDK's
+                                # claude CLI subprocess was SIGTERM'd by a
+                                # deploy restart (exit 143), the SDK swallowed
+                                # the message-reader fatal, and run_query
+                                # returned an EMPTY result without raising.
+                                # Without this flag, ``_f_rc_equiv_llm`` falls
+                                # through to 0 and the F.1 classifier paints
+                                # the kill as ``clean_exit_zero`` — the task is
+                                # marked completed and the artifact notifier
+                                # fires off stale artifacts. Mirrors the
+                                # `!script` branch's deploy-window handling
+                                # (and PR #563's deploy-window suppression
+                                # precedent).
+                                _f_was_deploy_killed = False
                                 _f_run_error_text = ""
                                 if not _f_skip_link:
                                     try:
@@ -2374,11 +2588,72 @@ class CronService:
                                             record.status = "error"
                                             record.error = errors[0]
                                             record.output_preview = record.error[:400]
+                                    elif (
+                                        _is_llm_deploy_kill_result(result)
+                                        and _is_deploy_window_active()
+                                    ):
+                                        # Deploy-kill signature inside a deploy
+                                        # window: the SDK's claude CLI subprocess
+                                        # was SIGTERM'd (exit 143) mid-run and the
+                                        # engine returned an empty result without
+                                        # raising. Mirror the `!script` branch's
+                                        # deploy-window handling: mark cancelled
+                                        # (NOT completed — the work never
+                                        # happened), advance next_run_at, and keep
+                                        # the in-flight marker (the finally below
+                                        # skips clearing for cancelled) so the
+                                        # startup recovery pass requeues the slot
+                                        # on next gateway boot.
+                                        #
+                                        # GUARDRAIL: the deploy-window predicate
+                                        # is the ONLY thing that downgrades the
+                                        # empty result here. Outside a deploy
+                                        # window an empty result keeps its
+                                        # pre-existing classification.
+                                        _f_was_deploy_killed = True
+                                        record.status = "cancelled"
+                                        record.error = (
+                                            "LLM run returned an empty result "
+                                            "(no text, no tool calls) during "
+                                            "deploy restart — claude CLI "
+                                            "subprocess SIGTERM'd mid-run "
+                                            "(will re-fire on next gateway boot)"
+                                        )
+                                        record.output_preview = record.error[:400]
+                                        _f_run_error_text = record.error
+                                        try:
+                                            job.next_run_at = (
+                                                time.time()
+                                                + _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC
+                                            )
+                                            self.store.save_jobs(self.jobs.values())
+                                            logger.info(
+                                                "Chron job %s: LLM run showed the "
+                                                "deploy-kill signature during a "
+                                                "deploy window — marked cancelled, "
+                                                "next_run_at advanced to +%ds",
+                                                job.job_id,
+                                                _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC,
+                                            )
+                                        except Exception as _llm_backfill_exc:  # noqa: BLE001
+                                            logger.warning(
+                                                "Chron job %s: failed to advance "
+                                                "next_run_at after LLM deploy-"
+                                                "cancellation: %s",
+                                                job.job_id,
+                                                _llm_backfill_exc,
+                                            )
                                     else:
                                         record.status = "success"
                                         record.output_preview = (getattr(result, "response_text", "") or "")[:400]
                                     record.finished_at = time.time()
                                     self._persist_run_output(job, record, result)
+                                    if record.status == "auth_required":
+                                        _llm_failure_class = "auth_required"
+                                    elif record.status == "cancelled":
+                                        _llm_failure_class = "cancelled"
+                                    else:
+                                        _llm_failure_class = "cron_dispatch_failed"
                                     self._finalize_workflow_attempt(
                                         job=job,
                                         record=record,
@@ -2388,7 +2663,7 @@ class CronService:
                                         workflow_run_id=workflow_run_id,
                                         workflow_attempt_id=workflow_attempt_id,
                                         failure_reason=record.error or ("auth_required" if record.status == "auth_required" else None),
-                                        failure_class="auth_required" if record.status == "auth_required" else "cron_dispatch_failed",
+                                        failure_class=_llm_failure_class,
                                         retryable=record.status == "error",
                                     )
                                 finally:
@@ -2422,6 +2697,7 @@ class CronService:
                                                 if not _f_was_timeout_killed
                                                 and not _f_was_exception
                                                 and not _f_was_cancelled
+                                                and not _f_was_deploy_killed
                                                 else 1
                                             )
                                             _f_conn_llm = _f_open_conn_llm()
@@ -2462,7 +2738,10 @@ class CronService:
                                                     was_signaled=False,
                                                     was_timeout_killed=_f_was_timeout_killed,
                                                     task_closed_normally=_f_closed_normally_llm,
-                                                    was_cancelled=_f_was_cancelled,
+                                                    was_cancelled=(
+                                                        _f_was_cancelled
+                                                        or _f_was_deploy_killed
+                                                    ),
                                                 )
                                                 logger.info(
                                                     "Phase F.1 LLM cron job %s exit classified as %s "
@@ -2527,10 +2806,16 @@ class CronService:
                                                 # recent run". TODO(operator-in-the-loop):
                                                 # follow-up to push a needs_review prompt and
                                                 # accept "keep working" / "abandon" replies.
+                                                # Deploy-restart kills are
+                                                # self-healing non-events (PR
+                                                # #563 precedent) — the slot
+                                                # requeues via the in-flight
+                                                # marker, so skip the operator-
+                                                # escalation comment for them.
                                                 if _f_classification_llm.outcome in {
                                                     "timeout_killed",
                                                     "cancelled_mid_run",
-                                                }:
+                                                } and not _f_was_deploy_killed:
                                                     try:
                                                         _cap_s = request_metadata.get(
                                                             "turn_timeout_seconds"
@@ -2772,6 +3057,12 @@ class CronService:
                 if not retry_scheduled:
                     self.running_jobs.discard(job.job_id)
                     self.running_job_scheduled_at.pop(job.job_id, None)
+                # Phase F close of the in-flight marker. Deploy-restart
+                # cancellations (and pending retries, which are still the
+                # same logical slot) keep their marker so the startup
+                # recovery pass requeues the interrupted slot on next boot.
+                if record.status not in {"cancelled", "retry_queued"}:
+                    self._clear_inflight(job.job_id)
                 moved_outputs = self._organize_workspace_outputs(job.workspace_dir)
                 # Finalize one-shot schedule consumption only after run actually started.
                 if reason == "schedule" and job.run_at is not None:

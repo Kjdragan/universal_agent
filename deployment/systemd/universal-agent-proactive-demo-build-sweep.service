@@ -1,0 +1,33 @@
+[Unit]
+Description=Universal Agent proactive demo-build lane sweep (deploy-independent 3x/day timer, SECRET-BEARING: Anthropic/ZAI key for the buildability LLM judge)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-csi-demo-triage-rank).
+# LOAD BEARING: proactive_demo_build_sweep.main() calls
+# initialize_runtime_secrets() and the per-video buildability judge
+# (proactive_tutorial_builds.is_video_buildable_with_judge) makes a bounded LLM
+# call reading the API key from os.environ. As a standalone oneshot it has no
+# gateway parent to inherit keys from, so UA_DEPLOYMENT_PROFILE=vps must drive a
+# strict Infisical production load — else the judge fails closed and zero
+# tutorial-build tasks are queued. .env OVERRIDES these when present.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.proactive_demo_build_sweep
+MemoryMax=1G
+# Pure SQL scan + one bounded LLM judge call per surviving candidate. Cap sized
+# generously so a slow judge batch self-heals on the next slot.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

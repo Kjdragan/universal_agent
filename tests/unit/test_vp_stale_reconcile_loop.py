@@ -136,3 +136,52 @@ def test_interval_env_var_has_minimum_floor(monkeypatch: pytest.MonkeyPatch) -> 
         int(__import__("os").getenv("UA_VP_STALE_RECONCILE_INTERVAL_SECONDS", "").strip() or 5 * 60),
     )
     assert derived == 60
+
+
+def test_reconciler_schedules_wiki_rescue_for_stale_mission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale-reconciled proactive_wiki mission triggers the deterministic
+    wiki-rescue scheduler with the reconcile failure_mode (the SIGTERM/deploy-kill
+    path that the worker-loop hook can't see)."""
+    import sqlite3
+
+    from universal_agent.services import wiki_rescue_driver
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE vp_missions ("
+        "mission_id TEXT, vp_id TEXT, mission_type TEXT, status TEXT, "
+        "cancel_requested INTEGER DEFAULT 0, result_ref TEXT, updated_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO vp_missions VALUES "
+        "('m-stale', 'vp.general.primary', 'proactive_wiki', 'running', 0, '', '2026-06-01T00:00:00')"
+    )
+    conn.commit()
+
+    # Isolate the unit under test: stub the staleness verdict and the heavy
+    # finalize/event collaborators (which need full schema + real DBs).
+    monkeypatch.setattr(
+        gateway_server, "_vp_is_running_mission_stale",
+        lambda row, *, now_utc, stale_seconds: (True, "claim_expired"),
+    )
+    monkeypatch.setattr(gateway_server, "finalize_vp_mission", lambda *a, **k: True)
+    monkeypatch.setattr(gateway_server, "append_vp_event", lambda *a, **k: None)
+    monkeypatch.setattr(gateway_server, "_vp_mission_source_context_from_row", lambda row: {})
+
+    scheduled: list[dict] = []
+    monkeypatch.setattr(
+        wiki_rescue_driver, "schedule_wiki_rescue",
+        lambda **kwargs: scheduled.append(kwargs),
+    )
+
+    reconciled = gateway_server._reconcile_stale_vp_missions_once(
+        conn, lane_label="test", stale_seconds=60
+    )
+
+    assert reconciled == 1
+    assert len(scheduled) == 1
+    assert scheduled[0]["mission_id"] == "m-stale"
+    assert scheduled[0]["mission_type"] == "proactive_wiki"
+    assert scheduled[0]["failure_mode"] == "stale_claim_expired"
+    assert scheduled[0]["status"] == "failed"

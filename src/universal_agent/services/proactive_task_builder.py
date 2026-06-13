@@ -74,12 +74,19 @@ def queue_proactive_task(
     priority: int = 2,
     labels: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
+    agent_ready: bool = True,
 ) -> dict[str, Any]:
     """Create a standardized proactive task in Task Hub.
 
     Centralises the common fields shared by all proactive services:
     ``project_key="proactive"``, ``status=open``, ``agent_ready=True``,
     ``trigger_type="heartbeat_poll"``, and priority clamping to [1, 4].
+
+    ``agent_ready`` defaults to True (the historical behavior). Callers that
+    want to queue a *pending-approval* row — visible/open but not yet
+    dispatch-eligible — pass ``agent_ready=False`` AND drop the ``agent-ready``
+    label, otherwise ``task_hub.upsert_item`` re-derives ``agent_ready=True``
+    from the label (the OR-fallback at ``upsert_item``).
 
     Before creating the task, checks the preference model.  If *all*
     matching preference dimensions carry strongly-negative weight the
@@ -95,7 +102,7 @@ def queue_proactive_task(
         # Derive topic tags from labels for preference matching
         topic_tags = [
             label for label in (labels or [])
-            if label not in {"agent-ready"}
+            if label not in {task_hub.TASK_LABEL_AGENT_READY}
         ]
         blocked, reason = should_block_proactive_task(
             conn,
@@ -128,9 +135,9 @@ def queue_proactive_task(
             "description": description,
             "project_key": "proactive",
             "priority": clamped,
-            "labels": labels or ["agent-ready"],
+            "labels": labels or [task_hub.TASK_LABEL_AGENT_READY],
             "status": task_hub.TASK_STATUS_OPEN,
-            "agent_ready": True,
+            "agent_ready": bool(agent_ready),
             "trigger_type": "heartbeat_poll",
             "metadata": metadata or {},
         },

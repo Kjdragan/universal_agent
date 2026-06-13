@@ -154,7 +154,9 @@ def main() -> int:
         "cody_mode": cody_mode,
         "task_id": task_id,
         "idempotency_key": f"direct-demo-{demo_id}",
-        "metadata": {"use_goal_loop": cody_mode == "anthropic", "task_id": task_id},
+        # /goal verified working on the ZAI endpoint (2026-06-10) — the
+        # anthropic-only gate was a false assumption.
+        "metadata": {"use_goal_loop": True, "task_id": task_id},
     }
     result = asyncio.run(_vp_dispatch_mission_impl(mission_args))
 

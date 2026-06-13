@@ -5,7 +5,10 @@ import { useCallback, useEffect, useState } from "react";
 const API_BASE = "/api/dashboard/gateway";
 const FILTER_PREFS_KEY = "ua.dashboard.proactiveSignals.filterPrefs.v1";
 const SOURCE_FILTERS = ["all", "youtube", "discord"] as const;
-const STATUS_FILTERS = ["pending", "tracking", "actioned", "rejected", "all"] as const;
+// "live" = pending + tracking (the active triage set, backend-defined in
+// proactive_signals.list_cards). Default view, so the tab shows live work, not
+// the rejected/promoted/deleted historical ledger.
+const STATUS_FILTERS = ["live", "pending", "tracking", "actioned", "rejected", "all"] as const;
 const FEEDBACK_CHIPS = [
   "more_like_this",
   "less_like_this",
@@ -88,7 +91,7 @@ export default function ProactiveSignalsPage() {
     }
     return "all";
   });
-  const [status, setStatus] = useState<(typeof STATUS_FILTERS)[number]>("all");
+  const [status, setStatus] = useState<(typeof STATUS_FILTERS)[number]>("live");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");

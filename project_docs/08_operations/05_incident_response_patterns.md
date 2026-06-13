@@ -15,7 +15,7 @@ code_paths:
   - "scripts/deploy_validate_runtime.sh"
   - "scripts/check_crashloop.sh"
   - "scripts/check_heartbeat_liveness.py"
-last_verified: 2026-06-01
+last_verified: 2026-06-11
 ---
 
 # Incident Response Patterns
@@ -454,6 +454,21 @@ side effect), not a failure. The lifecycle-miss guardrail (PR #563, 2026-05-29) 
 still page loudly. Both signals only ever *widen* the suppression window, never narrow it, so
 real failures (OOM, code crash) outside the window surface as before.
 
+### Genuine-miss email carries diagnostic context
+
+A genuine (non-deploy) `execution_missing_lifecycle_mutation` email used to be bare — just the
+title and the one-line "ended without a durable Task Hub lifecycle mutation" message, with no
+hint of *which* task failed or *why*. The emit site (`gateway_server.py`, the
+`execution_missing_lifecycle_mutation` branch) now folds flat, email-friendly diagnostics into
+the notification metadata: `task_id` / `invalid_task_ids`, `run_id`, `workspace_dir`,
+`tool_calls`, and the `log_tail` (`gateway_server.py::_read_run_log_tail`). The email renderer
+(`notification_dispatcher.py::_format_email_html`) surfaces those in a context table plus an
+escaped `<pre>` run-log tail. **`tool_calls: 0` is the tell** that the run never started — the
+most common cause is an upstream ZAI `429`/Fair-Usage-Policy `[1313]` rejection (see
+[`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md)) that killed both
+the original VP mission and the rescue run before either could close the Task Hub loop, so the
+operator can recognize the throttle from the inbox instead of SSHing to read `run.log`.
+
 ### Crashloop fail-fast (`scripts/check_crashloop.sh`)
 
 The deploy health-check loop calls `check_crashloop.sh` per attempt. It records baseline
@@ -465,10 +480,16 @@ block — see the deploy.yml parser quirk gotcha.)
 
 ### Notification dedup (`services/notification_dispatcher.py`)
 
-Alert cooldown is keyed on `(kind, scope, channel)` where `scope` resolves to
-`task_id`/`job_id`/`run_id`/`session_id` — so two genuinely different
-`execution_missing_lifecycle_mutation` events alert independently, while one misbehaving task
-that keeps firing the same kind gets coalesced. Default cooldown 300s, rollup window 180s.
+Alert cooldown is keyed on `(kind, scope, channel)` where `scope`
+(`notification_dispatcher.py::_scope_key_for_record`) resolves to
+`task_id`/`job_id`/`run_id`/`session_id`. A second, **separate** per-kind rollup window
+(`notification_dispatcher.py::_rollup_start` / `_flush_expired_rollups`, default 180s) then
+collapses *any-scope* same-kind alerts that fire after the first send into a single rollup
+email — so within a rollup window distinct tasks still batch by kind; the `scope` key governs
+the cross-window cooldown, not within-window batching. Default cooldown 300s, rollup window
+180s. For the cooldown key to resolve to the task at all, the event must carry a `task_id` in
+its metadata; the lifecycle-miss emit site now supplies it (the `task_id` diagnostic added
+above) instead of falling back to the shared `daemon_simone_todo` session id.
 
 ---
 

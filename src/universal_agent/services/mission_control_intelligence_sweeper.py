@@ -78,6 +78,28 @@ def _get_float_env(name: str, default: float) -> float:
         return default
 
 
+def mission_control_llm_should_run() -> bool:
+    """Dormancy gate for the sweeper's LLM passes (tier-1 + tier-2).
+
+    Mission Control is content-generation work (an operator-facing summary
+    nobody reads overnight), so per the project dormancy policy its expensive
+    ZAI calls observe the 6am-10pm Houston active window. The cheap sync
+    tier-0 tile pass is NOT gated (tiles stay fresh), and the operator
+    force-refresh path is NOT gated (the Refresh button always works) — only
+    the continuous-cadence LLM passes defer to dormancy. Opt out / run 24/7
+    by setting UA_MISSION_CONTROL_24_7=true (e.g. in Infisical).
+    """
+    from universal_agent.services.dormancy import should_run
+
+    run_24_7 = str(os.environ.get("UA_MISSION_CONTROL_24_7", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    return should_run(mode="always" if run_24_7 else "dormancy_aware")
+
+
 @dataclass
 class SweeperConfig:
     """Runtime configuration for the Mission Control sweeper.
@@ -87,10 +109,19 @@ class SweeperConfig:
     """
 
     interval_seconds: float = 60.0
-    tier1_floor_seconds: float = 180.0
-    tier1_ceiling_seconds: float = 1800.0
-    tier2_floor_seconds: float = 120.0
-    tier2_ceiling_seconds: float = 300.0
+    # Cadence floors/ceilings widened 2026-06-12 (LLM-efficiency pass) to cut
+    # ZAI Fair-Usage 1313/429 pressure: Mission Control was the single largest
+    # ZAI consumer on the box (~22 calls/hr, ~47% of box ZAI volume, ~125K-tok
+    # tier-1 + ~88K-tok tier-2 prompts, 24/7). Floors 180/120 -> 600 and ceilings
+    # 1800 -> 3600 roughly halve the steady-state call rate with no operator-
+    # visible loss (force-refresh / the Refresh button still bypass cadence on
+    # demand). Paired with the new dormancy gate (UA_MISSION_CONTROL_24_7) which
+    # skips the LLM passes 10pm-6am Houston. Code defaults, NOT .env (deploys
+    # wipe the VPS .env).
+    tier1_floor_seconds: float = 600.0
+    tier1_ceiling_seconds: float = 3600.0
+    tier2_floor_seconds: float = 600.0
+    tier2_ceiling_seconds: float = 3600.0
     lane_concurrency: int = 1
     auto_remediation_enabled: bool = False
 
@@ -99,10 +130,10 @@ class SweeperConfig:
         """Construct a SweeperConfig from environment variables."""
         return cls(
             interval_seconds=_get_float_env("UA_MISSION_CONTROL_SWEEPER_INTERVAL_S", 60.0),
-            tier1_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_FLOOR_S", 180.0),
-            tier1_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_CEILING_S", 1800.0),
-            tier2_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_FLOOR_S", 120.0),
-            tier2_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_CEILING_S", 300.0),
+            tier1_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_FLOOR_S", 600.0),
+            tier1_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_CEILING_S", 3600.0),
+            tier2_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_FLOOR_S", 600.0),
+            tier2_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_CEILING_S", 3600.0),
             lane_concurrency=max(1, _get_int_env("UA_MISSION_CONTROL_LANE_CONCURRENCY", 1)),
             auto_remediation_enabled=(os.getenv("UA_MISSION_CONTROL_AUTO_REMEDIATION") or "0").strip().lower()
                 in {"1", "true", "yes", "on", "enabled"},
@@ -304,7 +335,20 @@ class MissionControlSweeper:
           - tier-2 fires when tier-0 transitioned this sweep, OR tier-1
             produced new cards this sweep, OR ceiling exceeded since
             last tier-2 run. Never more often than the floor.
+
+        Dormancy: the LLM passes are skipped 10pm-6am Houston (content-
+        generation policy) unless UA_MISSION_CONTROL_24_7 is set. The cheap
+        sync tier-0 tick (tiles) already ran before this and is NOT gated, so
+        the panel still shows fresh tile state overnight; only new tier-1
+        cards / tier-2 readouts pause. The operator Refresh button
+        (force_refresh_async) bypasses this gate entirely.
         """
+        if not mission_control_llm_should_run():
+            result.skipped_reason = (
+                "dormant: MC LLM passes paused 10pm-6am Houston "
+                "(set UA_MISSION_CONTROL_24_7=true to run 24/7)"
+            )
+            return
         if is_phase_enabled(2):
             try:
                 await self._run_tier1_async(result)

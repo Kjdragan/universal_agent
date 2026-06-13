@@ -32,6 +32,7 @@ import {
   Wrench,
   FolderOpen,
   Workflow,
+  Gauge,
   Menu,
   X,
   type LucideIcon,
@@ -99,6 +100,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: "System",
     items: [
+      { href: "/dashboard/zai-control", label: "ZAI Control", icon: Gauge, requiresHeadquarters: true },
       { href: "/dashboard/cron-jobs", label: "Cron Jobs", icon: Clock },
       { href: "/dashboard/config", label: "Configuration", icon: Settings },
       { href: "/dashboard/cody", label: "Cody Mode & Usage", icon: Cpu },

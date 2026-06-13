@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -45,6 +46,16 @@ _CLASSIFY_SYSTEM = """You are a taxonomy classifier for YouTube channels. Catego
 Respond with ONLY a JSON object: {"category": "<exact_category_string>"}"""
 
 
+# Serialize channel-classification LLM calls to a single in-flight request.
+# YouTube ingest (add_channel + the /reclassify endpoint) can fan out many
+# concurrent classify calls; FastAPI runs those request handlers in parallel,
+# so the LLM calls hit the rate-limited ZAI account simultaneously and trip its
+# Fair-Usage limiter (error 1313), each then retrying up to 5x and amplifying
+# the storm. A process-wide concurrency-1 lock makes classification strictly
+# sequential ("one agent"), trading latency for staying under the usage cap.
+_CLASSIFY_LLM_LOCK = asyncio.Lock()
+
+
 async def _classify_channel_llm(
     channel_name: str,
     description: str = "",
@@ -68,11 +79,12 @@ async def _classify_channel_llm(
                 content_parts.append(f"- {sample[:300]}")
             method = "transcript"
 
-        raw = await _call_llm(
-            system=_CLASSIFY_SYSTEM,
-            user="\n".join(content_parts),
-            max_tokens=100,
-        )
+        async with _CLASSIFY_LLM_LOCK:
+            raw = await _call_llm(
+                system=_CLASSIFY_SYSTEM,
+                user="\n".join(content_parts),
+                max_tokens=100,
+            )
         result = _parse_json_response(raw)
         category = result.get("category", "other_signal")
 

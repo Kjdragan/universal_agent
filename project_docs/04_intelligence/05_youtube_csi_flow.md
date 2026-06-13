@@ -15,7 +15,8 @@ code_paths:
   - src/universal_agent/youtube_mode_utils.py
   - src/universal_agent/proactive_signals.py
   - src/universal_agent/services/scratch_publish.py
-last_verified: 2026-06-04
+  - src/universal_agent/services/proactive_tutorial_builds.py
+last_verified: 2026-06-10
 ---
 
 # YouTube CSI Flow
@@ -38,7 +39,15 @@ Code-verified caveat: the manifest scope calls Pipeline A a "playlist watcher."
 It is not a continuous watcher — it is a daily cron that *reads* a playlist
 once each morning. The continuous discovery layer is the **gold-channel
 poller** (below), which adds videos to those playlists from channel RSS the
-night before, and is itself distinct from Pipeline B's CSI RSS feed.
+night before, and is itself distinct from Pipeline B's CSI RSS feed. The
+former standalone continuous-poller service `youtube_playlist_watcher.py` was
+**retired in PR #438 (2026-05-23)** — the daily digest is now the canonical
+playlist-driven trigger (the retirement is asserted by
+`services/invariants/csi_source_liveness.py`). The redesign that converges
+Pipeline A's tutorial dispatch and Pipeline B's `tutorial_build` demo lane into
+a single Brief→Tutorial→Demo ladder is specified in
+`04_intelligence/15_demo_tutorial_pipeline_adr.md` (design approved 2026-06-10,
+implementation phased).
 
 ---
 
@@ -89,6 +98,7 @@ flowchart TD
     mapr --> art[write Digest.md artifact]
     art --> rank[_rank_digest_decisions + demo-worthiness gate]
     rank --> disp[POST tutorial candidates to /api/v1/hooks/youtube/manual]
+    rank --> demoq[_queue_demo_builds: tutorial_build rows via shared daily ceiling]
     art --> pocket[_save_repopulate_pocket]
     art --> csi[_emit_csi_digest -> .csi_digests.db]
     art --> email[AgentMail send digest]
@@ -224,6 +234,18 @@ Top-`UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N` (default 4) survivors are POSTed via
 `http://127.0.0.1:8002`) with a `UA_HOOKS_TOKEN` bearer, `mode=explainer_plus_code`.
 `--no-auto-tutorial-dispatch` sets top-n to 0.
 
+**P3 (2026-06-10):** the dispatched hook run is **teaching-doc only** — the
+`youtube-tutorial-creation` skill writes `CONCEPT.md`/`README.md`/`manifest.json`
+(plus an optional procedural `IMPLEMENTATION.md`) with `implementation_required=false`,
+and never a runnable `implementation/` folder. The SAME gate-passing rows
+(`dispatch_eligible=True`, independent of top-n) are ALSO queued as `tutorial_build`
+Task Hub rows through the shared daily ceiling
+(`youtube_daily_digest.py::_queue_demo_builds` →
+`proactive_tutorial_builds.py::queue_tutorial_builds_with_ceiling`), deduped by
+`video_id` against the broad CSI lane (`tutorial-build:<sha256(video_id)>` task ids);
+the runnable Demo is built post-gate in `/opt/ua_demos` by Cody. The dashboard
+"Create Repo" button is demoted to an optional "Export to Repo" for legacy runs.
+
 ### A.8 State, delivery-gated persistence, and playlist recreate
 
 - **Dedup DB** `youtube_ingestion_state.db` table `processed_videos`
@@ -340,9 +362,12 @@ Shorts are filtered (`_is_short_subject`), then two card types are produced:
 `_youtube_cluster_cards` (topics across multiple channels, scored against
 `YOUTUBE_INTEREST_TERMS`) and `_youtube_diamond_cards` (high-score individual
 videos). Alongside cards, `sync_generated_cards` (the same caller) invokes
-`sync_topic_signatures_from_csi` and `sync_build_oriented_csi_videos`.
-Playlist-source CSI events (`source='youtube_playlist'`) instead map to the
-manual YouTube hook via `signals_ingest.py::to_manual_youtube_payload`.
+`sync_topic_signatures_from_csi`. (It no longer invokes
+`sync_build_oriented_csi_videos` — that demo/tutorial-build call was removed
+2026-06-10 so the dedicated `universal-agent-proactive-demo-build-sweep` systemd
+timer, `scripts/proactive_demo_build_sweep.py`, is the single producer of that
+lane.) Playlist-source CSI events (`source='youtube_playlist'`) instead map to
+the manual YouTube hook via `signals_ingest.py::to_manual_youtube_payload`.
 
 The deeper Pipeline B consumer is **convergence/ideation**
 (`services/proactive_convergence.py::sync_topic_signatures_from_csi`): it reads
@@ -472,7 +497,14 @@ hadn't written. Two heartbeat invariants now guard it
   > 50% floor).]
 - `youtube_transcript_coverage` — rows exist in `rss_event_analysis` but most
   carry `transcript_status != 'ok'`. Floor 50% per populated day (≥3 rows),
-  7-day window.
+  7-day window. **Recovered-guard** (added 2026-06-10): when the
+  `youtube_invariants.py::RECOVERED_RECENT_DAYS` (2) most recent populated
+  days are both at/above the floor, the pipeline has recovered and any
+  remaining offending days are residue aging out of the window — the finding
+  downgrades to `severity_override="warn"` (dashboard-only; the critical
+  email digest only delivers `critical`) with a "RECOVERED" note in the
+  message. Context: transcripts recovered Jun 7 but the Jun 5–7 residue kept
+  paging 4 emails/day until it left the window.
 
 `csi_source_liveness` separately checks `max(occurred_at)` freshness per source
 in `csi.db`. The monitored set comes from `csi_source_liveness.effective_source_thresholds`,

@@ -1158,7 +1158,7 @@ def _build_followup_task_payload(
             else f"Scaffold Claude Code demo from @{handle} update"
         )
         description = _scaffold_task_description(handle=handle, packet_dir=packet_dir, action=action, lane_slug=lane_slug)
-        labels = ["agent-ready", "claude-code-intel", "x-api", "simone-scaffold"]
+        labels = [task_hub.TASK_LABEL_AGENT_READY, "claude-code-intel", "x-api", "simone-scaffold"]
         preferred_vp = "simone_direct"
         workflow_kind = "scaffold_demo_workspace"
     else:
@@ -1168,7 +1168,7 @@ def _build_followup_task_payload(
             else f"Analyze strategic Claude Code update from @{handle}"
         )
         description = _task_description(handle=handle, packet_dir=packet_dir, action=action)
-        labels = ["agent-ready", "claude-code-intel", "x-api", "atlas"]
+        labels = [task_hub.TASK_LABEL_AGENT_READY, "claude-code-intel", "x-api", "atlas"]
         preferred_vp = "vp.general.primary"
         workflow_kind = "research"
 
@@ -1268,7 +1268,7 @@ def queue_follow_up_tasks(
                     "description": _task_description(handle=handle, packet_dir=packet_dir, action=action),
                     "project_key": "proactive",
                     "priority": max(1, min(tier, 4)),
-                    "labels": ["agent-ready", "claude-code-intel", "x-api", "codie", "scaffold-fallback"],
+                    "labels": [task_hub.TASK_LABEL_AGENT_READY, "claude-code-intel", "x-api", "codie", "scaffold-fallback"],
                     "status": task_hub.TASK_STATUS_OPEN,
                     "agent_ready": True,
                     "trigger_type": "heartbeat_poll",

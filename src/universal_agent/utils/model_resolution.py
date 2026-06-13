@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 # Z.AI Anthropic-compatible endpoint model mappings
 # (https://api.z.ai/api/anthropic). The /api/anthropic endpoint does NOT
@@ -67,6 +70,46 @@ def resolve_sonnet() -> str:
 def resolve_opus() -> str:
     """Resolve the opus-tier (flagship) model — `glm-5.1`."""
     return resolve_model("opus")
+
+
+def resolve_goal_eval_model(cody_mode: str = "zai") -> str | None:
+    """Model for the built-in Claude Code ``/goal`` completion evaluator.
+
+    Claude Code's ``/goal`` loop judges the completion condition after every
+    turn with its "small fast model" — which current Claude Code collapses
+    onto ``ANTHROPIC_DEFAULT_HAIKU_MODEL`` (``ANTHROPIC_SMALL_FAST_MODEL`` is
+    deprecated; ref https://code.claude.com/docs/en/model-config). On the Z.AI
+    routing the haiku tier is operator-locked to ``glm-4.5-air`` — too weak to
+    adjudicate demo-build acceptance conditions reliably.
+
+    This resolves a STRONGER evaluator model (sonnet tier → ``glm-5-turbo``)
+    to be injected into the ``/goal`` work-turn subprocess ENV ONLY (see
+    ``vp/clients/claude_cli_client.py::_execute_cli_session``). The value is
+    never written to ``os.environ`` and never mutates ``ZAI_MODEL_MAP`` — the
+    global haiku operator-lock stays intact everywhere else. The override
+    rides the ``ANTHROPIC_DEFAULT_HAIKU_MODEL`` knob *inside that one child
+    process* because Claude Code exposes no separate small-fast-model lever
+    (the legacy ``ANTHROPIC_SMALL_FAST_MODEL`` was folded into the haiku one).
+
+    Returns ``None`` (no override → built-in haiku/small-fast evaluator) when:
+      * ``cody_mode == "anthropic"`` — a Claude-Max session keeps the real
+        Haiku evaluator; injecting a Z.AI model id into an api.anthropic.com
+        session would break it.
+      * ``UA_GOAL_EVAL_MODEL`` is set to an opt-out token
+        (off/none/default/haiku/disable/disabled).
+
+    Precedence: anthropic-mode short-circuit → ``UA_GOAL_EVAL_MODEL`` (explicit
+    model id, or opt-out token) → default ``resolve_sonnet()`` (glm-5-turbo).
+    """
+    # Never inject a Z.AI model id into an Anthropic-Max (OAuth) session.
+    if (cody_mode or "").strip().lower() == "anthropic":
+        return None
+    raw = (os.getenv("UA_GOAL_EVAL_MODEL") or "").strip()
+    if not raw:
+        return resolve_sonnet()  # default ON: glm-5-turbo for the ZAI /goal evaluator
+    if raw.lower() in {"off", "none", "default", "haiku", "disable", "disabled"}:
+        return None  # explicit opt-out → built-in haiku/small-fast (glm-4.5-air)
+    return raw  # explicit operator-pinned model id
 
 
 def resolve_claude_code_model(default: str = "sonnet") -> str:
@@ -173,6 +216,91 @@ def model_call_timeout_seconds(tier: str = "sonnet") -> float:
         except ValueError:
             pass
     return _TIER_DEFAULT_TIMEOUTS[tier_norm]
+
+
+# ── Wire-id → limiter tier reverse map ────────────────────────────────────
+# The ZAIRateLimiter buckets traffic by a small tier set. Given a WIRE-LEVEL
+# model id (the string actually sent to the ZAI proxy), `model_id_to_tier`
+# answers "which concurrency bucket does this belong to?". The tier set
+# deliberately matches `model_call_timeout_seconds` (opus/sonnet/haiku) PLUS
+# a new `mid` bucket for the Mission Control direct-model lane (glm-4.7) and
+# the glm-4.6 literal — those bypass `ZAI_MODEL_MAP` and would otherwise be
+# misbucketed.
+
+# Models we resolve by literal id, independent of any env override. glm-4.7 is
+# MISSION_CONTROL_DEFAULT_MODEL (bypasses ZAI_MODEL_MAP); glm-4.6 is a literal
+# in csi_demo_triage_ranker.py.
+_MID_TIER_LITERALS = frozenset({"glm-4.6", "glm-4.7"})
+
+# Conservativeness order (lowest concurrency first). When several intent-env
+# vars claim the SAME unknown id we resolve to the EARLIEST tier in this order.
+_TIER_CONSERVATIVENESS = ("opus", "sonnet", "mid", "haiku")
+
+# Process-level dedupe so the multi-env-claim conflict warning fires once per id.
+_TIER_CONFLICT_WARNED: set[str] = set()
+
+# Intent-expressing env vars → tier. Read at CALL time (these can be flipped at
+# runtime). Only consulted for ids that match nothing wire-level above.
+_ENV_TIER_VARS = (
+    ("ANTHROPIC_DEFAULT_OPUS_MODEL", "opus"),
+    ("ANTHROPIC_DEFAULT_SONNET_MODEL", "sonnet"),
+    ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "haiku"),
+    ("UA_MISSION_CONTROL_MODEL", "mid"),
+)
+
+
+def model_id_to_tier(model_id: str | None) -> str:
+    """Map a WIRE-LEVEL model id to the limiter's tier bucket.
+
+    Wire identity wins over env intent: an env var that names a model id
+    expresses one caller's intent, but the SAME id can be sent by many other
+    callers — letting an env var capture all of that id's traffic would invert
+    the protection. So the precedence is reverse-`ZAI_MODEL_MAP` → literals →
+    env vars → safe default. Returns one of {opus, sonnet, mid, haiku}; the
+    set deliberately matches `model_call_timeout_seconds` plus the new `mid`.
+
+    Precedence:
+      1. Exact reverse-`ZAI_MODEL_MAP` match (case-insensitive).
+      2. Literals glm-4.6 / glm-4.7 → "mid".
+      3. Env vars (read at call time), only for ids matched by nothing above.
+         If multiple env vars claim the same unknown id, resolve to the most
+         conservative (lowest-concurrency) tier and warn once per process.
+      4. Unknown / empty / None → "sonnet" (safe default).
+    """
+    if not model_id or not model_id.strip():
+        return "sonnet"
+    norm = model_id.strip().lower()
+
+    # 1. Reverse ZAI_MODEL_MAP (case-insensitive).
+    for tier, mapped in ZAI_MODEL_MAP.items():
+        if mapped.lower() == norm:
+            return tier
+
+    # 2. Literal mid-tier ids that bypass ZAI_MODEL_MAP.
+    if norm in _MID_TIER_LITERALS:
+        return "mid"
+
+    # 3. Intent-env vars — only for ids unclaimed wire-level above.
+    claimed: list[str] = []
+    for env_name, tier in _ENV_TIER_VARS:
+        val = (os.getenv(env_name) or "").strip().lower()
+        if val and val == norm:
+            claimed.append(tier)
+    if claimed:
+        if len(set(claimed)) > 1:
+            chosen = min(claimed, key=lambda t: _TIER_CONSERVATIVENESS.index(t))
+            if norm not in _TIER_CONFLICT_WARNED:
+                _TIER_CONFLICT_WARNED.add(norm)
+                logger.warning(
+                    "model_id_to_tier: id %r claimed by multiple intent-env vars "
+                    "(%s); resolving to most-conservative tier %r",
+                    model_id, ", ".join(sorted(set(claimed))), chosen,
+                )
+            return chosen
+        return claimed[0]
+
+    # 4. Safe default.
+    return "sonnet"
 
 
 def _is_truthy(value: str) -> bool:

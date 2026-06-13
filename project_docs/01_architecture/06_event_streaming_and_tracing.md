@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/api/process_turn_bridge.py
   - src/universal_agent/trace_utils.py
   - src/universal_agent/trace_catalog.py
-last_verified: 2026-05-29
+last_verified: 2026-06-10
 ---
 
 # Event Streaming & Tracing
@@ -48,7 +48,7 @@ class EventType(str, Enum):
 
 ### Two enums, kept string-compatible by hand
 
-There is a **parallel** `EventType` enum on the transport side: `api/events.py::EventType`. The transport enum is a superset — it re-declares all the producer events plus client→server control events (`QUERY`, `APPROVAL`, `PING`, `CANCEL`), server control events (`CONNECTED`, `QUERY_COMPLETE`, `CANCELLED`, `PONG`), and two extra server pushes (`SYSTEM_EVENT`, `SYSTEM_PRESENCE`). The bridge converts by string value, not by identity:
+There is a **parallel** `EventType` enum on the transport side: `api/events.py::EventType`. The transport enum is a superset — it re-declares the producer events — **except** the four `URW_PHASE_*` / `URW_EVALUATION` phase events, which exist only producer-side in `agent_core.py::EventType` — plus client→server control events (`QUERY`, `APPROVAL`, `PING`, `CANCEL`), server control events (`CONNECTED`, `QUERY_COMPLETE`, `CANCELLED`, `PONG`), and two extra server pushes (`SYSTEM_EVENT`, `SYSTEM_PRESENCE`). The bridge converts by string value, not by identity:
 
 ```python
 # api/process_turn_bridge.py::_convert_agent_event  (also api/agent_bridge.py)
@@ -292,7 +292,7 @@ On timeout the engine cancels the task and emits an `ERROR` event (`"Execution t
 
 ## Run log vs. trace
 
-Separately from `trace.json`, the engine optionally redirects subprocess stdio into `<workspace>/run.log` (`USE_PROCESS_STDIO_REDIRECT`) and writes plain-text breadcrumbs per event (`👤 USER`, `🤖 ASSISTANT`, `🛠️ TOOL CALL`, `📦 TOOL RESULT`, `ℹ️ STATUS`, `❌ ERROR`). On engine error, the last ~4KB of `run.log` is read and attached to the `ERROR` event's `log_tail` field so failures surface context without huge payloads.
+Separately from `trace.json`, the engine optionally redirects subprocess stdio into `<workspace>/run.log` (env `UA_GATEWAY_PROCESS_STDIO_REDIRECT`, default off, read into the `USE_PROCESS_STDIO_REDIRECT` engine constant) and writes plain-text breadcrumbs per event (`👤 USER`, `🤖 ASSISTANT`, `🛠️ TOOL CALL`, `📦 TOOL RESULT`, `ℹ️ STATUS`, `❌ ERROR`). On engine error, the last ~4KB of `run.log` is read and attached to the `ERROR` event's `log_tail` field so failures surface context without huge payloads.
 
 ## Rehydration / viewer
 
@@ -312,7 +312,7 @@ There is **no** server-side `hydrate()` step anymore. Per `viewer/__init__.py`, 
 | `LANGSMITH_API_KEY` | Enables LangSmith→OTel→Logfire SDK trace bridge | none (bridge off) |
 | `turn_timeout_seconds` (per-request metadata) | Per-turn wall-clock cap, highest priority | 0 (none) |
 | `UA_PROCESS_TURN_TIMEOUT_SECONDS` | Legacy global per-turn wall-clock cap | 0 |
-| `USE_PROCESS_STDIO_REDIRECT` | Redirect subprocess stdio into `run.log` | (engine constant) |
+| `UA_GATEWAY_PROCESS_STDIO_REDIRECT` | Redirect subprocess stdio into `run.log` (read into the `USE_PROCESS_STDIO_REDIRECT` engine constant) | `false` |
 
 ## Gotchas (code-verified)
 

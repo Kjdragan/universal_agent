@@ -18,7 +18,7 @@ code_paths:
   - scripts/install_uv_cache_prune_timer.sh
   - deployment/systemd/universal-agent-uv-cache-prune.service
   - deployment/systemd/universal-agent-uv-cache-prune.timer
-last_verified: 2026-06-04
+last_verified: 2026-06-11
 ---
 
 # Deployment & CI/CD
@@ -27,7 +27,7 @@ This subsystem governs how code moves from a branch to running production. Every
 
 ## Workflow inventory
 
-`.github/workflows/` holds eight workflows. Six are the CI/CD core; two are documentation-governance gates owned by the doc-system (covered by the documentation-governance rules in `project_docs/CLAUDE.md` — listed here only for completeness).
+`.github/workflows/` holds the CI/CD core plus documentation-governance gates owned by the doc-system (covered by the documentation-governance rules in `project_docs/CLAUDE.md` — listed here only for completeness).
 
 | Workflow (`name:`) | File | Trigger | Purpose |
 |---|---|---|---|
@@ -38,7 +38,8 @@ This subsystem governs how code moves from a branch to running production. Every
 | **Deploy Notify** | `deploy-notify.yml` | `workflow_run` on **Deploy** completed | Truthful deploy-complete signal to the operator's Telegram: confirms the **live** `/api/v1/version` SHA (Rule A) and reports ✅ / ⚠️ / ❌. |
 | **CI Failure Issue Filer** | `ci-failure-issue.yml` | `workflow_run completed` on the watched workflows | Files a `ci-failure` GitHub issue on any failed run; auto-closes it when the same workflow+branch goes green. |
 | Documentation Audit | `doc-audit.yml` | `pull_request` touching `project_docs/**` | Doc-governance PR gate (`doc_audit.py`). Doc-system owned. |
-| Nightly Documentation Health | `doc-nightly.yml` | cron `35 18 * * *`, manual | Nightly doc-accuracy sweep (ZAI). Doc-system owned. |
+| Docfix Tripwire | `docfix-tripwire.yml` | every `pull_request` (always-on) | **Required status check**: a `docfix/*` PR may touch documentation paths only; passes through all other branches. Doc-system owned. |
+| Nightly Documentation Health | `doc-nightly.yml` | cron `35 6 * * *` (~1:35 AM CT), manual | Nightly doc-accuracy sweep (ZAI). Doc-system owned. |
 
 Dependency bumps are automated by `.github/dependabot.yml` (`pip` + `github-actions`, weekly), which opens PRs against `main` that flow through the same gate.
 
@@ -136,6 +137,8 @@ concurrency:
 ```
 
 `cancel-in-progress: false` **queues** concurrent deploys instead of cancelling them. When several PRs squash-merge within seconds, their `push` events would otherwise fire `deploy.yml` simultaneously and collide on `/opt/universal_agent/.git/index.lock` (`fatal: Unable to create ... index.lock: File exists`). Serializing means last-write-wins on production and every deploy runs to completion.
+
+**Deploy coalescing (Phase B, 2026-06-11).** On top of serialization, the first job step (`Coalesce redundant deploys`) skips a queued run that is **superseded** by a strictly-newer Deploy run still queued/in-progress — because `remote_deploy.sh` deploys origin/main HEAD, the newer run ships a superset. A burst of N merges thus collapses to ~2 restarts (the running first + the newest), never fewer than the latest. The decision is the unit-tested `scripts/deploy/deploy_coalesce.py::should_skip_redundant_deploy`; it is fail-safe (any error ⇒ proceed). Full rationale: [`12_deploy_restart_resilience_adr.md`](12_deploy_restart_resilience_adr.md).
 
 ### How the deploy script reaches the VPS (decomposed 2026-05-30)
 
@@ -302,10 +305,11 @@ Runs **24/7** (infrastructure-event handler, exempt from active-hours dormancy).
 
 ## Documentation-governance gates (doc-system owned)
 
-Two workflows enforce the rebuilt documentation system (canonical docs in `project_docs/`); they are listed here for the complete CI picture but are owned by the doc-system:
+Three workflows enforce the rebuilt documentation system (canonical docs in `project_docs/`); they are listed here for the complete CI picture but are owned by the doc-system:
 
-- **Documentation Audit** (`doc-audit.yml`): `pull_request` touching `project_docs/**` / `scripts/doc_audit.py`. Runs `python scripts/doc_audit.py` (stdlib-only — **errors fail the PR**: frontmatter schema, `code_paths` globs resolve, `file::symbol` citations grep-resolve, no line-number citations, orphan/link check) plus a tripwire that fails any automated doc-fix PR touching non-doc paths.
-- **Nightly Documentation Health** (`doc-nightly.yml`): cron `35 18 * * *`. Runs `doc_audit.py --warn-only`, `gen_doc_index.py --check`, and a ZAI-backed `doc_accuracy_sweep.py --open-issue` accuracy batch (the sweep step uses `uv` pinned to Python 3.12).
+- **Documentation Audit** (`doc-audit.yml`): `pull_request` touching `project_docs/**` / `scripts/doc_audit.py`. Runs `python scripts/doc_audit.py` (stdlib-only — **errors fail the PR**: frontmatter schema, `code_paths` globs resolve, `file::symbol` citations grep-resolve, no line-number citations, orphan/link check).
+- **Docfix Tripwire** (`docfix-tripwire.yml`): always-on `pull_request` check ("Doc-fix PR touches docs only") and a **required status check** on `main`. For `docfix/*` head branches it hard-fails any change outside documentation paths (merge-base three-dot diff); for every other branch it passes through. This is the mechanical firewall that makes the autonomous doc-fix loop's docs-only auto-merge safe (see the [doc-triage ADR](11_autonomous_doc_triage_options_adr.md)). It lived inside `doc-audit.yml` until 2026-06-10, where its path filter made it impossible to require.
+- **Nightly Documentation Health** (`doc-nightly.yml`): cron `35 6 * * *` (~1:35 AM CT; overnight by operator request 2026-06-10). Runs `doc_audit.py --warn-only`, `gen_doc_index.py --check`, and a ZAI-backed `doc_accuracy_sweep.py --open-issue` accuracy batch (the sweep step uses `uv` pinned to Python 3.12).
 
 ## Verifying a deploy actually shipped
 
@@ -348,6 +352,7 @@ flowchart TD
     E -->|dedup: 1 timer per pr|branch:workflow:sha| F[cron one-shot\nrun_at +15m, delete_after_run\nDURABLE — survives deploy restart]
     F -->|grace fires| G[ci_failure_grace_recheck.py\nre-verify via gh]
     G -->|issue closed / PR merged / newer push / run green / already claimed| H[Stand down\ncoordination win]
+    H -->|moot: PR merged/closed or run green| H2[Auto-close the ci-failure issue\nno future green run will]
     G -->|orphaned + autofixable workflow + PR| I[Claim issue: label ci-autofix-dispatched\nqueue Cody fix mission]
     I --> J[Cody: STEP 0 re-verify-or-noop\nfix, push to PR branch\nself-label PR ci-autofix]
     J --> K[pr-auto-merge.yml lands PR once green]
@@ -357,6 +362,8 @@ flowchart TD
 **Why a dedicated route, not the hooks engine.** `hooks_service.handle_request` only emits `agent`/`wake` actions — routing CI-failure through it would wake an agent and put CI triage back into Simone's cognition. The dedicated `@app.post("/api/v1/hooks/ci-failure")` route (defined *before* the `/api/v1/hooks/{subpath}` catch-all so it wins) keeps the loop deterministic and out of agent reasoning.
 
 **Why a grace window.** The session that owns a failure almost always fix-forwards it within minutes. So we never act immediately: the gateway schedules a durable one-shot ~15-min timer and `ci_failure_grace_recheck.py` re-verifies before doing anything. **Re-verify happens at every stage** (TOCTOU guard): schedule-time dedup, grace-fire `decide_action`, and the Cody brief's STEP 0.
+
+**Stand-down auto-close (added 2026-06-10).** The GHA `close-issue` job only fires on a *green run of the same workflow+branch* — once a PR merges or closes, its branch never runs again, so its `ci-failure` issue lingered until a human closed it (observed: #905 sat ~3.5h after PR #904 merged). The grace recheck is the last actor to look at the failure, so on a stand-down whose reason is moot (`scripts/ci_failure_grace_recheck.py::MOOT_STAND_DOWN_REASONS`: `pr_merged` / `pr_closed` / `run_no_longer_failing`) it closes the issue itself via `close_stale_issue`, with an explanatory comment. `newer_push` deliberately stays open: a red newer run files its own issue, and the branch-green close job sweeps the old one.
 
 | Piece | Location |
 |---|---|
@@ -370,6 +377,6 @@ flowchart TD
 
 **Classification.** Cody-fixable = `PR Validate` / `Documentation Audit` / `Nightly Documentation Health` **with a PR present** (the remedy is a code edit on the PR branch). Everything else — `Deploy`, `PR Auto-Merge`, `PR Rebase Watchdog`, or any push-to-main with no PR — escalates to the operator (the remedy is infra/secret/merge-state, not a code edit).
 
-**Config / secrets.** `UA_CI_AUTOFIX_ENABLED` (default on; kill switch), `UA_CI_AUTOFIX_GRACE_SECONDS` (default 900, min 60). `UA_OPS_TOKEN` must exist as a GitHub Actions repo secret (mirrors Infisical prod); the GHA step skips the POST if it's unset.
+**Config / secrets.** `UA_CI_AUTOFIX_ENABLED` (default on; kill switch), `UA_CI_AUTOFIX_GRACE_SECONDS` (default 900, min 60), `UA_CI_AUTOFIX_AUTOCLOSE` (default on; stand-down auto-close kill switch). `UA_OPS_TOKEN` must exist as a GitHub Actions repo secret (mirrors Infisical prod); the GHA step skips the POST if it's unset.
 
 **Interim being retired.** Until this hook is verified live, `memory/HEARTBEAT.md` "CI/CD Health Check" keeps Simone polling `ci-failure` issues each beat. Once live-verified, that directive is removed so CI triage fully leaves Simone's cognition.

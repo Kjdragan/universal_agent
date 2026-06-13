@@ -9,9 +9,6 @@ name: Documentation Audit
 # Then scripts/registry_drift_check.py adds status-conditional teeth for the task
 # type registry: a `removed` row may not cite live code, a `canonical` row must,
 # and the scheduling frozenset pointer must stay intact.
-# Plus a tripwire: an automated doc-fix PR (head branch docfix/*) must touch ONLY
-# documentation paths — a hard mechanical replacement for the prompt-only firewall
-# that was bypassed on 2026-04-24.
 
 on:
   pull_request:
@@ -48,34 +45,9 @@ jobs:
         # deletions that never touch project_docs/ and so never trigger this job.)
         run: python scripts/registry_drift_check.py
 
-  docfix-tripwire:
-    name: Doc-fix PR touches docs only
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    # Only enforced for automated documentation-fix PRs.
-    if: startsWith(github.head_ref, 'docfix/')
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 50  # shallow: these jobs need only base+head (or no git), not 323MB of full history
-      - name: Fail if any non-documentation path changed
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          echo "Changed files in this doc-fix PR:"
-          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
-          echo "$changed"
-          # Allowed: project_docs/**, docs/** (legacy/archive), root *.md, AGENTS.md
-          violations="$(echo "$changed" | grep -vE '^(project_docs/|docs/|[^/]+\.md$|AGENTS\.md$)' || true)"
-          if [ -n "$violations" ]; then
-            echo "::error::Doc-fix PR modified non-documentation paths:"
-            echo "$violations"
-            exit 1
-          fi
-          echo "OK — doc-fix PR touches documentation only."
-
   # NOTE: the "No new writes to archived docs/" guard moved to its own always-on
   # workflow (.github/workflows/archive-write-guard.yml) so it can be a REQUIRED
-  # status check. A path-filtered guard (this workflow only runs on doc paths)
-  # cannot be made required without blocking unrelated PRs that never trigger it.
+  # status check, and the docfix tripwire ("Doc-fix PR touches docs only") moved
+  # to .github/workflows/docfix-tripwire.yml on 2026-06-10 for the same reason.
+  # A path-filtered guard (this workflow only runs on doc paths) cannot be made
+  # required without blocking unrelated PRs that never trigger it.

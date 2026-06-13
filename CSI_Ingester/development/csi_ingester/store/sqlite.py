@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sqlite3
 
@@ -331,6 +332,32 @@ CREATE TABLE IF NOT EXISTS transcript_incidents (
 );
 """
 
+# Durable full-transcript corpus. The enrich pass fetches each YouTube transcript
+# (avg ~13K chars), sends only a ~12K head/middle/tail excerpt to the analyzer LLM,
+# then historically DISCARDED the body — keeping only transcript_chars/transcript_ref
+# on rss_event_analysis. This table preserves the full text, keyed by video_id, so the
+# downstream intel-brief author can synthesize from the real source (not the ~300-char
+# distilled key_claims) and for future intelligence mining over the corpus.
+MIGRATION_0014_YOUTUBE_TRANSCRIPTS = """
+CREATE TABLE IF NOT EXISTS youtube_transcripts (
+    video_id         TEXT PRIMARY KEY,
+    event_id         TEXT,
+    channel_id       TEXT,
+    channel_name     TEXT,
+    title            TEXT,
+    published_at     TEXT,
+    language         TEXT,
+    char_count       INTEGER NOT NULL DEFAULT 0,
+    transcript_text  TEXT NOT NULL,
+    source_ref       TEXT,
+    fetched_at       TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_youtube_transcripts_channel_id ON youtube_transcripts(channel_id);
+CREATE INDEX IF NOT EXISTS idx_youtube_transcripts_published_at ON youtube_transcripts(published_at);
+CREATE INDEX IF NOT EXISTS idx_youtube_transcripts_event_id ON youtube_transcripts(event_id);
+CREATE INDEX IF NOT EXISTS idx_youtube_transcripts_fetched_at ON youtube_transcripts(fetched_at);
+"""
+
 MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0001_core", MIGRATION_0001_CORE),
     ("0002_source_state", MIGRATION_0002_SOURCE_STATE),
@@ -345,13 +372,33 @@ MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0011_content_schema", MIGRATION_0011_CONTENT_SCHEMA),
     ("0012_transcript_error", MIGRATION_0012_TRANSCRIPT_ERROR),
     ("0013_transcript_incidents", MIGRATION_0013_TRANSCRIPT_INCIDENTS),
+    ("0014_youtube_transcripts", MIGRATION_0014_YOUTUBE_TRANSCRIPTS),
 )
+
+
+# csi.db is in rollback-journal mode and is written by BOTH the long-running
+# csi-ingester service and the csi-rss-semantic-enrich timer. With the default
+# busy_timeout of 0, any momentary write contention raises
+# "sqlite3.OperationalError: database is locked" instantly. A busy_timeout makes
+# a contending writer WAIT for the lock (the contention is bursty, not held), so
+# concurrent CSI writers serialize cleanly instead of failing.
+_DEFAULT_BUSY_TIMEOUT_MS = 15000
+
+
+def _busy_timeout_ms() -> int:
+    raw = str(os.getenv("CSI_SQLITE_BUSY_TIMEOUT_MS", str(_DEFAULT_BUSY_TIMEOUT_MS))).strip()
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_BUSY_TIMEOUT_MS
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    timeout_ms = _busy_timeout_ms()
+    conn = sqlite3.connect(str(db_path), timeout=timeout_ms / 1000.0)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout={timeout_ms}")
     return conn
 
 

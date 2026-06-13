@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/loop_control.py
   - src/universal_agent/feature_flags.py
   - justfile
-last_verified: 2026-05-29
+last_verified: 2026-06-10
 ---
 
 # Execution Environments
@@ -40,7 +40,7 @@ There are two axes to keep separate:
 |---|---|---|---|---|
 | **Interactive coding** | Operator at a terminal (`claude`, Antigravity) | Anthropic Max via OAuth (`~/.claude/.credentials.json`) | Interactive TTY | `scripts/claude_with_mcp_env.sh` → `_claude_launcher.py` strips `ANTHROPIC_*` so OAuth wins |
 | **Autonomous principals** | Simone heartbeats, Atlas, dispatch sweep, intel crons | ZAI proxy / GLM | In-process Claude Agent SDK | `initialize_runtime_secrets()` injects `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` from Infisical (no exclude) |
-| **Cody per-task** | VP-dispatched coding/demo missions | **Anthropic Max by default** (since 2026-05-11 PM); ZAI on override | `claude --print` CLI subprocess (anthropic) or SDK (zai) | `services/cody_mode.resolve_cody_mode` → `vp_orchestration` forces `execution_mode="cli"` for anthropic |
+| **Cody per-task** | VP-dispatched coding/demo missions | **ZAI / GLM by default** (since 2026-06-07); Anthropic Max on per-task/per-VP override | SDK / autonomous in-process (zai) or `claude --print` CLI subprocess (anthropic) | `services/cody_mode.resolve_cody_mode` → `vp_orchestration` forces `execution_mode="cli"` for anthropic |
 
 The rest of this doc explains each.
 
@@ -60,7 +60,7 @@ flowchart TD
       C1["vp_dispatch_mission"] --> C2["resolve_cody_mode()"]
       C2 -->|anthropic| C3["execution_mode=cli<br/>_build_cli_env scrubs ANTHROPIC_*"]
       C3 --> C4["claude --print --model claude-opus-4-8<br/>OAuth / CLAUDE_CODE_OAUTH_TOKEN"]
-      C2 -->|zai| C5["execution_mode=autonomous<br/>SDK on ZAI"]
+      C2 -->|zai default| C5["execution_mode=autonomous<br/>SDK on ZAI"]
     end
 ```
 
@@ -190,24 +190,26 @@ runs as VP-dispatched missions via Task Hub). Every Cody task carries a
 Priority order (highest first):
 
 1. **`task.cody_mode`** — per-task override on `task_hub_items`.
-2. **DB setting `cody_default_mode`** — operator-configurable from the dashboard
-   tile, persisted in `task_hub_settings` (read via `_resolve_db_setting`).
-3. **`UA_CODY_DEFAULT_MODE`** env var — deploy-time override, usually unset.
-4. **`_HARDCODED_FALLBACK_MODE = "anthropic"`** — the final default.
+2. **Per-VP DB pin `cody_default_mode:<vp_id>`** — operator pin for a single VP
+   (flip CODIE without disturbing the others), read via `_resolve_vp_db_setting`.
+3. **Global DB setting `cody_default_mode`** — operator-configurable from the
+   dashboard tile, persisted in `task_hub_settings` (read via `_resolve_db_setting`).
+4. **`UA_CODY_DEFAULT_MODE`** env var — deploy-time override, usually unset.
+5. **Per-VP profile default `VpProfile.inference_mode`** — the agent defines its
+   own inference backend (read via `_resolve_profile_default`); consulted only when
+   a `vp_id` is supplied and nothing above matched.
+6. **`_HARDCODED_FALLBACK_MODE = "zai"`** — the final VP-blind default (the demo /
+   no-`vp_id` path).
 
-> **Correction to legacy docs / stale comments.** The hardcoded fallback was
-> flipped from `"zai"` to `"anthropic"` on **2026-05-11 PM** by operator
-> decision (`cody_mode.py::_HARDCODED_FALLBACK_MODE`). Cody now defaults to real
-> Anthropic Max for **every** task unless explicitly overridden — not just for
-> `/opt/ua_demos/` workspaces. Note that two function signatures in
-> `claude_cli_client.py` (`_execute_cli_session(cody_mode="zai")` and
-> `_build_cli_env(cody_mode="zai")`) and a module docstring in that file still
-> carry a default/comment of `"zai"`. Those are *parameter defaults / stale
-> comments* on the CLI client, **not** the dispatch default — by the time a
-> mission reaches the CLI client, `vp_orchestration` has already resolved and
-> plumbed the real mode into the payload. The authoritative default lives in
-> `cody_mode.py`. `[VERIFY: consider aligning the cody_mode_default param/comment
-> in claude_cli_client.py with "anthropic" to remove the cross-file confusion.]`
+> **Default history.** The hardcoded fallback was flipped `"zai"` → `"anthropic"`
+> on **2026-05-11 PM**, then flipped **back** `"anthropic"` → `"zai"` on
+> **2026-06-07** (`cody_mode.py::_HARDCODED_FALLBACK_MODE`) because Anthropic began
+> API-billing the Claude-Code-via-Max SDK path — so Cody no longer runs on real
+> Anthropic by default. **Every Cody/VP path now resolves to ZAI/GLM unless
+> explicitly overridden** (per-task `cody_mode`, a per-VP / global DB pin, the env
+> var, or a VP profile whose `inference_mode = "anthropic"`). The `cody_mode="zai"`
+> parameter defaults in `claude_cli_client.py` (`_execute_cli_session`,
+> `_build_cli_env`) now correctly match this hardcoded default.
 
 `resolve_from_payload` is the downstream variant used by the VP worker / CLI
 client when the task row is no longer in scope — it reads `payload.cody_mode`
@@ -215,7 +217,9 @@ or `payload.metadata.cody_mode`, falls through to env / hardcoded default, and
 **does not** consult the DB setting (the dispatch decision is already baked in).
 
 `get_default_mode_state` / `set_default_mode` back the dashboard tile (current
-mode + who/when changed + source: `db_setting` / `env_var` / `hardcoded_default`).
+mode + who/when changed + source: `db_setting_vp` / `db_setting_global` / `env_var`
+/ `profile_default` / `hardcoded_default`; `list_vp_mode_states` reports the
+per-VP effective modes).
 `set_default_mode` raises `ValueError` on an invalid mode so the settings
 endpoint can return 400.
 
@@ -431,9 +435,11 @@ list. Pick the surface that matches the mode.
 
 ## Gotchas / common mistakes
 
-- **"Cody runs on ZAI."** Wrong since 2026-05-11 PM. Cody defaults to Anthropic
-  Max for every task. Revert only via per-task `cody_mode="zai"`, the dashboard
-  tile, or `UA_CODY_DEFAULT_MODE=zai`.
+- **"Cody defaults to Anthropic Max."** Wrong since 2026-06-07 — Cody defaults to
+  **ZAI/GLM** again (Anthropic began API-billing the Max-SDK path). Get Anthropic
+  Max only via an explicit override: per-task `cody_mode="anthropic"`, a per-VP /
+  global dashboard pin, `UA_CODY_DEFAULT_MODE=anthropic`, or a VP profile with
+  `inference_mode="anthropic"`.
 - **"Anthropic Max is only for `/opt/ua_demos/`."** Wrong. `_build_cli_env`
   scrubs `ANTHROPIC_*` for any Cody mission with `cody_mode="anthropic"`
   regardless of workspace location.

@@ -126,6 +126,7 @@ from universal_agent.heartbeat_service import (
     _parse_duration_seconds as _parse_heartbeat_duration_seconds,
     _resolve_heartbeat_interval_env as _resolve_hb_interval_env,
     _resolve_min_interval_seconds as _resolve_hb_min_interval_seconds,
+    heartbeat_drain_on_shutdown_enabled,
 )
 from universal_agent.hooks_service import HooksService, build_manual_youtube_action
 from universal_agent.identity import resolve_user_id
@@ -761,6 +762,31 @@ def _artifact_api_file_url(rel_path: str) -> str:
     return f"/api/artifacts/files/{urllib.parse.quote(normalized, safe='/')}"
 
 
+def _session_viewer_url(*, session_id: str = "", run_id: str = "", workspace_dir: str = "") -> str:
+    """Deep link into the 3-panel session viewer (web-ui ``app/page.tsx``).
+
+    Mirrors ``web-ui/lib/viewer/openViewer.ts``: prefer ``session_id`` over
+    ``run_id`` (never send both) and forward ``workspace`` so the resolver's
+    workspace-path branch (``viewer/resolver.py::resolve_session_view_target``)
+    can place VP-mission / hook-session builds. Returns "" when no session/run
+    identity exists (pre-P5 manifests) — callers render no link.
+    """
+    sid = str(session_id or "").strip()
+    rid = str(run_id or "").strip()
+    ws = str(workspace_dir or "").strip()
+    if not sid and not rid:
+        return ""
+    params: list[tuple[str, str]] = []
+    if sid:
+        params.append(("session_id", sid))
+    elif rid:
+        params.append(("run_id", rid))
+    if ws:
+        params.append(("workspace", ws))
+    params.append(("role", "viewer"))
+    return "/?" + urllib.parse.urlencode(params)
+
+
 def _tutorial_manifest(run_dir: Path) -> dict[str, Any]:
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists() or not manifest_path.is_file():
@@ -950,6 +976,12 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
             video_url = str(manifest.get("video_url") or "").strip()
             if not video_url and video_id:
                 video_url = f"https://www.youtube.com/watch?v={video_id}"
+            # P5 session link (15_demo_tutorial_pipeline_adr.md): stamped by
+            # hooks_service._stamp_tutorial_manifest_build_session post-run.
+            # Absent on pre-P5 manifests -> empty strings, never an error.
+            build_session_id = str(manifest.get("build_session_id") or "").strip()
+            build_run_id = str(manifest.get("build_run_id") or "").strip()
+            build_workspace_dir = str(manifest.get("build_workspace_dir") or "").strip()
             run_item = {
                 "run_path": run_rel,
                 "run_dir": str(run_dir),
@@ -965,6 +997,14 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
                 "run_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
                 "files": files,
                 "implementation_required": implementation_required,
+                "session_id": build_session_id,
+                "run_id": build_run_id,
+                "session_workspace_dir": build_workspace_dir,
+                "session_url": _session_viewer_url(
+                    session_id=build_session_id,
+                    run_id=build_run_id,
+                    workspace_dir=build_workspace_dir,
+                ),
             }
             runs.append((mtime, run_item))
 
@@ -3649,6 +3689,24 @@ def _reconcile_stale_vp_missions_once(
         )
         reconciled += 1
 
+        # Deterministic wiki-rescue (flag-gated UA_WIKI_RESCUE_ENABLED): a
+        # SIGTERM/stale-killed proactive_wiki mission gets the same bounded
+        # rescue ladder as a clean worker-loop failure (the vp/worker_loop.py
+        # hook covers clean failures; this covers the reconcile path). The
+        # finalize above already surfaced the vp_failure task the driver reads,
+        # and the status='running' SELECT guarantees once-per-failure.
+        try:
+            from universal_agent.services.wiki_rescue_driver import schedule_wiki_rescue
+
+            schedule_wiki_rescue(
+                mission_id=mission_id,
+                mission_type=str(row["mission_type"] or ""),
+                failure_mode=reconcile_failure_mode,
+                status=final_status,
+            )
+        except Exception:
+            logger.debug("wiki-rescue scheduling failed for %s", mission_id, exc_info=True)
+
     return reconciled
 
 
@@ -5433,7 +5491,7 @@ def _build_csi_recommendation_task_items(
         ]
         agent_ready = owner_lane == "agent"
         if agent_ready:
-            labels.append("agent-ready")
+            labels.append(task_hub.TASK_LABEL_AGENT_READY)
             labels.append(f"sub-agent:{subtask_role}")
         else:
             labels.append("needs-human")
@@ -7243,6 +7301,43 @@ async def _run_gateway_session_request(
                 notification_kind=notification_kind,
                 goal_message=goal_message,
             )
+            # Flat, email-friendly diagnostic context. The notification-dispatcher
+            # email renderer only surfaces a small allowlist of metadata keys, so
+            # the nested ``goal_satisfaction`` blob never reaches the operator's
+            # inbox. Lift the few facts that make a lifecycle miss debuggable
+            # without opening the VPS — which task failed, which run/workspace to
+            # inspect, how many tool calls happened (``0`` is the tell that the
+            # run never started, e.g. an upstream ZAI 429/FUP), and the run.log
+            # tail that carries the actual error line.
+            notification_metadata_extra: dict[str, Any] = {}
+            if request_run_kind == "todo_execution":
+                observed = goal_satisfaction.get("observed") if isinstance(goal_satisfaction, dict) else {}
+                observed = observed if isinstance(observed, dict) else {}
+                diag_task_ids = [
+                    str(task_id).strip()
+                    for task_id in (observed.get("invalid_task_ids") or [])
+                    if str(task_id).strip()
+                ]
+                if not diag_task_ids and isinstance(request.metadata, dict):
+                    diag_task_ids = [
+                        str(task_id).strip()
+                        for task_id in (request.metadata.get("claimed_task_ids") or [])
+                        if str(task_id).strip()
+                    ]
+                notification_metadata_extra["tool_calls"] = tool_call_count
+                if diag_task_ids:
+                    # ``task_id`` is also the notification dispatcher's per-event
+                    # cooldown scope key (``_scope_key_for_record``) — supplying
+                    # it makes the cooldown resolve per-task instead of falling
+                    # back to the shared ``daemon_simone_todo`` session id. (The
+                    # separate per-kind rollup window still batches same-kind
+                    # alerts regardless of scope.)
+                    notification_metadata_extra["task_id"] = diag_task_ids[0]
+                    notification_metadata_extra["invalid_task_ids"] = diag_task_ids
+                diag_workspace = active_execution_workspace or session.workspace_dir or ""
+                log_tail = _read_run_log_tail(diag_workspace) if diag_workspace else None
+                if log_tail:
+                    notification_metadata_extra["log_tail"] = log_tail
             _add_notification(
                 kind=notification_kind,
                 title=notification_title,
@@ -7257,6 +7352,7 @@ async def _run_gateway_session_request(
                     "workspace_dir": active_execution_workspace or session.workspace_dir or "",
                     "active_run_workspace": _session_active_run_workspace(session) or active_execution_workspace or "",
                     "deploy_restart_casualty": deploy_restart_casualty,
+                    **notification_metadata_extra,
                 },
             )
             await manager.broadcast(
@@ -14420,6 +14516,13 @@ async def _run_after_deployment_window(
 async def lifespan(app: FastAPI):
     global _FACTORY_POLICY, _delegation_mission_bus, _DEPLOYMENT_PROFILE
     process_heartbeat.start()
+    # C1 (measure-first, deploy-restart resilience ADR 12): time the blocking
+    # pre-yield startup segments so the cold-start log localizes where the
+    # gateway's restart dead-window actually goes. Pure instrumentation — no
+    # behavior change, no reorder. The reorder (if any) is gated on this data.
+    from universal_agent.startup_timing import StartupPhaseTimer  # noqa: PLC0415 — lazy
+
+    _startup_timer = StartupPhaseTimer()
     logger.info("🚀 Universal Agent Gateway Server starting...")
     logger.info("Lifespan: Resolving bootstrap state...")
     bootstrap_state = bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
@@ -14432,6 +14535,7 @@ async def lifespan(app: FastAPI):
     if _refreshed_profile in {"local_workstation", "standalone_node", "vps"}:
         _DEPLOYMENT_PROFILE = _refreshed_profile
     logger.info("Lifespan: deployment profile resolved to %s", _DEPLOYMENT_PROFILE)
+    _startup_timer.mark("bootstrap_runtime_environment")
     _FACTORY_POLICY = bootstrap_state.policy
     _refresh_runtime_feature_flags_from_env()
     # Phase D (2026-05-11): if we're in dev mode, log a per-loop summary so the
@@ -14502,6 +14606,7 @@ async def lifespan(app: FastAPI):
     
     # Initialize runtime database (required by ProcessTurnAdapter -> setup_session)
     import universal_agent.main as main_module
+    _startup_timer.mark("config_csi_redis_factory")
     db_path = get_runtime_db_path()
     logger.info("Connecting to runtime DB: %s", db_path)
     main_module.runtime_db_conn = connect_runtime_db(db_path)
@@ -14513,6 +14618,7 @@ async def lifespan(app: FastAPI):
     ensure_schema(main_module.runtime_db_conn)
     _ensure_activity_schema(main_module.runtime_db_conn)
     _activity_prune_old(main_module.runtime_db_conn)
+    _startup_timer.mark("runtime_db_connect_and_schema")
 
     # Pre-warm SQLite page cache for the dashboard hot paths. The first
     # request after restart was paying 12–15s of cold-page cost on the
@@ -14535,6 +14641,7 @@ async def lifespan(app: FastAPI):
     except Exception as _prewarm_exc:  # noqa: BLE001 — defensive at boot
         logger.warning("Dashboard pre-warm failed (non-fatal): %s", _prewarm_exc)
 
+    _startup_timer.mark("dashboard_prewarm")
     persisted_notifications = _load_notifications_from_activity_store(_notifications_max)
     if persisted_notifications:
         _notifications[:] = list(reversed(persisted_notifications))
@@ -15169,6 +15276,8 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("🧹 No stale running VP missions detected on startup")
 
+    _startup_timer.mark("heartbeat_daemon_subsystem_and_startup_reconcile")
+
     # --- Periodic VP stale-mission reconciliation (covers daemons that stop
     # polling between deploys; on-startup reconcile alone leaves multi-hour gaps). ---
     if _vp_stale_reconcile_enabled:
@@ -15246,6 +15355,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed to start digest TTL sweep loops")
 
+    _startup_timer.mark("background_loops_spawned")
+    logger.info("⏱️  Gateway startup timing — %s", _startup_timer.summary())
+
     yield
     
     # Cleanup
@@ -15295,7 +15407,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.debug("Daemon session manager shutdown error (non-fatal)")
     if _heartbeat_service:
-        await _heartbeat_service.stop()
+        # ADR §C2 (deploy-restart resilience): drain an in-flight Simone heartbeat
+        # iteration before exit instead of SIGTERM-cancelling it (harm H2). systemd
+        # grants TimeoutStopSec (90s) for the drain; kill-switch is
+        # UA_HEARTBEAT_DRAIN_ON_SHUTDOWN_ENABLED=0 (restores legacy immediate cancel).
+        await _heartbeat_service.stop(drain=heartbeat_drain_on_shutdown_enabled())
     if _cron_service:
         await _cron_service.stop()
     try:
@@ -16802,6 +16918,174 @@ async def ops_proactive_health_email_test(
         note=str(note or "").strip(),
     )
     return result
+
+
+# ── ZAI emergency control plane (status + levers) ───────────────────────────
+
+
+@app.get("/api/v1/ops/zai/status")
+async def ops_zai_status(request: Request):
+    """Live ZAI inference health + control state for the emergency dashboard.
+
+    Aggregates the observability events (per-tier 429 rejection rates + FUP
+    counts), the rate-limiter snapshot (effective caps, outcome counters,
+    pause/freeze state), and the control-plane state (intervention level,
+    pauses, cap overrides). Read-only; all reads fail soft to empty/zero so the
+    dashboard renders even when a source is missing."""
+    _require_ops_auth(request)
+    try:
+        from universal_agent.services.zai_status import build_status
+
+        # build_status reads + JSON-parses the events file (≤10k lines, largest
+        # during an incident) — offload off the event loop so the 5s dashboard
+        # poll can't starve the gateway (the 2026-05-26 event-loop-starvation
+        # class). Fail-soft envelope still wraps it.
+        return await asyncio.to_thread(build_status)
+    except Exception as exc:  # noqa: BLE001 — status must degrade, not crash
+        logger.warning("ops_zai_status: aggregator raised", exc_info=True)
+        return {"error": f"status_unavailable: {type(exc).__name__}", "events": {}, "control": {}}
+
+
+class ZaiControlRequest(BaseModel):
+    """A single emergency-lever action against the ZAI control plane."""
+    action: str  # set_level | set_global_pause | set_tier_caps | set_tier_pause | clear
+    level: Optional[int] = None
+    active: Optional[bool] = None
+    ttl_seconds: Optional[float] = None
+    reason: str = ""
+    overrides: Optional[dict[str, dict[str, int]]] = None  # {tier: {cap?, max?}}
+    tiers: Optional[dict[str, bool]] = None                # {tier: paused?}
+
+
+@app.post("/api/v1/ops/zai/control")
+async def ops_zai_control(request: Request, payload: ZaiControlRequest):
+    """Apply an emergency ZAI lever — the dashboard's write side.
+
+    Actions:
+      - ``set_level`` {level 0..4, ttl_seconds?} — apply a ladder preset.
+      - ``set_global_pause`` {active, ttl_seconds?, reason?} — toggle the
+        account-wide pause (enforced at the httpx hook = ALL callers).
+      - ``set_tier_caps`` {overrides: {tier: {cap?, max?}}} — live per-tier caps.
+      - ``set_tier_pause`` {tiers: {tier: bool}} — per-tier hard stop.
+      - ``clear`` — reset to normal (level 0).
+
+    Writes the control file (atomic); the enforcement points pick it up within
+    ~2s. Auth required. Returns the resulting control state."""
+    _require_ops_auth(request)
+    from universal_agent.services import zai_control
+
+    action = (payload.action or "").strip().lower()
+    by = "dashboard"
+    try:
+        if action == "set_level":
+            if payload.level is None or int(payload.level) not in zai_control.LEVELS:
+                raise HTTPException(status_code=400, detail=f"Invalid level: {payload.level}")
+            state = zai_control.apply_level(
+                int(payload.level), ttl_seconds=payload.ttl_seconds,
+                reason=payload.reason, by=by,
+            )
+        elif action == "set_global_pause":
+            if payload.active is None:
+                raise HTTPException(status_code=400, detail="set_global_pause requires 'active'")
+            state = zai_control.set_global_pause(
+                bool(payload.active), ttl_seconds=payload.ttl_seconds,
+                reason=payload.reason, by=by,
+            )
+        elif action == "set_tier_caps":
+            if not isinstance(payload.overrides, dict):
+                raise HTTPException(status_code=400, detail="set_tier_caps requires 'overrides'")
+            for tier in payload.overrides:
+                if tier not in zai_control.TIERS:
+                    raise HTTPException(status_code=400, detail=f"Unknown tier: {tier}")
+            state = zai_control.set_tier_overrides(payload.overrides, by=by)
+        elif action == "set_tier_pause":
+            if not isinstance(payload.tiers, dict):
+                raise HTTPException(status_code=400, detail="set_tier_pause requires 'tiers'")
+            for tier in payload.tiers:
+                if tier not in zai_control.TIERS:
+                    raise HTTPException(status_code=400, detail=f"Unknown tier: {tier}")
+            state = zai_control.set_tier_pause(payload.tiers, by=by)
+        elif action == "clear":
+            state = zai_control.clear_all(by=by)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ops_zai_control: action %r failed", action, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"control_write_failed: {type(exc).__name__}")
+
+    return {"ok": True, "action": action, "control": state}
+
+
+# ── ZAI proactive-activity controls (per-process on/off) ────────────────────
+
+
+def _require_ops_auth_for_sudo_surface(request: Request) -> None:
+    """Stricter auth for the systemctl-shelling activity controls: fail CLOSED
+    if ops auth is entirely unconfigured on a server profile. A secrets-bootstrap
+    miss (this repo has prior incidents of OPS/SESSION tokens resolving empty at
+    boot, 2026-05-26) must NOT silently leave a ``sudo systemctl`` surface open.
+    On non-server profiles, defers to the normal ops-auth check."""
+    if _DEPLOYMENT_PROFILE == "vps" and not OPS_TOKEN and not OPS_JWT_SECRET:
+        raise HTTPException(status_code=503, detail="ops auth not configured for activity controls")
+    _require_ops_auth(request)
+
+
+@app.get("/api/v1/ops/zai/activities")
+async def ops_zai_activities(request: Request):
+    """Live state of the controllable proactive activities (the allowlisted
+    ZAI-consuming systemd timers + continuous services) plus the read-only
+    in-process loop states. Read-only; shells ``systemctl show`` N times so it
+    is offloaded off the event loop and fails soft per unit."""
+    _require_ops_auth_for_sudo_surface(request)
+    try:
+        from universal_agent.services.zai_activity_control import list_activities
+
+        return await asyncio.to_thread(list_activities)
+    except Exception as exc:  # noqa: BLE001 — must degrade, not crash the dashboard
+        logger.warning("ops_zai_activities: aggregator raised", exc_info=True)
+        return {"error": f"activities_unavailable: {type(exc).__name__}", "activities": []}
+
+
+class ZaiActivityControlRequest(BaseModel):
+    """Start/stop (etc.) one allowlisted proactive-activity unit."""
+    unit: str
+    action: str
+
+
+@app.post("/api/v1/ops/zai/activity-control")
+async def ops_zai_activity_control(request: Request, payload: ZaiActivityControlRequest):
+    """Dispatch a single systemctl verb against one ALLOWLISTED proactive unit.
+
+    Security: ops-auth + headquarters-role gated (mirrors the factory
+    local-service-control endpoint, which also shells systemctl). The unit MUST
+    be in the hardcoded allowlist and the action one of the benign allowlisted
+    verbs — both validated here AND inside ``control_unit`` — and the call is an
+    argv list (``sudo -n systemctl <action> <unit>``), never a shell string.
+    Core/infra units (gateway/api/webui/watchdog/…) are not in the allowlist and
+    are rejected with 400."""
+    _require_ops_auth_for_sudo_surface(request)
+    _require_headquarters_role_for_fleet()
+
+    from universal_agent.services import zai_activity_control as zac
+
+    unit = (payload.unit or "").strip()
+    action = (payload.action or "").strip().lower()
+    if not zac.is_allowed_unit(unit):
+        raise HTTPException(status_code=400, detail=f"Unit not in allowlist: {unit}")
+    if not zac.is_allowed_action(action):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Action not allowed: {action}. Allowed: {sorted(zac.ALLOWED_ACTIONS)}",
+        )
+    try:
+        return await asyncio.to_thread(zac.control_unit, unit, action)
+    except ValueError as exc:  # re-validation inside control_unit (defense in depth)
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ops_zai_activity_control: %s %s failed", action, unit, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"activity_control_failed: {type(exc).__name__}")
 
 
 class FactoryUpdateRequest(BaseModel):
@@ -19656,9 +19940,24 @@ def _register_system_cron_job(
       instead of silently leaving the row enabled (which would keep
       firing on every restart). See PR #534 / hourly_insight_email
       regression for the bug this prevents.
+    * **Tombstone breadcrumb (migrated jobs).** When the disable is because
+      the job was migrated to a systemd timer
+      (``systemd_migrated_jobs.py::is_migrated_to_systemd``), the row's
+      ``metadata.disabled_reason`` is stamped
+      ``"migrated_to_systemd:universal-agent-<job>.timer"`` so anyone reading
+      ``cron_jobs.json`` sees WHY it is disabled and where it actually fires —
+      instead of mistaking the tombstone for a dead cron (a real 2026-06
+      investigation error). Stamped idempotently (only when missing/changed),
+      and cleared on re-enable. The full diagnostic for "is this job actually
+      running?" lives in ``project_docs/03_agents/04_cron_and_scheduling.md``.
+      NOTE: jobs that disable through a bespoke ``_ensure_*`` path (not this
+      helper) — e.g. ``codie_proactive_cleanup``, ``csi_convergence_sync``,
+      ``youtube_daily_digest``, ``youtube_gold_channel_poller`` — do not (yet)
+      carry this breadcrumb; the ``SYSTEMD_MIGRATED_SYSTEM_JOBS`` frozenset +
+      ``systemctl`` remain authoritative for them.
     * If no existing row is found, or the existing row is already
-      disabled, the helper returns ``None`` (no-op — don't insert a
-      disabled row, don't churn the existing one).
+      disabled (and any breadcrumb is already current), the helper returns
+      ``None`` (no-op — don't insert a disabled row, don't churn the row).
 
     Returns the job dict on success, or `None` when disabled with no
     enabled-row to flip, or the cron service is unavailable.
@@ -19681,8 +19980,40 @@ def _register_system_cron_job(
     # disable-bug.
     if not enabled:
         existing = _find_cron_job_by_system_job(system_job)
-        if existing is not None and bool(getattr(existing, "enabled", False)):
-            existing_id = str(getattr(existing, "job_id", ""))
+        if existing is None:
+            return None
+        was_enabled = bool(getattr(existing, "enabled", False))
+        existing_id = str(getattr(existing, "job_id", ""))
+        existing_meta = getattr(existing, "metadata", None) or {}
+        if _is_migrated_to_systemd(system_job):
+            # TOMBSTONE BREADCRUMB. This row is disabled because the job was
+            # migrated to a deploy-independent systemd timer (the timer is the
+            # sole firer — no double-fire). Without this marker, the persisted
+            # `cron_jobs.json` row reads as a plain "disabled / dead cron", which
+            # has misled investigators into concluding the job stopped running
+            # (it has not — the systemd timer fires it). Stamp the reason + the
+            # unit that actually fires it, so cron_jobs.json itself answers
+            # "is this running?". SOURCE OF TRUTH for the migrated set:
+            # `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`. Full
+            # diagnostic: project_docs/03_agents/04_cron_and_scheduling.md
+            # ("Is this scheduled job actually running?").
+            reason = (
+                "migrated_to_systemd:universal-agent-"
+                f"{system_job.replace('_', '-')}.timer"
+            )
+            # Only write when something actually changes — avoids re-saving
+            # cron_jobs.json + emitting an update event on every gateway boot.
+            if was_enabled or existing_meta.get("disabled_reason") != reason:
+                updated = _cron_service.update_job(
+                    existing_id, {"enabled": False, "metadata": {"disabled_reason": reason}}
+                )
+                if hasattr(updated, "to_dict"):
+                    return updated.to_dict()
+                return {"job_id": existing_id, "enabled": False}
+            return None
+        # Non-migrated plain disable (e.g. UA_<JOB>_ENABLED=0): propagate the
+        # disable to the persisted row if it is still enabled, else no-op.
+        if was_enabled:
             updated = _cron_service.update_job(existing_id, {"enabled": False})
             if hasattr(updated, "to_dict"):
                 return updated.to_dict()
@@ -19726,6 +20057,13 @@ def _register_system_cron_job(
     }
     existing = _find_cron_job_by_system_job(system_job)
     if existing is not None:
+        # Rollback hygiene: if a previously-migrated job is being re-enabled
+        # (removed from the frozenset / UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1),
+        # clear any stale `disabled_reason` tombstone breadcrumb. update_job
+        # MERGES metadata, so without this the old "migrated_to_systemd:…"
+        # marker would linger on the now-enabled row.
+        if (getattr(existing, "metadata", None) or {}).get("disabled_reason"):
+            metadata["disabled_reason"] = ""
         updated = _cron_service.update_job(str(getattr(existing, "job_id", "")), updates)
         return updated.to_dict() if hasattr(updated, "to_dict") else {"job_id": str(getattr(updated, "job_id", ""))}
     job = _cron_service.add_job(
@@ -20701,6 +21039,11 @@ def _claude_code_intel_demos(
         demo_id = demo_dir.name
         slug_match = _DEMO_DIR_RE.match(demo_id)
         entity_slug = slug_match.group("slug") if slug_match else ""
+        # P5 session link: stamped at VP-mission terminal by
+        # worker_loop._stamp_demo_manifest_build_session. Pre-P5 manifests
+        # carry neither field -> empty strings, no link rendered.
+        build_mission_id = str(manifest.get("build_mission_id") or "").strip()
+        build_session_id = str(manifest.get("build_session_id") or "").strip() or build_mission_id
         demos.append(
             {
                 "demo_id": demo_id,
@@ -20711,6 +21054,13 @@ def _claude_code_intel_demos(
                 "timestamp": str(manifest.get("timestamp") or ""),
                 "entity_slug": entity_slug,
                 "linked_from_entity": demo_id in linked_demo_ids,
+                "session_id": build_session_id,
+                "run_id": build_mission_id,
+                "session_url": _session_viewer_url(
+                    session_id=build_session_id,
+                    run_id=build_mission_id,
+                    workspace_dir=str(demo_dir),
+                ),
             }
         )
     demos.sort(key=lambda item: (str(item.get("timestamp") or ""), str(item.get("demo_id") or "")), reverse=True)
@@ -21227,6 +21577,80 @@ async def artifacts_ack_get(artifact_id: str, t: str = ""):
             (artifact.get("title") or "")[:80],
         )
     return Response(status_code=204)
+
+
+@app.get("/api/v1/proactive_health/ack")
+async def proactive_health_ack_get(f: str = "", t: str = ""):
+    """Signed-URL acknowledge endpoint for proactive_health digest emails.
+
+    Mirrors ``artifacts_ack_get``: the HMAC token IS the auth (no
+    ``_require_ops_auth`` — the link lands in the operator's mail client,
+    which can't attach a bearer header). ``f`` is the finding_id, ``t`` a
+    TTL'd token from ``proactive_health_notifier.sign_finding_ack_token``.
+    On success records the ack (``proactive_health_snapshot.record_ack``) so
+    the systemd timer mutes the finding out of the critical digest until it
+    RECOVERS (suppress-until-recovered with hysteresis — not a timed snooze).
+    Idempotent — a re-click renders an "already acknowledged" page. Returns
+    small HTML landing pages (the operator sees this in a browser tab).
+    """
+    from fastapi.responses import HTMLResponse
+
+    from universal_agent.services import proactive_health_snapshot as ph_snap
+    from universal_agent.services.proactive_health_notifier import (
+        verify_finding_ack_token,
+    )
+
+    finding_id = (f or "").strip()
+    if not finding_id or not verify_finding_ack_token(finding_id, t or ""):
+        logger.info(
+            "proactive_health_ack_get: invalid/expired ack token for finding %s (no-op)",
+            finding_id or "(empty)",
+        )
+        body = _brief_chrome(
+            "Link expired or invalid",
+            "<p>We couldn't verify this acknowledge link (it may have "
+            "expired — ack links are valid 14 days). The finding is "
+            "unchanged; you can check live state on the Mission Control "
+            "dashboard.</p>",
+            status_color="#cf222e",
+        )
+        return HTMLResponse(content=body, status_code=401)
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            ack = ph_snap.record_ack(
+                conn, finding_id=finding_id, ack_source="email_link"
+            )
+        finally:
+            conn.close()
+
+    safe_finding = (
+        finding_id.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+    if ack.get("created"):
+        logger.info(
+            "proactive_health_ack_get: acknowledged finding %s — digest muted "
+            "until it recovers",
+            finding_id,
+        )
+        body = _brief_chrome(
+            "Finding acknowledged",
+            f"<p><code>{safe_finding}</code> is now muted from the "
+            "proactive-health digest <strong>until it recovers</strong> "
+            "(stays green long enough). This is not a timed snooze: while it "
+            "keeps firing you won't be re-emailed about it, and a NEW red "
+            "after recovery alerts again immediately.</p>",
+            status_color="#1a7f37",
+        )
+        return HTMLResponse(content=body, status_code=200)
+    body = _brief_chrome(
+        "Already acknowledged",
+        f"<p><code>{safe_finding}</code> was already acknowledged "
+        f"({ack.get('acked_at_utc') or 'earlier'}) and remains muted until "
+        "it recovers. Nothing changed.</p>",
+    )
+    return HTMLResponse(content=body, status_code=200)
 
 
 # ── PR B: Insight pipeline feedback / viewer / pause endpoints ─────────
@@ -28119,7 +28543,7 @@ async def dashboard_mission_control_dispatch_to_codie(
                 title=title,
                 description=description,
                 priority=3,
-                labels=["agent-ready", "mission-control-dispatch", card.get("subject_kind", "task")],
+                labels=[task_hub.TASK_LABEL_AGENT_READY, "mission-control-dispatch", card.get("subject_kind", "task")],
                 metadata={
                     "source": "mission_control_card_dispatch",
                     "mission_control_card_id": card_id,
@@ -29227,6 +29651,51 @@ async def dashboard_tutorial_bootstrap_jobs(limit: int = 100, run_path: str = ""
     clamped_limit = max(1, min(int(limit), 500))
     jobs = _tutorial_bootstrap_list_jobs(limit=clamped_limit, run_path=run_path)
     return {"jobs": jobs}
+
+
+@app.get("/api/v1/dashboard/tutorials/pending-builds")
+async def dashboard_tutorial_pending_builds(limit: int = 50):
+    """List pending-approval tutorial_build Task Hub rows (P2a ceiling overflow)."""
+    from universal_agent.services.proactive_tutorial_builds import (
+        list_pending_approval_builds,
+    )
+
+    clamped = max(1, min(int(limit), 200))
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            builds = list_pending_approval_builds(conn, limit=clamped)
+        finally:
+            conn.close()
+    return {"builds": builds, "count": len(builds)}
+
+
+@app.post("/api/v1/dashboard/tutorials/pending-builds/{task_id}/approve")
+async def dashboard_tutorial_pending_build_approve(task_id: str):
+    """Approve + dispatch a pending-approval tutorial build (operator button).
+
+    Manual approvals are UNCAPPED — this path never consults the daily
+    auto-build ceiling (UA_DEMO_BUILD_DAILY_CEILING); the flip is the
+    canonical dispatch_on_approval agent_ready 0->1 promotion.
+    """
+    from universal_agent.services.proactive_tutorial_builds import (
+        approve_pending_tutorial_build,
+    )
+
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            result = approve_pending_tutorial_build(
+                conn, task_id=tid, agent_id="dashboard_operator"
+            )
+            return {"status": "approved_and_dispatched", "assignment": result}
+        except DispatchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
 
 
 @app.post("/api/v1/dashboard/tutorials/review")
@@ -31179,7 +31648,7 @@ def _create_heartbeat_remediation_task(
             "description": description,
             "project_key": "proactive",
             "priority": 2,
-            "labels": ["heartbeat-fix", "agent-ready", "auto-created"],
+            "labels": ["heartbeat-fix", task_hub.TASK_LABEL_AGENT_READY, "auto-created"],
             "status": "open",
             "agent_ready": True,
             "trigger_type": "immediate",

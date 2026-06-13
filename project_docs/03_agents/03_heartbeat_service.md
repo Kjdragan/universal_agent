@@ -70,6 +70,8 @@ This document covers only the UA Heartbeat Service.
 
 Heartbeats do **not backfill**: a missed window is consumed (`last_run = now`) rather than catching up when a client later attaches.
 
+**Graceful shutdown drain (deploy-restart resilience).** The scheduler loop runs each iteration as a tracked child task (`HeartbeatService._scheduler_loop` sets `self._inflight_iteration`). On gateway shutdown, `gateway_server.py::lifespan` calls `HeartbeatService.stop(drain=…)`: when draining is enabled (`heartbeat_drain_on_shutdown_enabled`, env `UA_HEARTBEAT_DRAIN_ON_SHUTDOWN_ENABLED`, default ON) `stop()` **awaits the in-flight iteration** up to a bounded budget (`UA_HEARTBEAT_DRAIN_TIMEOUT_SECONDS`, default 45s — comfortably under the gateway unit's `TimeoutStopSec=90s`) via `graceful_drain.py::drain_inflight`, then falls back to the legacy `task.cancel()`. This stops a `systemctl restart` from SIGTERM-cancelling an in-flight Simone heartbeat iteration mid-LLM-call (the deploy-restart casualty, harm **H2**), while a long iteration that overruns the budget still cancels exactly as before (its `finally` reopens the Task Hub item). See [`../06_platform/12_deploy_restart_resilience_adr.md`](../06_platform/12_deploy_restart_resilience_adr.md) §C2.
+
 ```mermaid
 flowchart TD
     Tick[scheduler_loop tick ~1-30s] --> Each[for each active session]

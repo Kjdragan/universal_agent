@@ -19,6 +19,7 @@ from universal_agent.utils.model_resolution import (
     model_call_timeout_seconds,
     resolve_agent_teams_enabled,
     resolve_claude_code_model,
+    resolve_goal_eval_model,
     resolve_haiku,
     resolve_model,
     resolve_opus,
@@ -216,3 +217,167 @@ class TestResolveAgentTeamsEnabled:
         monkeypatch.delenv("UA_AGENT_TEAMS_ENABLED", raising=False)
         monkeypatch.setenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "true")
         assert resolve_agent_teams_enabled(default=False) is True
+
+
+# ── model_id_to_tier() — wire-id → limiter tier reverse map ──────────────────
+
+from universal_agent.utils.model_resolution import model_id_to_tier
+
+
+@pytest.fixture
+def clean_tier_env(monkeypatch):
+    """Clear every env var model_id_to_tier consults and reset the once-per-
+    process conflict-warned set so tests don't leak warnings into each other."""
+    import universal_agent.utils.model_resolution as mr
+
+    for var in (
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "UA_MISSION_CONTROL_MODEL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    mr._TIER_CONFLICT_WARNED.clear()
+    yield
+    mr._TIER_CONFLICT_WARNED.clear()
+
+
+class TestModelIdToTier:
+    # Rule 1 — exact reverse ZAI_MODEL_MAP match (wire identity).
+    def test_air_is_haiku(self, clean_tier_env):
+        assert model_id_to_tier("glm-4.5-air") == "haiku"
+
+    def test_turbo_is_sonnet(self, clean_tier_env):
+        assert model_id_to_tier("glm-5-turbo") == "sonnet"
+
+    def test_glm51_is_opus(self, clean_tier_env):
+        assert model_id_to_tier("glm-5.1") == "opus"
+
+    def test_case_insensitive_reverse_map(self, clean_tier_env):
+        assert model_id_to_tier("GLM-5.1") == "opus"
+        assert model_id_to_tier("Glm-5-Turbo") == "sonnet"
+
+    # Rule 2 — literal mid-tier ids that bypass ZAI_MODEL_MAP.
+    def test_glm47_is_mid(self, clean_tier_env):
+        assert model_id_to_tier("glm-4.7") == "mid"
+
+    def test_glm46_is_mid(self, clean_tier_env):
+        assert model_id_to_tier("glm-4.6") == "mid"
+
+    # Rule 1 OUTRANKS env intent — the inversion-protection cases.
+    def test_wire_identity_wins_over_opus_env(self, clean_tier_env, monkeypatch):
+        """ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5-turbo must NOT promote glm-5-turbo
+        to opus — wire identity wins, so it stays sonnet. Env-first would let
+        one caller's intent capture every caller of that wire id."""
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "glm-5-turbo")
+        assert model_id_to_tier("glm-5-turbo") == "sonnet"
+
+    def test_wire_identity_wins_over_haiku_env(self, clean_tier_env, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "glm-5.1")
+        assert model_id_to_tier("glm-5.1") == "opus"
+
+    # Rule 3 — env vars classify UNKNOWN ids (no wire match).
+    def test_env_claims_unknown_id_opus(self, clean_tier_env, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "some-private-opus")
+        assert model_id_to_tier("some-private-opus") == "opus"
+
+    def test_env_claims_unknown_id_haiku(self, clean_tier_env, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "private-haiku")
+        assert model_id_to_tier("private-haiku") == "haiku"
+
+    def test_env_claims_unknown_id_mid(self, clean_tier_env, monkeypatch):
+        monkeypatch.setenv("UA_MISSION_CONTROL_MODEL", "private-mc")
+        assert model_id_to_tier("private-mc") == "mid"
+
+    # Rule 3 conflict — multiple env vars claim the same unknown id → most
+    # conservative (opus < sonnet < mid < haiku).
+    def test_conflict_resolves_to_most_conservative(self, clean_tier_env, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "shared-mystery")
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "shared-mystery")
+        assert model_id_to_tier("shared-mystery") == "opus"
+
+    def test_conflict_sonnet_vs_haiku_picks_sonnet(self, clean_tier_env, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "ambig")
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "ambig")
+        assert model_id_to_tier("ambig") == "sonnet"
+
+    def test_conflict_warns_once_per_process(self, clean_tier_env, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "warned-id")
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "warned-id")
+        with caplog.at_level(logging.WARNING, logger="universal_agent.utils.model_resolution"):
+            model_id_to_tier("warned-id")
+            model_id_to_tier("warned-id")
+        conflict_warnings = [r for r in caplog.records if "claimed by multiple" in r.message]
+        assert len(conflict_warnings) == 1
+
+    # Rule 4 — safe defaults.
+    def test_unknown_id_defaults_to_sonnet(self, clean_tier_env):
+        assert model_id_to_tier("totally-unknown-model") == "sonnet"
+
+    def test_none_defaults_to_sonnet(self, clean_tier_env):
+        assert model_id_to_tier(None) == "sonnet"
+
+    def test_empty_defaults_to_sonnet(self, clean_tier_env):
+        assert model_id_to_tier("") == "sonnet"
+        assert model_id_to_tier("   ") == "sonnet"
+
+    def test_tier_set_matches_timeout_tiers_plus_mid(self):
+        """The tier set is {opus, sonnet, mid, haiku} — model_call_timeout_seconds
+        tiers (opus/sonnet/haiku) plus the new mid."""
+        produced = {
+            model_id_to_tier("glm-5.1"),
+            model_id_to_tier("glm-5-turbo"),
+            model_id_to_tier("glm-4.5-air"),
+            model_id_to_tier("glm-4.7"),
+        }
+        assert produced == {"opus", "sonnet", "haiku", "mid"}
+
+
+# ── resolve_goal_eval_model ──────────────────────────────────────────────────
+#
+# Upgrades the built-in Claude Code /goal completion evaluator off the
+# operator-locked weak haiku tier (glm-4.5-air) onto the sonnet tier
+# (glm-5-turbo) on ZAI — scoped per-subprocess by the CLI client, never a
+# global remap.
+
+
+class TestResolveGoalEvalModel:
+    def test_zai_default_is_sonnet_tier(self, monkeypatch):
+        """Unset env on ZAI → the sonnet-tier model (glm-5-turbo)."""
+        monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
+        monkeypatch.delenv("ANTHROPIC_DEFAULT_SONNET_MODEL", raising=False)
+        assert resolve_goal_eval_model("zai") == "glm-5-turbo"
+        assert resolve_goal_eval_model() == "glm-5-turbo"  # default cody_mode
+
+    def test_anthropic_mode_never_overrides(self, monkeypatch):
+        """Anthropic-Max sessions keep the real Haiku evaluator — never inject
+        a ZAI model id into an api.anthropic.com session. The short-circuit
+        wins even when UA_GOAL_EVAL_MODEL is explicitly set."""
+        monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
+        assert resolve_goal_eval_model("anthropic") is None
+        monkeypatch.setenv("UA_GOAL_EVAL_MODEL", "glm-5-turbo")
+        assert resolve_goal_eval_model("anthropic") is None
+
+    def test_explicit_override_passes_through_on_zai(self, monkeypatch):
+        monkeypatch.setenv("UA_GOAL_EVAL_MODEL", "glm-4.6")
+        assert resolve_goal_eval_model("zai") == "glm-4.6"
+
+    @pytest.mark.parametrize(
+        "token", ["off", "none", "default", "haiku", "disable", "disabled", "OFF", "Haiku"]
+    )
+    def test_opt_out_tokens_disable_override(self, monkeypatch, token):
+        """An opt-out token → no override (fall back to the built-in
+        haiku/small-fast evaluator, glm-4.5-air)."""
+        monkeypatch.setenv("UA_GOAL_EVAL_MODEL", token)
+        assert resolve_goal_eval_model("zai") is None
+
+    def test_does_not_touch_the_haiku_operator_lock(self, monkeypatch):
+        """Calling the resolver never mutates the global haiku tier — the
+        operator lock (ZAI_MODEL_MAP['haiku']=glm-4.5-air) is read-only here."""
+        monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
+        monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
+        resolve_goal_eval_model("zai")
+        assert ZAI_MODEL_MAP["haiku"] == "glm-4.5-air"
+        assert resolve_haiku() == "glm-4.5-air"

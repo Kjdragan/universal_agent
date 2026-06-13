@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -23,8 +24,10 @@ from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.clients.claude_cli_client import (
     ClaudeCodeCLIClient,
     _build_cli_prompt,
+    _execute_cli_session,
     _is_auth_failure,
     _parse_payload,
+    _run_goal_loop_mission,
 )
 
 
@@ -924,3 +927,345 @@ async def test_cli_ua_cody_cli_model_default_means_no_model_flag(tmp_path: Path,
         await client.run_mission(mission=mission, workspace_root=tmp_path)
 
     assert "--model" not in captured_cmd
+# ---------------------------------------------------------------------------
+# P6 — /goal loop runner (_run_goal_loop_mission via run_mission).
+#
+# Uses a real fake `claude` executable on PATH (not a mocked
+# create_subprocess_exec) because the contract under test is the exact
+# invocation shape: briefing prompt on STDIN, then the /goal turn as an
+# ARGV argument plus --dangerously-skip-permissions (the only empirically
+# verified slash-command dispatch form — live VPS check 2026-06-10).
+# ---------------------------------------------------------------------------
+import os as _os
+
+
+def _install_fake_claude(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    briefing_writes_condition: bool = True,
+) -> Path:
+    """Install a fake `claude` on PATH that logs argv + stdin per invocation.
+
+    Invocation N writes ``argv-N.json`` and ``stdin-N.txt`` into the returned
+    log dir. When ``briefing_writes_condition`` is set, a non-/goal invocation
+    writes ``goal_condition.txt`` into its cwd (the mission workspace) —
+    mimicking the briefing turn's self-brief-and-attest Phase 3 output.
+    """
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = tmp_path / "cli-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    script = bin_dir / "claude"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        f"log_dir = {str(log_dir)!r}\n"
+        "n = len([f for f in os.listdir(log_dir) if f.startswith('argv-')]) + 1\n"
+        "with open(os.path.join(log_dir, f'argv-{n}.json'), 'w') as fh:\n"
+        "    json.dump(sys.argv[1:], fh)\n"
+        "stdin_text = sys.stdin.read()\n"
+        "with open(os.path.join(log_dir, f'stdin-{n}.txt'), 'w') as fh:\n"
+        "    fh.write(stdin_text)\n"
+        f"writes_condition = {briefing_writes_condition!r}\n"
+        "is_goal_turn = any(a.startswith('/goal') for a in sys.argv[1:])\n"
+        "if writes_condition and not is_goal_turn:\n"
+        "    with open('goal_condition.txt', 'w') as fh:\n"
+        "        fh.write('The transcript shows the demo ran end-to-end.')\n"
+        "print(json.dumps({'type': 'result', 'result': 'ok', 'session_id': 'fake-sid'}))\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{_os.pathsep}{_os.environ.get('PATH', '')}")
+    return log_dir
+
+
+def _goal_eligible_mission(mission_id: str) -> dict[str, Any]:
+    return {
+        "mission_id": mission_id,
+        "vp_id": "vp.coder.primary",
+        "objective": "Build the tutorial demo",
+        "payload_json": json.dumps({
+            "timeout_seconds": 60,
+            "max_retries": 0,
+            "metadata": {"use_goal_loop": True, "cody_mode": "zai"},
+        }),
+    }
+
+
+def _read_invocations(log_dir: Path) -> list[tuple[list[str], str]]:
+    out: list[tuple[list[str], str]] = []
+    n = 1
+    while (log_dir / f"argv-{n}.json").exists():
+        argv = json.loads((log_dir / f"argv-{n}.json").read_text(encoding="utf-8"))
+        stdin_text = (log_dir / f"stdin-{n}.txt").read_text(encoding="utf-8")
+        out.append((argv, stdin_text))
+        n += 1
+    return out
+
+
+@pytest.mark.asyncio
+async def test_goal_eligible_mission_runs_briefing_then_goal_turn(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("UA_VP_GOAL_ENABLED", raising=False)
+    log_dir = _install_fake_claude(tmp_path, monkeypatch)
+
+    client = ClaudeCodeCLIClient()
+    outcome = await client.run_mission(
+        mission=_goal_eligible_mission("goal-two-turn"),
+        workspace_root=tmp_path / "ws",
+    )
+
+    assert outcome.status == "completed"
+    invocations = _read_invocations(log_dir)
+    assert len(invocations) == 2, "expected briefing turn + /goal turn"
+
+    briefing_argv, briefing_stdin = invocations[0]
+    # Briefing prompt arrives on stdin, never argv.
+    assert not any(a.startswith("/goal") for a in briefing_argv)
+    assert "self-brief" in briefing_stdin.lower()
+    assert "goal_condition.txt" in briefing_stdin
+
+    goal_argv, goal_stdin = invocations[1]
+    goal_args = [a for a in goal_argv if a.startswith("/goal ")]
+    assert goal_args, f"second turn must carry /goal in argv, got {goal_argv}"
+    assert "demo ran end-to-end" in goal_args[0]
+    assert "--dangerously-skip-permissions" in goal_argv
+    assert goal_stdin == "", "argv mode must not also send the prompt on stdin"
+
+    assert outcome.payload.get("goal_phase") == "goal_loop"
+    assert outcome.payload.get("goal_condition_chars", 0) > 0
+
+
+@pytest.mark.asyncio
+async def test_goal_loop_skips_briefing_when_condition_exists(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("UA_VP_GOAL_ENABLED", raising=False)
+    log_dir = _install_fake_claude(tmp_path, monkeypatch)
+
+    workspace_root = tmp_path / "ws"
+    workspace = workspace_root / "goal-skip-brief"
+    workspace.mkdir(parents=True)
+    (workspace / "goal_condition.txt").write_text(
+        "The transcript shows the precomputed condition.", encoding="utf-8"
+    )
+
+    client = ClaudeCodeCLIClient()
+    outcome = await client.run_mission(
+        mission=_goal_eligible_mission("goal-skip-brief"),
+        workspace_root=workspace_root,
+    )
+
+    assert outcome.status == "completed"
+    invocations = _read_invocations(log_dir)
+    assert len(invocations) == 1, "existing goal_condition.txt must skip the briefing turn"
+    goal_argv, _ = invocations[0]
+    assert any(a.startswith("/goal ") for a in goal_argv)
+
+
+@pytest.mark.asyncio
+async def test_goal_loop_falls_back_to_single_pass_when_condition_missing(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.delenv("UA_VP_GOAL_ENABLED", raising=False)
+    log_dir = _install_fake_claude(tmp_path, monkeypatch, briefing_writes_condition=False)
+
+    client = ClaudeCodeCLIClient()
+    outcome = await client.run_mission(
+        mission=_goal_eligible_mission("goal-fallback"),
+        workspace_root=tmp_path / "ws",
+    )
+
+    assert outcome.status == "completed"
+    assert outcome.payload.get("goal_condition_missing") is True
+
+    invocations = _read_invocations(log_dir)
+    assert len(invocations) == 2
+    fallback_argv, fallback_stdin = invocations[1]
+    # Legacy single-pass prompt: stdin, no /goal argv.
+    assert not any(a.startswith("/goal") for a in fallback_argv)
+    assert "## Objective" in fallback_stdin
+
+
+def test_build_cli_prompt_goal_eligible_param_without_env(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("UA_VP_GOAL_ENABLED", raising=False)
+    prompt = _build_cli_prompt(
+        objective="Build the demo",
+        payload={},
+        workspace_dir=tmp_path,
+        skill_name="",
+        goal_eligible=True,
+    )
+    assert "Self-briefing (REQUIRED FIRST STEP)" in prompt
+    assert "Completion attestation (REQUIRED)" in prompt
+
+
+@pytest.mark.asyncio
+async def test_goal_turn_carries_only_the_authored_condition(tmp_path: Path, monkeypatch):
+    """2026-06-11 de-interference: the work turn's /goal prompt carries ONLY
+    the condition Cody authored — NO UA-appended COMPLETION.md attestation
+    clause. That clause (and its paired worker_loop demotion guard) were
+    removed to rely on vanilla /goal; the condition is the sole acceptance."""
+    monkeypatch.delenv("UA_VP_GOAL_ENABLED", raising=False)
+    log_dir = _install_fake_claude(tmp_path, monkeypatch)
+
+    client = ClaudeCodeCLIClient()
+    outcome = await client.run_mission(
+        mission=_goal_eligible_mission("goal-no-clause"),
+        workspace_root=tmp_path / "ws",
+    )
+
+    assert outcome.status == "completed"
+    invocations = _read_invocations(log_dir)
+    goal_argv, _ = invocations[-1]
+    goal_args = [a for a in goal_argv if a.startswith("/goal ")]
+    assert goal_args, f"expected a /goal argv turn, got {goal_argv}"
+    prompt = goal_args[0]
+    # Cody's authored condition is present...
+    assert "demo ran end-to-end" in prompt
+    # ...and NOTHING UA bolted on: no COMPLETION.md attestation clause.
+    assert "COMPLETION.md" not in prompt
+    assert "self-brief-and-attest" not in prompt
+    assert "goal_attestation_clause_appended" not in (outcome.payload or {})
+
+
+# ---------------------------------------------------------------------------
+# /goal evaluator model upgrade — scoped per-subprocess (never global)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_goal_eval_model_injected_into_subprocess_env_only(tmp_path: Path, monkeypatch):
+    """goal_eval_model pins ANTHROPIC_DEFAULT_HAIKU_MODEL on the spawned
+    subprocess's env ONLY — it must never mutate the parent os.environ
+    (the operator-locked global haiku tier)."""
+    monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
+    captured: dict[str, Any] = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        raise FileNotFoundError("claude")  # short-circuit after capturing env
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client.asyncio.create_subprocess_exec",
+        side_effect=fake_exec,
+    ):
+        out = await _execute_cli_session(
+            prompt="/goal do the thing",
+            workspace_dir=tmp_path,
+            timeout_seconds=5,
+            enable_agent_teams=False,
+            mission_id="m-goal",
+            cody_mode="zai",
+            prompt_in_argv=True,
+            goal_eval_model="glm-5-turbo",
+        )
+
+    assert out.status == "failed"  # FileNotFoundError path
+    assert captured["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-5-turbo"
+    # The global parent env is untouched — scoping guarantee.
+    assert os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL") != "glm-5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_no_goal_eval_model_leaves_haiku_unset_in_subprocess(tmp_path: Path, monkeypatch):
+    """Without goal_eval_model, the subprocess env carries no forced
+    glm-5-turbo haiku override (normal sessions are unaffected)."""
+    monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
+    captured: dict[str, Any] = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        raise FileNotFoundError("claude")
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client.asyncio.create_subprocess_exec",
+        side_effect=fake_exec,
+    ):
+        await _execute_cli_session(
+            prompt="just do work",
+            workspace_dir=tmp_path,
+            timeout_seconds=5,
+            enable_agent_teams=False,
+            mission_id="m-plain",
+            cody_mode="zai",
+        )
+
+    assert captured["env"].get("ANTHROPIC_DEFAULT_HAIKU_MODEL") != "glm-5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_goal_loop_passes_eval_model_on_work_turn_only(tmp_path: Path, monkeypatch):
+    """_run_goal_loop_mission resolves a strong evaluator model and threads
+    it onto the /goal WORK turn (prompt_in_argv=True), recording it in the
+    payload. The briefing turn is skipped here (goal_condition.txt exists)."""
+    monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_DEFAULT_SONNET_MODEL", raising=False)
+    (tmp_path / "goal_condition.txt").write_text(
+        "The transcript shows pytest exited 0. OR stop after 20 turns."
+    )
+
+    calls: list[dict[str, Any]] = []
+
+    async def mock_execute(**kwargs):
+        calls.append(kwargs)
+        return MissionOutcome(
+            status="completed",
+            result_ref=f"workspace://{tmp_path}",
+            message="ok",
+            payload={"exit_code": 0},
+        )
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client._execute_cli_session",
+        side_effect=mock_execute,
+    ):
+        out = await _run_goal_loop_mission(
+            objective="build a demo",
+            payload={},
+            workspace_dir=tmp_path,
+            timeout_seconds=60,
+            enable_agent_teams=False,
+            mission_id="m-loop",
+            cody_mode="zai",
+            task_id="t-1",
+            skill_name="cody-implements-from-brief",
+        )
+
+    assert len(calls) == 1  # only the work turn (briefing skipped)
+    work = calls[0]
+    assert work["prompt_in_argv"] is True
+    assert work["prompt"].startswith("/goal ")
+    assert work["goal_eval_model"] == "glm-5-turbo"
+    assert out.payload["goal_eval_model"] == "glm-5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_goal_eligible_mission_gets_higher_wallclock(tmp_path: Path, monkeypatch):
+    """/goal-eligible missions get the higher wall-clock backstop
+    (GOAL_DEFAULT_CLI_TIMEOUT_SECONDS=6000) so /goal's OWN self-bounding clause
+    — not the old 30-min default — terminates a healthy run."""
+    monkeypatch.delenv("UA_VP_GOAL_ENABLED", raising=False)
+    from universal_agent.vp.clients import claude_cli_client as _mod
+
+    captured: dict[str, Any] = {}
+
+    async def fake_goal_loop(**kwargs):
+        captured.update(kwargs)
+        return MissionOutcome(status="completed", result_ref="workspace://x", payload={})
+
+    monkeypatch.setattr(_mod, "_run_goal_loop_mission", fake_goal_loop)
+
+    mission = {
+        "mission_id": "goal-timeout",
+        "vp_id": "vp.coder.primary",
+        "objective": "Build the tutorial demo",
+        "payload_json": json.dumps({
+            "max_retries": 0,
+            # NO timeout_seconds → the goal-eligible default applies.
+            "metadata": {"use_goal_loop": True, "cody_mode": "zai"},
+        }),
+    }
+    client = ClaudeCodeCLIClient()
+    outcome = await client.run_mission(mission=mission, workspace_root=tmp_path / "ws")
+
+    assert outcome.status == "completed"
+    assert _mod.GOAL_DEFAULT_CLI_TIMEOUT_SECONDS == 6000
+    assert captured["timeout_seconds"] == _mod.GOAL_DEFAULT_CLI_TIMEOUT_SECONDS
+    assert captured["timeout_seconds"] > _mod.DEFAULT_CLI_TIMEOUT_SECONDS

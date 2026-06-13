@@ -160,6 +160,28 @@ def _derive_overall_status(
     return "ok"
 
 
+def annotate_invariant_acks(
+    invariants: Iterable[Dict[str, Any]],
+    active_acks: Dict[str, Dict[str, Any]],
+) -> None:
+    """Stamp ``acknowledged`` / ``acked_at_utc`` onto invariant dicts in place.
+
+    ``active_acks`` is ``proactive_health_snapshot.get_active_acks`` output
+    (``{finding_id: ack_row}``). Findings without an active ack get any stale
+    annotation removed so a recovered ack never lingers in the payload. Pure
+    annotation — severity and overall_status derivation are untouched.
+    """
+    for finding in invariants or ():
+        fid = str(finding.get("finding_id") or finding.get("metric_key") or "")
+        ack = active_acks.get(fid)
+        if ack:
+            finding["acknowledged"] = True
+            finding["acked_at_utc"] = ack.get("acked_at_utc")
+        else:
+            finding.pop("acknowledged", None)
+            finding.pop("acked_at_utc", None)
+
+
 def _load_cron_jobs_from_persistence(path: Path) -> List[Any]:
     """Read `cron_jobs.json` directly and return CronJob objects.
 
@@ -302,12 +324,29 @@ def build_proactive_health_payload(
     except Exception:  # noqa: BLE001
         backlog_payload = None
 
+    invariants_payload = [f.model_dump() for f in invariant_findings]
+
+    # Read-only acknowledged-state annotation (dashboard "ACKED" chip). The
+    # timer is the single ack reconciler/writer; this path only READS the
+    # active set. Best-effort — a missing acks table yields no annotation.
+    if activity_conn is not None:
+        try:
+            from universal_agent.services.proactive_health_snapshot import (
+                get_active_acks,
+            )
+
+            annotate_invariant_acks(invariants_payload, get_active_acks(activity_conn))
+        except Exception:  # noqa: BLE001 — annotation must never break the payload
+            logger.debug(
+                "proactive_health: ack annotation skipped", exc_info=True
+            )
+
     return {
         "overall_status": overall,
         "generated_at_utc": _utc_now_iso(),
         "crons": crons,
         "stale_tasks": stale,
         "parked_tasks": parked,
-        "invariants": [f.model_dump() for f in invariant_findings],
+        "invariants": invariants_payload,
         "vp_mission_backlog": backlog_payload,
     }

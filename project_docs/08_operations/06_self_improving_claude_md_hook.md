@@ -6,7 +6,7 @@ subsystem: ops-self-improvement
 code_paths:
   - .claude/hooks/self-improve-stop.sh
   - .claude/hooks/self_improve_reflect.py
-last_verified: 2026-06-03
+last_verified: 2026-06-12
 ---
 
 # Self-Improving CLAUDE.md Stop Hook

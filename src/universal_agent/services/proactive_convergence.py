@@ -13,6 +13,8 @@ import sqlite3
 import time
 from typing import Any, Callable, Optional
 
+from universal_agent import task_hub
+from universal_agent.rate_limiter import _is_fup_error
 from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
@@ -116,6 +118,24 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             ON convergence_candidates(detected_at DESC);
         CREATE INDEX IF NOT EXISTS idx_convergence_candidates_task
             ON convergence_candidates(task_id);
+
+        -- Stage-2 cluster-refine result cache (added 2026-06-11).
+        -- Keyed on the bucket's sorted-video-id set (the ``cluster_key`` from
+        -- ``_detect_clusters_sql``).  A cache HIT within the TTL
+        -- (``UA_CONVERGENCE_REFINE_CACHE_TTL_HOURS``, default 24h) reuses the
+        -- stored verdict and skips the ZAI LLM call.  A bucket that gains or
+        -- loses a video produces a new key and is always re-judged.
+        CREATE TABLE IF NOT EXISTS convergence_refine_cache (
+            cluster_key TEXT PRIMARY KEY,
+            is_convergence INTEGER NOT NULL DEFAULT 0,
+            signal_strength REAL NOT NULL DEFAULT 0,
+            thesis TEXT NOT NULL DEFAULT '',
+            converging_video_ids_json TEXT NOT NULL DEFAULT '[]',
+            verdict_json TEXT NOT NULL DEFAULT '',
+            judged_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_convergence_refine_cache_judged
+            ON convergence_refine_cache(judged_at DESC);
         """
     )
     conn.commit()
@@ -304,12 +324,14 @@ def sync_topic_signatures_from_csi(
     deadline = time.monotonic() + _convergence_budget_seconds()
 
     candidates_written = 0
+    refine_stats: dict = {"sonnet_calls_made": 0, "cache_hits": 0}
     if _llm_clustering_enabled():
         confirmed = _detect_clusters_llm(
             conn,
             source_window_hours=source_window_hours,
             min_channels=min_channels,
             deadline=deadline,
+            stats=refine_stats,
         )
         clusters = [
             (c["signatures"], c.get("thesis", ""), float(c.get("signal_strength") or 0))
@@ -385,6 +407,8 @@ def sync_topic_signatures_from_csi(
         "convergence_events": candidates_written,
         "candidates_written": candidates_written,
         "ideation_candidates_written": ideation_written,
+        "sonnet_calls_made": refine_stats["sonnet_calls_made"],
+        "cache_hits": refine_stats["cache_hits"],
     }
 
 
@@ -573,14 +597,19 @@ def _min_signal_strength() -> int:
 
 def _convergence_llm_concurrency() -> int:
     """Max concurrent per-bucket refine calls. `include_secondary` recall
-    produces dozens of coarse buckets; refining them one-at-a-time at ~5-15s
-    each (opus-tier) overran the 900s cron budget. The refine LLM path has no
-    rate limiter, so this bounds concurrent load on the ZAI proxy. Default 6."""
-    raw = str(os.getenv("UA_CONVERGENCE_LLM_CONCURRENCY", "6")).strip()
+    produces dozens of coarse buckets. The refine LLM path is NOT wrapped by the
+    ZAIRateLimiter, so this is the ONLY bound on concurrent load against the ZAI
+    proxy from this stage. Lowered 6 -> 2 (2026-06-10) because the 6-wide
+    cluster-refine fan-out was the dominant source of ZAI Fair-Usage 429/1313
+    bursts; paired with the sonnet-tier judge (`glm-5-turbo`, ~35% faster than
+    the former opus default) so the smaller fan-out still clears its bucket set
+    well within the convergence budget. Override with
+    UA_CONVERGENCE_LLM_CONCURRENCY. Default 2."""
+    raw = str(os.getenv("UA_CONVERGENCE_LLM_CONCURRENCY", "2")).strip()
     try:
         return max(1, min(16, int(raw)))
     except ValueError:
-        return 6
+        return 2
 
 
 def _convergence_budget_seconds() -> float:
@@ -600,6 +629,23 @@ def _convergence_budget_seconds() -> float:
         return 600.0
 
 
+def _convergence_refine_cache_enabled() -> bool:
+    """Stage-2 cluster-refine result cache; ON by default. Set
+    UA_CONVERGENCE_REFINE_CACHE_ENABLED=0 to always re-judge every bucket."""
+    return str(os.getenv("UA_CONVERGENCE_REFINE_CACHE_ENABLED", "1")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _convergence_refine_cache_ttl_hours() -> float:
+    """TTL for a cached refine verdict; default 24h. A row older than this is a miss."""
+    raw = str(os.getenv("UA_CONVERGENCE_REFINE_CACHE_TTL_HOURS", "24")).strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 24.0
+
+
 def _independent_channels(signatures: list[dict[str, Any]]) -> set[str]:
     out = {
         str(s.get("channel_name") or s.get("channel_id") or "").strip()
@@ -609,14 +655,102 @@ def _independent_channels(signatures: list[dict[str, Any]]) -> set[str]:
     return out
 
 
-def _cluster_judge_overrides() -> dict[str, str]:
-    """Optional per-stage model/provider override for the convergence cluster
-    judge — lets you A/B the default (opus-tier ``glm-5.1`` via the ZAI proxy)
-    against another model, e.g. Anthropic Sonnet, without touching any other
-    fan-out stage.
+def _refine_cluster_key(bucket: list[dict[str, Any]]) -> str:
+    """Same derivation as ``_detect_clusters_sql``'s cluster_key: sorted unique
+    non-empty video_ids joined by '|'. Identical bucket -> identical key."""
+    vids = sorted({
+        str(s.get("video_id") or "").strip()
+        for s in bucket
+        if str(s.get("video_id") or "").strip()
+    })
+    return "|".join(vids)
 
-    All three unset → ``{}`` → current behaviour (shared ZAI env, ``resolve_opus()``).
-    - ``UA_CONVERGENCE_JUDGE_MODEL``    — model id passed to the call.
+
+def _refine_cache_get(cluster_key: str) -> Optional[dict[str, Any]]:
+    """Fresh (within TTL) cached verdict, else None (miss). Any error -> None."""
+    if not cluster_key:
+        return None
+    ttl_h = _convergence_refine_cache_ttl_hours()
+    try:
+        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+
+        with connect_runtime_db(get_activity_db_path()) as c:
+            ensure_schema(c)
+            c.row_factory = sqlite3.Row
+            row = c.execute(
+                "SELECT is_convergence, signal_strength, thesis, "
+                "converging_video_ids_json, judged_at "
+                "FROM convergence_refine_cache WHERE cluster_key = ? LIMIT 1",
+                (cluster_key,),
+            ).fetchone()
+        if not row:
+            return None
+        if ttl_h > 0:
+            judged = _parse_time(row["judged_at"])
+            if judged is None or (datetime.now(timezone.utc) - judged) > timedelta(hours=ttl_h):
+                return None
+        try:
+            conv_ids = json.loads(row["converging_video_ids_json"] or "[]")
+        except Exception:
+            conv_ids = []
+        return {
+            "is_convergence": bool(row["is_convergence"]),
+            "thesis": str(row["thesis"] or ""),
+            "signal_strength": float(row["signal_strength"] or 0.0),
+            "converging_video_ids": [str(v) for v in conv_ids if str(v).strip()],
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("refine cache get failed (%s): %s", cluster_key, exc)
+        return None
+
+
+def _refine_cache_put(cluster_key: str, verdict: Optional[dict[str, Any]]) -> None:
+    """Store a CLEAN verdict (incl. None = negative). NEVER call for LLM error/FUP."""
+    if not cluster_key:
+        return
+    if verdict is None:
+        is_conv, strength, thesis, conv_ids = 0, 0.0, "", []
+    else:
+        is_conv = 1
+        strength = float(verdict.get("signal_strength") or 0.0)
+        thesis = str(verdict.get("thesis") or "")
+        conv_ids = [
+            str(s.get("video_id") or "").strip()
+            for s in (verdict.get("signatures") or [])
+            if str(s.get("video_id") or "").strip()
+        ]
+    try:
+        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+
+        with connect_runtime_db(get_activity_db_path()) as c:
+            ensure_schema(c)
+            c.execute(
+                "INSERT OR REPLACE INTO convergence_refine_cache "
+                "(cluster_key, is_convergence, signal_strength, thesis, "
+                " converging_video_ids_json, verdict_json, judged_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (cluster_key, is_conv, strength, thesis, json.dumps(conv_ids), "",
+                 _now_iso()),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("refine cache put failed (%s): %s", cluster_key, exc)
+
+
+def _cluster_judge_overrides() -> dict[str, str]:
+    """Per-stage model/provider override for the convergence cluster judge.
+
+    DEFAULT (``UA_CONVERGENCE_JUDGE_MODEL`` unset): the **sonnet tier**
+    (``glm-5-turbo`` via ``resolve_sonnet()``). A 2026-06-10 A/B over 30 live
+    buckets (run twice) showed glm-5-turbo reaches the SAME precision as the
+    former opus default (``glm-5.1`` — both confirmed 2/30) while running ~35%
+    faster, whereas the cheaper haiku (`glm-4.5-air`, 15/30) and `glm-4.7`
+    (11/30) tiers over-confirm broad-topic buckets and fail this precision gate.
+    So the judge defaults to sonnet, not opus: equal quality, cheaper, faster,
+    and less ZAI Fair-Usage pressure. Validate any tier change with
+    ``scripts/convergence_model_ab.py``.
+
+    Overrides (all optional):
+    - ``UA_CONVERGENCE_JUDGE_MODEL``    — model id (overrides the sonnet default).
     - ``UA_CONVERGENCE_JUDGE_BASE_URL`` — provider base URL (set to Anthropic's
       to route this one stage to real Claude instead of the ZAI proxy).
     - ``UA_CONVERGENCE_JUDGE_API_KEY``  — key for that provider.
@@ -630,6 +764,13 @@ def _cluster_judge_overrides() -> dict[str, str]:
         val = (os.getenv(env) or "").strip()
         if val:
             overrides[kwarg] = val
+    if "model" not in overrides:
+        # No explicit override → default the judge to the sonnet tier
+        # (glm-5-turbo). Without this the call falls through to
+        # llm_classifier._call_llm's resolve_opus() default (glm-5.1).
+        from universal_agent.utils.model_resolution import resolve_sonnet
+
+        overrides["model"] = resolve_sonnet()
     return overrides
 
 
@@ -671,6 +812,19 @@ async def _refine_cluster_with_llm(
         )
         parsed = _parse_json_response(raw)
     except Exception as exc:  # noqa: BLE001
+        # A Fair-Usage-Policy ([1313]/concurrency) error is account-level
+        # throttling — grinding through the remaining ~60 buckets would just rack
+        # up more doomed ZAI calls and deepen the FUP pressure. Re-raise so the
+        # caller (`_detect_clusters_llm_async`) can trip a one-shot circuit
+        # breaker and skip the rest of this run. Everything else fails closed
+        # (no candidate) as before.
+        if _is_fup_error(str(exc)):
+            logger.warning(
+                "convergence LLM refine hit a Fair-Usage signal (bucket size=%d): %s",
+                len(bucket),
+                exc,
+            )
+            raise
         logger.warning("convergence LLM refine failed (bucket size=%d): %s", len(bucket), exc)
         return None
 
@@ -705,6 +859,7 @@ async def _detect_clusters_llm_async(
     source_window_hours: int,
     min_channels: int,
     deadline: float | None = None,
+    stats: dict | None = None,
 ) -> list[dict[str, Any]]:
     """Recall (SQL buckets) → precision (LLM refine each). Returns confirmed
     clusters as dicts with ``signatures`` / ``thesis`` / ``signal_strength``.
@@ -714,7 +869,11 @@ async def _detect_clusters_llm_async(
     recall window routinely yields dozens of buckets, and one-at-a-time opus
     refines overran the 900s cron budget. ``deadline`` (monotonic seconds) caps
     total wall time: buckets not yet started when the budget is spent are skipped
-    cheaply and re-detected on the next run (candidate writes are idempotent)."""
+    cheaply and re-detected on the next run (candidate writes are idempotent).
+
+    ``stats`` (optional mutable dict) accumulates ``sonnet_calls_made`` and
+    ``cache_hits`` across all per-bucket refine tasks for the caller to surface
+    in ``latest_sync.json``."""
     buckets = _detect_clusters_sql(
         conn,
         source_window_hours=source_window_hours,
@@ -724,18 +883,69 @@ async def _detect_clusters_llm_async(
     if not buckets:
         return []
     sem = asyncio.Semaphore(_convergence_llm_concurrency())
+    # FUP circuit breaker: a single Fair-Usage ([1313]) signal means ZAI is
+    # account-level throttling us — the remaining buckets would just be ~60 more
+    # doomed LLM calls. The first `_refine_one` that catches a FUP-classified
+    # exception flips this flag; every subsequent `_refine_one` then returns None
+    # immediately (checked right after acquiring the semaphore, alongside the
+    # deadline check). The next hourly run re-detects the skipped buckets —
+    # candidate writes are idempotent, so nothing is lost.
+    fup_tripped = False
+    skipped_after_breaker = 0
+    _stats = stats if stats is not None else {}
+    _stats.setdefault("sonnet_calls_made", 0)
+    _stats.setdefault("cache_hits", 0)
 
     async def _refine_one(bucket: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        nonlocal fup_tripped, skipped_after_breaker
         async with sem:
+            if fup_tripped:
+                skipped_after_breaker += 1
+                return None
             if deadline is not None and time.monotonic() >= deadline:
                 return None
+
+            key = _refine_cluster_key(bucket) if _convergence_refine_cache_enabled() else ""
+            if key:
+                cached = _refine_cache_get(key)
+                if cached is not None:
+                    _stats["cache_hits"] += 1
+                    if not cached["is_convergence"]:
+                        return None
+                    ids = {v for v in cached["converging_video_ids"] if v}
+                    confirmed = [s for s in bucket if str(s.get("video_id") or "").strip() in ids]
+                    if len(_independent_channels(confirmed)) < max(2, int(min_channels or 2)):
+                        return None
+                    return {
+                        "signatures": confirmed,
+                        "thesis": cached["thesis"],
+                        "signal_strength": cached["signal_strength"],
+                    }
             try:
-                return await _refine_cluster_with_llm(bucket, min_channels=min_channels)
+                result = await _refine_cluster_with_llm(bucket, min_channels=min_channels)
             except Exception as exc:  # noqa: BLE001
+                if _is_fup_error(str(exc)):
+                    # This bucket DID make the (failed) LLM call that surfaced the
+                    # FUP signal; it is not counted in `skipped_after_breaker`,
+                    # which tracks only the buckets short-circuited WITHOUT a call.
+                    fup_tripped = True
+                    return None
                 logger.warning("convergence refine task failed: %s", exc)
                 return None
+            _stats["sonnet_calls_made"] += 1
+            if key:
+                _refine_cache_put(key, result)
+            return result
 
     results = await asyncio.gather(*[_refine_one(b) for b in buckets])
+    if fup_tripped:
+        logger.warning(
+            "convergence FUP circuit breaker tripped: a Fair-Usage ([1313]) signal "
+            "aborted this run; %d of %d buckets skipped without an LLM call. The next "
+            "hourly run re-detects them (candidate writes are idempotent).",
+            skipped_after_breaker,
+            len(buckets),
+        )
     return [r for r in results if r]
 
 
@@ -745,14 +955,19 @@ def _detect_clusters_llm(
     source_window_hours: int,
     min_channels: int,
     deadline: float | None = None,
+    stats: dict | None = None,
 ) -> list[dict[str, Any]]:
     """Sync wrapper around the async LLM clustering (mirrors the loop-handling
-    pattern used by the other sync wrappers in this module)."""
+    pattern used by the other sync wrappers in this module).
+
+    ``stats`` is forwarded to :func:`_detect_clusters_llm_async` to accumulate
+    ``sonnet_calls_made`` / ``cache_hits`` for the caller."""
     coro = _detect_clusters_llm_async(
         conn,
         source_window_hours=source_window_hours,
         min_channels=min_channels,
         deadline=deadline,
+        stats=stats,
     )
     try:
         loop = asyncio.get_running_loop()
@@ -1132,10 +1347,10 @@ def write_convergence_candidate(
 
     if is_ideation:
         title = f"ATLAS evaluate ideation insight: {headline}"
-        labels = ["agent-ready", "ideation", "atlas", "candidate", "insight"]
+        labels = [task_hub.TASK_LABEL_AGENT_READY, "ideation", "atlas", "candidate", "insight"]
     else:
         title = f"ATLAS evaluate convergence candidate: {headline}"
-        labels = ["agent-ready", "convergence", "atlas", "candidate"]
+        labels = [task_hub.TASK_LABEL_AGENT_READY, "convergence", "atlas", "candidate"]
 
     # ── Pre-Task-Hub editorial triage ──────────────────────────────
     # Decide whether this candidate is worth a Task Hub item BEFORE we create

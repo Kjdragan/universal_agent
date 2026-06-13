@@ -97,6 +97,13 @@ Open a Python helper task and:
    video_ids = json.loads(row["video_ids_json"])
    channels = json.loads(row["channel_names_json"])
    primary_topics = json.loads(row["primary_topics_json"])
+
+   # Enrich signatures with full transcript text from the durable corpus.
+   # Each signature dict gains a `full_transcript` key (str or None).
+   # The authoring pass (Phase 2) uses this as the primary source; it falls
+   # back to `key_claims` only when `full_transcript` is None.
+   from universal_agent.services.transcript_corpus import load_full_sources_for_candidate
+   signatures = load_full_sources_for_candidate(signatures)  # adds signatures[*]["full_transcript"]
    ```
 
 2. Read the recent briefs index. Use `read_index_or_fallback` so a missing
@@ -153,7 +160,9 @@ For the current candidate, compile:
 
 - Distinct channels covering the cluster (from `channel_names_json`)
 - Primary topics (from `primary_topics_json`)
-- Per-channel key claims (from `signatures_json[*].key_claims`)
+- Per-channel primary source: `signatures_json[*].full_transcript` when present
+  (the full persisted transcript text); fall back to `signatures_json[*].key_claims`
+  only when `full_transcript` is None or empty
 - Source URLs (from `signatures_json[*].video_url`)
 
 ### 1.2 Apply the decision rubric
@@ -242,10 +251,27 @@ faithfully represent the dispatch narrative (`metadata.thesis` /
 that the actual sources do NOT support MUST be disclosed in a one-line
 provenance note (Section 3), never silently dropped or substituted.
 
-Capture the **authoring model** — the model that authored this HTML brief
-(read it from the runtime model env var the mission ran under, falling back
-to the resolved flagship model). It is persisted on the artifact in
-Phase 3.3.
+**Source fidelity rule:** Author from `signatures[*].full_transcript` when
+present — this is the full YouTube transcript persisted during CSI enrichment.
+Fall back to `signatures[*].key_claims` ONLY when `full_transcript` is None
+or empty for a given channel. These are low-volume accepted survivors; take
+whatever inference time is needed to do justice to the full source text.
+When a `full_transcript` is available, do NOT summarize down to `key_claims`
+level — use the transcript to write a richer, more specific evidence summary
+(Section 2) and to verify every dispatch-narrative claim against the source.
+
+Capture the **authoring model** deterministically — converge intel briefs run
+under the opus tier (glm-5.1). Resolve it in code:
+
+```python
+import os
+from universal_agent.utils.model_resolution import resolve_opus
+# Deterministic provenance: convergence briefs are authored under the opus tier
+# (glm-5.1), which honors ANTHROPIC_DEFAULT_OPUS_MODEL else resolve_opus().
+authoring_model = (os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL") or "").strip() or resolve_opus()
+```
+
+It is persisted on the artifact in Phase 3.3.
 
 1. **Convergence signal** — what the cluster is about, and why now (the
    "what + why now"). 2-4 sentences.
@@ -349,9 +375,10 @@ upsert_artifact(
         # software/coding demo; False/absent otherwise (incl. the legacy path).
         "demo_amenable": bool(demo_amenable),
         # Provenance: which model authored this HTML brief (captured in Phase 2
-        # from the runtime model env var the mission ran under, falling back to
-        # the resolved flagship model), and which model produced the upstream
-        # triage verdict (`metadata.triage.model` when present, else None).
+        # via deterministic code — `ANTHROPIC_DEFAULT_OPUS_MODEL` env var else
+        # `resolve_opus()`, always glm-5.1 on ZAI), and which model produced
+        # the upstream triage verdict (`metadata.triage.model` when present,
+        # else None).
         "authoring_model": authoring_model,
         "triage_model": (metadata.get("triage") or {}).get("model"),
     },

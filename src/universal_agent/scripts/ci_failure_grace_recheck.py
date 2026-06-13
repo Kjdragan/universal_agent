@@ -48,6 +48,8 @@ import os
 import subprocess
 from typing import Any, Callable, Optional
 
+from universal_agent import task_hub
+
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
@@ -70,6 +72,17 @@ LABEL_DISPATCHED = "ci-autofix-dispatched"
 LABEL_NEEDS_OPERATOR = "needs-operator"
 LABEL_AUTOFIX = "ci-autofix"
 LABEL_CI_FAILURE = "ci-failure"
+
+# Stand-down reasons where the failure is moot AND no future event will close
+# the issue. The GHA close-issue job (ci-failure-issue.yml) only fires on a
+# GREEN run of the same workflow+branch — a merged/closed PR's branch never
+# runs again, so its ci-failure issue lingers until a human closes it
+# (observed: #905 sat ~3.5h after PR #904 merged). `newer_push` is deliberately
+# NOT here: the newer run files its own issue if red, and the branch-green
+# close job sweeps the old one when the branch eventually passes.
+MOOT_STAND_DOWN_REASONS = frozenset(
+    {"pr_merged", "pr_closed", "run_no_longer_failing"}
+)
 
 # --------------------------------------------------------------------------- #
 # Data
@@ -326,6 +339,37 @@ def _add_label(ctx: FailureContext, issue_number: int, label: str, gh: GhRunner)
     return rc == 0
 
 
+def close_stale_issue(
+    ctx: FailureContext, state: RepoState, reason: str, *, gh: GhRunner
+) -> bool:
+    """Close a ci-failure issue whose failure became moot during the grace
+    window (see ``MOOT_STAND_DOWN_REASONS`` for why nothing else ever will)."""
+    if not state.issue_number:
+        return False
+    detail = {
+        "pr_merged": f"PR #{ctx.pr_number} has merged.",
+        "pr_closed": f"PR #{ctx.pr_number} was closed without merging.",
+        "run_no_longer_failing": "a re-run of the workflow is no longer failing.",
+    }.get(reason, "the underlying failure no longer applies.")
+    comment = (
+        f"Auto-closed by `ci_failure_grace_recheck` (stand-down: **{reason}**): {detail} "
+        f"The failed run [{ctx.run_id}]({ctx.run_url}) is moot, and no future green run "
+        f"on this branch will arrive to auto-close it."
+    )
+    rc, _, _ = gh(
+        [
+            "issue",
+            "close",
+            str(state.issue_number),
+            "--repo",
+            ctx.repo,
+            "--comment",
+            comment,
+        ]
+    )
+    return rc == 0
+
+
 # --------------------------------------------------------------------------- #
 # Cody fix-mission brief
 # --------------------------------------------------------------------------- #
@@ -444,7 +488,7 @@ def dispatch_cody_fix(
             title=f"CI auto-fix: {ctx.workflow} on PR #{ctx.pr_number}",
             description=brief,
             priority=3,
-            labels=["agent-ready", "proactive-codie", "ci-autofix", "code"],
+            labels=[task_hub.TASK_LABEL_AGENT_READY, "proactive-codie", "ci-autofix", "code"],
             metadata={
                 "source": "ci_autofix_hook",
                 "pr_number": ctx.pr_number,
@@ -567,6 +611,13 @@ def run_grace_recheck(
     }
 
     if action == "stand_down":
+        if (
+            reason in MOOT_STAND_DOWN_REASONS
+            and state.issue_open
+            and os.getenv("UA_CI_AUTOFIX_AUTOCLOSE", "1").strip()
+            in {"1", "true", "True", "yes"}
+        ):
+            result["issue_auto_closed"] = close_stale_issue(ctx, state, reason, gh=gh)
         return result
     if action == "dispatch_cody":
         result.update(dispatch_cody_fix(ctx, state, gh=gh, db_path=db_path))

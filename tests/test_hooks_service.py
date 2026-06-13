@@ -2343,8 +2343,13 @@ def test_build_manual_youtube_action_builds_direct_agent_payload():
     assert action is not None
     assert action["name"] == "WatcherTestHook"
     assert action["to"] == "youtube-expert"
-    assert action["session_key"] == "yt_UCdemo-channel_demo1234567"
-    assert "learning_mode: concept_plus_implementation" in action["message"]
+    # build_manual_youtube_action joins segments with a double underscore
+    # (f"yt_{channel_seg}__{video_seg}"); pre-P3 this assert expected a single
+    # one and had been failing silently (file is outside the tests/unit gate).
+    assert action["session_key"] == "yt_UCdemo-channel__demo1234567"
+    assert "learning_mode: concept_only" in action["message"]
+    assert "Do NOT create an implementation/ folder" in action["message"]
+    assert "implementation/ with runnable code" not in action["message"]
     assert "allow_degraded_transcript_only: true" in action["message"]
 
 

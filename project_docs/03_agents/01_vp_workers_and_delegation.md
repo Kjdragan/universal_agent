@@ -10,7 +10,10 @@ code_paths:
   - src/universal_agent/tools/vp_orchestration.py
   - src/universal_agent/services/cody_mode.py
   - src/universal_agent/services/self_briefing.py
-last_verified: 2026-06-03
+  - src/universal_agent/services/vp_failure_rescue.py
+  - src/universal_agent/services/wiki_rescue_policy.py
+  - src/universal_agent/services/wiki_rescue_driver.py
+last_verified: 2026-06-11
 ---
 
 # VP Workers & Delegation
@@ -103,6 +106,27 @@ which retries on SQLite `database is locked` with backoff):
 `_build_payload` lifts `metadata.linked_task_id` to a **top-level `task_id`**
 field on the payload — this is the contract the worker and CLI client read to
 thread Task Hub linkage (closing the "delegated zombie" pattern; see below).
+
+### Linked-task auto-discovery + the hijack guard
+
+When a dispatch arrives without `task_id`, `_vp_dispatch_mission_impl` auto-discovers
+the linkage from the latest seized assignment (`task_hub.py::find_recent_active_task_for_agent`,
+the PR #490c fallback that keeps operator-dispatched Cody missions linked). That fallback's
+"one claim in flight" assumption is structurally violated by the P2b approve path —
+`dispatch_on_approval` seizes the assignment as `dashboard_operator` and the card sits seized
+until Simone's todo loop dispatches it. In the 2026-06-10 incident a taskless nightly-wiki
+dispatch stole a freshly-approved `tutorial_build` card during that window, inherited its
+`use_goal_loop`/`cody_mode` stamps, and falsely closed it at mission completion. Two gates
+now close the class (guard tests: `tests/unit/test_vp_link_discovery_guard.py`):
+
+- **`link_task=False`** — scheduled-routine dispatchers that execute no Task Hub task
+  (`nightly_wiki_agent.py`, `briefings_agent.py`, `freelance_scout_agent.py`) pass this kwarg
+  through `dispatch_vp_mission`; discovery is skipped entirely. An explicit `task_id` is
+  always honored regardless.
+- **Lane compatibility** — a *discovered* (never explicit) task whose `source_kind` is in
+  `vp_orchestration.py::_CODER_LANE_SOURCE_KINDS` (`tutorial_build`, `cody_demo_task`,
+  `cody_scaffold_request`) only auto-links when the dispatch targets `coder_vp_id()`; any
+  other VP refuses the link with a warning log.
 
 ### Preference context injection
 
@@ -479,6 +503,30 @@ Each verb closes the corresponding `vp_failure:<mission_id>` task hub item with 
 `missing_completion_attestation`, `auth_failure`, `workspace_guard`,
 `subprocess_crash`, `timeout`, `goal_cap_hit`, `operator_cancel`,
 `vp_self_reported`.
+
+### Deterministic wiki-rescue (flag-gated)
+
+Routing to Simone is best-effort and LLM-discretionary — in practice she invokes a
+rescue verb on ~none of the surfaced failures, so failed missions rot (auto-parked).
+For the **`proactive_wiki` lane only**, `wiki_rescue_driver.py::maybe_rescue_failed_wiki_mission`
+adds a *deterministic* rescue (flag `UA_WIKI_RESCUE_ENABLED`, default off), fired
+from **both** failure paths: clean failures inline from
+`worker_loop.py::_execute_mission_logic` immediately after `finalize_vp_mission`,
+and SIGTERM/stale-killed missions from the reconciler
+(`gateway_server.py::_reconcile_stale_vp_missions_once`) via the sync-safe bridge
+`wiki_rescue_driver.py::schedule_wiki_rescue` (create_task on the running gateway
+loop, `asyncio.run` when loop-less). It reads the authoritative
+`failure_count` off the `vp_failure:<mission_id>` task and applies the pure,
+bounded ladder in `wiki_rescue_policy.py::decide_wiki_rescue`: a transient infra
+failure → `redispatch_fresh` on ATLAS (≤ `MAX_ATLAS_RETRIES`); a structural failure
+or exhausted retries → hand to Cody (`vp.coder.primary`) when free, else an ATLAS
+fallback (`wiki_rescue_driver.py::_cody_available`); budget (`MAX_TOTAL_RESCUES`)
+exhausted → `escalate_vp_failure_to_operator`, then stop. The Cody handoff rides a
+new `override_vp_id` arg on `vp_orchestration.py::_vp_dispatch_mission_redispatch_fresh_impl`
+(cross-VP reassignment; the legacy verbs keep the original vp_id). Scope is the
+`wiki_rescue_policy.py::RESCUABLE_MISSION_TYPES` set — narrow first, generalize once proven.
+`UA_WIKI_RESCUE_DRY_RUN` makes the driver log its verdict without dispatching (the
+smoke vehicle used before the flag was enabled in production on 2026-06-11).
 
 ## Operator runbook: flushing the mission backlog
 

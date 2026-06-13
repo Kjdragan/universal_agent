@@ -2177,6 +2177,95 @@ def _dispatch_tutorial_candidates(
     return results
 
 
+def _demo_build_candidates(decisions: dict[str, Any]) -> list[dict[str, Any]]:
+    """Demo-lane candidates from the digest decisions (P3).
+
+    Every ranked row that passed the deterministic demo-worthiness gate
+    (``dispatch_eligible=True`` — annotated by
+    ``_select_tutorial_dispatch_candidates`` on ALL rows, independent of the
+    Tutorial-tier ``top_n``/tie-extension budget), in ``value_score`` order
+    (``ranked_videos`` is already sorted descending). The Demo tier has its own
+    throttle: the shared daily build ceiling.
+    """
+    candidates: list[dict[str, Any]] = []
+    for row in decisions.get("ranked_videos", []):
+        if not row.get("dispatch_eligible"):
+            continue
+        video_id = str(row.get("video_id") or "").strip()
+        if not video_id:
+            continue
+        candidates.append(
+            {
+                "video_id": video_id,
+                "video_title": str(row.get("title") or ""),
+                "video_url": f"https://www.youtube.com/watch?v={video_id}",
+                "channel_name": "",
+                "extraction_plan": {
+                    "summary": str(row.get("reason") or ""),
+                    "category": "youtube_daily_digest",
+                    "value_score": int(row.get("value_score") or 0),
+                },
+                "priority": 3,
+            }
+        )
+    return candidates
+
+
+def _queue_demo_builds(
+    *,
+    decisions: dict[str, Any],
+    dry_run: bool,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """P3: queue demo-worthy digest videos into the ``tutorial_build`` Task Hub lane.
+
+    Converges the curated Daily Digest source onto the SAME ranked
+    daily-ceiling logic the broad CSI sweep uses
+    (``proactive_tutorial_builds.queue_tutorial_builds_with_ceiling``):
+    top-ranked candidates auto-dispatch up to the remaining America/Chicago
+    daily budget; the rest queue as pending-approval rows for the dashboard
+    button (P2b, uncapped). Dedupe across sources is structural —
+    ``queue_tutorial_build_task`` derives ``task_id`` from ``sha256(video_id)``,
+    so a video seen by both the digest and the broad RSS sweep lands on ONE row.
+
+    This process is a standalone systemd subprocess with direct activity-DB
+    access (same pattern as ``scripts/proactive_demo_build_sweep.py``);
+    ``conn`` is injectable for tests. Failures are swallowed (logged) so the
+    Brief email is never blocked by demo-lane queueing.
+    """
+    candidates = _demo_build_candidates(decisions)
+    base = {"queued": 0, "auto_queued": 0, "auto_new": 0, "auto_reaffirmed": 0, "pending_approval": 0, "candidates": len(candidates)}
+    if dry_run or not candidates:
+        base["skipped"] = "dry_run" if dry_run else "no_candidates"
+        return base
+    try:
+        from universal_agent.services.proactive_tutorial_builds import (
+            queue_tutorial_builds_with_ceiling,
+        )
+
+        if conn is not None:
+            outcome = queue_tutorial_builds_with_ceiling(
+                conn, candidates, source="youtube_daily_digest"
+            )
+        else:
+            from universal_agent.durable.db import (
+                connect_runtime_db,
+                get_activity_db_path,
+            )
+
+            with connect_runtime_db(get_activity_db_path()) as db:
+                outcome = queue_tutorial_builds_with_ceiling(
+                    db, candidates, source="youtube_daily_digest"
+                )
+    except Exception as exc:  # noqa: BLE001 — demo-lane queueing must never break the digest
+        logger.warning("Demo-build queueing failed (digest continues): %s", exc)
+        base["error"] = str(exc)
+        return base
+    outcome["candidates"] = len(candidates)
+    outcome["queued"] = int(outcome.get("auto_queued") or 0) + int(outcome.get("pending_approval") or 0)
+    return outcome
+
+
 def _format_tutorial_dispatch_summary(
     *,
     decisions: dict[str, Any],
@@ -2901,6 +2990,15 @@ def process_daily_digest(
         dispatch_path = candidates_path.with_name(candidates_path.stem + "_dispatch_results.json")
         dispatch_path.write_text(json.dumps(dispatch_results, indent=2, ensure_ascii=False), encoding="utf-8")
         logger.info("Saved tutorial dispatch results: %s", dispatch_path)
+
+    # P3: the SAME gate-passing videos also enter the Demo ladder — tutorial_build
+    # Task Hub rows through the shared daily ceiling (one ladder for both YouTube
+    # sources; sha256(video_id) task ids dedupe against the broad CSI sweep).
+    demo_queue_outcome = _queue_demo_builds(decisions=decisions, dry_run=dry_run)
+    logger.info(
+        "Demo-build lane queue outcome (tutorial_build, shared daily ceiling): %s",
+        demo_queue_outcome,
+    )
 
     tutorial_dispatch_summary = _format_tutorial_dispatch_summary(
         decisions=decisions,

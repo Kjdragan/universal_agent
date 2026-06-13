@@ -84,6 +84,7 @@ def _apply_env_defaults(path: Path) -> None:
         os.environ.setdefault(key, val)
 
 
+from _csi_pace import pace_sleep, resolve_enrich_pace_seconds  # noqa: E402
 from _csi_retry import retry_on_transient  # noqa: E402
 from _csi_secret_resolver import resolve_token_from_infisical  # noqa: E402
 
@@ -479,6 +480,45 @@ def _upsert_analysis(
     conn.commit()
 
 
+def _persist_transcript(
+    conn,
+    *,
+    video_id: str,
+    event_id: str | None,
+    channel_id: str | None,
+    channel_name: str | None,
+    title: str | None,
+    published_at: str | None,
+    transcript_text: str,
+    transcript_chars: int,
+    source_ref: str | None,
+) -> None:
+    """Persist the full transcript body into the youtube_transcripts corpus (idempotent by video_id)."""
+    conn.execute(
+        """
+        INSERT INTO youtube_transcripts (
+            video_id, event_id, channel_id, channel_name, title, published_at,
+            char_count, transcript_text, source_ref, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(video_id) DO UPDATE SET
+            event_id=excluded.event_id,
+            channel_id=excluded.channel_id,
+            channel_name=excluded.channel_name,
+            title=excluded.title,
+            published_at=excluded.published_at,
+            char_count=excluded.char_count,
+            transcript_text=excluded.transcript_text,
+            source_ref=excluded.source_ref,
+            fetched_at=excluded.fetched_at
+        """,
+        (
+            video_id, event_id, channel_id, channel_name, title, published_at,
+            int(transcript_chars or len(transcript_text)), transcript_text, source_ref,
+        ),
+    )
+    conn.commit()
+
+
 def _extract_transcript_error_class(transcript_result: dict[str, Any]) -> str | None:
     """Extract the most significant error class from transcript fetch result.
 
@@ -654,8 +694,12 @@ def main() -> int:
     claude_used = 0
     category_counts: Counter[str] = Counter()
     endpoint_success_counts: dict[str, int] = {}
+    # Slow-burn pacing: space per-event ZAI calls so the run trickles instead of
+    # bursting (avoids tripping the Fair-Usage rate limit). Knob: _csi_pace.py.
+    pace_seconds = resolve_enrich_pace_seconds()
 
     for row in rows:
+        made_llm_call = False
         event_db_id = int(row["id"])
         event_id = str(row["event_id"])
         source = str(row["source"] or "youtube_channel_rss")
@@ -724,6 +768,7 @@ def main() -> int:
         content_schema_json = None
 
         if use_claude and api_key and transcript_text:
+            made_llm_call = True
             parsed, usage = _analyze_with_claude(
                 title=title,
                 channel_name=channel_name,
@@ -825,8 +870,28 @@ def main() -> int:
             transcript_error=transcript_error,
         )
 
+        # Persist the full transcript body into the durable corpus (it is otherwise
+        # discarded after summarization). Best-effort: never fail the enrich loop.
+        if transcript_status == "ok" and video_id and transcript_text:
+            try:
+                _persist_transcript(
+                    conn,
+                    video_id=video_id,
+                    event_id=event_id,
+                    channel_id=channel_id,
+                    channel_name=channel_name,
+                    title=title,
+                    published_at=published_at,
+                    transcript_text=transcript_text,
+                    transcript_chars=transcript_chars,
+                    source_ref=transcript_ref,
+                )
+            except Exception:
+                print(f"TRANSCRIPT_PERSIST_FAILED video_id={video_id}")
+
         # ── Post-enrichment: trigger watchlist re-classification if transcript arrived ──
         if transcript_status == "ok" and channel_id and summary_text:
+            made_llm_call = True
             _try_reclassify_channel(
                 channel_id=channel_id,
                 transcript_samples=[summary_text[:500]],
@@ -837,6 +902,12 @@ def main() -> int:
 
         category_counts[category] += 1
         processed += 1
+
+        # Slow-burn pacing: only delay after an event that actually hit the LLM,
+        # turning a ~40-call burst into a gentle trickle. Sequential already —
+        # this just spaces the calls. Fixed/manual (not adaptive); 0 disables.
+        if made_llm_call:
+            pace_sleep(pace_seconds)
 
     conn.close()
     print(f"RSS_ENRICH_PENDING={len(rows)}")

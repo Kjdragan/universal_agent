@@ -1,0 +1,18 @@
+[Unit]
+Description=Run the Universal Agent proactive demo-build lane sweep at 08:30, 13:30, 18:30 America/Chicago (deploy-independent, 3x/day)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. Three slots inside the active
+# window (6 AM–10 PM Houston). DST handled by systemd; Persistent replays a
+# missed slot inside a deploy window (the script's dormancy gate prevents an
+# overnight replay from actually running). systemd-255 honors the OnCalendar
+# timezone suffix and the hour list `08,13,18` expands to one fire per listed
+# hour (verify with `systemd-analyze calendar`).
+OnCalendar=*-*-* 08,13,18:30:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-proactive-demo-build-sweep.service
+
+[Install]
+WantedBy=timers.target

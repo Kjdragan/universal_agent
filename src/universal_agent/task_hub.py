@@ -23,6 +23,11 @@ TASK_STATUS_CANCELLED = "cancelled"
 TASK_STATUS_DELEGATED = "delegated"           # VP is actively working this
 TASK_STATUS_PENDING_REVIEW = "pending_review"  # VP done, Simone sign-off needed
 TASK_STATUS_SCHEDULED = "scheduled"            # Time-bound: cron trigger will execute at due_at
+TASK_STATUS_WAITING_ON_REPLY = "waiting-on-reply"  # Email reply sent, awaiting human response
+
+# Common task labels — single source of truth for label string literals used
+# across services, bridges, and the gateway.
+TASK_LABEL_AGENT_READY = "agent-ready"
 
 # stale_state marker for terminal-SUCCESS tasks the operator cleared off the
 # dashboard. Such rows keep ``status = completed`` — they are deliberately NOT
@@ -733,14 +738,14 @@ def list_workstream_tasks(
 def _phase_task_status_bucket(status: str) -> str:
     normalized = str(status or "").strip().lower()
     if normalized in {TASK_STATUS_REVIEW, TASK_STATUS_PENDING_REVIEW}:
-        return "needs_review"
+        return TASK_STATUS_REVIEW
     if normalized == TASK_STATUS_COMPLETED:
-        return "completed"
+        return TASK_STATUS_COMPLETED
     if normalized == TASK_STATUS_BLOCKED:
-        return "blocked"
+        return TASK_STATUS_BLOCKED
     if normalized in {TASK_STATUS_IN_PROGRESS, TASK_STATUS_DELEGATED}:
-        return "in_progress"
-    return "open"
+        return TASK_STATUS_IN_PROGRESS
+    return TASK_STATUS_OPEN
 
 
 def _child_phase_task_ref(item: dict[str, Any]) -> dict[str, Any]:
@@ -993,7 +998,7 @@ def _mission_phase_template_to_task(
         "description": description,
         "project_key": str(phase.get("project_key") or parent.get("project_key") or "immediate"),
         "priority": _safe_int(phase.get("priority"), _safe_int(parent.get("priority"), 2)),
-        "labels": list(phase.get("labels") or ["agent-ready"]),
+        "labels": list(phase.get("labels") or [TASK_LABEL_AGENT_READY]),
         "status": str(phase.get("status") or TASK_STATUS_OPEN),
         "agent_ready": bool(phase.get("agent_ready", True)),
         "trigger_type": str(phase.get("trigger_type") or DEFAULT_TRIGGER_TYPE),
@@ -1184,7 +1189,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
 
     agent_ready = bool(item.get("agent_ready", existing.get("agent_ready", False)))
     if not agent_ready:
-        agent_ready = "agent-ready" in label_set
+        agent_ready = TASK_LABEL_AGENT_READY in label_set
 
     existing_status = str(existing.get("status") or "").strip().lower()
     status = str(item.get("status") or existing_status or TASK_STATUS_OPEN).strip().lower()
@@ -1413,15 +1418,15 @@ def _dispatch_skip_reason(item: dict[str, Any], *, eligible: bool, threshold: fl
         return "completion_locked"
     status = str(item.get("status") or TASK_STATUS_OPEN).strip().lower()
     if status == TASK_STATUS_BLOCKED:
-        return "blocked"
+        return TASK_STATUS_BLOCKED
     if status == TASK_STATUS_IN_PROGRESS:
-        return "in_progress"
+        return TASK_STATUS_IN_PROGRESS
     if status == TASK_STATUS_DELEGATED:
         return "delegated_to_vp"
     if status == TASK_STATUS_PENDING_REVIEW:
         return "pending_review"
     if status == TASK_STATUS_REVIEW and not _is_system_schedule_task(item):
-        return "needs_review"
+        return TASK_STATUS_REVIEW
     if not bool(item.get("agent_ready")):
         return "agent_not_ready"
     score = _safe_float(item.get("score"), 0.0)
@@ -2923,7 +2928,7 @@ def create_proactive_feedback_continuation(
             "description": "\n".join(description_parts),
             "project_key": "proactive",
             "priority": max(2, _safe_int(parent.get("priority"), 2)),
-            "labels": ["proactive", "continuation", "agent-ready"],
+            "labels": ["proactive", "continuation", TASK_LABEL_AGENT_READY],
             "status": TASK_STATUS_OPEN,
             "parent_task_id": parent_id,
             "agent_ready": True,
@@ -4338,7 +4343,7 @@ def finalize_assignments(
                 WHERE status IN (?, ?, ?)
             )
             """,
-            (TASK_STATUS_COMPLETED, TASK_STATUS_REVIEW, "waiting-on-reply"),
+            (TASK_STATUS_COMPLETED, TASK_STATUS_REVIEW, TASK_STATUS_WAITING_ON_REPLY),
         )
     except Exception as _dq_err:
         logger.debug("Dispatch queue cleanup skipped: %s", _dq_err)
@@ -4961,7 +4966,7 @@ def decompose_task(
             "description": sub.get("description", ""),
             "project_key": sub.get("project_key", parent.get("project_key", "immediate")),
             "priority": sub.get("priority", 2),
-            "labels": sub.get("labels", ["agent-ready"]),
+            "labels": sub.get("labels", [TASK_LABEL_AGENT_READY]),
             "status": sub.get("status", TASK_STATUS_OPEN),
             "agent_ready": sub.get("agent_ready", True),
             "trigger_type": sub.get("trigger_type", DEFAULT_TRIGGER_TYPE),
@@ -5147,6 +5152,17 @@ def _emit_kanban_terminal_intelligence(
     )
 
 
+# Demo-lane source kinds whose completion must carry worker-finalize
+# evidence (metadata.vp_terminal_status == "completed" AND
+# metadata.demo_finalize.ok). Legit completion for these lanes flows
+# through the VP worker's terminal sync (attestation guard +
+# tutorial_demo_finalize); an LLM calling the generic `complete` verb on
+# the source task bypasses all of it — see perform_task_action's gate.
+DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS = frozenset(
+    {"tutorial_build", "cody_demo_task"}
+)
+
+
 def perform_task_action(
     conn: sqlite3.Connection,
     *,
@@ -5228,6 +5244,64 @@ def perform_task_action(
     elif action_norm == "complete":
         metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
         dispatch_meta = dict(metadata.get("dispatch") or {})
+        # ── Demo-lane completion-evidence gate (2026-06-11 incident) ────
+        # Simone's rescue-evaluator, handling the vp_failure item for a
+        # mission demoted to failed (missing_completion_attestation),
+        # "completed" the SOURCE tutorial_build task via this verb —
+        # producing a completed row with empty demo_finalize and bypassing
+        # the entire P6 deterministic finalize (manifest synthesis,
+        # mechanical checks, dashboard registration). A non-operator
+        # complete on a demo-lane task is honored only when the linked
+        # mission genuinely completed AND finalize evidence exists;
+        # otherwise it routes to needs_review for operator eyes.
+        _src_kind = str(item.get("source_kind") or "").strip()
+        _agent_norm = str(agent_id or "").strip()
+        _is_operator_surface = _agent_norm == "dashboard_operator" or _agent_norm.startswith(
+            "operator"
+        )
+        if (
+            _src_kind in DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS
+            and not _is_operator_surface
+        ):
+            _vp_terminal = str(metadata.get("vp_terminal_status") or "").strip().lower()
+            _finalize_ok = bool((metadata.get("demo_finalize") or {}).get("ok"))
+            if not (_vp_terminal == "completed" and _finalize_ok):
+                dispatch_meta["last_disposition"] = "review"
+                dispatch_meta["last_disposition_reason"] = (
+                    reason_text or "completion_requires_demo_finalize"
+                )
+                dispatch_meta["completion_unverified"] = True
+                dispatch_meta["completion_blocked_reason"] = (
+                    "completion_requires_demo_finalize"
+                )
+                metadata["dispatch"] = dispatch_meta
+                _complete_active_assignments_for_task(
+                    conn,
+                    task_id=task_id,
+                    result_summary="completion_requires_demo_finalize",
+                    ended_at=now_iso,
+                )
+                conn.execute(
+                    "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+                    (TASK_STATUS_REVIEW, "needs_review", _json_dumps(metadata), now_iso, task_id),
+                )
+                _record_evaluation(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    decision="review",
+                    reason="completion_requires_demo_finalize",
+                    score=_safe_float(item.get("score"), 0.0),
+                    score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+                    judge_payload={
+                        "source": "demo_lane_completion_gate",
+                        "vp_terminal_status": _vp_terminal,
+                        "demo_finalize_ok": _finalize_ok,
+                        "agent_claim": reason_text,
+                    },
+                )
+                conn.commit()
+                return get_item(conn, task_id) or item
         task_for_verification = {**item, "metadata": metadata}
         expected_channel = _task_expected_final_channel(task_for_verification)
         requires_verified_delivery = _task_requires_verified_final_delivery(

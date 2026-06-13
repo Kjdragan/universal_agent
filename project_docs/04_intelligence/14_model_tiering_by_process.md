@@ -31,7 +31,8 @@ code_paths:
   - src/universal_agent/rate_limiter.py
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/gateway_server.py
-last_verified: 2026-06-10
+  - src/universal_agent/services/transcript_corpus.py
+last_verified: 2026-06-12
 ---
 
 # Intelligence Model Tiering by Process
@@ -77,7 +78,12 @@ Dedicated, off-tier lanes exist for subsystems that must not contend with the ma
 agent's budget at all:
 
 - **Mission Control** — `resolve_mission_control_model()` → `glm-4.7` (bypasses the
-  tier map; override `UA_MISSION_CONTROL_MODEL`).
+  tier map; override `UA_MISSION_CONTROL_MODEL`). As of **2026-06-12** this covers **all**
+  Mission Control LLM work including the tier-2 Chief-of-Staff readout (`mission_control_chief_of_staff.py::synthesize_readout`),
+  which was previously on the opus tier (`resolve_model("opus")` → glm-5.1/glm-5-turbo) but was
+  consolidated onto the glm-4.7 lane to keep the readout off the shared sonnet/opus lane it was
+  contending on. Override still honored via `UA_MISSION_CONTROL_COS_MODEL` (should be unset in
+  Infisical so the code default applies).
 
 ---
 
@@ -122,7 +128,19 @@ change, so a tier can be tuned up or down per process if quality or cost dictate
 
 ---
 
+> **2026-06-11 implementation note:** the `llm_classifier.py` wrapper rows below were
+> registry intent that the code did not yet implement — the wrappers passed no
+> `model=`, so `_call_llm`'s `resolve_opus()` fallback kept them on `glm-5.1`. As of
+> 2026-06-11 all five wrappers (`classify_priority`, `classify_agent_route`,
+> `generate_calendar_task_description`, `extract_due_at`, `extract_disjointed_tasks`)
+> explicitly pass `llm_classifier.py::_classifier_default_model` — **sonnet
+> (`glm-5-turbo`) by default**, override via `UA_LLM_CLASSIFIER_DEFAULT_MODEL`. Sonnet
+> (not haiku) for the Tier-A-registered rows because live per-model 429 data showed
+> ZAI throttling `glm-4.5-air` at ~61% and `glm-5.1` at ~85%+ while `glm-5-turbo`
+> flowed clean — move them down to haiku via the env knob once air pressure clears.
+
 ## 4. Registry — at a glance
+
 
 ### Tier A — `glm-4.5-air` (haiku)
 
@@ -142,7 +160,7 @@ change, so a tier can be tuned up or down per process if quality or cost dictate
 |---|---|---|---|---|---|
 | Agent routing | `llm_classifier.py::classify_agent_route` | Simone / CODIE / ATLAS | low (≤5 / sweep) | flagship | Wrong route mis-delegates a whole mission |
 | Email task-splitting | `llm_classifier.py::extract_disjointed_tasks` | split into N tasks, keep context | low (default-off) | flagship | Segmentation+context risk; air may over/under-split |
-| Convergence cluster-refine | `proactive_convergence.py::_refine_cluster_with_llm` | is this bucket a real convergence? | **high** (≤6 concurrent) | flagship | Precision gate; bad merges re-poison the stream |
+| Convergence cluster-refine | `proactive_convergence.py::_refine_cluster_with_llm` | is this bucket a real convergence? | **high** (≤2 concurrent; ~89% cache-hit) | flagship→**sonnet** (A/B 2026-06-10) | Precision gate; air/4.7 over-confirm — sonnet is the floor, matches opus |
 | Heartbeat health evaluator | `health_evaluator.py` | ignore / directive / escalate | low | flagship | Misroute drops a real human escalation |
 | Brainstorm refinement | `refinement_agent.py` | advance / question / hold + rewrite | low | flagship | Mixed judgment + rewrite, light synthesis |
 | URW completion judge | `urw/evaluator.py` (`LLMJudgeEvaluator`) | 0–1 rubric score, gates retries | low | flagship | Too-lenient/harsh score wrongly passes or burns retries |
@@ -159,6 +177,27 @@ change, so a tier can be tuned up or down per process if quality or cost dictate
 | Feedback → rules distiller | `proactive_signals.py::distill_feedback_to_rules` | Rewrites an entire rules markdown doc in place; weak model risks clobbering it |
 | Task decomposition (gateway) | `decomposition_agent.py` | Free-form multi-step planning; split/ordering cascades into every subagent |
 | URW task decomposer | `urw/decomposer.py` (`LLMDecomposer`) | Free-form atomic-task-graph planning that drives the whole URW run |
+| Convergence intel-brief authoring | `evaluate-and-author-intel-brief` SKILL.md | Long-form synthesis from full transcripts; low volume (accepted survivors only) |
+
+**Intel-brief authoring — transcript corpus and deterministic provenance (2026-06-11):**
+Convergence briefs are now authored from the **full persisted transcript corpus** instead
+of the ~300-char distilled `key_claims`. Each YouTube transcript fetched during CSI
+enrichment (`CSI_Ingester/development/scripts/csi_rss_semantic_enrich.py::_persist_transcript`)
+is written to the `youtube_transcripts` table in `csi.db` (migration
+`0014_youtube_transcripts`). At brief-authoring time,
+`services/transcript_corpus.py::load_full_sources_for_candidate` enriches each signature
+with `full_transcript` from the corpus (falling back to `key_claims` only when no
+persisted text exists). The authoring model is captured deterministically:
+
+```python
+from universal_agent.utils.model_resolution import resolve_opus
+authoring_model = (os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL") or "").strip() or resolve_opus()
+# Always glm-5.1 on the ZAI execution profile.
+```
+
+This replaces the previous "read from runtime env var, fall back to flagship model"
+heuristic with a code-derived value that is always the opus tier (glm-5.1). Gating
+stages (`triage_candidate`, `_refine_cluster_with_llm`) are unchanged.
 
 ### Already off-flagship / out of scope (no change)
 
@@ -166,6 +205,7 @@ change, so a tier can be tuned up or down per process if quality or cost dictate
 |---|---|---|---|
 | Mission Control card discovery | `mission_control_tier1.py` | `glm-4.7` | Dedicated lane via `resolve_mission_control_model()` |
 | Mission Control event titles | `mission_control_event_titles.py` | `glm-4.7` | Dedicated lane |
+| Mission Control Chief-of-Staff readout (tier-2) | `mission_control_chief_of_staff.py::synthesize_readout` | `glm-4.7` | **Moved off opus → glm-4.7 on 2026-06-12** to keep it off the shared sonnet/opus lane; unset Infisical `UA_MISSION_CONTROL_COS_MODEL` |
 | CSI demo-triage ranker | `csi_demo_triage_ranker.py` | `glm-4.6` | Already below flagship; `UA_CSI_DEMO_TRIAGE_MODEL` knob exists |
 | Backlog triage synthesizer | `backlog_triage.py` | `glm-5-turbo` | Already sonnet (`resolve_sonnet`) |
 | Skill-gap finder synthesizer | `skill_gap_finder.py` | `glm-5-turbo` | Already sonnet |
@@ -240,12 +280,36 @@ Splits one email into multiple independent tasks while preserving each task's co
 Gated behind a default-off flag, so ~0 live volume. **Not air**: segmentation that
 must carry context is where a small model over/under-splits or drops detail.
 
-**Convergence cluster-refine** — `proactive_convergence.py::_refine_cluster_with_llm`.
+**Convergence cluster-refine** — `proactive_convergence.py::_refine_cluster_with_llm`
+(model knob: `proactive_convergence.py::_cluster_judge_overrides`).
 The precision layer: judges whether a coarse SQL bucket genuinely converges on one
-thesis across independent channels, dropping false buckets. High volume and **run up
-to 6-wide concurrently** (`UA_CONVERGENCE_LLM_CONCURRENCY`, default 6) — this fan-out
-is itself a burst contributor and is separately a candidate for throttling. **Not
-air**: over-eager merges re-poison the candidate stream; turbo is the precision floor.
+thesis across independent channels, dropping false buckets. As of 2026-06-10 it
+defaults to the **sonnet tier (`glm-5-turbo`)**, down from the former opus default
+(`glm-5.1`), and runs **2-wide** (`UA_CONVERGENCE_LLM_CONCURRENCY`, default lowered
+6 → 2) — both to stop this fan-out being the dominant ZAI Fair-Usage 429/1313 burst
+contributor. **A/B-confirmed** (`scripts/convergence_model_ab.py`, 30 live buckets,
+run twice): glm-5-turbo matches the opus default's precision (both 2/30) at ~35%
+lower latency, while `glm-4.5-air` (15/30) and `glm-4.7` (11/30) over-confirm
+broad-topic buckets and fail this precision gate. **Turbo is the precision floor; air
+is not viable here.**
+
+**TTL-bounded result cache (2026-06-11):**
+`proactive_convergence.py::_refine_cache_get` / `_refine_cache_put` add a
+SQLite-backed result cache keyed on the bucket's sorted-video-id set
+(`proactive_convergence.py::_refine_cluster_key`), stored in the
+`convergence_refine_cache` table (`proactive_convergence.py::ensure_schema`). A
+cache HIT within the TTL reuses the stored verdict and skips the ZAI LLM call
+entirely — zero quality change because a bucket that gains or loses a video produces
+a new key and is always re-judged. ~89% of buckets re-judge identically across
+consecutive hourly runs, so this reduces the effective sonnet-call volume by ~89%.
+Call counts are surfaced per-run via `"sonnet_calls_made"` / `"cache_hits"` keys in
+the `sync_topic_signatures_from_csi` return dict (flows into `latest_sync.json`).
+
+Knobs (both env-overridable, no deploy needed):
+- `UA_CONVERGENCE_REFINE_CACHE_ENABLED` — `1`/`true` (default on) / `0` to always
+  re-judge every bucket.
+- `UA_CONVERGENCE_REFINE_CACHE_TTL_HOURS` — float, default `24`; a row older than
+  this is a miss and the LLM is re-invoked.
 
 **Heartbeat health evaluator** — `health_evaluator.py`.
 Classifies morning-report items into ignore / directive / escalate against a
@@ -272,6 +336,17 @@ Reads a workspace/transcript evidence bundle and produces a grounded multi-field
 verdict (implemented / known_issues / success_assessment / confidence) that must not
 infer success from silence. Low volume; `UA_PROACTIVE_RECAP_LLM_MODEL` knob already
 exists. **Not air**: nuanced evidence-grounded reasoning.
+
+> **2026-06-12 limiter fix:** `proactive_work_recap.py::_call_llm_recap_evaluator` previously
+> used a raw `Anthropic()` SDK client, bypassing the AIMD per-tier rate limiter entirely.
+> Live data showed ~64% hard-fail when the ZAI sonnet tier was momentarily saturated (the
+> raw client has no backoff). The function now routes through
+> `llm_classifier.py::_call_llm` via the same sync→async bridge pattern used by
+> `proactive_convergence.py::_detect_clusters_llm` — so `with_rate_limit_retry` handles
+> backoff when `UA_LLM_CLASSIFIER_LIMITER_ENABLED=1`. The heuristic session-evidence
+> fallback (`_evaluate_recap` → `evaluation_status="llm_failed_fallback"`) is unchanged;
+> the model tier (`glm-5-turbo` via `UA_PROACTIVE_RECAP_LLM_MODEL`, defaulting to
+> `resolve_opus()` when unset) is unchanged.
 
 **Wiki semantic extraction** — `wiki/llm.py` (`_call_llm`, shared by
 `extract_entities` / `extract_concepts` / `generate_summary`).

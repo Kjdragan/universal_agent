@@ -146,6 +146,8 @@ Use the AgentMail service to send the email. If AgentMail is not available or fa
             mission_type="freelance_scout",
             idempotency_key=f"freelance-scout-{today}-{datetime.now(timezone.utc).strftime('%H')}",
             source_session_id="cron_freelance_scout",
+            # Routine dispatch — executes no Task Hub task; never auto-link one.
+            link_task=False,
         )
     except RuntimeError as exc:
         logger.error(f"Dispatch failed: {exc}")

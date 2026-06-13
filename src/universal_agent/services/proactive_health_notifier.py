@@ -19,12 +19,15 @@ the pre-flight was retired; the heartbeat now only READS the durable snapshot.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import hmac
 import json
 import logging
 import os
 import sys
 import time
 from typing import Any, Iterable, Optional, Protocol
+import urllib.parse
 
 from universal_agent.services.email_tags import ActionTag, KindTag
 
@@ -32,6 +35,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_COOLDOWN_SECONDS = 21600  # 6h
 KEVIN_EMAIL = "kevinjdragan@gmail.com"
+
+# Per-finding "Acknowledge" links embedded in the digest email. 14 days —
+# long enough that a link in an unread email still works, short enough that a
+# leaked link eventually dies.
+FINDING_ACK_TTL_SECONDS = 14 * 86400
+ACK_ROUTE_PATH = "/api/v1/proactive_health/ack"
 
 
 def _resolve_agentmail_service_via_gateway() -> Optional[Any]:
@@ -309,6 +318,78 @@ async def send_test_critical_email(
 # owns the cooldown decision.
 
 
+# ── Per-finding "Acknowledge" links (suppress-until-recovered) ────────────────
+# HMAC-is-the-auth GET links, mirroring cron_artifact_notifier's ack URLs but
+# with the '{exp}.{sig}' TTL token shape from youtube_oauth_health
+# (mint_signed_param / check_signed_param). The gateway endpoint
+# (GET /api/v1/proactive_health/ack) verifies the token and records the ack in
+# proactive_health_snapshot.record_ack; the timer then filters acked finding-ids
+# out of the digest until the finding recovers (see reconcile_acks).
+
+
+def _finding_ack_secret() -> bytes:
+    """Same secret material/precedence as cron_artifact_notifier._ack_secret."""
+    from universal_agent.services.cron_artifact_notifier import _ack_secret
+
+    return _ack_secret()
+
+
+def sign_finding_ack_token(
+    finding_id: str, *, ttl_seconds: int = FINDING_ACK_TTL_SECONDS
+) -> str:
+    """Return ``"{expires_epoch}.{hex_sig}"`` over ``f"ph_ack:{finding_id}:{exp}"``.
+
+    Returns the empty string when no signing secret is configured or the
+    finding_id is blank — the caller MUST then omit the ack line entirely
+    (never print a dead link in the email).
+    """
+    secret = _finding_ack_secret()
+    fid = (finding_id or "").strip()
+    if not secret or not fid:
+        return ""
+    exp = int(datetime.now(timezone.utc).timestamp()) + int(ttl_seconds)
+    payload = f"ph_ack:{fid}:{exp}".encode("utf-8")
+    sig = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+    return f"{exp}.{sig}"
+
+
+def verify_finding_ack_token(finding_id: str, token: str) -> bool:
+    """Validate a :func:`sign_finding_ack_token` token (TTL + signature)."""
+    secret = _finding_ack_secret()
+    fid = (finding_id or "").strip()
+    value = (token or "").strip()
+    if not secret or not fid or not value or "." not in value:
+        return False
+    exp_str, _, sig = value.partition(".")
+    try:
+        exp = int(exp_str)
+    except ValueError:
+        return False
+    if exp < int(datetime.now(timezone.utc).timestamp()):
+        return False  # expired
+    payload = f"ph_ack:{fid}:{exp}".encode("utf-8")
+    expected = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig.strip())
+
+
+def _build_finding_ack_url(finding_id: str) -> str:
+    """Operator-facing ack URL, or "" when no secret/base is available."""
+    base = (
+        os.getenv("FRONTEND_URL", "")
+        or os.getenv("UA_PUBLIC_BASE_URL", "")
+        or "https://app.clearspringcg.com"
+    ).strip().rstrip("/")
+    if not base:
+        return ""
+    token = sign_finding_ack_token(finding_id)
+    if not token:
+        return ""
+    return (
+        f"{base}{ACK_ROUTE_PATH}"
+        f"?f={urllib.parse.quote(finding_id, safe='')}&t={token}"
+    )
+
+
 def _format_digest_email(
     criticals: list[dict[str, Any]], generated_at: str
 ) -> tuple[str, str]:
@@ -319,6 +400,7 @@ def _format_digest_email(
         f"{n} critical proactive_health invariant{plural} firing as of {generated_at}.",
         "",
     ]
+    any_ack_url = False
     for idx, finding in enumerate(criticals, 1):
         title = finding.get("title") or "Proactive health finding"
         metric_key = finding.get("metric_key") or "?"
@@ -333,12 +415,28 @@ def _format_digest_email(
             lines.append(f"   What's wrong: {recommendation}")
         lines.append(f"   Observed: {observed_str}")
         lines.append(f"   Runbook: {runbook}")
+        finding_id = str(
+            finding.get("finding_id") or finding.get("metric_key") or ""
+        ).strip()
+        ack_url = _build_finding_ack_url(finding_id) if finding_id else ""
+        if ack_url:
+            # Omitted entirely when no signing secret resolves — never print
+            # a dead link.
+            any_ack_url = True
+            lines.append(f"   Acknowledge (mute until recovered): {ack_url}")
         lines.append("")
     lines.append(
         f"You will not be re-notified about this same finding-set for "
         f"{_cooldown_seconds() // 3600}h (a new or changed critical resets the "
         f"window). Live state: GET /api/v1/ops/proactive_health."
     )
+    if any_ack_url:
+        lines.append(
+            "Acknowledge = mute that finding until it RECOVERS (stays green "
+            "long enough), not a timed snooze: while it keeps firing you stay "
+            "muted, and a NEW red after recovery emails again immediately. "
+            "Ack links are valid 14 days."
+        )
     lines.append("")
     lines.append("— Proactive Health Watchdog (systemd timer)")
     return subject, "\n".join(lines)

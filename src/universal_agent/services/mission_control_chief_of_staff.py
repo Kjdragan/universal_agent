@@ -22,9 +22,9 @@ from universal_agent.durable.db import (
     get_sqlite_busy_timeout_ms,
 )
 from universal_agent.feature_flags import task_hub_missions_enabled
-from universal_agent.rate_limiter import ZAIRateLimiter
+from universal_agent.rate_limiter import ZAIFupPauseError, ZAIRateLimiter, _is_fup_error
 from universal_agent.systemd_migrated_jobs import is_migrated_to_systemd
-from universal_agent.utils.model_resolution import resolve_model
+from universal_agent.utils.model_resolution import resolve_mission_control_model
 
 logger = logging.getLogger(__name__)
 
@@ -796,6 +796,39 @@ def fallback_readout(evidence: dict[str, Any], *, error: str | None = None) -> d
     }
 
 
+def _is_429_shaped(exc_str: str) -> bool:
+    """True for an ordinary rate-limit/429 error (the retryable throttle tier).
+
+    Kept identical to the inline test the except branch used before
+    ``_record_throttle`` existed (``"429" in str(exc) or "rate" in str(exc).lower()``)
+    so behavior for plain 429s is unchanged.
+    """
+    return "429" in exc_str or "rate" in exc_str.lower()
+
+
+async def _record_throttle(limiter: ZAIRateLimiter, context: str, exc_str: str) -> None:
+    """Record a throttle signal against the limiter, 429-shape FIRST.
+
+    Empirically (verified on the VPS 2026-06-11) ZAI returns its account-level
+    Fair-Usage throttle AS a 429 whose body ALSO carries the ``[1313] ... Fair
+    Usage Policy`` text — 1058/1058 logged 429s matched ``_is_fup_error``. So a
+    naive "FUP-text wins" rule would record EVERY ordinary throttle as a FUP
+    signal, and the watchdog's no-grace CRITICAL FUP tier would page continuously
+    for routine rate-limiting. That inverts the intent.
+
+    Therefore the 429-shape check comes FIRST: any 429/rate-shaped error records
+    via ``record_429`` (the retryable tier) EVEN IF its text also matches
+    ``_is_fup_error``. ``record_fup_signal`` (the STOP / account-cliff tier the
+    watchdog escalates as CRITICAL with no grace) is reserved for a genuine
+    NON-429 Fair-Usage signal — e.g. a 403 account suspension / flag that carries
+    no 429 marker. Records nothing for an error that is neither.
+    """
+    if _is_429_shaped(exc_str):
+        await limiter.record_429(context)
+    elif _is_fup_error(exc_str):
+        await limiter.record_fup_signal(context, exc_str)
+
+
 async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     """Call the LLM to synthesize a readout from evidence; return (readout_dict, model_used)."""
     api_key = (
@@ -811,15 +844,22 @@ async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], 
     except Exception as exc:
         return fallback_readout(evidence, error=f"anthropic package unavailable: {exc}"), None
 
-    # Promoted to opus tier per operator decision. Mission
-    # Control "Chief of Staff" synthesizes priorities and recommendations
-    # across many simultaneous signals (CSI, Task Hub, supervisors,
-    # heartbeat findings) and is the canonical human-facing
-    # operational summary. Strategic synthesis quality matters more
-    # than per-call cost here; per-tier env override
-    # (UA_MISSION_CONTROL_COS_MODEL) still wins if the operator wants
-    # to dial back.
-    model = os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_model("opus")
+    # Consolidated onto the dedicated Mission Control model lane (glm-4.7) on
+    # 2026-06-12 (operator decision, LLM-efficiency pass). Previously this was
+    # the opus tier (glm-5.1 / glm-5-turbo), which put the tier-2 readout on the
+    # SHARED sonnet/opus ZAI lane where it contended with the main agent calls
+    # (Simone / Cody / convergence). resolve_mission_control_model() bypasses the
+    # haiku/sonnet/opus tier map and returns glm-4.7 — the same high-concurrency
+    # direct-model lane tier-1 already uses — so ALL of Mission Control now sits
+    # off the flagship lane. Note: this trades a modest tier-2 synthesis-quality
+    # step down (glm-4.7 is older/weaker than glm-5-turbo) for lane isolation;
+    # for a background panel nobody watches in real time, glm-4.7's higher
+    # latency (~45s/readout) is irrelevant. The per-call override
+    # (UA_MISSION_CONTROL_COS_MODEL) still wins if the operator wants to pin a
+    # different model; as of 2026-06-12 the prod Infisical override is pinned to
+    # glm-4.7 to match this default (deploy-order-safe — see PR), and can be
+    # unset once this default is live everywhere.
+    model = os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_mission_control_model()
     client_kwargs: dict[str, Any] = {
         "api_key": api_key,
         "max_retries": 0,
@@ -839,29 +879,48 @@ async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], 
     last_error: Exception | None = None
 
     for attempt in range(max_retries):
-        async with limiter.acquire("mission_control_chief_of_staff"):
-            try:
-                response = await client.messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=0.3,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                await limiter.record_success()
-                text = "".join(getattr(block, "text", "") for block in response.content).strip()
-                readout = _extract_json_object(text)
-                readout.setdefault("generated_at_utc", evidence.get("generated_at_utc") or utc_now_iso())
-                readout.setdefault("source_counts", evidence.get("source_counts") or {})
-                readout["synthesis_status"] = "ok"
-                return readout, model
-            except Exception as exc:
-                last_error = exc
-                if "429" in str(exc) or "rate" in str(exc).lower():
-                    await limiter.record_429("mission_control_chief_of_staff")
-                if attempt < max_retries - 1:
-                    import asyncio
+        try:
+            async with limiter.acquire("mission_control_chief_of_staff"):
+                try:
+                    response = await client.messages.create(
+                        model=model,
+                        max_tokens=max_tokens,
+                        temperature=0.3,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    await limiter.record_success()
+                    text = "".join(getattr(block, "text", "") for block in response.content).strip()
+                    readout = _extract_json_object(text)
+                    readout.setdefault("generated_at_utc", evidence.get("generated_at_utc") or utc_now_iso())
+                    readout.setdefault("source_counts", evidence.get("source_counts") or {})
+                    readout["synthesis_status"] = "ok"
+                    return readout, model
+                except Exception as exc:
+                    last_error = exc
+                    # 429-shape FIRST: ordinary ZAI throttle arrives AS a 429 whose
+                    # body also carries [1313]/Fair-Usage text (1058/1058 on the VPS),
+                    # so record_429 (retryable) wins for those; record_fup_signal (the
+                    # STOP / account-cliff tier) only fires for a genuine non-429
+                    # Fair-Usage signal. See _record_throttle.
+                    await _record_throttle(limiter, SERVICE_SOURCE, str(exc))
+                    if attempt < max_retries - 1:
+                        import asyncio
 
-                    await asyncio.sleep(limiter.get_backoff(attempt))
+                        await asyncio.sleep(limiter.get_backoff(attempt))
+        except ZAIFupPauseError as exc:
+            # The account-level FUP acquire-pause is in force — honor this
+            # function's never-raise contract and fall back immediately
+            # (the sweeper persists the fallback readout; the pause expires
+            # on its own).
+            last_error = exc
+            break
+
+    # Exhaustion is the outcome the watchdog alarms on: a readout that
+    # burned all its retries on 429-shaped errors is a logical failure the
+    # snapshot must carry (with_rate_limit_retry does this for routed
+    # callers; this is the main legacy acquire+record caller).
+    if last_error is not None and _is_429_shaped(str(last_error)):
+        limiter.note_retry_exhausted()
 
     return fallback_readout(evidence, error=str(last_error or "unknown LLM error")), model
 

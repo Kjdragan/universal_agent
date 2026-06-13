@@ -36,6 +36,7 @@ _FULL_DAY_RANGE = "00..23"
 _RUNTIME_GATED_TIMERS = {
     "universal-agent-hourly-intel-digest.timer",
     "universal-agent-csi-convergence-sync.timer",
+    "universal-agent-proactive-signal-card-sync.timer",
 }
 
 # ExecStart script (relative to repo root) -> the UA_<JOB>_24_7 env var its
@@ -45,6 +46,7 @@ _RUNTIME_GATED_TIMERS = {
 _RUNTIME_GATED_SCRIPTS = {
     "src/universal_agent/scripts/hourly_intel_digest_cron.py": "UA_INTEL_DIGEST_24_7",
     "src/universal_agent/scripts/csi_convergence_sync.py": "UA_CSI_CONVERGENCE_SYNC_24_7",
+    "src/universal_agent/scripts/proactive_signal_card_sync.py": "UA_PROACTIVE_CARD_SYNC_24_7",
 }
 
 

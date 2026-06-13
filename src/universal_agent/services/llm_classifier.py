@@ -19,7 +19,11 @@ import logging
 import os
 from typing import Any, Optional, TypedDict
 
-from universal_agent.utils.model_resolution import resolve_haiku, resolve_opus
+from universal_agent.utils.model_resolution import (
+    resolve_haiku,
+    resolve_opus,
+    resolve_sonnet,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,15 +83,75 @@ class TutorialBuildabilityResult(TypedDict):
 
 # ── LLM Client Helper ──────────────────────────────────────────────────────
 
+def _classifier_default_model() -> str:
+    """Default model for the classification/extraction/routing wrappers.
+
+    These are bounded classification tasks, not flagship reasoning — the
+    tiering doctrine (10_zai_rate_limiter.md §7, 14_model_tiering_by_process)
+    has always said they belong below opus; they only ran on glm-5.1 because
+    `_call_llm`'s fallback default is `resolve_opus()`. The sonnet tier
+    (glm-5-turbo) was A/B-proven equal to the opus default on the convergence
+    judge, and live per-model 429 data (2026-06-11) showed ZAI throttling
+    glm-5.1 at ~85%+ while glm-5-turbo flowed clean. Override via
+    UA_LLM_CLASSIFIER_DEFAULT_MODEL.
+    """
+    return (os.getenv("UA_LLM_CLASSIFIER_DEFAULT_MODEL") or "").strip() or resolve_sonnet()
+
+
+def _limiter_enabled() -> bool:
+    """Is the ZAIRateLimiter routing for `_call_llm` enabled?
+
+    Default OFF. Flip via `UA_LLM_CLASSIFIER_LIMITER_ENABLED` (Infisical for
+    prod; never the VPS `.env` — deploys wipe it; durable default-on means a
+    code-default change here).
+    """
+    from universal_agent.feature_flags import _is_truthy
+
+    return _is_truthy(os.getenv("UA_LLM_CLASSIFIER_LIMITER_ENABLED"))
+
+
+def _targets_zai(base_url: Optional[str]) -> bool:
+    """Does this call's EFFECTIVE base URL point at the ZAI proxy?
+
+    The limiter protects the ZAI account; `_call_llm`'s ``base_url`` override
+    (the per-stage A/B knobs) can route a call to real Anthropic, whose 429s
+    are unrelated — wrapping those would consume ZAI tier slots and poison
+    ZAI tier state. Mirrors `zai_observability.ZAI_HOSTS` filtering.
+    """
+    effective = (base_url or os.getenv("ANTHROPIC_BASE_URL") or "").strip()
+    if not effective:
+        return False  # default Anthropic endpoint — not ZAI
+    from universal_agent.services.zai_observability import ZAI_HOSTS
+
+    return any(h in effective for h in ZAI_HOSTS)
+
+
+def _limiter_call_budget_seconds() -> Optional[float]:
+    """Wall-clock budget for one logical `_call_llm` retry saga when routed
+    through the limiter. Keeps the worst case (5 attempts + backoffs) inside
+    cron budgets (convergence boxes whole runs at 600s)."""
+    try:
+        value = float(os.getenv("UA_LLM_CLASSIFIER_LIMITER_BUDGET_SECONDS", "300") or "300")
+    except (TypeError, ValueError):
+        return 300.0
+    return value if value > 0 else None
+
+
 async def _get_anthropic_client(
-    *, base_url: Optional[str] = None, api_key: Optional[str] = None
+    *,
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    max_retries: Optional[int] = None,
 ) -> Any:
     """Create an AsyncAnthropic client using the ZAI emulation layer.
 
     ``base_url`` / ``api_key`` override the shared env defaults for a single
     call — used by per-stage A/B knobs (e.g. routing the convergence cluster
     judge to a different provider/model). When unset, the usual env chain
-    (the ZAI proxy) is used.
+    (the ZAI proxy) is used. ``max_retries`` overrides the env default —
+    the limiter-routed path passes 0 so retry policy lives in ONE layer
+    (SDK-internal retries would double every wire 429 and sleep inside the
+    acquired slot; same pairing `mission_control_chief_of_staff.py` uses).
     """
     try:
         from anthropic import AsyncAnthropic
@@ -118,10 +182,13 @@ async def _get_anthropic_client(
         client_kwargs["timeout"] = float(os.getenv("UA_LLM_CALL_TIMEOUT_SECONDS", "180") or "180")
     except (TypeError, ValueError):
         client_kwargs["timeout"] = 180.0
-    try:
-        client_kwargs["max_retries"] = int(os.getenv("UA_LLM_CALL_MAX_RETRIES", "1") or "1")
-    except (TypeError, ValueError):
-        client_kwargs["max_retries"] = 1
+    if max_retries is not None:
+        client_kwargs["max_retries"] = max_retries
+    else:
+        try:
+            client_kwargs["max_retries"] = int(os.getenv("UA_LLM_CALL_MAX_RETRIES", "1") or "1")
+        except (TypeError, ValueError):
+            client_kwargs["max_retries"] = 1
 
     return AsyncAnthropic(**client_kwargs)
 
@@ -144,15 +211,45 @@ async def _call_llm(
     client per call; their ``aclose()`` finalizers then fired AFTER the cron's
     ``asyncio.run()`` loop closed, spraying ~12 ``RuntimeError('Event loop is closed')``
     per run into the journal (non-fatal, but log noise + connection leak).
+
+    When ``UA_LLM_CLASSIFIER_LIMITER_ENABLED`` is on AND the effective base URL
+    targets the ZAI proxy, the call routes through
+    ``rate_limiter.with_rate_limit_retry`` — one edit covering every `_call_llm`
+    caller (~12 flows) with the per-tier AIMD limiter: coordinated backoff,
+    tier-bucketed concurrency (via ``model_id_to_tier``), and the FUP cliff
+    stop. The SDK's own retries are disabled on that path (``max_retries=0``)
+    so retry policy lives in one layer. Flag OFF or non-ZAI target → the
+    original direct path, unchanged.
     """
-    client = await _get_anthropic_client(base_url=base_url, api_key=api_key)
+    resolved_model = model or resolve_opus()
+    use_limiter = _limiter_enabled() and _targets_zai(base_url)
+    client = await _get_anthropic_client(
+        base_url=base_url,
+        api_key=api_key,
+        max_retries=0 if use_limiter else None,
+    )
     try:
-        response = await client.messages.create(
-            model=model or resolve_opus(),
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
+        if use_limiter:
+            from universal_agent.rate_limiter import with_rate_limit_retry
+            from universal_agent.utils.model_resolution import model_id_to_tier
+
+            response = await with_rate_limit_retry(
+                client.messages.create,
+                context="llm_classifier",
+                model_tier=model_id_to_tier(resolved_model),
+                max_total_seconds=_limiter_call_budget_seconds(),
+                model=resolved_model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
+        else:
+            response = await client.messages.create(
+                model=resolved_model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
 
         raw_text = ""
         for block in response.content:
@@ -276,7 +373,9 @@ async def classify_priority(
             context=context or "(none)",
         )
 
-        raw = await _call_llm(system=_PRIORITY_SYSTEM, user=user_msg)
+        raw = await _call_llm(
+            system=_PRIORITY_SYSTEM, user=user_msg, model=_classifier_default_model()
+        )
         result = _parse_json_response(raw)
 
         priority_str = str(result.get("priority", "p2")).lower().strip()
@@ -380,7 +479,9 @@ async def classify_agent_route(
             available_agents=", ".join(sorted(available_agents)) if available_agents else "simone, vp.coder.primary, vp.general.primary",
         )
 
-        raw = await _call_llm(system=_ROUTING_SYSTEM, user=user_msg)
+        raw = await _call_llm(
+            system=_ROUTING_SYSTEM, user=user_msg, model=_classifier_default_model()
+        )
         result = _parse_json_response(raw)
 
         agent_id = str(result.get("agent_id", _AGENT_SIMONE)).strip()
@@ -483,7 +584,9 @@ async def generate_calendar_task_description(
             organizer=organizer or "(unknown)",
         )
 
-        raw = await _call_llm(system=_CALENDAR_DESC_SYSTEM, user=user_msg)
+        raw = await _call_llm(
+            system=_CALENDAR_DESC_SYSTEM, user=user_msg, model=_classifier_default_model()
+        )
         result = _parse_json_response(raw)
 
         return {
@@ -590,6 +693,7 @@ async def extract_due_at(
         raw = await _call_llm(
             system=system_prompt,
             user=user_msg,
+            model=_classifier_default_model(),
             max_tokens=512,  # doubled from 256 per audit
         )
         result = _parse_json_response(raw)
@@ -674,6 +778,7 @@ async def extract_disjointed_tasks(
         raw = await _call_llm(
             system=_DISJOINTED_TASK_SYSTEM,
             user=user_msg,
+            model=_classifier_default_model(),
             max_tokens=2048,  # doubled from 1024 per audit
         )
         result = _parse_json_response(raw)

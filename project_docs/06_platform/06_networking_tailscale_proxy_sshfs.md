@@ -22,7 +22,7 @@ code_paths:
   - ".claude/skills/publish-to-scratchpad/SKILL.md"
   - "deploy/nginx/universal-agent-app"
   - "scripts/deploy/install_nginx_app_config.sh"
-last_verified: 2026-06-03
+last_verified: 2026-06-12
 ---
 
 # Networking: Tailscale, Residential Proxy, SSHFS
@@ -157,7 +157,17 @@ A reusable delivery pattern: render an artifact as **standalone HTML**, publish 
   - **Deterministic Python pipelines** (cron scripts, services — which have no LLM in the loop and can't invoke a skill) call `scratch_publish.py::publish_html_to_scratch`, which shells out to the same script and returns the URL (or `None` so the caller can fall back to attaching the artifact). The YouTube daily digest cron uses this path.
 - **Origin & first production user:** the YouTube daily digest "clickable TOC" problem (see `04_intelligence/05_youtube_csi_flow.md` § A.9). As of 2026-06-02 the digest's **primary** delivery is a scratchpad **link** (the full per-video report with its working clickable index renders live in the browser); the PDF attachment is now only a **fallback** used when `publish_html_to_scratch` returns `None`, so a digest is never dropped. This replaced the prior "email a PDF attachment" approach, which fought Gmail's attachment rendering and degraded the in-document jump links to a static PDF bookmark outline.
 
+### 1.7 Public Static Hosting: `here.now`
+
+While the Tailnet HTML scratchpad is the preferred and default choice for internal/private operator reports, some static artifacts need to be shared publicly outside the tailnet. In those cases, use `here.now`.
+
+- **Best for:** Agent-generated static artifacts that need to be publicly shareable — reports, landing pages, prototypes, portfolios, one-pagers, file sharing.
+- **Not for:** Anything we currently run on the VPS — the dashboard, the agent runtime, API endpoints, databases, WebSocket connections, authentication flows.
+- **Overlaps with:** Our Tailscale scratchpad (`publish_scratch.sh`), but `here.now` is public (hosted on Cloudflare's Edge CDN) while the scratchpad is tailnet-private. They serve different visibility needs.
+- **Tooling & Secrets:** Agents use the `here-now` skill. Credentials (`HERENOW_API_KEY`) are stored in Infisical for `development` and `production` environments to authorize deployments.
+
 ---
+
 
 ## 2. Residential Proxy
 

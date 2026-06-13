@@ -7,7 +7,7 @@ code_paths:
   - src/universal_agent/hooks_service.py
   - src/universal_agent/sdk/
   - src/universal_agent/gateway_server.py
-last_verified: 2026-06-03
+last_verified: 2026-06-12
 ---
 
 # Hook System Architecture
@@ -231,9 +231,14 @@ Bootstrapped configs default `enabled=true` and raise `max_body_bytes` to 1 MiB.
 
 `build_manual_youtube_action` (module-level) normalizes a `{video_url|video_id,
 channel_id, title, mode}` payload into an `agent` action routed to
-`youtube-expert`, resolving `mode` (`auto`/`explainer_only`/`explainer_plus_code`)
-into a `learning_mode` and a deterministic `session_key` of
-`yt_<channel>__<video>`.
+`youtube-expert`. It normalizes `mode` (`auto`/`explainer_only`/`explainer_plus_code`,
+with `auto` resolved to `explainer_plus_code` or `explainer_only` by a
+code-orientation heuristic), but `learning_mode` is **hardcoded to `concept_only`**
+for every run — the Tutorial tier is teaching-doc only; the runnable demo is built
+post-gate by the `tutorial_build` Task Hub lane (see
+[Demo/Tutorial Pipeline ADR](../04_intelligence/15_demo_tutorial_pipeline_adr.md)). `mode`
+is still recorded (it drives vision-analysis depth / study-material focus). The action
+also carries a deterministic `session_key` of `yt_<channel>__<video>`.
 
 ## Startup recovery
 

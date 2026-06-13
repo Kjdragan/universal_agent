@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/agent_setup.py
   - src/universal_agent/hooks.py
   - src/universal_agent/hooks_service.py
-last_verified: 2026-06-03
+last_verified: 2026-06-12
 ---
 
 # Workspaces & Artifacts

@@ -168,6 +168,64 @@ def _extract_first_target_path(constraints: dict[str, Any]) -> str:
             return value
     return ""
 
+
+def _stamp_demo_manifest_build_session(
+    *,
+    workspace_dir: str,
+    mission_id: str,
+    vp_id: str,
+    cody_session_id: str = "",
+) -> bool:
+    """P5 (15_demo_tutorial_pipeline_adr.md "Cross-cutting requirement"):
+    stamp the building VP mission onto the demo's manifest.json so dashboard
+    surfaces can deep-link the 3-panel session viewer.
+
+    ``build_session_id`` is the ``vp-mission-<id>`` — the id the viewer's
+    VP-mission special case (web-ui/app/page.tsx) and
+    ``viewer/resolver.py::mission_log_rel`` both key on; the demo workspace
+    itself is the ``workspace`` hint (mirrors the Kanban completed-card
+    enrichment in ``gateway_server.py::dashboard_todolist_completed``).
+
+    Additive merge via ``resolve_demo_artifacts_dir`` (handles the
+    ``vp-mission-<id>/`` subdir layout). Returns True when a manifest was
+    stamped. Best-effort: never raises, never creates a manifest.
+    """
+    try:
+        from universal_agent.services.cody_implementation import (
+            resolve_demo_artifacts_dir,
+        )
+
+        ws = Path(str(workspace_dir or "")).expanduser()
+        if not ws.is_dir():
+            return False
+        manifest_path = resolve_demo_artifacts_dir(ws) / "manifest.json"
+        if not manifest_path.is_file():
+            return False
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        payload["build_mission_id"] = str(mission_id or "")
+        payload["build_session_id"] = str(mission_id or "")
+        payload["build_vp_id"] = str(vp_id or "")
+        if cody_session_id:
+            payload["build_cli_session_id"] = str(cody_session_id)
+        manifest_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return True
+    except Exception:
+        logger.warning(
+            "Demo manifest build-session stamp failed for %s (mission %s)",
+            workspace_dir,
+            mission_id,
+            exc_info=True,
+        )
+        return False
+
 # ── GitHub repo for doc-maintenance PRs ──────────────────────────────────────
 _GH_REPO = os.getenv("UA_GH_REPO", "Kjdragan/universal_agent")
 
@@ -691,76 +749,20 @@ class VpWorkerLoop:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
-        # Completion attestation guard (PRD § 5.5) — when THIS MISSION is
-        # /goal-eligible (use_goal_loop=True in payload metadata OR an
-        # eligible source_kind), the VP must have written COMPLETION.md
-        # per the self-brief-and-attest skill before we accept "completed".
-        # Missing the file demotes to failed with a stable failure_mode
-        # that Simone can recognize as a protocol violation (not a work
-        # failure). The demoted outcome then flows through the failure_mode
-        # / transcript_tail derivation below, surfacing to Simone via the
-        # vp_mission_failure lane just like any other failure.
-        #
-        # 2026-05-26 fix: previously this gated on the GLOBAL flag
-        # `vp_goal_enabled()` instead of the per-mission eligibility,
-        # which caused successful Cody missions WITHOUT use_goal_loop to
-        # be spuriously demoted for missing a file they were never told
-        # to write. The smoke test (vp-mission-24b75861...) hit exactly
-        # this — Cody completed the task correctly, but the global flag
-        # was on, COMPLETION.md was absent (skill wasn't even invokable
-        # — see issue #4 in PR description), and the guard demoted it.
-        # Now we check `is_goal_eligible_mission(mission)` so the guard
-        # only fires for missions that actually opted into /goal flow.
-        if outcome.status == "completed":
-            try:
-                from universal_agent.services.self_briefing import (
-                    check_completion_attestation,
-                    is_goal_eligible_mission,
-                )
-                if is_goal_eligible_mission(mission):
-                    # PR #492 dual-path — also check Cody's actual cwd
-                    # (captured by PR #490 in MissionOutcome.payload
-                    # when CLI capture fires) before declaring missing.
-                    # Cody may have written COMPLETION.md to his cwd
-                    # rather than the canonical mission_workspace when
-                    # the BRIEF scoped his work to a /tmp dir.
-                    _fallback_dirs: list[Path] = []
-                    _payload_cwd = str((outcome.payload or {}).get("cli_workspace_dir") or "").strip()
-                    if _payload_cwd:
-                        _fallback_dirs.append(Path(_payload_cwd))
-                    ok, reason = check_completion_attestation(
-                        workspace_path,
-                        fallback_dirs=_fallback_dirs or None,
-                    )
-                    if not ok:
-                        logger.warning(
-                            "VP mission %s missing COMPLETION.md: %s — demoting to failed",
-                            mission_id, reason,
-                        )
-                        outcome = MissionOutcome(
-                            status="failed",
-                            result_ref=outcome.result_ref,
-                            message=f"missing_completion_attestation: {reason}",
-                            payload={
-                                **(outcome.payload or {}),
-                                "demoted_from_completed": True,
-                                "completion_attestation_reason": reason,
-                            },
-                        )
-            except Exception as exc:
-                logger.warning(
-                    "VP mission %s: completion-attestation check failed (%s); "
-                    "treating original outcome as authoritative",
-                    mission_id, exc,
-                )
+        # COMPLETION.md attestation guard REMOVED 2026-06-11 — we rely on the
+        # built-in /goal loop as the sole acceptance authority and no longer
+        # demote a completed mission to failed for a missing COMPLETION.md.
+        # The guard plus its paired condition AND-clause (in
+        # claude_cli_client._run_goal_loop_mission) were UA scaffolding bolted
+        # onto vanilla /goal; both were removed to stop interfering with the
+        # feature. The self-brief-and-attest skill may still author
+        # COMPLETION.md as a trail, but it is no longer enforced. The demo
+        # completion-evidence gate (task_hub DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS,
+        # demo_finalize.ok) remains the deterministic backstop for the demo lane.
 
         # Derive failure_mode + transcript_tail for the rescue hook in
         # finalize_vp_mission. transcript_tail comes from outcome.payload
         # (Claude CLI stream-json client populates this on failure paths).
-        # If COMPLETION-attestation demotion happened above, the classifier
-        # will see "missing_completion_attestation" in the message and
-        # return that string — preserving the protocol-violation signal
-        # all the way to Simone's rescue surface.
         _payload = outcome.payload or {}
         _transcript_tail = (
             str(_payload.get("final_text") or "")
@@ -768,8 +770,6 @@ class VpWorkerLoop:
             or None
         )
         _failure_mode = _classify_outcome_failure_mode(outcome)
-        if not _failure_mode and "missing_completion_attestation" in str(outcome.message or ""):
-            _failure_mode = "missing_completion_attestation"
 
         if outcome.status == "cancelled":
             finalize_vp_mission(
@@ -790,6 +790,29 @@ class VpWorkerLoop:
         else:
             finalize_vp_mission(self.conn, mission_id, "completed", result_ref=outcome.result_ref)
             event_type = "vp.mission.completed"
+
+        # Deterministic wiki-rescue (flag-gated UA_WIKI_RESCUE_ENABLED, bounded,
+        # best-effort): fire immediately on a genuine failure so a failed nightly
+        # wiki is retried / handed to Cody / escalated NOW, instead of rotting in
+        # Simone's rescue queue (which never acted on 0/152 prod failures). The
+        # driver only enqueues a fresh mission — it does not run anything inline.
+        if outcome.status in ("failed", "cancelled"):
+            try:
+                from universal_agent.services.wiki_rescue_driver import (
+                    maybe_rescue_failed_wiki_mission,
+                )
+
+                await maybe_rescue_failed_wiki_mission(
+                    mission_id=mission_id,
+                    mission_type=str(mission.get("mission_type") or ""),
+                    failure_mode=(
+                        _failure_mode
+                        or ("operator_cancel" if outcome.status == "cancelled" else "vp_self_reported")
+                    ),
+                    status=outcome.status,
+                )
+            except Exception as exc:  # noqa: BLE001 — rescue must never break the worker
+                logger.warning("wiki-rescue hook failed for %s: %s", mission_id, exc)
 
         # Teardown worktree AFTER finalization so result_ref is persisted.
         # Skip teardown if the agent's result_ref points at the worktree itself
@@ -874,6 +897,65 @@ class VpWorkerLoop:
                     _src_kind = str((_src_item or {}).get("source_kind") or "")
                     _src_meta = dict((_src_item or {}).get("metadata") or {})
 
+                    # P6 — deterministic tutorial_build finalize: synthesize
+                    # manifest.json (so the P5 stamp below stops no-op'ing),
+                    # run existence-only mechanical checks, and register the
+                    # demo on the dashboard demo surface (UA_DEMOS_ROOT
+                    # symlink the _claude_code_intel_demos walker picks up).
+                    _tutorial_finalize: dict[str, Any] = {}
+                    if event_type == "vp.mission.completed" and _src_kind == "tutorial_build":
+                        from universal_agent.services.tutorial_demo_finalize import (
+                            finalize_tutorial_build_demo,
+                        )
+                        _fin_result_ws = ""
+                        if str(outcome.result_ref or "").startswith("workspace://"):
+                            _fin_result_ws = str(outcome.result_ref).removeprefix("workspace://").strip()
+                        _tutorial_finalize = finalize_tutorial_build_demo(
+                            task_id=_source_task_id,
+                            task_meta=_src_meta,
+                            mission=dict(mission),
+                            mission_id=mission_id,
+                            workspace_candidates=[
+                                str(_src_meta.get("workspace_dir") or "").strip(),
+                                str((outcome.payload or {}).get("cli_workspace_dir") or "").strip(),
+                                _fin_result_ws,
+                            ],
+                        )
+
+                    # P5 (15_demo_tutorial_pipeline_adr.md "Cross-cutting
+                    # requirement"): stamp the building mission's identity onto
+                    # the demo manifest BEFORE terminal routing so
+                    # finalize_direct_demo / the evaluator / the dashboard demo
+                    # walker all see the session link. Deterministic code
+                    # stamping (never trusts the LLM to copy ids); execution-
+                    # mode-agnostic (CLI and ZAI/SDK clients both land here).
+                    if event_type == "vp.mission.completed" and _src_kind in (
+                        "cody_demo_task",
+                        "tutorial_build",
+                    ):
+                        _dispatch_meta = (
+                            _src_meta.get("dispatch")
+                            if isinstance(_src_meta.get("dispatch"), dict)
+                            else {}
+                        )
+                        _stamp_result_ws = ""
+                        if str(outcome.result_ref or "").startswith("workspace://"):
+                            _stamp_result_ws = str(outcome.result_ref).removeprefix("workspace://").strip()
+                        for _demo_ws in (
+                            str(_src_meta.get("workspace_dir") or "").strip(),
+                            str((outcome.payload or {}).get("cli_workspace_dir") or "").strip(),
+                            _stamp_result_ws,
+                        ):
+                            if _demo_ws and _stamp_demo_manifest_build_session(
+                                workspace_dir=_demo_ws,
+                                mission_id=mission_id,
+                                vp_id=self.vp_id,
+                                cody_session_id=str(
+                                    (_dispatch_meta or {}).get("cody_session_id") or ""
+                                ).strip(),
+                            ):
+                                break
+
                     if _src_kind == "cody_demo_task" and event_type == "vp.mission.completed":
                         # Consolidated, SINGLE owner of cody_demo_task terminal routing.
                         # Previously this blind "→ completed" raced the gateway VP-event
@@ -920,6 +1002,7 @@ class VpWorkerLoop:
                             "metadata": {
                                 **_terminal_meta,
                                 "linked_mission_id": mission_id,
+                                **({"demo_finalize": _tutorial_finalize} if _tutorial_finalize else {}),
                             },
                         })
                         logger.info(

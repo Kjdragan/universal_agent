@@ -8,12 +8,16 @@ name: Nightly Documentation Health
 #      Infisical-injected ANTHROPIC_*->ZAI mapping the UA services use. No Anthropic spend,
 #      no new secret. Opens a GH issue when drift is found; never fails the run.
 #
-# Schedule: 18:35 UTC ~= 1:35 PM CT — inside the operating-hours active window
-# (content/quota work respects dormancy; this is cheap + read-only so timing is lax).
+# Schedule: 06:35 UTC ~= 1:35 AM CT (operator decision 2026-06-10: run overnight so the
+# desktop dark-factory session triages/fixes on idle Max quota and results are merged by
+# morning — the overnight loop IS the consumer, so the dormancy rationale doesn't apply).
+# This is a documented exception to the active-window default, pinned by
+# tests/unit/test_cron_dormancy_defaults.py::test_doc_nightly_runs_overnight (which
+# previously enforced the daytime window — that's why this sat at 18:35 UTC ~= 1:35 PM CT).
 
 on:
   schedule:
-    - cron: '35 18 * * *'
+    - cron: '35 6 * * *'
   workflow_dispatch:
     inputs:
       batch_size:

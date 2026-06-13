@@ -49,6 +49,12 @@ logger = logging.getLogger(__name__)
 
 # Default timeout for CLI sessions (30 minutes)
 DEFAULT_CLI_TIMEOUT_SECONDS = 1800
+# Higher wall-clock backstop for /goal-eligible missions (100 minutes).
+# Authored goal_condition.txt self-bounds run up to ~90 min ("stop after N
+# minutes"), and /goal's OWN clause should be what terminates a healthy run —
+# this wall-clock is only a last-resort kill for a runaway loop. The old
+# 30-min default guillotined healthy /goal runs below their own budget.
+GOAL_DEFAULT_CLI_TIMEOUT_SECONDS = 6000
 # Maximum timeout (4 hours)
 MAX_CLI_TIMEOUT_SECONDS = 14400
 # Stall detection: how often to wake and check for no-progress while reading
@@ -140,8 +146,17 @@ class ClaudeCodeCLIClient(VpClient):
             return MissionOutcome(status="failed", message="missing objective")
 
         payload = _parse_payload(mission.get("payload_json"))
+        # P6 — single eligibility predicate shared with the worker-side
+        # routing AND the wall-clock default below. /goal-eligible missions
+        # get the higher backstop so /goal's own self-bounding clause (not
+        # our timer) terminates a healthy run; non-goal missions keep 30 min.
+        from universal_agent.services.self_briefing import is_goal_eligible_mission
+        goal_eligible = is_goal_eligible_mission(mission)
+        _default_timeout = (
+            GOAL_DEFAULT_CLI_TIMEOUT_SECONDS if goal_eligible else DEFAULT_CLI_TIMEOUT_SECONDS
+        )
         timeout_seconds = min(
-            max(30, int(payload.get("timeout_seconds") or DEFAULT_CLI_TIMEOUT_SECONDS)),
+            max(30, int(payload.get("timeout_seconds") or _default_timeout)),
             MAX_CLI_TIMEOUT_SECONDS,
         )
         max_retries = int(payload.get("max_retries") or MAX_RETRIES)
@@ -166,8 +181,10 @@ class ClaudeCodeCLIClient(VpClient):
         workspace_dir = _resolve_workspace(mission_id, workspace_root, payload)
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build the prompt for the CLI
-        prompt = _build_cli_prompt(objective, payload, workspace_dir, skill_name)
+        # Build the prompt for the CLI (legacy single-pass path)
+        prompt = _build_cli_prompt(
+            objective, payload, workspace_dir, skill_name, goal_eligible=goal_eligible
+        )
 
         # Acquire session budget slots
         budget = _get_budget()
@@ -193,6 +210,31 @@ class ClaudeCodeCLIClient(VpClient):
             budget.enter_heavy_mode(cli_consumer_id)
 
         try:
+            _cli_task_id = str(payload.get("task_id") or "").strip()
+            if goal_eligible:
+                # /goal loop IS the retry mechanism (evaluator-driven, with
+                # the ACCEPTANCE self-bounding clause) — no outer retries.
+                outcome = await _run_goal_loop_mission(
+                    objective=objective,
+                    payload=payload,
+                    workspace_dir=workspace_dir,
+                    timeout_seconds=timeout_seconds,
+                    enable_agent_teams=enable_agent_teams,
+                    mission_id=mission_id,
+                    cody_mode=cody_mode,
+                    task_id=_cli_task_id,
+                    skill_name=skill_name,
+                )
+                _classify_and_route_cli_exit(
+                    outcome=outcome, task_id=_cli_task_id, mission_id=mission_id,
+                )
+                if outcome.status == "completed":
+                    _record_mission_token_usage(
+                        outcome=outcome, mission_id=mission_id,
+                        task_id=_cli_task_id or None, cody_mode=cody_mode,
+                    )
+                return outcome
+
             # Attempt execution with retries
             last_outcome: Optional[MissionOutcome] = None
             for attempt in range(1, max_retries + 2):  # +2 because range is exclusive and attempt 1 is the first try
@@ -209,7 +251,6 @@ class ClaudeCodeCLIClient(VpClient):
                         attempt=attempt,
                     )
 
-                _cli_task_id = str(payload.get("task_id") or "").strip()
                 outcome = await _execute_cli_session(
                     prompt=current_prompt,
                     workspace_dir=workspace_dir,
@@ -293,6 +334,9 @@ async def _execute_cli_session(
     mission_id: str,
     cody_mode: str = "zai",
     task_id: str = "",
+    prompt_in_argv: bool = False,
+    extra_cli_args: tuple[str, ...] = (),
+    goal_eval_model: str | None = None,
 ) -> MissionOutcome:
     """Spawn a claude CLI subprocess and monitor its output.
 
@@ -301,9 +345,23 @@ async def _execute_cli_session(
     assignment (best-effort) and the eventual exit is fed into
     ``classify_worker_exit`` upstream in :func:`run_mission`. Empty
     ``task_id`` skips F.1 bookkeeping silently.
+
+    ``goal_eval_model`` (set only on the ``/goal`` work turn) pins the model
+    used by Claude Code's built-in completion evaluator. The evaluator runs
+    on the CC "small fast model", which current CC reads from
+    ``ANTHROPIC_DEFAULT_HAIKU_MODEL`` (``ANTHROPIC_SMALL_FAST_MODEL`` is
+    deprecated). We set that var on THIS subprocess's env dict only — never
+    on ``os.environ`` and never on the global ``ZAI_MODEL_MAP`` operator
+    lock — so the evaluator (and only this child process's background calls)
+    runs on a stronger model. See
+    ``utils/model_resolution.resolve_goal_eval_model``.
     """
 
     env = _build_cli_env(enable_agent_teams, workspace_dir, cody_mode=cody_mode)
+    if goal_eval_model:
+        # Scoped to this child process only (env is a fresh per-subprocess
+        # dict): upgrade the built-in /goal evaluator's small-fast model.
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = goal_eval_model
 
     cmd = [
         "claude",
@@ -327,6 +385,14 @@ async def _execute_cli_session(
         model_override = os.getenv("UA_CODY_CLI_MODEL", "claude-opus-4-8").strip()
         if model_override and model_override.lower() != "default":
             cmd.extend(["--model", model_override])
+
+    if extra_cli_args:
+        cmd.extend(extra_cli_args)
+    if prompt_in_argv:
+        # /goal turn: pass the prompt as an argv argument — slash-command
+        # dispatch is only verified for `claude -p "/goal ..."` argv form
+        # (live VPS check 2026-06-10), not stdin.
+        cmd.append(prompt)
 
     logger.info("Launching CLI: %s (cwd=%s, timeout=%ds)", " ".join(cmd), workspace_dir, timeout_seconds)
 
@@ -386,10 +452,11 @@ async def _execute_cli_session(
                 mission_id, _f_exc,
             )
 
-    # Send the prompt to stdin
+    # Send the prompt to stdin (skipped when it was passed via argv)
     try:
-        proc.stdin.write(prompt.encode("utf-8"))
-        await proc.stdin.drain()
+        if not prompt_in_argv:
+            proc.stdin.write(prompt.encode("utf-8"))
+            await proc.stdin.drain()
         proc.stdin.close()
     except Exception as exc:
         logger.error("Failed to write prompt to CLI stdin: %s", exc)
@@ -477,6 +544,123 @@ async def _execute_cli_session(
         result_ref=result.result_ref,
         message=result.message,
         payload=enriched_payload,
+    )
+
+
+# Briefing turn gets a bounded slice of the mission budget; the /goal loop
+# gets the full remaining wall-clock.
+GOAL_BRIEFING_TIMEOUT_SECONDS = 900
+
+
+async def _run_goal_loop_mission(
+    *,
+    objective: str,
+    payload: dict[str, Any],
+    workspace_dir: Path,
+    timeout_seconds: int,
+    enable_agent_teams: bool,
+    mission_id: str,
+    cody_mode: str,
+    task_id: str,
+    skill_name: str,
+) -> MissionOutcome:
+    """P6 two-phase /goal runner (PRD §5.1/5.2; works on ZAI — verified live).
+
+    Turn 1 (briefing): self-brief-and-attest → BRIEF.md + ACCEPTANCE.md +
+    goal_condition.txt. Turn 2 (work): `claude -p "/goal <condition>"` —
+    the evaluator loops until the condition (or its self-bounding clause)
+    is met. The work turn is handed ONLY the condition Cody authored — no
+    UA-appended clauses (2026-06-11: the former COMPLETION.md attestation
+    AND-clause and its worker_loop guard were removed to rely on vanilla
+    /goal; the condition is the sole acceptance). Missing/invalid
+    goal_condition.txt degrades to the legacy single-pass prompt instead of
+    failing the mission.
+    """
+    from universal_agent.services.self_briefing import (
+        build_self_briefing_prompt,
+        read_goal_condition,
+    )
+
+    if not (workspace_dir / "goal_condition.txt").exists():
+        briefing_prompt = build_self_briefing_prompt(
+            workspace_dir=workspace_dir,
+            objective=objective,
+            is_goal_eligible=True,
+        )
+        briefing_outcome = await _execute_cli_session(
+            prompt=briefing_prompt,
+            workspace_dir=workspace_dir,
+            timeout_seconds=min(timeout_seconds, GOAL_BRIEFING_TIMEOUT_SECONDS),
+            enable_agent_teams=False,
+            mission_id=mission_id,
+            cody_mode=cody_mode,
+            task_id="",  # PID/dispatch bookkeeping belongs to the work turn
+        )
+        if briefing_outcome.status != "completed":
+            return MissionOutcome(
+                status="failed",
+                result_ref=briefing_outcome.result_ref,
+                message=f"goal briefing turn failed: {briefing_outcome.message}",
+                payload={**(briefing_outcome.payload or {}), "goal_phase": "briefing"},
+            )
+
+    condition = read_goal_condition(workspace_dir)
+    if not condition:
+        logger.warning(
+            "Mission %s: goal_condition.txt missing/invalid after briefing — "
+            "falling back to single-pass prompt", mission_id,
+        )
+        fallback_prompt = _build_cli_prompt(
+            objective, payload, workspace_dir, skill_name, goal_eligible=True
+        )
+        outcome = await _execute_cli_session(
+            prompt=fallback_prompt,
+            workspace_dir=workspace_dir,
+            timeout_seconds=timeout_seconds,
+            enable_agent_teams=enable_agent_teams,
+            mission_id=mission_id,
+            cody_mode=cody_mode,
+            task_id=task_id,
+        )
+        enriched = dict(outcome.payload or {})
+        enriched["goal_condition_missing"] = True
+        return MissionOutcome(
+            status=outcome.status, result_ref=outcome.result_ref,
+            message=outcome.message, payload=enriched,
+        )
+
+    # We hand the built-in /goal loop ONLY the condition Cody authored — no
+    # UA-appended clauses. (Removed 2026-06-11: a COMPLETION.md attestation
+    # AND-clause used to be bolted on here to satisfy a separate worker_loop
+    # guard; both that clause and the guard were removed to rely on vanilla
+    # /goal — the condition itself is the sole acceptance.)
+    #
+    # Upgrade the built-in /goal completion evaluator off the operator-locked
+    # weak haiku tier (glm-4.5-air) onto a stronger model (sonnet → glm-5-turbo
+    # on ZAI; no override on Anthropic-Max). Scoped to THIS work-turn
+    # subprocess only — never touches os.environ or the ZAI_MODEL_MAP lock.
+    from universal_agent.utils.model_resolution import resolve_goal_eval_model
+
+    goal_eval_model = resolve_goal_eval_model(cody_mode)
+    outcome = await _execute_cli_session(
+        prompt=f"/goal {condition}",
+        workspace_dir=workspace_dir,
+        timeout_seconds=timeout_seconds,
+        enable_agent_teams=enable_agent_teams,
+        mission_id=mission_id,
+        cody_mode=cody_mode,
+        task_id=task_id,
+        prompt_in_argv=True,
+        extra_cli_args=("--dangerously-skip-permissions",),
+        goal_eval_model=goal_eval_model,
+    )
+    enriched = dict(outcome.payload or {})
+    enriched["goal_phase"] = "goal_loop"
+    enriched["goal_condition_chars"] = len(condition)
+    enriched["goal_eval_model"] = goal_eval_model or "haiku-default"
+    return MissionOutcome(
+        status=outcome.status, result_ref=outcome.result_ref,
+        message=outcome.message, payload=enriched,
     )
 
 
@@ -1036,6 +1220,8 @@ def _build_cli_prompt(
     payload: dict[str, Any],
     workspace_dir: Path,
     skill_name: str,
+    *,
+    goal_eligible: bool = False,
 ) -> str:
     """Craft a well-structured prompt for the Claude Code CLI session.
 
@@ -1048,7 +1234,15 @@ def _build_cli_prompt(
 
     parts = []
 
-    goal_enabled = os.environ.get("UA_VP_GOAL_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    # Per-mission eligibility (metadata.use_goal_loop or eligible
+    # source_kind + flag) ORed with the legacy global flag so existing
+    # flag-on behavior is preserved. Fixes the mismatch where the
+    # worker-side attestation guard keyed on per-mission eligibility but
+    # this prompt keyed on the global env, leaving an eligible mission
+    # un-instructed about BRIEF/COMPLETION.
+    goal_enabled = goal_eligible or (
+        os.environ.get("UA_VP_GOAL_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    )
 
     if skill_name:
         parts.append(
@@ -1250,7 +1444,7 @@ def _save_stream_log(
     try:
         log_path = workspace_dir / "cli_stream.log"
         with open(log_path, "w", encoding="utf-8") as f:
-            f.write(f"# Claude Code CLI Stream Log\n")
+            f.write("# Claude Code CLI Stream Log\n")
             f.write(f"# Exit code: {exit_code}\n")
             f.write(f"# Lines: {len(stream_lines)}\n\n")
             for line in stream_lines:

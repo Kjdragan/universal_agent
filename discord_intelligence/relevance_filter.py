@@ -12,7 +12,6 @@ Design:
   - Store-but-hide: noise messages stay in DB with is_meaningful=false
 """
 
-import asyncio
 import json
 import logging
 import os
@@ -22,6 +21,7 @@ from anthropic import AsyncAnthropic
 
 from .config import CONFIG
 from .database import DiscordIntelligenceDB
+from .llm_gate import ZAI_CALL_LOCK
 from universal_agent.rate_limiter import ZAIRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -162,7 +162,9 @@ async def classify_batch(
             results.append((msg["id"], False))
     
     try:
-        async with limiter.acquire(context="relevance_filter"):
+        # ZAI_CALL_LOCK (outermost) serializes ALL discord LLM calls process-wide;
+        # limiter.acquire() is the per-call ZAI tier limiter inside it.
+        async with ZAI_CALL_LOCK, limiter.acquire(context="relevance_filter"):
             response = await client.messages.create(
                 model=model,
                 max_tokens=1024,
@@ -228,7 +230,8 @@ async def run_relevance_sweep(
     
     1. Fetch up to max_batch_size * max_workers unfiltered messages
     2. Split into sub-batches
-    3. Run concurrent classify_batch calls
+    3. Run classify_batch calls SEQUENTIALLY (one ZAI call at a time — rate-limit
+       conscious; max_workers now only bounds how many messages are fetched)
     4. Write results back to DB
     
     Returns:
@@ -242,26 +245,24 @@ async def run_relevance_sweep(
     
     logger.info("Relevance sweep: %d unfiltered messages to classify", len(unfiltered))
     
-    # Split into sub-batches for concurrent processing
+    # Split into sub-batches (each processed as one sequential classify_batch call)
     batches = []
     for i in range(0, len(unfiltered), max_batch_size):
         batch = unfiltered[i:i + max_batch_size]
         if batch:
             batches.append(batch)
     
-    # Run concurrent workers
-    if len(batches) == 1:
-        all_results = await classify_batch(batches[0])
-    else:
-        tasks = [classify_batch(batch) for batch in batches]
-        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-        all_results = []
-        for result in batch_results:
-            if isinstance(result, Exception):
-                logger.error("Batch classification failed: %s", result)
-                # Fail-open for failed batches
-                continue
-            all_results.extend(result)
+    # Process sub-batches SEQUENTIALLY (one ZAI call at a time) to stay under
+    # ZAI's Fair-Usage limit — slower than asyncio.gather, but rate-limit-conscious
+    # (classify_batch also holds the daemon-wide ZAI_CALL_LOCK).
+    all_results = []
+    for batch in batches:
+        try:
+            all_results.extend(await classify_batch(batch))
+        except Exception as e:
+            logger.error("Batch classification failed: %s", e)
+            # Fail-open for failed batches
+            continue
     
     # Write results to DB
     if all_results:

@@ -24,11 +24,10 @@ class VpProfile:
     cli_capable: bool = True
     # Default inference backend for this VP — "anthropic" (real Anthropic
     # Max plan via workspace OAuth) or "zai" (ZAI/GLM proxy). The agent
-    # defines its own inference, not the dispatching function: CODIE
-    # (coder) defaults to "anthropic" because demo/coding work may rely on
-    # Anthropic-specific features; ATLAS (generalist) and any other VP
-    # default to "zai" to keep autonomous synthesis/research cheap and off
-    # the scarce Max 5-hour-window credits. This is only the DEFAULT —
+    # defines its own inference, not the dispatching function: as of
+    # 2026-06-07 EVERY VP — including CODIE (coder) — defaults to "zai"
+    # (Anthropic API-bills the Claude-Code-via-Max SDK path; see the
+    # vp.coder.primary instance comment below). This is only the DEFAULT —
     # ``services/cody_mode.resolve_cody_mode`` still lets a per-task
     # ``cody_mode``, the operator DB setting, or ``UA_CODY_DEFAULT_MODE``
     # override it (e.g. flip CODIE to "zai" to save cost). Field default is

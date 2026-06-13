@@ -12,7 +12,7 @@ code_paths:
   - scripts/infisical_upsert_secret.py
   - scripts/claude_with_mcp_env.sh
   - scripts/_claude_launcher.py
-last_verified: 2026-05-29
+last_verified: 2026-06-11
 ---
 
 # Secrets & Infisical
@@ -21,7 +21,7 @@ last_verified: 2026-05-29
 
 Infisical is the single source of truth (SSOT) for all Universal Agent application configuration and secrets. At process start, every UA Python service calls `initialize_runtime_secrets()` (`src/universal_agent/infisical_loader.py`), which authenticates to Infisical with machine-identity (universal-auth) credentials, fetches every secret in the project at the configured path, and injects them onto `os.environ`. The vault is **authoritative**: fetched values overwrite anything already in the environment, with a small carve-out for "bootstrap identity" keys (machine role/stage/slug and the Infisical creds themselves).
 
-There is exactly one bootstrap dependency that does **not** come from Infisical: the machine-identity credentials needed to talk to Infisical in the first place. These live in a tiny `.env` file on disk. Three are the actual *credentials* and are validated as required in `infisical_loader.py::_fetch_infisical_secrets` (`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID`); a fourth, `INFISICAL_ENVIRONMENT`, sits alongside them but is *configuration*, not a credential — it defaults to `development` via `_normalize_infisical_environment` when unset. Everything else is pulled from the vault.
+There is exactly one bootstrap dependency that does **not** come from Infisical: the machine-identity credentials needed to talk to Infisical in the first place. These live in a tiny `.env` file on disk. Three are the actual *credentials* and are validated as required in `infisical_loader.py::_fetch_infisical_secrets` (`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID`); a fourth, `INFISICAL_ENVIRONMENT`, sits alongside them but is *configuration*, not a credential — when unset, `_normalize_infisical_environment` defaults it to `production` on the production VPS (`_on_production_vps()`) and to `development` everywhere else. Everything else is pulled from the vault.
 
 > Operator rule (from CLAUDE.md): never read secrets from `.env`/`os.getenv` except for the Infisical bootstrap creds. Call `initialize_runtime_secrets()` at startup. Never commit secrets.
 
@@ -95,10 +95,20 @@ The injection logic, in order:
 # 1. exclude_prefixes filter
 # 2. identity carve-out: if clean_key in preserve_keys and already in os.environ -> skip
 # 3. general overwrite gate: if not overwrite and clean_key in os.environ -> skip
-# 4. else os.environ[clean_key] = value
+# 4. else os.environ[clean_key] = _normalize_secret_value(clean_key, value)
 ```
 
 So a pre-set identity key wins over the vault **even when `overwrite=True`**. Everything else: vault wins.
+
+Values are injected **verbatim** with one narrow exception: `_normalize_secret_value` trims surrounding
+whitespace for a small allowlist of single-line filesystem-path vars (`_PATH_VALUE_KEYS` =
+`CURL_CA_BUNDLE`/`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`, plus the `_PATH_VALUE_SUFFIXES` `_CA_BUNDLE`/`_CERT_FILE`/`_CERT_PATH`).
+This is a targeted backstop for a live 2026-06-11 defect where the Infisical `CURL_CA_BUNDLE` value carried a
+stray trailing newline, which made `curl`/OpenSSL treat the path as an unreadable cert file and fail every
+HTTPS request (`exit 77` / `HTTP 000`) in both the `development` and `production` envs. It is **not** a blanket
+strip — every other secret value passes through unchanged so multi-line secrets (PEM keys, JSON service-account
+blobs) survive byte-for-byte. (The `.env` reader `_claude_launcher.py::_source_env_file` already `.strip()`s its
+values, which is why only Infisical-sourced path vars were exposed to this.)
 
 There is one special alias inside the injector: setting `ZAI_API_KEY` also sets `Z_AI_API_KEY` (for `zai_vision` tool compatibility).
 

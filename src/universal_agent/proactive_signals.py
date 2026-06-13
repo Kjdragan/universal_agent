@@ -1,3 +1,35 @@
+"""Proactive signal cards — generation, status lifecycle, and dashboard actions.
+
+WHO WRITES ``proactive_signal_cards.status`` (the complete set — there is no other
+writer, and in particular **nothing auto-rejects a card**):
+
+- ``upsert_generated_card``  — INSERTs new cards as ``'pending'``; on conflict it
+  updates content but **never changes status** (status is absent from its
+  ``ON CONFLICT DO UPDATE SET`` clause), so regenerating a card cannot re-status it.
+- ``apply_card_action``      — operator dashboard action button → ``'actioned'``
+  (any non-``track_topic`` action) or ``'tracking'`` (``track_topic``). Never
+  ``'rejected'``.
+- ``record_feedback``        — sets status to whatever the caller passes
+  (``COALESCE(?, status)``). Its ONLY caller-with-a-status is the dashboard
+  feedback endpoint (``gateway_server`` ``PATCH /proactive-signals/{id}/feedback``);
+  the dashboard "Reject" button is what produces ``'rejected'``. **Operator-driven,
+  per click — there is no batch/automatic rejecter anywhere in this codebase.**
+- ``delete_card``            — the silent dashboard delete button → ``'deleted'``.
+- ``expire_stale_pending_cards`` — the ONLY *automatic* status mutation: a TTL sweep
+  (``UA_PROACTIVE_CARD_TTL_DAYS``, default 14) that soft-deletes (``'deleted'``,
+  NOT ``'rejected'``) ``pending`` cards whose source video has aged out of the CSI
+  window. Replaced the retired autonomous curation drainer (2026-06).
+
+So a pile of ``rejected`` rows means operators clicked Reject; a pile of ``deleted``
+rows means the TTL sweep (or the delete button) ran. Do not attribute rejections to
+a preference model or a sweeper — that mistake was made during the 2026-06
+investigation; the actual writer set is above.
+
+Card GENERATION (``sync_generated_cards``) has no autonomous trigger: it runs only
+when the proactive-signals dashboard is loaded with ``?sync`` (or ``force_sync``);
+see ``gateway_server`` ``dashboard_proactive_signals``.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -100,9 +132,16 @@ def list_cards(
     if source and source.strip().lower() != "all":
         clauses.append("source = ?")
         params.append(source.strip().lower())
-    if status and status.strip().lower() != "all":
+    status_norm = (status or "").strip().lower()
+    if status_norm == "live":
+        # The default tab view: untriaged + actively-watched cards only. Excludes
+        # terminal/handled states (actioned, rejected, promoted, deleted) so the
+        # tab shows the live work, not the historical ledger.
+        clauses.append("status IN (?, ?)")
+        params.extend([CARD_STATUS_PENDING, CARD_STATUS_TRACKING])
+    elif status_norm and status_norm != "all":
         clauses.append("status = ?")
-        params.append(status.strip().lower())
+        params.append(status_norm)
     else:
         clauses.append("status != ?")
         params.append(CARD_STATUS_DELETED)
@@ -207,16 +246,29 @@ def delete_card(conn: sqlite3.Connection, card_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-def expire_stale_pending_cards(conn: sqlite3.Connection, *, older_than_days: int = 14) -> int:
+def expire_stale_pending_cards(conn: sqlite3.Connection, *, older_than_days: int = 3) -> int:
     """Soft-delete ``pending`` cards not refreshed in ``older_than_days`` days.
 
-    A card's ``updated_at`` advances on every sync while its source video is
-    still in the recent CSI window. Once the video ages out, the card stops
-    being regenerated; with no autonomous drainer (the curation lane was
-    removed 2026-06) an un-triaged card would otherwise sit ``pending`` forever
-    and inflate the dashboard + the db-health pending count. This sweep clears
-    those — operator-triaged cards (approved/rejected/tracking/actioned/deleted)
-    are never touched because it only matches ``status='pending'``.
+    Keyed on ``updated_at`` (last time the tick re-upserted the card). A card's
+    ``updated_at`` advances every sync while its source video is still in the
+    recent CSI window (~2 days of YouTube RSS); once the video ages out the card
+    stops being refreshed and this TTL clears it ``older_than_days`` days later.
+    Net shelf life ≈ time-in-feed (≤~2 days) + ``older_than_days`` — bounded, and
+    an un-acted card always drops off the tab within a few days.
+
+    NOTE: this deliberately does NOT key on ``created_at``. A card's
+    ``created_at`` is the *video's* publish time (``occurred_at``), not the
+    card's first-generation time — so a ``created_at`` TTL would instantly expire
+    cards for any video ingested more than N days after it was published (RSS
+    backfills, re-ingestion), which is a footgun. ``updated_at`` reflects "still
+    being surfaced", which is what we actually want to age out.
+
+    Soft-delete only: the row stays in the DB with ``status='deleted'`` (drops
+    off the pending/live tab but is preserved for audit + resurface prevention —
+    the tick's status-preserving upsert won't bring it back). Only
+    ``status='pending'`` is touched; operator-triaged cards
+    (approved/rejected/tracking/actioned/deleted) are never affected. Default 3
+    days (``UA_PROACTIVE_CARD_TTL_DAYS``); ``older_than_days <= 0`` disables it.
 
     Returns the number of cards expired.
     """
@@ -228,6 +280,41 @@ def expire_stale_pending_cards(conn: sqlite3.Connection, *, older_than_days: int
         "UPDATE proactive_signal_cards SET status = ?, updated_at = ? "
         "WHERE status = ? AND updated_at < ?",
         (CARD_STATUS_DELETED, _now_iso(), CARD_STATUS_PENDING, cutoff),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
+def purge_aged_terminal_cards(conn: sqlite3.Connection, *, older_than_days: Optional[int] = None) -> int:
+    """Hard-delete terminal (non-live) cards not touched in ``older_than_days`` days.
+
+    LIVE statuses (``pending``, ``tracking``) are NEVER purged. Everything else —
+    ``actioned``, ``rejected``, ``approved``, ``deleted``, and the legacy
+    ``promoted`` relics — is a terminal/handled state; once a row's ``updated_at``
+    is older than the purge window it is physically removed to keep the table and
+    the dashboard stats tidy (rather than accumulating a permanent ledger of
+    rejected/deleted rows forever).
+
+    RESURFACE-SAFE by construction: keyed on ``updated_at``, which the tick
+    advances every time it re-upserts a card whose source video is still in the
+    CSI regeneration window (~2 days of YouTube RSS events). A row only becomes
+    purgeable once its ``updated_at`` is older than the window, i.e. its video has
+    aged out and the tick is no longer touching it — so a purged card cannot be
+    re-INSERTed as ``pending`` on the next tick. Default window 7 days
+    (``UA_PROACTIVE_CARD_PURGE_DAYS``), comfortably above the ~2-day CSI window,
+    retaining a week of rejection memory + audit before removal.
+
+    Returns the number of rows purged. ``older_than_days <= 0`` disables it.
+    """
+    ensure_schema(conn)
+    days = _card_purge_days() if older_than_days is None else older_than_days
+    if days <= 0:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cursor = conn.execute(
+        "DELETE FROM proactive_signal_cards "
+        "WHERE status NOT IN (?, ?) AND updated_at < ?",
+        (CARD_STATUS_PENDING, CARD_STATUS_TRACKING, cutoff),
     )
     conn.commit()
     return cursor.rowcount
@@ -342,46 +429,107 @@ def apply_card_action(
     return get_card(conn, card_id) or card
 
 
+def _card_ttl_days() -> int:
+    """Resolve the pending-card TTL in days since generation (`UA_PROACTIVE_CARD_TTL_DAYS`, default 3)."""
+    try:
+        return int(os.getenv("UA_PROACTIVE_CARD_TTL_DAYS", "3") or "3")
+    except (TypeError, ValueError):
+        return 3
+
+
+def _card_purge_days() -> int:
+    """Resolve the aged-terminal-card hard-purge window (`UA_PROACTIVE_CARD_PURGE_DAYS`, default 7).
+
+    Must stay comfortably above the CSI regeneration window (~2 days of YouTube
+    RSS events) so a purged card whose video is still in-window can't be
+    re-INSERTed as ``pending`` on the next tick. 7 days = resurface-safe + a
+    week of retained audit/rejection memory.
+    """
+    try:
+        return int(os.getenv("UA_PROACTIVE_CARD_PURGE_DAYS", "7") or "7")
+    except (TypeError, ValueError):
+        return 7
+
+
+def generate_signal_cards(
+    conn: sqlite3.Connection,
+    *,
+    csi_db_path: Optional[Path] = None,
+    discord_db_path: Optional[Path] = None,
+    ttl_days: Optional[int] = None,
+) -> dict[str, int]:
+    """Generate/refresh the proactive **signal cards** from CSI + Discord feedstock.
+
+    This is the **pure-SQLite card-only core**: it upserts YouTube diamond cards
+    and Discord cards into ``proactive_signal_cards`` and runs the TTL sweep. It
+    does **no LLM work** and does **not** run convergence/topic-signature or
+    tutorial-build syncs (those have their own pipelines + systemd timers, e.g.
+    ``csi-convergence-sync``). It is therefore safe to call on a frequent
+    autonomous tick (``scripts/proactive_signal_card_sync.py``) without burning
+    LLM quota or double-running convergence.
+
+    ``sync_generated_cards`` is the superset the dashboard load calls (this core
+    + the convergence/tutorial syncs); both share this function so the card logic
+    lives in exactly one place. Returns ``{youtube, discord, expired, purged}``.
+    """
+    counts = {"youtube": 0, "discord": 0, "expired": 0, "purged": 0}
+    for card in generate_youtube_cards(csi_db_path):
+        upsert_generated_card(conn, card)
+        counts["youtube"] += 1
+    for card in generate_discord_cards(discord_db_path):
+        upsert_generated_card(conn, card)
+        counts["discord"] += 1
+    counts["expired"] = expire_stale_pending_cards(
+        conn, older_than_days=_card_ttl_days() if ttl_days is None else ttl_days
+    )
+    counts["purged"] = purge_aged_terminal_cards(conn)
+    return counts
+
+
 def sync_generated_cards(
     conn: sqlite3.Connection,
     *,
     csi_db_path: Optional[Path] = None,
     discord_db_path: Optional[Path] = None,
 ) -> dict[str, int]:
-    counts = {"youtube": 0, "discord": 0, "topic_signatures": 0, "convergence_events": 0, "tutorial_build_tasks": 0, "expired": 0}
-    for card in generate_youtube_cards(csi_db_path):
-        upsert_generated_card(conn, card)
-        counts["youtube"] += 1
-    try:
-        from universal_agent.services.proactive_convergence import (
-            sync_topic_signatures_from_csi,
-        )
+    """Dashboard-load sync: the pure-SQLite card core only.
 
-        signature_counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db_path)
-        counts["topic_signatures"] = int(signature_counts.get("upserted") or 0)
-        counts["convergence_events"] = int(signature_counts.get("convergence_events") or 0)
-    except Exception:
-        logger.debug("Failed syncing CSI topic signatures", exc_info=True)
-    try:
-        from universal_agent.services.proactive_tutorial_builds import (
-            sync_build_oriented_csi_videos,
-        )
+    The card-producing work is delegated to :func:`generate_signal_cards`. This
+    function NO LONGER runs the topic-signature/convergence sync. That sync is
+    LLM-bearing (it fans out dozens of opus-tier ZAI refine calls), so it is NOT
+    suitable for a frequent tick — and it already has its own dedicated systemd
+    timer ``universal-agent-csi-convergence-sync.timer``
+    (``python -m universal_agent.scripts.csi_convergence_sync``) as the SOLE
+    convergence producer (single-producer pattern).
 
-        tutorial_counts = sync_build_oriented_csi_videos(conn, csi_db_path=csi_db_path)
-        counts["tutorial_build_tasks"] = int(tutorial_counts.get("queued") or 0)
-    except Exception:
-        logger.debug("Failed syncing CSI tutorial build tasks", exc_info=True)
-    for card in generate_discord_cards(discord_db_path):
-        upsert_generated_card(conn, card)
-        counts["discord"] += 1
-    # Drain stale pending cards so an un-triaged queue can't pile up
-    # indefinitely now that the autonomous curation drainer is gone
-    # (UA_PROACTIVE_CARD_TTL_DAYS, default 14; set 0 to disable).
-    try:
-        ttl_days = int(os.getenv("UA_PROACTIVE_CARD_TTL_DAYS", "14") or "14")
-    except (TypeError, ValueError):
-        ttl_days = 14
-    counts["expired"] = expire_stale_pending_cards(conn, older_than_days=ttl_days)
+    The dashboard-tick invoker that imported and called
+    ``sync_topic_signatures_from_csi`` here was removed 2026-06-11 as a redundant
+    SECOND producer — same pattern as the demo-build-lane removal noted below.
+    ``gateway_server.py::dashboard_proactive_signals`` (``?sync=background``)
+    schedules this sync on a 300s cooldown
+    (``UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS``), so an open dashboard re-fired
+    the full LLM convergence fan-out every 5 minutes — verified bursts of ~200 ZAI
+    calls/min whenever the dashboard was open, feeding ZAI Fair-Usage 429 pressure
+    for no benefit (the hourly timer already produces the same candidates;
+    candidate writes are idempotent). The function's prior docstring already said
+    the convergence sync was "LLM-bearing, so NOT suitable for a frequent tick — it
+    has its own timer"; now the code finally agrees.
+
+    Preserves the historical 6-key counts shape (``youtube``/``discord``/``expired``
+    + ``topic_signatures``/``convergence_events``/``tutorial_build_tasks``); the
+    ``topic_signatures``/``convergence_events``/``tutorial_build_tasks`` keys are
+    retained for back-compat but are now ALWAYS 0 here (mirroring how
+    ``tutorial_build_tasks`` was already handled). The demo/tutorial build lane is
+    likewise produced SOLELY by the dedicated systemd timer
+    ``universal-agent-proactive-demo-build-sweep``
+    (``scripts/proactive_demo_build_sweep.py``); running
+    ``sync_build_oriented_csi_videos`` here too was a redundant second invoker of
+    the same producer (removed 2026-06-10).
+    """
+    counts = {"topic_signatures": 0, "convergence_events": 0, "tutorial_build_tasks": 0}
+    counts.update(
+        generate_signal_cards(conn, csi_db_path=csi_db_path, discord_db_path=discord_db_path)
+    )
     return counts
 
 
@@ -483,7 +631,7 @@ def generate_discord_cards(discord_db_path: Optional[Path], *, limit: int = 60) 
                 "card_id": _card_id("discord", str(row["id"])),
                 "source": "discord",
                 "card_type": "insight",
-                "title": f"Discord insight: {topic[:180]}",
+                "title": topic[:180],
                 "summary": str(row["summary"] or "").strip()[:1200],
                 "priority": 3 if urgency == "high" else 2,
                 "confidence_score": max(0.35, min(0.95, confidence)),
@@ -528,7 +676,7 @@ def _youtube_diamond_cards(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "card_id": _card_id("youtube-video", item.get("event_id") or item.get("url") or title),
                 "source": "youtube",
                 "card_type": "diamond" if not has_transcript else "transcript_insight",
-                "title": f"YouTube candidate: {title[:190]}",
+                "title": title[:190],
                 "summary": str(summary).strip()[:1400],
                 "priority": 3 if has_transcript else 2,
                 "confidence_score": min(0.94, score),
@@ -582,25 +730,25 @@ def _youtube_actions(*, topic: str, has_transcripts: bool, cluster: bool) -> lis
     if has_transcripts:
         return [
             {"id": "research_further", "label": "Research Further", "description": "Create a follow-up research task using the transcript-backed evidence."},
-            {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end."},
+            {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. GROUNDING (anti-drift): keep the wiki about THIS signal's actual subject — add the source (e.g. the YouTube video) as the anchor, build a DISAMBIGUATED research query from the card's summary (never a bare ambiguous name like 'Olympus Protocol'), and import only on-topic/cited sources so unrelated material sharing a keyword is excluded."},
             {"id": "build_demo", "label": "Build Demo", "description": "Create a task to prototype or demonstrate the technique if applicable."},
         ]
     return [
         {"id": "fetch_transcripts", "label": "Fetch More Transcripts", "description": "Create a capped transcript sampling task for representative non-Short videos."},
         {"id": "track_topic", "label": "Track Topic", "description": "Keep watching this topic before spending transcript budget."},
         {"id": "research_further", "label": "Research Further", "description": "Create a lightweight research task from metadata and available evidence."},
-        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end."},
+        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. GROUNDING (anti-drift): keep the wiki about THIS signal's actual subject — add the source (e.g. the YouTube video) as the anchor, build a DISAMBIGUATED research query from the card's summary (never a bare ambiguous name like 'Olympus Protocol'), and import only on-topic/cited sources so unrelated material sharing a keyword is excluded."},
     ] if cluster else [
         {"id": "fetch_transcripts", "label": "Fetch Transcript", "description": "Create a task to fetch and analyze this non-Short video transcript."},
         {"id": "track_topic", "label": "Track Topic", "description": "Keep watching for related videos before deeper work."},
-        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end."},
+        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. GROUNDING (anti-drift): keep the wiki about THIS signal's actual subject — add the source (e.g. the YouTube video) as the anchor, build a DISAMBIGUATED research query from the card's summary (never a bare ambiguous name like 'Olympus Protocol'), and import only on-topic/cited sources so unrelated material sharing a keyword is excluded."},
     ]
 
 
 def _discord_actions(topic: str) -> list[dict[str, str]]:
     return [
         {"id": "research_further", "label": "Research Further", "description": "Create a research task from this Discord intelligence signal."},
-        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end."},
+        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. GROUNDING (anti-drift): keep the wiki about THIS signal's actual subject — add the source (e.g. the YouTube video) as the anchor, build a DISAMBIGUATED research query from the card's summary (never a bare ambiguous name like 'Olympus Protocol'), and import only on-topic/cited sources so unrelated material sharing a keyword is excluded."},
         {"id": "track_topic", "label": "Track Topic", "description": "Keep watching this topic before deeper work."},
     ]
 

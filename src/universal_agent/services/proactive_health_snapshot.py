@@ -21,12 +21,18 @@ The row also carries the digest-email cooldown state
 "don't re-spam the same finding-set" rule survives a process restart — the
 in-memory ``_notifications`` cache the in-process notifier used for cooldown
 does not exist in a fresh oneshot subprocess.
+
+This module also owns the operator-acknowledgement table
+(``proactive_health_acks`` — suppress-until-recovered with hysteresis; see the
+"Acknowledgements" section below), which lives in the same ``activity_state.db``.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
+import os
 import sqlite3
 from typing import Any, Dict, Iterable, Optional
 
@@ -34,6 +40,15 @@ logger = logging.getLogger(__name__)
 
 # Singleton primary key — there is exactly one "latest" snapshot row.
 LATEST_ROW_ID = 1
+
+# Acknowledgement hysteresis: an acked finding must stay GREEN this long
+# (continuously — any red touch resets the clock via last_red_at_utc) before
+# the ack flips to 'recovered' and re-arms alerting. Criticals flap on a
+# minutes scale, so a brief green dip must NOT count as recovery.
+DEFAULT_ACK_RECOVERY_SECONDS = 21600  # 6h
+# Max-lifetime backstop: an ack can never outlive this, even while still red,
+# so a forgotten click can't mute a finding forever.
+ACK_MAX_LIFETIME_DAYS = 30
 
 _SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS proactive_health_snapshots (
@@ -105,6 +120,7 @@ def decide_digest(
     last_sent_ts: Optional[float],
     now_ts: float,
     cooldown_seconds: float,
+    excluded_ids: Iterable[str] = (),
 ) -> tuple[bool, str]:
     """Decide whether to send a critical digest, and the alerted-set to persist.
 
@@ -130,6 +146,14 @@ def decide_digest(
     sliding the window forward from the last thing the operator was actually
     told.
 
+    ``excluded_ids`` (the operator-ACKNOWLEDGED finding-ids) are stripped from
+    the carried-forward alerted set so an acked id never lingers in (or
+    re-enters) the fingerprint: when its ack later recovers and the finding
+    re-reds, it counts as a genuinely-new id and alerts immediately even if a
+    pre-ack send stamped it into ``last_digest_fingerprint`` within a
+    still-live window. Callers also keep acked ids OUT of
+    ``current_finding_ids`` (the timer filters them upstream).
+
     Returns ``(should_send, next_alerted_fingerprint)``. The fingerprint is the
     union of the carried-forward alerted set and the current criticals, to be
     stamped into ``last_digest_fingerprint`` — meaningful only when
@@ -143,6 +167,7 @@ def decide_digest(
         last_sent_ts is not None and (now_ts - last_sent_ts) < cooldown_seconds
     )
     already = _split_ids(prev_fingerprint) if window_live else set()
+    already -= {str(i) for i in excluded_ids or ()}
     new_ids = current - already
     if not new_ids:
         return False, _join_ids(already)
@@ -254,3 +279,204 @@ def read_latest_snapshot(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
     except (ValueError, TypeError):
         data["payload"] = {}
     return data
+
+
+# ─── Acknowledgements (suppress-until-recovered, with hysteresis) ─────────────
+# Operator-facing "Acknowledge" links in the critical-digest email land here
+# (gateway ``GET /api/v1/proactive_health/ack`` → ``record_ack``). An *active*
+# ack mutes a finding-id out of the digest until the finding RECOVERS — stays
+# green for ``UA_PROACTIVE_HEALTH_ACK_RECOVERY_SECONDS`` (criticals flap on a
+# minutes scale, so a brief green dip must not re-arm). The timer is the single
+# reconciler (``reconcile_acks`` every tick); everything else reads via
+# ``get_active_acks``. Rows are never deleted — recovery flips ``status`` to
+# 'recovered' so the table doubles as an audit trail.
+
+_ACK_SCHEMA_DDL = """
+CREATE TABLE IF NOT EXISTS proactive_health_acks (
+    id               INTEGER PRIMARY KEY,
+    finding_id       TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'active',
+    acked_at_utc     TEXT NOT NULL,
+    ack_source       TEXT,
+    last_red_at_utc  TEXT,
+    recovered_at_utc TEXT,
+    note             TEXT
+)
+"""
+
+# Partial unique index: at most ONE active ack per finding-id; recovered rows
+# accumulate freely (audit trail across repeated ack/recover cycles).
+_ACK_ACTIVE_INDEX_DDL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_proactive_health_acks_active
+ON proactive_health_acks (finding_id) WHERE status = 'active'
+"""
+
+
+def ensure_ack_schema(conn: sqlite3.Connection) -> None:
+    """Create the acks table + active-uniqueness index. Idempotent."""
+    conn.execute(_ACK_SCHEMA_DDL)
+    conn.execute(_ACK_ACTIVE_INDEX_DDL)
+
+
+def ack_recovery_seconds() -> int:
+    """Green-streak length required before an active ack flips to recovered."""
+    raw = os.getenv("UA_PROACTIVE_HEALTH_ACK_RECOVERY_SECONDS")
+    if not raw:
+        return DEFAULT_ACK_RECOVERY_SECONDS
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return DEFAULT_ACK_RECOVERY_SECONDS
+
+
+def _parse_ack_ts(value: Any) -> Optional[float]:
+    """ISO-8601 (Z-tolerant) → epoch seconds, or None on garbage."""
+    s = str(value or "").strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _ack_row_to_dict(row: Any) -> Dict[str, Any]:
+    try:
+        return {k: row[k] for k in row.keys()}  # type: ignore[attr-defined]
+    except AttributeError:
+        keys = (
+            "id",
+            "finding_id",
+            "status",
+            "acked_at_utc",
+            "ack_source",
+            "last_red_at_utc",
+            "recovered_at_utc",
+            "note",
+        )
+        return dict(zip(keys, row))
+
+
+def record_ack(
+    conn: sqlite3.Connection,
+    *,
+    finding_id: str,
+    ack_source: Optional[str] = None,
+    note: Optional[str] = None,
+    now_iso: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Record an operator acknowledgement for a finding-id. Idempotent.
+
+    A second ack while one is already active is a no-op that returns the
+    existing row with ``created=False`` (the gateway renders an "already
+    acknowledged" page off that flag). A fresh ack after a prior recovery
+    inserts a NEW row — the recovered row stays behind as audit trail.
+    """
+    ensure_ack_schema(conn)
+    fid = str(finding_id or "").strip()
+    if not fid:
+        raise ValueError("finding_id must be non-empty")
+    now = now_iso or datetime.now(timezone.utc).isoformat()
+    existing = conn.execute(
+        "SELECT * FROM proactive_health_acks WHERE finding_id = ? AND status = 'active'",
+        (fid,),
+    ).fetchone()
+    if existing is not None:
+        out = _ack_row_to_dict(existing)
+        out["created"] = False
+        return out
+    cur = conn.execute(
+        """
+        INSERT INTO proactive_health_acks
+            (finding_id, status, acked_at_utc, ack_source, last_red_at_utc, note)
+        VALUES (?, 'active', ?, ?, ?, ?)
+        """,
+        (fid, now, ack_source, now, note),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM proactive_health_acks WHERE id = ?", (cur.lastrowid,)
+    ).fetchone()
+    out = _ack_row_to_dict(row)
+    out["created"] = True
+    logger.info(
+        "proactive_health ack recorded: finding_id=%s source=%s", fid, ack_source
+    )
+    return out
+
+
+def get_active_acks(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
+    """Return ``{finding_id: ack_row}`` for all active acks.
+
+    Reader-safe: a missing table (nothing ever acked) returns {} rather than
+    raising, so read paths never DDL.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT * FROM proactive_health_acks WHERE status = 'active'"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {str(_ack_row_to_dict(r)["finding_id"]): _ack_row_to_dict(r) for r in rows}
+
+
+def reconcile_acks(
+    conn: sqlite3.Connection,
+    *,
+    current_critical_ids: Iterable[str],
+    now_iso: str,
+    recovery_seconds: Optional[int] = None,
+) -> Dict[str, list]:
+    """Advance ack lifecycle against the current critical set. Timer-only.
+
+    For every ACTIVE ack:
+
+    - finding still critical → touch ``last_red_at_utc`` (resets the green
+      streak; this is the hysteresis that keeps a flapping critical muted);
+    - finding green for longer than ``recovery_seconds`` (measured from the
+      last red touch, falling back to the ack time) → flip to 'recovered',
+      re-arming alerting for the next NEW red;
+    - ack older than ``ACK_MAX_LIFETIME_DAYS`` → force-recover regardless of
+      redness (backstop so a click can't mute a finding forever).
+
+    Returns ``{"active": [...], "recovered": [...]}`` finding-id lists.
+    """
+    ensure_ack_schema(conn)
+    window = recovery_seconds if recovery_seconds is not None else ack_recovery_seconds()
+    current = {str(i) for i in current_critical_ids}
+    now_ts = _parse_ack_ts(now_iso)
+    if now_ts is None:
+        now_ts = datetime.now(timezone.utc).timestamp()
+    max_lifetime_seconds = ACK_MAX_LIFETIME_DAYS * 86400
+    active: list[str] = []
+    recovered: list[str] = []
+    for fid, ack in get_active_acks(conn).items():
+        acked_ts = _parse_ack_ts(ack.get("acked_at_utc"))
+        expired = acked_ts is not None and (now_ts - acked_ts) > max_lifetime_seconds
+        if fid in current and not expired:
+            conn.execute(
+                "UPDATE proactive_health_acks SET last_red_at_utc = ? WHERE id = ?",
+                (now_iso, ack["id"]),
+            )
+            active.append(fid)
+            continue
+        last_red_ts = _parse_ack_ts(ack.get("last_red_at_utc")) or acked_ts
+        green_long_enough = (
+            last_red_ts is None or (now_ts - last_red_ts) > window
+        )
+        if expired or (fid not in current and green_long_enough):
+            conn.execute(
+                "UPDATE proactive_health_acks "
+                "SET status = 'recovered', recovered_at_utc = ? WHERE id = ?",
+                (now_iso, ack["id"]),
+            )
+            recovered.append(fid)
+        else:
+            # Green, but not green long enough — keep the ack active.
+            active.append(fid)
+    conn.commit()
+    if recovered:
+        logger.info(
+            "proactive_health acks recovered (re-armed): %s", ", ".join(sorted(recovered))
+        )
+    return {"active": active, "recovered": recovered}

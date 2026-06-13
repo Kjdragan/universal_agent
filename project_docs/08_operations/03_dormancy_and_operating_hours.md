@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - tests/unit/test_cron_dormancy_defaults.py
   - tests/unit/test_dormancy_schedule_consistency.py
-last_verified: 2026-06-09
+last_verified: 2026-06-10
 ---
 
 # Dormancy & Operating Hours
@@ -268,6 +268,17 @@ Further always-on behaviors are not crons but are explicitly dormancy-exempt:
     (default `1`/on); window via `UA_CRON_ARTIFACT_DEDUP_WINDOW_HOURS` (default `24`).
     Once the operator acks/rejects/archives the row, the next run is allowed to
     surface a fresh artifact so a recurrence is not silently hidden.
+  - **Run-freshness gate (false-disclosure suppression).** Cron workspaces are
+    reused, so manifests/files from prior runs linger on disk. A deploy-killed
+    `paper_to_podcast_daily` run on 2026-06-10 produced nothing, yet the
+    notifier picked up a 2-day-old manifest and emailed it as tonight's
+    podcast. `cron_artifact_notifier._load_manifest` and the
+    `_scan_work_products` fallback now only consider manifests/files with
+    `mtime >= started_at` of the current run; when nothing fresh exists the
+    notifier logs "run produced no new artifacts" and sends **no** email.
+    This also makes the `paper_to_podcast_email_delivery` invariant's
+    bracketed-job-id subject marker sound: a notifier email now implies fresh
+    artifacts.
 - **Heartbeat pre-flight health check** — every Simone heartbeat tick (24/7, the
   heartbeat is a runtime tick driver, not a cron) calls
   `proactive_health_notifier.run_pre_flight_check` (code-verified at
@@ -295,6 +306,7 @@ guard tests in `tests/unit/test_cron_dormancy_defaults.py` keep this honest.
 |---|---|---|---|
 | `hourly_intel_digest` | systemd timer `00..23`, runtime-gated | **Windowed by default**, runtime-flippable | `UA_INTEL_DIGEST_24_7=true` |
 | `csi_convergence_sync` | systemd timer `00..23`, runtime-gated | **Windowed by default**, runtime-flippable | `UA_CSI_CONVERGENCE_SYNC_24_7=true` |
+| `proactive_signal_card_sync` | systemd timer `00..23:25`, runtime-gated | **Windowed by default**, runtime-flippable | `UA_PROACTIVE_CARD_SYNC_24_7=true` |
 | `cron_artifact_reminders_sweep` | `*/30 6-21` | Windowed (also self-gates per reminder) | — |
 | `vp_mission_pr_reconciler` | `*/15 6-20` | Windowed (job-specific 6–20) | — |
 | `hackernews_snapshot` | `0,30 6-21` | Windowed (source currently parked) | — |
@@ -357,6 +369,7 @@ is not memoized).
 |---|---|---|---|
 | `hourly_intel_digest` (systemd) | `UA_INTEL_DIGEST_24_7` | `00..23` timer, runtime-gated | set var `true` in Infisical, then reinstall the timer (below) |
 | `csi_convergence_sync` (systemd) | `UA_CSI_CONVERGENCE_SYNC_24_7` | `00..23` timer, runtime-gated | set var `true` in Infisical, then reinstall the timer (below) |
+| `proactive_signal_card_sync` (systemd) | `UA_PROACTIVE_CARD_SYNC_24_7` | `00..23:25` timer, runtime-gated | set var `true` in Infisical, then reinstall the timer (below) |
 
 The env vars live in Infisical (dev + prod) defaulted to `false` (explicit
 windowed) so the lever is discoverable. Deliberately **excluded** from the pilot:
@@ -486,6 +499,19 @@ discipline requirement, not an enforced one.
   Changing the window in one place (e.g. `_ACTIVE_END_HOUR`) does **not** change
   the cron literals in `gateway_server.py` or the heartbeat HH:MM config — they're
   separate sources of truth that happen to agree.
+- **Confirm WHICH substrate fires a job before reasoning about its dormancy.**
+  Whether a job runs overnight, and whether dormancy even applies to it, depends
+  on whether it fires from a **systemd timer** or an **in-process cron** — and a
+  job migrated to a timer leaves a `"enabled": false` *tombstone* in
+  `cron_jobs.json` plus a stale workspace `run.log`, both of which read as "this
+  is off / hasn't run." It is not off. Check the timer
+  (`systemctl list-timers 'universal-agent-*'`) and the canonical migrated set
+  (`systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`) first. Full diagnostic:
+  [`03_agents/04_cron_and_scheduling.md`](../03_agents/04_cron_and_scheduling.md)
+  § "Is this scheduled job actually running?". (Fixed-time overnight jobs such as
+  `nightly_wiki` at 03:15 are a *deliberate* dormant-window exception — see
+  "Fixed-time crons" below — they run as scheduled; the guard test only emits an
+  informational soft-warn, never a failure.)
 - **`zoneinfo` fallback is permissive.** If tzdata is missing,
   `_within_active_window` returns `True` for every hour — reminders fire 24/7 rather
   than being lost. Don't read a `True` as "definitely active."

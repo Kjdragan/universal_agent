@@ -293,6 +293,9 @@ async def test_run_async_tiers_invokes_tier2_after_tier1(tmp_path: Path, monkeyp
     _run_tier2_async in order on the same sweep."""
     monkeypatch.setenv("UA_MISSION_CONTROL_INTEL_DB_PATH", str(tmp_path / "mc.db"))
     monkeypatch.setenv("UA_MC_PHASE_2_ENABLED", "1")
+    # Run the LLM cascade regardless of wall-clock — the dormancy gate added
+    # 2026-06-12 otherwise skips both passes outside the 6am-10pm Houston window.
+    monkeypatch.setenv("UA_MISSION_CONTROL_24_7", "true")
 
     sequence: list[str] = []
 
@@ -310,4 +313,66 @@ async def test_run_async_tiers_invokes_tier2_after_tier1(tmp_path: Path, monkeyp
     sweeper = MissionControlSweeper(SweeperConfig())
     result = _result()
     await sweeper.run_async_tiers(result)
+    assert sequence == ["tier1", "tier2"]
+
+
+# ── dormancy gate (2026-06-12 LLM-efficiency pass) ─────────────────────
+
+
+async def test_run_async_tiers_skips_llm_when_dormant(tmp_path: Path, monkeypatch):
+    """When dormant (10pm-6am Houston) and not opted into 24/7, run_async_tiers
+    must skip BOTH LLM passes and record a dormancy skip reason."""
+    monkeypatch.setenv("UA_MISSION_CONTROL_INTEL_DB_PATH", str(tmp_path / "mc.db"))
+    monkeypatch.setenv("UA_MC_PHASE_2_ENABLED", "1")
+    monkeypatch.delenv("UA_MISSION_CONTROL_24_7", raising=False)
+    # Force "dormant" regardless of the real wall-clock.
+    monkeypatch.setattr(
+        "universal_agent.services.dormancy.is_active_window", lambda now=None: False
+    )
+
+    sequence: list[str] = []
+
+    async def _fake_tier1(self_, result):
+        sequence.append("tier1")
+
+    async def _fake_tier2(self_, result):
+        sequence.append("tier2")
+
+    monkeypatch.setattr(MissionControlSweeper, "_run_tier1_async", _fake_tier1)
+    monkeypatch.setattr(MissionControlSweeper, "_run_tier2_async", _fake_tier2)
+
+    sweeper = MissionControlSweeper(SweeperConfig())
+    result = _result()
+    await sweeper.run_async_tiers(result)
+
+    assert sequence == []  # neither LLM pass fired
+    assert result.skipped_reason is not None
+    assert "dormant" in result.skipped_reason
+
+
+async def test_run_async_tiers_runs_when_dormant_but_24_7(tmp_path: Path, monkeypatch):
+    """UA_MISSION_CONTROL_24_7=true overrides dormancy — the LLM passes run
+    even outside the active window."""
+    monkeypatch.setenv("UA_MISSION_CONTROL_INTEL_DB_PATH", str(tmp_path / "mc.db"))
+    monkeypatch.setenv("UA_MC_PHASE_2_ENABLED", "1")
+    monkeypatch.setenv("UA_MISSION_CONTROL_24_7", "true")
+    monkeypatch.setattr(
+        "universal_agent.services.dormancy.is_active_window", lambda now=None: False
+    )
+
+    sequence: list[str] = []
+
+    async def _fake_tier1(self_, result):
+        sequence.append("tier1")
+
+    async def _fake_tier2(self_, result):
+        sequence.append("tier2")
+
+    monkeypatch.setattr(MissionControlSweeper, "_run_tier1_async", _fake_tier1)
+    monkeypatch.setattr(MissionControlSweeper, "_run_tier2_async", _fake_tier2)
+
+    sweeper = MissionControlSweeper(SweeperConfig())
+    result = _result()
+    await sweeper.run_async_tiers(result)
+
     assert sequence == ["tier1", "tier2"]
