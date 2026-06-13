@@ -8,13 +8,13 @@ from .session import SessionStore
 
 logger = logging.getLogger(__name__)
 
-async def logging_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]):
+async def logging_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]) -> None:
     user = ctx.update.effective_user
     chat = ctx.update.effective_chat
     logger.info(f"Update {ctx.update.update_id} | User: {user.id if user else 'N/A'} | Chat: {chat.id if chat else 'N/A'}")
     await next_fn()
 
-async def auth_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]):
+async def auth_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]) -> None:
     user_id = ctx.update.effective_user.id if ctx.update.effective_user else 0
     allowed_user_ids = set(get_allowed_user_ids())
     if allowed_user_ids and user_id not in allowed_user_ids:

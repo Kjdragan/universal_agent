@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import asyncio
 from datetime import datetime
 import logging
-from typing import Any, Dict, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Optional, Set
 import uuid
+
+if TYPE_CHECKING:
+    from .agent_adapter import AgentAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +46,11 @@ class TaskManager:
                 return task
         return None
 
-    def enable_continuation(self, user_id: int):
+    def enable_continuation(self, user_id: int) -> None:
         """Enable continuation mode for a user. Next /agent will reuse session."""
         self.continuation_mode.add(user_id)
         
-    def disable_continuation(self, user_id: int):
+    def disable_continuation(self, user_id: int) -> None:
         """Disable continuation mode for a user."""
         self.continuation_mode.discard(user_id)
         
@@ -78,7 +83,7 @@ class TaskManager:
     def get_task(self, task_id: str) -> Optional[Task]:
         return self.tasks.get(task_id)
     
-    def get_user_tasks(self, user_id: int):
+    def get_user_tasks(self, user_id: int) -> list[Task]:
         # Return tasks sorted by creation time (newest first)
         tasks = [t for t in self.tasks.values() if t.user_id == user_id]
         return sorted(tasks, key=lambda t: t.created_at, reverse=True)
@@ -116,7 +121,7 @@ class TaskManager:
 
         return False, f"Task is already {target.status}."
 
-    async def worker(self, agent_adapter):
+    async def worker(self, agent_adapter: AgentAdapter) -> None:
         """
         Continuous worker loop to process tasks.
         agent_adapter: Instance of AgentAdapter class

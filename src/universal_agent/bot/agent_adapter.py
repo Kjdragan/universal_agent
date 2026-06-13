@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 import asyncio
 from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
 import sys
-from typing import Any, AsyncIterator, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 import uuid
+
+if TYPE_CHECKING:
+    from .task_manager import Task
 
 from .config import UA_GATEWAY_URL, UA_TELEGRAM_ALLOW_INPROCESS
 from universal_agent.agent_core import AgentEvent, EventType, UniversalAgent
@@ -57,7 +62,7 @@ class AgentAdapter:
         self.worker_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initialize Connection to Gateway."""
         if self.initialized:
             return
@@ -262,7 +267,7 @@ class AgentAdapter:
              if isinstance(self.gateway, ExternalGateway):
                  await self.gateway.close()
 
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """Cleanup resources."""
         self._shutdown_event.set()
         
@@ -284,7 +289,7 @@ class AgentAdapter:
         self.worker_task = None
         self.initialized = False
 
-    async def execute(self, task, continue_session: bool = False):
+    async def execute(self, task: Task, continue_session: bool = False) -> None:
         """
         Executes a task using the agent via the background actor.
         Matches the interface expected by TaskManager.

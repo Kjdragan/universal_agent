@@ -10,7 +10,7 @@ from ..core.context import BotContext
 from universal_agent.artifacts import resolve_artifacts_dir
 
 
-async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]):
+async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]) -> None:
     """
     Handles /agent, /status, /continue, /new, /menu, /briefing, /delegate, callback queries, and generic text messages.
     """

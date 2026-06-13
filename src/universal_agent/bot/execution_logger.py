@@ -7,7 +7,7 @@ class DualWriter:
         self.file = file_handle
         self.stream = original_stream
 
-    def write(self, data):
+    def write(self, data: str) -> None:
         self.stream.write(data)
         self.stream.flush()
         try:
@@ -16,7 +16,7 @@ class DualWriter:
         except ValueError:
             pass # File might be closed
 
-    def flush(self):
+    def flush(self) -> None:
         self.stream.flush()
         try:
             self.file.flush()

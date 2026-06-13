@@ -20,7 +20,7 @@ class UpdateRunner:
         self.process_callback = process_callback
         self._running = True
 
-    async def enqueue(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def enqueue(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Add an update to the appropriate chat queue."""
         if not self._running:
             return
@@ -54,7 +54,7 @@ class UpdateRunner:
             except Exception as e:
                 logger.error(f"Worker loop error for chat {chat_id}: {e}")
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop all workers."""
         self._running = False
         for task in self.workers.values():

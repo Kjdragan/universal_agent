@@ -4,7 +4,7 @@ from typing import Awaitable, Callable
 from ..core.context import BotContext
 
 
-async def onboarding_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]):
+async def onboarding_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]) -> None:
     """
     Handles /start and /help commands.
     """
