@@ -428,8 +428,10 @@ reads with a pure-Python dict lookup. `services/zai_function_catalog.py` provide
 `function_source_hash` (AST-extracts a described function's source and hashes it) /
 `annotate_stale` (flags entries whose stored `source_sha` no longer matches the current
 source — i.e. the function was refactored and its description may have rotted) /
-`coverage` (observed stages with no entry — the "N stages undescribed" signal driving an
-occasional re-population pass). Each entry carries a `role`, the `tier_current`, and a
+`coverage` (real `file.py::function` stages with no entry — the "N stages undescribed"
+signal driving an occasional re-population pass; `_is_describable_stage` excludes legacy
+file-level events and `<string>` exec frames so the count isn't inflated by un-catalogable
+noise). Each entry carries a `role`, the `tier_current`, and a
 `tier_verdict` (`appropriate` | `review`) — the trade-off assessment baked into the
 reference, so the panel can flag tier-misallocation candidates (e.g. an `opus`
 extraction/evaluation stage that a cheaper tier would serve). Regenerate the JSON after

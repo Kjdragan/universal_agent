@@ -142,14 +142,32 @@ def annotate_stale(catalog: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     return out
 
 
+def _is_describable_stage(caller_fn: str) -> bool:
+    """A coverage-eligible stage is a real ``<file.py>::<function>`` key. This
+    excludes (a) legacy file-level keys (no ``::``) emitted by events captured
+    before the ``caller_fn`` upgrade — they age out of the JSONL in ~6 days and
+    were never describable stages; and (b) ``<string>`` / exec-frame callers
+    (no real source file) whose function source can't be hashed or described.
+    Without this filter the "N stages undescribed" signal is inflated by
+    un-catalogable noise during the transition window."""
+    if "::" not in caller_fn:
+        return False
+    file_part = caller_fn.split("::", 1)[0]
+    return file_part.endswith(".py")
+
+
 def coverage(observed_caller_fns: list[str], catalog: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """Coverage of observed stages against the catalog. ``undescribed`` is the
-    list of observed ``caller_fn`` keys with no entry (exact or file-level) —
-    the "N stages need describing" signal for the re-population pass."""
+    """Coverage of observed STAGES against the catalog. ``undescribed`` is the
+    list of real ``file.py::function`` stages with no entry (exact or file-level)
+    — the "N stages need describing" signal for the re-population pass. Non-stage
+    keys (legacy file-level events, ``<string>`` exec frames) are ignored
+    (`_is_describable_stage`)."""
     cat = catalog if catalog is not None else load_catalog()
     described: set[str] = set()
     undescribed: set[str] = set()
     for cf in set(observed_caller_fns):  # unique stages, not occurrences
+        if not _is_describable_stage(cf):
+            continue
         if lookup(cf, cat) is not None:
             described.add(cf)
         else:

@@ -166,7 +166,8 @@ change, so a tier can be tuned up or down per process if quality or cost dictate
 | URW completion judge | `urw/evaluator.py` (`LLMJudgeEvaluator`) | 0–1 rubric score, gates retries | low | flagship | Too-lenient/harsh score wrongly passes or burns retries |
 | URW phase planner | `urw/phase_planner.py` (`PhasePlanner`) | group tasks into phases | low | flagship | Constrained combinatorial reasoning |
 | Proactive work-recap eval | `proactive_work_recap.py` | implemented / issues / assessment | low | flagship | Evidence-grounded judgment; "don't infer success from silence" |
-| Wiki semantic extraction | `wiki/llm.py` (`_call_llm`; 3 callers) | entities / concepts / 1–3 sent summary | low–medium | flagship | Knowledge-store surface; extraction noise compounds into retrieval/links |
+| Wiki semantic extraction | `wiki/llm.py` (`extract_entities` / `extract_concepts` → `_extract_model()`) | entities / concepts | low–medium | **turbo** | Bounded structured extraction; moved opus→turbo 2026-06-13 (`UA_WIKI_EXTRACT_MODEL`) |
+| Wiki summary generation | `wiki/llm.py` (`generate_summary`) | 1–3 sentence summary | low–medium | flagship | Generative knowledge-store surface; kept on opus (quality-sensitive) |
 
 ### Tier C — `glm-5.1` (flagship, keep)
 
@@ -348,13 +349,15 @@ exists. **Not air**: nuanced evidence-grounded reasoning.
 > the model tier (`glm-5-turbo` via `UA_PROACTIVE_RECAP_LLM_MODEL`, defaulting to
 > `resolve_opus()` when unset) is unchanged.
 
-**Wiki semantic extraction** — `wiki/llm.py` (`_call_llm`, shared by
-`extract_entities` / `extract_concepts` / `generate_summary`).
-Extracts entities, concept tags, and a 1–3 sentence summary from wiki text, each with
-a heuristic fallback. Low–medium volume. By task-shape this is air-eligible, **but it
-is held at turbo deliberately**: it feeds a *knowledge store*, so extraction noise
-compounds into later retrieval and linking, and at this volume the air-vs-turbo cost
-delta is marginal — when output compounds and savings are small, take the safer tier.
+**Wiki semantic extraction** — `wiki/llm.py`. The bounded extraction stages
+`extract_entities` / `extract_concepts` now pass `model=_extract_model()` → **turbo**
+(`glm-5-turbo`, env `UA_WIKI_EXTRACT_MODEL`), moved off the `_call_llm` `resolve_opus()`
+default 2026-06-13 (they were observed burning real flagship tokens on the ZAI token
+panel). By task-shape they are air-eligible, **but held at turbo deliberately**: they
+feed a *knowledge store*, so extraction noise compounds into later retrieval and
+linking, and at this volume the air-vs-turbo cost delta is marginal — when output
+compounds and savings are small, take the safer tier. `generate_summary` is separate:
+it is generative (1–3 sentence prose) and **kept on flagship** (`resolve_opus()` default).
 
 ### Tier C — kept on `glm-5.1`
 

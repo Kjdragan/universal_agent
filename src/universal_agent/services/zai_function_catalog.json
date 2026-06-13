@@ -25,8 +25,8 @@
       "description": "Generative synthesis of an idea brief from a batch of CSI candidate signals (max_tokens=1500). The 'Track B' ideation sweep that feeds Atlas's evaluate-and-author-intel-brief.",
       "role": "writer",
       "tier_current": "opus",
-      "tier_verdict": "review",
-      "notes": "Falls through to _call_llm's opus default (no model override). Generative synthesis makes opus defensible, BUT this is a 429 hotspot (~44% reject in 24h). Consider a sonnet A/B or pacing.",
+      "tier_verdict": "appropriate",
+      "notes": "DELIBERATELY on opus/glm-5.1 (Tier C, project_docs 14_model_tiering_by_process) — high-value engine for non-obvious cross-cutting trends, restored because GLM quota is abundant; do NOT downgrade. The ~44% reject is a throttle-PACING concern, not a tier issue.",
       "source_sha": "113fde4571aaeb65"
     },
     "universal_agent/services/proactive_convergence.py::_run_triage_llm": {
@@ -141,19 +141,19 @@
       "label": "Wiki — entity extraction",
       "description": "Extracts named entities from wiki source material.",
       "role": "extractor",
-      "tier_current": "opus",
-      "tier_verdict": "review",
-      "notes": "wiki/llm._call_llm defaults to opus. Bounded extraction — sonnet/haiku likely sufficient; opus->sonnet A/B candidate.",
-      "source_sha": "2265d0f4f6007010"
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "opus->sonnet 2026-06-13: routed through _extract_model() (UA_WIKI_EXTRACT_MODEL, default sonnet). Bounded structured extraction — was on the opus default unnecessarily.",
+      "source_sha": "1d70538f8dc5bbef"
     },
     "universal_agent/wiki/llm.py::extract_concepts": {
       "label": "Wiki — concept extraction",
       "description": "Extracts key concepts/topics from wiki source material.",
       "role": "extractor",
-      "tier_current": "opus",
-      "tier_verdict": "review",
-      "notes": "wiki/llm._call_llm defaults to opus. Bounded extraction — cheaper-tier candidate.",
-      "source_sha": "20c55c284099350b"
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "opus->sonnet 2026-06-13: routed through _extract_model() (UA_WIKI_EXTRACT_MODEL, default sonnet). Bounded structured extraction — was on the opus default unnecessarily.",
+      "source_sha": "a17b2400d59f7b61"
     },
     "universal_agent/wiki/llm.py::generate_summary": {
       "label": "Wiki — summary generation",
@@ -161,7 +161,7 @@
       "role": "writer",
       "tier_current": "opus",
       "tier_verdict": "review",
-      "notes": "wiki/llm._call_llm defaults to opus. Generative — opus more defensible than the extraction stages, but verify it needs flagship quality.",
+      "notes": "wiki/llm._call_llm defaults to opus. Generative (1-3 sentence summary) — kept on opus while the extraction siblings moved to sonnet (2026-06-13); verify it needs flagship quality.",
       "source_sha": "9bcc1490f4b40e4c"
     },
     "universal_agent/discord_intelligence/relevance_filter.py::classify_batch": {
@@ -181,6 +181,33 @@
       "tier_verdict": "appropriate",
       "notes": "",
       "source_sha": "c6652f0171586929"
+    },
+    "universal_agent/backlog_triage.py::_synthesize": {
+      "label": "Backlog triage — synthesis",
+      "description": "Synthesizes a triage decision/summary over the task backlog (max_tokens=1500).",
+      "role": "synthesis",
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "resolve_sonnet (glm-5-turbo) via _resolve_model; env-overridable.",
+      "source_sha": "3730a36524ab84a7"
+    },
+    "universal_agent/scripts/youtube_daily_digest.py::_zai_call_with_retry": {
+      "label": "YouTube daily digest — ZAI calls (map + reduce)",
+      "description": "Retry-wrapped ZAI calls for the daily digest: the per-video MAP step (glm-4.5-air/haiku, high fan-out) and the final REDUCE/synthesis (opus). Once-daily batch.",
+      "role": "synthesis",
+      "tier_current": "mixed",
+      "tier_verdict": "review",
+      "notes": "Map step (glm-4.5-air, per-video fan-out) observed ~83% 429 over 12h — a CONCURRENCY-burst throttle, NOT a tier issue; lower map concurrency / pace (UA_YOUTUBE_DIGEST_*). Reduce step on opus (single call, defensible).",
+      "source_sha": "c8b6d88fe80768a6"
+    },
+    "universal_agent/services/proactive_intelligence_report.py::_call_reasoning_llm": {
+      "label": "Proactive intelligence report — reasoning",
+      "description": "Lightweight reasoning over period stats for the proactive intelligence report (max_tokens=700).",
+      "role": "synthesis",
+      "tier_current": "haiku",
+      "tier_verdict": "appropriate",
+      "notes": "Hardcoded glm-4.5-air (haiku) — intentionally lightweight.",
+      "source_sha": "809192de1121e77d"
     }
   }
 }

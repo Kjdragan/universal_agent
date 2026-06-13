@@ -12,7 +12,7 @@ import os
 import re
 from typing import Any, Optional
 
-from universal_agent.utils.model_resolution import resolve_opus
+from universal_agent.utils.model_resolution import resolve_opus, resolve_sonnet
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +69,24 @@ def _call_llm(
     return raw_text.strip()
 
 
+def _extract_model() -> str:
+    """Model tier for the bounded wiki EXTRACTION stages (entities / concepts) —
+    sonnet (``glm-5-turbo``) by default, env-overridable via
+    ``UA_WIKI_EXTRACT_MODEL``. Entity/concept extraction is a structured,
+    bounded-output task; without an explicit model it fell through to
+    ``_call_llm``'s ``resolve_opus()`` default (``glm-5.1`` — the flagship /
+    most Fair-Usage-throttled tier) unnecessarily (observed burning real opus
+    tokens on the ZAI token panel, 2026-06-13). Summary GENERATION keeps the
+    opus default — it is generative and quality-sensitive."""
+    return (os.getenv("UA_WIKI_EXTRACT_MODEL") or "").strip() or resolve_sonnet()
+
+
 def _parse_json_list(raw: str, key: str = "items") -> list[str]:
     """Parse a JSON list of strings from the LLM response."""
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         lines = cleaned.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [ln for ln in lines if not ln.strip().startswith("```")]
         cleaned = "\n".join(lines).strip()
 
     try:
@@ -119,8 +131,9 @@ def extract_entities(text: str, fallback_limit: int = 5) -> list[str]:
         
     try:
         raw = _call_llm(
-            system=_EXTRACT_ENTITIES_SYSTEM, 
-            user=f"Extract entities from:\n\n{text[:4000]}"
+            system=_EXTRACT_ENTITIES_SYSTEM,
+            user=f"Extract entities from:\n\n{text[:4000]}",
+            model=_extract_model(),
         )
         entities = _parse_json_list(raw)
         return entities
@@ -139,8 +152,9 @@ def extract_concepts(text: str, fallback_limit: int = 5) -> list[str]:
         
     try:
         raw = _call_llm(
-            system=_EXTRACT_CONCEPTS_SYSTEM, 
-            user=f"Extract concepts from:\n\n{text[:4000]}"
+            system=_EXTRACT_CONCEPTS_SYSTEM,
+            user=f"Extract concepts from:\n\n{text[:4000]}",
+            model=_extract_model(),
         )
         concepts = _parse_json_list(raw)
         return concepts

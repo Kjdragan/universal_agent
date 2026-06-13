@@ -84,6 +84,24 @@ def test_coverage_reports_undescribed():
     assert cov["undescribed"] == ["universal_agent/b.py::mystery"]
 
 
+def test_coverage_ignores_non_stage_keys():
+    # Legacy file-level events (no ::) and <string> exec frames are NOT
+    # describable stages — they must not inflate the undescribed count.
+    catalog = {"version": 1, "entries": {}}
+    cov = cat.coverage(
+        [
+            "universal_agent/services/csi_watchlist.py",  # legacy file-level (no ::)
+            "<string>",                                   # exec/REPL frame
+            "<string>::run",                              # exec frame w/ fn — not a .py source
+            "universal_agent/b.py::real_stage",           # the only real stage
+        ],
+        catalog,
+    )
+    assert cov["undescribed"] == ["universal_agent/b.py::real_stage"]
+    assert cov["undescribed_count"] == 1
+    assert cov["described_count"] == 0
+
+
 def test_build_token_usage_joins_catalog(tmp_path, monkeypatch):
     now = time.time()
     csi = "universal_agent/api/routers/csi_watchlist.py"
