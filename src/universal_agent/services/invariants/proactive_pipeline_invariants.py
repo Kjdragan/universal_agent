@@ -35,9 +35,6 @@ HOUSTON_TZ = ZoneInfo("America/Chicago")
 # Thresholds — tunable but conservative defaults. Each is named so future
 # operators can grep and adjust without reading the body.
 MORNING_BRIEFING_MAX_AGE_HOURS = 4.0
-HACKERNEWS_MAX_GAP_MINUTES = 45.0
-HACKERNEWS_ACTIVE_HOUR_MIN = 6  # inclusive
-HACKERNEWS_ACTIVE_HOUR_MAX = 21  # inclusive (last tick :30 of hour 21 = 9:30 PM CDT)
 # csi_convergence_sync writes `convergence_candidates` sporadically (only when a
 # real convergence/ideation is detected) on an hourly active-hours cron — NOT the
 # decommissioned `proactive_convergence_events` table on a 30-min 24/7 cadence the
@@ -275,82 +272,7 @@ def proactive_artifact_digest_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str
 
 
 # ---------------------------------------------------------------------------
-# 3. hackernews_snapshot half-hour cadence during active hours
-# ---------------------------------------------------------------------------
-
-
-@invariant(
-    id="hackernews_snapshot_cadence",
-    title="HN snapshot produced within last 45m during active hours",
-    description=(
-        "Cron `hackernews_snapshot` runs every 30 min during 6 AM – 9:30 PM "
-        "Houston and writes artifacts/hackernews/snapshots/<TS>.json. If the "
-        "most recent snapshot is more than 45 minutes old during active hours, "
-        "the snapshot pipeline has stalled."
-    ),
-    severity="warn",
-    runbook_command=(
-        "ls -lt artifacts/hackernews/snapshots/*.json 2>/dev/null | head -5; "
-        "tail -20 logs/cron_hackernews_snapshot*.log 2>/dev/null"
-    ),
-    metadata={
-        "pipeline": "hackernews_snapshot",
-        "cron_expr": "0,30 6-21 * * *",
-        "tz": "America/Chicago",
-    },
-)
-def hackernews_snapshot_cadence(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Fire when the newest HN snapshot is stale during active hours.
-
-    Looks at the most-recent mtime under ``hackernews/snapshots/`` and flags a
-    gap over ``HACKERNEWS_MAX_GAP_MINUTES`` while inside the 6 AM-9:30 PM Houston
-    active window (with a 30-min grace after the first tick to absorb the
-    overnight gap). Returns None when the dir is absent, outside active hours,
-    or the snapshot is fresh.
-    """
-    artifacts_dir = ctx.get("artifacts_dir")
-    if artifacts_dir is None:
-        return None
-    snaps_dir = Path(artifacts_dir) / "hackernews" / "snapshots"
-    if not snaps_dir.exists():
-        return None
-    now = _now_houston()
-    if not (HACKERNEWS_ACTIVE_HOUR_MIN <= now.hour <= HACKERNEWS_ACTIVE_HOUR_MAX):
-        return None
-    # First active-hour tick of the day (6:00 AM Houston) can be up to ~8h
-    # behind the last 9:30 PM snapshot from the prior evening. Stay quiet for
-    # the first 30 minutes after 6 AM so that overnight gap doesn't false-fire.
-    if now.hour == HACKERNEWS_ACTIVE_HOUR_MIN and now.minute < 30:
-        return None
-    files = list(snaps_dir.glob("*.json"))
-    if not files:
-        return {
-            "observed_value": {"snapshots_dir": str(snaps_dir), "count": 0},
-            "message": "No HN snapshots on disk during active hours.",
-            "threshold_text": f"latest snapshot mtime within {HACKERNEWS_MAX_GAP_MINUTES:.0f} min",
-        }
-    latest = max(files, key=lambda p: p.stat().st_mtime)
-    latest_mtime = datetime.fromtimestamp(latest.stat().st_mtime, tz=HOUSTON_TZ)
-    age_minutes = (now - latest_mtime).total_seconds() / 60.0
-    if age_minutes > HACKERNEWS_MAX_GAP_MINUTES:
-        return {
-            "observed_value": {
-                "latest_file": latest.name,
-                "age_minutes": round(age_minutes, 1),
-                "snapshot_count": len(files),
-            },
-            "message": (
-                f"Latest HN snapshot is {age_minutes:.1f} min old "
-                f"(threshold {HACKERNEWS_MAX_GAP_MINUTES:.0f} min). The 30-min "
-                "cadence cron may be failing or queued behind a slow upstream."
-            ),
-            "threshold_text": f"age <= {HACKERNEWS_MAX_GAP_MINUTES:.0f} min during active hours",
-        }
-    return None
-
-
-# ---------------------------------------------------------------------------
-# 4. csi_convergence_sync freshness
+# 3. csi_convergence_sync freshness
 # ---------------------------------------------------------------------------
 
 
@@ -440,7 +362,7 @@ def csi_convergence_sync_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, An
 
 
 # ---------------------------------------------------------------------------
-# 5. nightly_wiki overnight output
+# 4. nightly_wiki overnight output
 # ---------------------------------------------------------------------------
 
 
@@ -522,7 +444,7 @@ def nightly_wiki_persistent_silence(ctx: Dict[str, Any]) -> Optional[Dict[str, A
 
 
 # ---------------------------------------------------------------------------
-# 6. proactive_reports daily trio (morning + midday + afternoon)
+# 5. proactive_reports daily trio (morning + midday + afternoon)
 # ---------------------------------------------------------------------------
 
 
@@ -599,7 +521,7 @@ def proactive_reports_daily_trio(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
-# 7. claude_code_intel packet freshness
+# 6. claude_code_intel packet freshness
 # ---------------------------------------------------------------------------
 
 
@@ -673,7 +595,7 @@ def claude_code_intel_packet_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str
 
 
 # ---------------------------------------------------------------------------
-# 8. csi_demo_triage_rank artifact freshness
+# 7. csi_demo_triage_rank artifact freshness
 # ---------------------------------------------------------------------------
 
 
@@ -771,7 +693,7 @@ def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any
 
 
 # ---------------------------------------------------------------------------
-# 9. paper_to_podcast_daily email delivery
+# 8. paper_to_podcast_daily email delivery
 # ---------------------------------------------------------------------------
 
 
@@ -871,7 +793,7 @@ def paper_to_podcast_email_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str, A
 
 
 # ---------------------------------------------------------------------------
-# 10. vault_lint_contradictions monthly cadence
+# 9. vault_lint_contradictions monthly cadence
 # ---------------------------------------------------------------------------
 
 
@@ -944,7 +866,7 @@ def vault_lint_contradictions_monthly(ctx: Dict[str, Any]) -> Optional[Dict[str,
 
 
 # ---------------------------------------------------------------------------
-# 11. proactive brief → task_hub funnel coverage
+# 10. proactive brief → task_hub funnel coverage
 # ---------------------------------------------------------------------------
 
 

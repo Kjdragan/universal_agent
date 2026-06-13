@@ -281,7 +281,7 @@ independent of Simone's LLM and the heartbeat tick, and guarantee findings reach
 `services/invariants/` register ~21 probes (20 unique ids — the count grew
 post-design with `mission_control_sweeper_liveness` (#751), `disk_usage_health`,
 and the youtube transcript/enrichment coverage split;
-`services/invariants/proactive_pipeline_invariants.py` alone carries 11); `services/proactive_health.py::build_proactive_health_payload`
+`services/invariants/proactive_pipeline_invariants.py` alone carries 10); `services/proactive_health.py::build_proactive_health_payload`
 aggregates them **in-memory** (no DB row, no JSON written by the builder). The
 operator email path already exists —
 `services/proactive_health_notifier.py::run_pre_flight_check` →

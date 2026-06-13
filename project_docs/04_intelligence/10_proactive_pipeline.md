@@ -657,7 +657,6 @@ than screaming). Probes (all consume `activity_conn` and/or `artifacts_dir`):
 |---|---|---|
 | `morning_briefing_freshness` | today's `DAILY_BRIEFING.md` exists after 6:30 AM | warn |
 | `proactive_artifact_digest_delivery` | digest emailed in last ~30h | warn |
-| `hackernews_snapshot_cadence` | HN snapshot < 45 min old in active hours | warn |
 | `csi_convergence_sync_freshness` | `convergence_candidates` max(created_at) < 3h **during active hours (8–21 CT)** | warn |
 | `nightly_wiki_persistent_silence` | a wiki appeared in last 7 days | warn |
 | `proactive_reports_daily_trio` | ≥2 of 3 daily reports by 5 PM | warn |
