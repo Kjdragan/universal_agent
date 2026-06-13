@@ -417,13 +417,17 @@ concretions:
   is retained as the notifier primitive (still used by tests and the
   `email_test` endpoint's sibling helper) but has **no production caller** after
   the heartbeat removal — retiring it is a follow-up.
-- **Follow-up — DONE (2026-06-05):** `services/invariants/mission_control_sweeper_liveness.py`
-  warns when the Phase B sweeper's per-tick heartbeat (`last_checked_at` on the
-  `__tier1_meta__` row, NOT the sparse `state_since` — the S3 trap) goes stale
-  beyond ~5× cadence, so a wedged-but-alive sweeper surfaces through this same
-  health path. **WARN-only** (never emails — the digest is criticals-only) and
-  phase-gated (no-op when `UA_MC_PHASE_1_ENABLED` is off), so it can't become a
-  false page. Threshold tunable via `UA_MC_SWEEPER_LIVENESS_MAX_STALE_SECONDS`.
+- **Follow-up — DONE (2026-06-05, fixed 2026-06-13):** `services/invariants/mission_control_sweeper_liveness.py`
+  warns when **both** tier-0 tiles AND tier-1 meta are stale. Tier-0 tiles
+  (`task_hub_pressure`, `heartbeat_daemon`, `gateway`) are written by
+  `_persist_tile_state` on every tick and are the true per-tick liveness signal;
+  `__tier1_meta__` is only written when the LLM pass fires and legitimately
+  idles during dormancy / rate-limit waits. The original single-signal design
+  (tier-1 meta only) caused false WARNs during tier-1 idle periods, triggering
+  pointless service restarts. The dual-signal fix requires BOTH to be stale
+  before warning. **WARN-only** (never emails — the digest is criticals-only)
+  and phase-gated (no-op when `UA_MC_PHASE_1_ENABLED` is off). Threshold tunable
+  via `UA_MC_SWEEPER_LIVENESS_MAX_STALE_SECONDS`.
 
 ### Decision 4 — Consolidations (keep / merge / drop)
 
