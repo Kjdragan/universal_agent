@@ -302,6 +302,56 @@ def analyze_token_usage(now: float, window_seconds: int, top_n: int = 25) -> dic
     return out
 
 
+def build_token_usage(window_seconds: int, top_n: int = 25) -> dict[str, Any]:
+    """`analyze_token_usage` + the pre-built function catalog joined onto every
+    stage — the payload the ZAI-Control token panel consumes. Read-only,
+    fail-soft, PURE PYTHON (the catalog is a committed JSON lookup; NO runtime
+    LLM). Annotates each process's stages with `{label, description, role,
+    tier_current, tier_verdict, stale}` from `zai_function_catalog`, lifts a
+    process-level catalog entry from the heaviest described stage, and reports
+    catalog `coverage` (observed stages with no description yet)."""
+    report = analyze_token_usage(time.time(), window_seconds, top_n=top_n)
+    try:
+        from universal_agent.services import zai_function_catalog as cat
+
+        catalog = cat.load_catalog()
+        annotated = cat.annotate_stale(catalog)  # key -> entry + stale
+
+        observed: list[str] = []
+        for proc in report.get("processes", []):
+            proc_entry = None
+            for stage in proc.get("stages", []):
+                cf = stage.get("caller_fn", "")
+                observed.append(cf)
+                entry = annotated.get(cf) or annotated.get(cf.split("::", 1)[0])
+                if entry:
+                    stage["catalog"] = {
+                        "label": entry.get("label"),
+                        "description": entry.get("description"),
+                        "role": entry.get("role"),
+                        "tier_current": entry.get("tier_current"),
+                        "tier_verdict": entry.get("tier_verdict"),
+                        "notes": entry.get("notes"),
+                        "stale": entry.get("stale", False),
+                    }
+                    # process-level entry = the heaviest stage that is described
+                    if proc_entry is None:
+                        proc_entry = stage["catalog"]
+                else:
+                    stage["catalog"] = None
+            proc["catalog"] = proc_entry
+
+        report["catalog"] = {
+            "version": catalog.get("version", 0),
+            "generated_at": catalog.get("generated_at"),
+            "coverage": cat.coverage(observed, catalog),
+        }
+    except Exception as exc:  # noqa: BLE001 — catalog is optional enrichment
+        logger.debug("zai_status token catalog join failed: %s", exc)
+        report["catalog"] = {"version": 0, "coverage": {}, "error": type(exc).__name__}
+    return report
+
+
 def _read_snapshot() -> dict[str, Any]:
     try:
         from universal_agent.rate_limiter import _get_state_path

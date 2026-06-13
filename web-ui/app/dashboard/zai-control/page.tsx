@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 const API_BASE = "/api/dashboard/gateway";
 const TIERS = ["opus", "sonnet", "mid", "haiku"] as const;
@@ -156,6 +156,284 @@ function HealthBadge({ health }: { health?: ActivityHealth }) {
     <span className={`shrink-0 rounded px-1 text-[10px] font-medium ${hb.cls}`} title={tip}>
       {hb.text}
     </span>
+  );
+}
+
+// ── Token use by process ─────────────────────────────────────────────────────
+// On-demand panel (Refresh / window-change only — NO live polling) backed by the
+// pure-Python /ops/zai/token-usage aggregation + the committed function catalog.
+
+const TOKEN_WINDOWS: { label: string; hours: number }[] = [
+  { label: "1h", hours: 1 },
+  { label: "6h", hours: 6 },
+  { label: "24h", hours: 24 },
+  { label: "3d", hours: 72 },
+  { label: "6d", hours: 144 },
+];
+
+type StageCatalog = {
+  label?: string;
+  description?: string;
+  role?: string;
+  tier_current?: string;
+  tier_verdict?: string;
+  notes?: string;
+  stale?: boolean;
+} | null;
+
+type TokenStage = {
+  caller_fn: string;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  r429: number;
+  catalog?: StageCatalog;
+};
+
+type TokenProcess = {
+  caller: string;
+  requests: number;
+  r429: number;
+  reject_pct: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  retry_input_tokens: number;
+  retry_multiplier: number | null;
+  dormant_tokens: number;
+  stages: TokenStage[];
+  catalog?: StageCatalog;
+};
+
+type TokenUsagePayload = {
+  available?: boolean;
+  generated_at?: number;
+  token_events_seen?: number;
+  totals?: {
+    requests: number;
+    r429: number;
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    retry_input_tokens: number;
+    dormant_tokens: number;
+  };
+  processes?: TokenProcess[];
+  catalog?: {
+    version?: number;
+    generated_at?: string;
+    coverage?: { described_count?: number; undescribed_count?: number; undescribed?: string[] };
+  };
+  error?: string;
+};
+
+function fmtTok(n?: number | null): string {
+  const v = Number(n || 0);
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
+  return `${v}`;
+}
+
+function shortCaller(c: string): string {
+  return c.replace("universal_agent/services/", "").replace("universal_agent/", "");
+}
+
+function retryColor(m: number | null): string {
+  if (m === null || m >= 3) return "text-red-500";
+  if (m >= 1.5) return "text-amber-500";
+  return "text-muted-foreground";
+}
+
+function verdictBadge(verdict?: string): { text: string; cls: string } | null {
+  if (verdict === "review") return { text: "review tier", cls: "bg-amber-500/15 text-amber-500" };
+  if (verdict === "appropriate") return { text: "tier ok", cls: "bg-emerald-500/15 text-emerald-500" };
+  return null;
+}
+
+function TokenPanel() {
+  const [data, setData] = useState<TokenUsagePayload | null>(null);
+  const [hours, setHours] = useState<number>(24);
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const load = useCallback(async (h: number) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/zai/token-usage?hours=${h}`, { cache: "no-store" });
+      setData(await res.json());
+    } catch (e) {
+      setData({ error: String(e) });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Fetch on mount + whenever the window changes. NO interval — operator-driven Refresh only.
+  useEffect(() => {
+    load(hours);
+  }, [hours, load]);
+
+  const t = data?.totals;
+  const cov = data?.catalog?.coverage;
+  const noTokens = data && data.available && (data.token_events_seen ?? 0) === 0;
+
+  return (
+    <section className="rounded-md border border-border bg-card p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-lg font-medium">Token use by process</h2>
+          <p className="text-xs text-muted-foreground">
+            Where ZAI tokens go, by process &amp; stage. On-demand (no live polling) — pure-Python aggregation of the
+            inference events log. Expand a row for the per-stage breakdown &amp; what each stage does.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex overflow-hidden rounded border border-border text-xs">
+            {TOKEN_WINDOWS.map((w) => (
+              <button
+                key={w.label}
+                onClick={() => setHours(w.hours)}
+                className={`px-2 py-1 ${hours === w.hours ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:bg-muted"}`}
+              >
+                {w.label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => load(hours)}
+            disabled={loading}
+            className="rounded border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+          >
+            {loading ? "…" : "↻ Refresh"}
+          </button>
+        </div>
+      </div>
+
+      {data?.error ? <p className="text-xs text-red-500">token usage unavailable: {data.error}</p> : null}
+
+      {t ? (
+        <p className="mb-2 text-xs text-muted-foreground">
+          window total: <span className="text-foreground">{t.requests}</span> calls ·{" "}
+          <span className="text-foreground">{fmtTok(t.input_tokens)}</span> in /{" "}
+          <span className="text-foreground">{fmtTok(t.output_tokens)}</span> out /{" "}
+          <span className="text-foreground">{fmtTok(t.total_tokens)}</span> total · {t.r429} × 429 · retry-waste{" "}
+          <span className="text-amber-500">{fmtTok(t.retry_input_tokens)}</span> in · dormant {fmtTok(t.dormant_tokens)}
+        </p>
+      ) : null}
+
+      {noTokens ? (
+        <p className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-500">
+          No token data in this window yet — showing request counts only (capture upgrade not live for this range).
+        </p>
+      ) : null}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="text-muted-foreground">
+            <tr className="border-b border-border">
+              <th className="py-1 pr-2">Process / stage</th>
+              <th className="px-2 py-1 text-right">calls</th>
+              <th className="px-2 py-1 text-right">rej%</th>
+              <th className="px-2 py-1 text-right">in</th>
+              <th className="px-2 py-1 text-right">out</th>
+              <th className="px-2 py-1 text-right">total</th>
+              <th className="px-2 py-1 text-right" title="retry multiplier — input prompt re-sends per landed call">
+                retry×
+              </th>
+              <th className="py-1 pl-2 text-right">dormant</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(data?.processes || []).map((p) => {
+              const vb = verdictBadge(p.catalog?.tier_verdict);
+              const isOpen = !!expanded[p.caller];
+              return (
+                <Fragment key={p.caller}>
+                  <tr
+                    className="cursor-pointer border-b border-border/50 hover:bg-muted/30"
+                    onClick={() => setExpanded((e) => ({ ...e, [p.caller]: !e[p.caller] }))}
+                  >
+                    <td className="py-1 pr-2">
+                      <span className="text-muted-foreground">{isOpen ? "▾" : "▸"}</span>{" "}
+                      <span className="font-medium">{p.catalog?.label || shortCaller(p.caller)}</span>
+                      {vb ? <span className={`ml-1 rounded px-1 text-[10px] ${vb.cls}`}>{vb.text}</span> : null}
+                      {p.catalog?.stale ? (
+                        <span
+                          className="ml-1 rounded bg-zinc-500/15 px-1 text-[10px] text-zinc-400"
+                          title="function source changed since it was described — re-describe"
+                        >
+                          stale
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="px-2 py-1 text-right">{p.requests}</td>
+                    <td className={`px-2 py-1 text-right ${pctColor(p.reject_pct)}`}>{p.reject_pct}</td>
+                    <td className="px-2 py-1 text-right">{fmtTok(p.input_tokens)}</td>
+                    <td className="px-2 py-1 text-right">{fmtTok(p.output_tokens)}</td>
+                    <td className="px-2 py-1 text-right font-medium">{fmtTok(p.total_tokens)}</td>
+                    <td className={`px-2 py-1 text-right ${retryColor(p.retry_multiplier)}`}>
+                      {p.retry_multiplier === null ? "∞" : `${p.retry_multiplier}×`}
+                    </td>
+                    <td className="py-1 pl-2 text-right">
+                      {p.dormant_tokens > 0 ? <span className="text-amber-500">{fmtTok(p.dormant_tokens)}</span> : "—"}
+                    </td>
+                  </tr>
+                  {isOpen ? (
+                    <tr className="bg-muted/20">
+                      <td colSpan={8} className="px-3 py-2">
+                        {p.catalog?.description ? (
+                          <p className="mb-2 text-[11px] text-muted-foreground">
+                            <span className="text-foreground">{p.catalog.role}</span> · tier {p.catalog.tier_current}
+                            {p.catalog.tier_verdict === "review" ? (
+                              <span className="text-amber-500"> · review tier</span>
+                            ) : null}{" "}
+                            — {p.catalog.description}
+                            {p.catalog.notes ? <span className="mt-1 block italic">{p.catalog.notes}</span> : null}
+                          </p>
+                        ) : null}
+                        <table className="w-full text-left text-[11px]">
+                          <tbody>
+                            {p.stages.map((s) => (
+                              <tr key={s.caller_fn} className="border-t border-border/30">
+                                <td className="py-1 pr-2">
+                                  {s.catalog?.label || s.caller_fn.split("::").pop()}
+                                  {!s.catalog ? (
+                                    <span
+                                      className="ml-1 rounded bg-zinc-500/15 px-1 text-[10px] text-zinc-400"
+                                      title="no catalog description yet"
+                                    >
+                                      undescribed
+                                    </span>
+                                  ) : null}
+                                  {s.catalog?.tier_verdict === "review" ? (
+                                    <span className="ml-1 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">review</span>
+                                  ) : null}
+                                </td>
+                                <td className="px-2 py-1 text-right text-muted-foreground">{s.requests} calls</td>
+                                <td className="px-2 py-1 text-right">{fmtTok(s.input_tokens)} in</td>
+                                <td className="py-1 pl-2 text-right">{fmtTok(s.output_tokens)} out</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {cov && (cov.undescribed_count || 0) > 0 ? (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          {cov.undescribed_count} stage{(cov.undescribed_count || 0) === 1 ? "" : "s"} undescribed (catalog v
+          {data?.catalog?.version}). Run the catalog re-population pass to describe them.
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -551,6 +829,9 @@ export default function ZaiControlPage() {
           </div>
         ) : null}
       </section>
+
+      {/* Token use by process (on-demand; pure-Python aggregation + catalog) */}
+      <TokenPanel />
 
       {/* L5 — out of band */}
       <section className="rounded-md border border-border bg-card p-4">
