@@ -24,7 +24,7 @@ from universal_agent.durable.db import (
 from universal_agent.feature_flags import task_hub_missions_enabled
 from universal_agent.rate_limiter import ZAIFupPauseError, ZAIRateLimiter, _is_fup_error
 from universal_agent.systemd_migrated_jobs import is_migrated_to_systemd
-from universal_agent.utils.model_resolution import resolve_model
+from universal_agent.utils.model_resolution import resolve_mission_control_model
 
 logger = logging.getLogger(__name__)
 
@@ -844,15 +844,22 @@ async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], 
     except Exception as exc:
         return fallback_readout(evidence, error=f"anthropic package unavailable: {exc}"), None
 
-    # Promoted to opus tier per operator decision. Mission
-    # Control "Chief of Staff" synthesizes priorities and recommendations
-    # across many simultaneous signals (CSI, Task Hub, supervisors,
-    # heartbeat findings) and is the canonical human-facing
-    # operational summary. Strategic synthesis quality matters more
-    # than per-call cost here; per-tier env override
-    # (UA_MISSION_CONTROL_COS_MODEL) still wins if the operator wants
-    # to dial back.
-    model = os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_model("opus")
+    # Consolidated onto the dedicated Mission Control model lane (glm-4.7) on
+    # 2026-06-12 (operator decision, LLM-efficiency pass). Previously this was
+    # the opus tier (glm-5.1 / glm-5-turbo), which put the tier-2 readout on the
+    # SHARED sonnet/opus ZAI lane where it contended with the main agent calls
+    # (Simone / Cody / convergence). resolve_mission_control_model() bypasses the
+    # haiku/sonnet/opus tier map and returns glm-4.7 — the same high-concurrency
+    # direct-model lane tier-1 already uses — so ALL of Mission Control now sits
+    # off the flagship lane. Note: this trades a modest tier-2 synthesis-quality
+    # step down (glm-4.7 is older/weaker than glm-5-turbo) for lane isolation;
+    # for a background panel nobody watches in real time, glm-4.7's higher
+    # latency (~45s/readout) is irrelevant. The per-call override
+    # (UA_MISSION_CONTROL_COS_MODEL) still wins if the operator wants to pin a
+    # different model; as of 2026-06-12 the prod Infisical override is pinned to
+    # glm-4.7 to match this default (deploy-order-safe — see PR), and can be
+    # unset once this default is live everywhere.
+    model = os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_mission_control_model()
     client_kwargs: dict[str, Any] = {
         "api_key": api_key,
         "max_retries": 0,
