@@ -1,0 +1,128 @@
+name: Codie PR Review Queue
+
+# Surfaces — and optionally auto-stale-closes — open `codie/*` PRs so the dark
+# factory's AUTONOMOUS cleanup PRs don't rot unseen.
+#
+# Background (2026-06-13): PR #888 (a `codie/` type-hints cleanup) sat open for
+# 3 days — CI-green and mergeable — because `codie/*` branches are deliberately
+# EXCLUDED from auto-merge (`pr-auto-merge.yml`) so autonomous code gets a human
+# review before it lands. That review gate is correct, but nothing SURFACED the
+# waiting PR, so it accumulated silently. The existing `ci-failure-issue.yml`
+# only closes the loop for FAILING bot PRs; green-but-unreviewed `codie/*` PRs
+# had no disposition path at all. This workflow fills that gap:
+#   - SURFACE: maintain one idempotent tracking issue ("Codie PRs awaiting
+#     review") listing every open `codie/*` PR, so the operator — and any AI
+#     session reading the issue feed, per the `ci-failure` watch convention —
+#     discovers them.
+#   - AUTO-STALE-CLOSE: close `codie/*` PRs older than CLOSE_DAYS with an
+#     explanatory comment. Autonomous cleanup is cheap to regenerate, so an
+#     unreviewed PR that ages out is closed (reversibly — reopen is one click)
+#     rather than left to rot. Set the repo variable `UA_CODIE_PR_CLOSE_DAYS=0`
+#     (or dispatch with close_days=0) to disable closing and run surface-only.
+#
+# Does NOT auto-merge: the manual-review gate on `codie/*` is intentional and
+# this workflow respects it (auto-merging unreviewed bot code is how phantom-
+# branch incidents happen). `kevin/*` and `feature/*` PRs are HUMAN-authored
+# and out of scope — their authors track them.
+#
+# A fixed-time daily schedule is dormancy-EXEMPT per the operating-hours policy
+# (a single discrete fire-time, not an interval cron). It fires in the active
+# window anyway. This is also infrastructure/PR-management, not content
+# generation.
+
+on:
+  schedule:
+    - cron: "0 14 * * *"   # 09:00 America/Chicago (CDT) / ~08:00 (CST). GHA cron is UTC.
+  workflow_dispatch:
+    inputs:
+      close_days:
+        description: "Auto-close codie/* PRs older than N days (0 = surface only). Blank = use repo default."
+        required: false
+        default: ""
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: read
+
+jobs:
+  review-queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      # Days after which an unreviewed codie/* PR is auto-closed. 0 disables.
+      # Precedence: workflow_dispatch input -> repo variable -> default 14.
+      CLOSE_DAYS: ${{ github.event.inputs.close_days != '' && github.event.inputs.close_days || vars.UA_CODIE_PR_CLOSE_DAYS || '14' }}
+    steps:
+      - name: Ensure label exists
+        run: |
+          gh label create codie-review-queue --repo "$REPO" \
+            --color 1D76DB \
+            --description "Auto-filed: codie/* PRs awaiting operator review" \
+            2>/dev/null || true
+
+      - name: Surface + stale-close codie/* PRs
+        run: |
+          set -euo pipefail
+          NOW=$(date -u +%s)
+          echo "CLOSE_DAYS=${CLOSE_DAYS}"
+
+          # Open codie/* PRs (the autonomous, manual-review-gated lane).
+          gh pr list --repo "$REPO" --state open --limit 100 \
+            --json number,title,headRefName,createdAt,url,isDraft \
+            --jq '[.[] | select(.headRefName | startswith("codie/"))]' > /tmp/codie.json
+          echo "open codie/* PRs: $(jq 'length' /tmp/codie.json)"
+
+          CLOSED_LINES=""
+          KEPT_LINES=""
+
+          for row in $(jq -r '.[] | @base64' /tmp/codie.json); do
+            _j() { echo "$row" | base64 -d | jq -r "$1"; }
+            NUM=$(_j '.number'); TITLE=$(_j '.title'); BR=$(_j '.headRefName')
+            CREATED=$(_j '.createdAt'); URL=$(_j '.url'); DRAFT=$(_j '.isDraft')
+            CREATED_TS=$(date -u -d "$CREATED" +%s)
+            AGE_DAYS=$(( (NOW - CREATED_TS) / 86400 ))
+
+            if [ "${CLOSE_DAYS}" -gt 0 ] && [ "${AGE_DAYS}" -ge "${CLOSE_DAYS}" ] && [ "${DRAFT}" != "true" ]; then
+              gh pr comment "$NUM" --repo "$REPO" --body \
+          "Auto-closing this autonomous \`codie/*\` PR: it sat **${AGE_DAYS} days** without a review (\`codie/*\` PRs require a manual merge by design and are not auto-merged). Autonomous cleanup is cheap to regenerate — the dark factory will re-propose if it is still relevant. **Reopen** if you want to keep it. _(codie-pr-review-queue.yml)_"
+              gh pr close "$NUM" --repo "$REPO" || true
+              CLOSED_LINES="${CLOSED_LINES}- #${NUM} ${TITLE} (\`${BR}\`, ${AGE_DAYS}d)\n"
+            else
+              KEPT_LINES="${KEPT_LINES}- #${NUM} ${TITLE} (\`${BR}\`, ${AGE_DAYS}d) — ${URL}\n"
+            fi
+          done
+
+          # Maintain ONE idempotent tracking issue for the remaining open codie PRs.
+          ISSUE=$(gh issue list --repo "$REPO" --label codie-review-queue --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "${KEPT_LINES}" ]; then
+            KEPT_COUNT=$(printf '%b' "${KEPT_LINES}" | grep -c '^- ' || true)
+            {
+              printf 'These **autonomous `codie/*` PRs are open and awaiting your review** — they are CI-gated but deliberately NOT auto-merged (manual review by design).\n\n'
+              printf '%b' "${KEPT_LINES}"
+              printf '\nMerge the good ones (`gh pr merge <n> --squash`) or close the rest. '
+              printf 'Unreviewed PRs older than **%s days** are auto-closed by this workflow (reopen to keep).\n' "${CLOSE_DAYS}"
+              if [ -n "${CLOSED_LINES}" ]; then
+                printf -- '\n---\nAuto-closed this run (stale):\n\n'
+                printf '%b' "${CLOSED_LINES}"
+              fi
+              printf -- '\n_Maintained by `codie-pr-review-queue.yml` (daily). Edit `UA_CODIE_PR_CLOSE_DAYS` to tune._\n'
+            } > /tmp/body.md
+            if [ -n "${ISSUE}" ]; then
+              gh issue edit "$ISSUE" --repo "$REPO" \
+                --title "🤖 Codie PRs awaiting review (${KEPT_COUNT})" \
+                --body-file /tmp/body.md
+            else
+              gh issue create --repo "$REPO" --label codie-review-queue \
+                --title "🤖 Codie PRs awaiting review (${KEPT_COUNT})" \
+                --body-file /tmp/body.md
+            fi
+          elif [ -n "${ISSUE}" ]; then
+            # Queue is empty — close the tracking issue so it doesn't linger.
+            gh issue close "$ISSUE" --repo "$REPO" \
+              --comment "No open codie/* PRs awaiting review. _(codie-pr-review-queue.yml)_"
+          fi

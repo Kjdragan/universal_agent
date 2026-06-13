@@ -37,6 +37,7 @@ on:
       - PR Rebase Watchdog
       - Documentation Audit
       - Nightly Documentation Health
+      - Codie PR Review Queue
     types: [completed]
 
 permissions:

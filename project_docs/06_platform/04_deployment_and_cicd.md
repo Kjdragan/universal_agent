@@ -10,6 +10,7 @@ code_paths:
   - .github/workflows/pr-auto-merge.yml
   - .github/workflows/pr-rebase-watchdog.yml
   - .github/workflows/ci-failure-issue.yml
+  - .github/workflows/codie-pr-review-queue.yml
   - .github/dependabot.yml
   - scripts/deploy/remote_deploy.sh
   - scripts/deploy_validate_runtime.sh
@@ -18,7 +19,7 @@ code_paths:
   - scripts/install_uv_cache_prune_timer.sh
   - deployment/systemd/universal-agent-uv-cache-prune.service
   - deployment/systemd/universal-agent-uv-cache-prune.timer
-last_verified: 2026-06-11
+last_verified: 2026-06-13
 ---
 
 # Deployment & CI/CD
@@ -37,6 +38,7 @@ This subsystem governs how code moves from a branch to running production. Every
 | **Deploy** | `deploy.yml` | push to `main` (with `paths-ignore`), manual | The production deploy. Fetches `remote_deploy.sh` → SSH-pipes it to the VPS → fetch/reset/rebuild/restart/health-gate. |
 | **Deploy Notify** | `deploy-notify.yml` | `workflow_run` on **Deploy** completed | Truthful deploy-complete signal to the operator's Telegram: confirms the **live** `/api/v1/version` SHA (Rule A) and reports ✅ / ⚠️ / ❌. |
 | **CI Failure Issue Filer** | `ci-failure-issue.yml` | `workflow_run completed` on the watched workflows | Files a `ci-failure` GitHub issue on any failed run; auto-closes it when the same workflow+branch goes green. |
+| **Codie PR Review Queue** | `codie-pr-review-queue.yml` | daily cron `0 14 * * *` (~9 AM CT), manual | Disposition path for the `codie/*` PRs that auto-merge intentionally excludes: maintains one idempotent `codie-review-queue` tracking issue surfacing open `codie/*` PRs awaiting review, and auto-stale-closes ones older than `UA_CODIE_PR_CLOSE_DAYS` (default 14) with a regenerable comment. Does **not** auto-merge — respects the manual-review gate. |
 | Documentation Audit | `doc-audit.yml` | `pull_request` touching `project_docs/**` | Doc-governance PR gate (`doc_audit.py`). Doc-system owned. |
 | Docfix Tripwire | `docfix-tripwire.yml` | every `pull_request` (always-on) | **Required status check**: a `docfix/*` PR may touch documentation paths only; passes through all other branches. Doc-system owned. |
 | Nightly Documentation Health | `doc-nightly.yml` | cron `35 6 * * *` (~1:35 AM CT), manual | Nightly doc-accuracy sweep (ZAI). Doc-system owned. |
@@ -52,7 +54,7 @@ Two workflows make branch-prefix decisions (`pr-auto-merge.yml` auto-merge eligi
 | `claude/*` | ✅ auto-merge | auto-rebase (force-push) |
 | `worktree-*` (EnterWorktree) | ✅ auto-merge | auto-rebase (force-push) |
 | `fix/*`, `docs/*`, `chore/*`, `dependabot/*` | ✅ auto-merge | comment only |
-| `codie/*` | ❌ manual review | comment only |
+| `codie/*` | ❌ manual review (surfaced + stale-closed by `codie-pr-review-queue.yml`) | comment only |
 | `kevin/*`, `feature/*` | ❌ manual review (operator) | comment only |
 | **any** PR labeled `ci-autofix` | ✅ auto-merge (label override) | n/a |
 
