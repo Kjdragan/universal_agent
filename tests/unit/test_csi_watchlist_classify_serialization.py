@@ -18,11 +18,12 @@ import universal_agent.services.llm_classifier as llm_classifier
 
 
 async def test_classify_channel_llm_serializes_concurrent_calls(monkeypatch):
-    state = {"current": 0, "max": 0}
+    state = {"current": 0, "max": 0, "models": set()}
 
-    async def fake_call_llm(*, system, user, max_tokens=100):
+    async def fake_call_llm(*, system, user, max_tokens=100, model=None):
         state["current"] += 1
         state["max"] = max(state["max"], state["current"])
+        state["models"].add(model)
         try:
             # Hold the slot long enough that any parallelism would be observed.
             await asyncio.sleep(0.02)
@@ -43,3 +44,11 @@ async def test_classify_channel_llm_serializes_concurrent_calls(monkeypatch):
         "expected strictly serialized (concurrency 1)"
     )
     assert all(category == "other_signal" for category, _method in results)
+    # Regression guard: channel classification must pass the classifier-default
+    # (sonnet) tier explicitly — NOT fall through to `_call_llm`'s opus default.
+    # An all-opus fall-through here was the single largest ZAI Fair-Usage 429
+    # source (2026-06-13). Any None signals a dropped model= arg (the regression).
+    assert state["models"] == {llm_classifier._classifier_default_model()}, (
+        f"channel classification used models {state['models']}; expected only "
+        "the classifier default tier (sonnet / glm-5-turbo)"
+    )
