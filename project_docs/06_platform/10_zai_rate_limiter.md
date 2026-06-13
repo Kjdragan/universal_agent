@@ -11,6 +11,7 @@ code_paths:
   - src/universal_agent/services/zai_observability.py
   - src/universal_agent/services/zai_control.py
   - src/universal_agent/services/zai_status.py
+  - src/universal_agent/scripts/zai_token_report.py
   - src/universal_agent/services/zai_activity_control.py
   - src/universal_agent/services/zai_activity_health.py
   - src/universal_agent/services/invariants/zai_inference_health.py
@@ -333,19 +334,26 @@ Accepted limitations (reviewed and deliberate):
 `httpx.Client`/`AsyncClient.__init__` so **every** outbound request to `api.z.ai` is
 captured — regardless of whether the caller used the limiter. `_capture` writes a JSON
 line per request to `AGENT_RUN_WORKSPACES/zai_inference_events.jsonl`:
-`{ts, method, url_path, host, status, model, category, fup_texted, caller, ...}`.
+`{ts, method, url_path, host, status, model, category, fup_texted, caller, caller_fn,
+input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, ...}`.
 `_classify_response` buckets each into `ok` / `rate_limited_429` / `fup_signal` / etc.
 
-Three load-bearing details of the capture path (all added 2026-06-11):
+Four load-bearing details of the capture path (1–3 added 2026-06-11; 4 added 2026-06-13):
 
-1. **Error bodies are force-read in the hook.** At response-hook time with a real
+1. **Non-streaming bodies are force-read in the hook.** At response-hook time with a real
    transport the body is not yet read, so `response.text` raises
    `httpx.ResponseNotRead` — which was silently swallowed, leaving `body_snippet`
    empty on *every* production event and blinding FUP detection entirely (12,559
    events, zero `fup_signal`, while journald showed 1313 text on every 429). The
-   hooks now call `response.read()` / `await response.aread()` for `status >= 400`
-   before `_capture` (`zai_observability.py::_on_response_sync` / `_on_response_async`).
-   Streaming success responses are never force-read.
+   hooks call `response.read()` / `await response.aread()` before `_capture`
+   (`zai_observability.py::_on_response_sync` / `_on_response_async`). As of
+   2026-06-13 this read covers **all non-streaming responses, not just `status >= 400`**
+   — so the success-body `usage` block can be parsed for per-call token counts
+   (detail 4). httpx caches read content, so the SDK consumer reads the same buffer
+   unaffected. **Streaming bodies (`content-type: text/event-stream`) are NEVER
+   force-read** (`zai_observability.py::_is_streaming_response`) — that would consume
+   the stream out from under the consumer. No ZAI call streams today (verified
+   2026-06-13), so this is future-proofing.
 2. **`model` field.** `_capture` parses the request's JSON body
    (`zai_observability.py::_model_from_request`, fail-soft to `"unknown"`) so events
    can be bucketed per model/tier — the per-tier 429 signal the AIMD limiter work
@@ -355,6 +363,15 @@ Three load-bearing details of the capture path (all added 2026-06-11):
    FUP-keyword bodies on non-429 responses (the cliff). The boolean `fup_texted`
    field marks any FUP-keyword body regardless of status, preserving throttle-text
    visibility without conflating it with the cliff category.
+4. **Per-call token usage (2026-06-13).** `_capture` parses the response body's
+   `usage` block (`zai_observability.py::_usage_from_response`, fail-soft to zeros)
+   into `input_tokens` / `output_tokens` / `cache_creation_input_tokens` /
+   `cache_read_input_tokens`, handling both the Anthropic-compatible
+   (`input_tokens`/`output_tokens`) and OpenAI-compatible
+   (`prompt_tokens`/`completion_tokens`) shapes. The `model` still comes from the
+   *request* body (detail 2); only token counts come from the response, and only
+   for non-streaming `status < 400` responses. This is what lets the dashboard
+   answer *which process burns the most ZAI tokens*, not just which 429s most.
 
 **Caller attribution — names the real consumer, not the plumbing.**
 `_identify_caller()` walks the stack to the first frame inside `/universal_agent/`,
@@ -371,6 +388,31 @@ a real `classify_*` consumer that lives in the seam file. The "Top 429 callers" 
 therefore names the actual culprit. (Historical note: before this fix and before the
 limiter flag, calls attributed to `rate_limiter.py` / a flat `llm_classifier.py`
 aggregate; the events log now decomposes by real flow.)
+
+**Stage granularity (`caller_fn`, 2026-06-13).** Alongside the file-level `caller`,
+`_capture` records `caller_fn` = `file::function` (the resolved caller frame plus its
+function name — both derived from one stack walk via
+`zai_observability.py::_resolve_caller_frame`, so they can never disagree;
+`_identify_caller`'s file-only contract is unchanged). This lets token spend be
+attributed to a *stage within* a process — e.g. distinguishing
+`proactive_convergence.py::_detect_clusters_llm_async` (the sonnet cluster judge) from
+the convergence brief-writer — which the file-level key alone cannot.
+
+### 5.3 Per-process token aggregation (`zai_status.analyze_token_usage`)
+
+`zai_status.py::analyze_token_usage(now, window_seconds, top_n)` is a read-only,
+**pure-Python (no LLM)** single pass over the events JSONL that groups token spend by
+`caller` (with per-`caller_fn` stage and per-tier sub-breakdowns) over an arbitrary
+window — up to ~6 days, the JSONL retention, with no durable store. Per process it
+sums input/output tokens and computes the churn signals the ZAI-Control token panel
+surfaces: `reject_pct`, `retry_input_tokens` (input tokens on 429'd attempts — the
+wasted full-prompt re-sends), `retry_multiplier` (≈ total-input ÷ first-attempt input),
+and `dormant_tokens` (spend in the 22:00–06:00 America/Chicago dormancy window). Events
+predating the token-capture upgrade read as zero tokens, so an older window degrades
+gracefully to a request-count proxy (`token_events_seen` distinguishes "no data yet"
+from "genuinely 0"). The CLI `scripts/zai_token_report.py` (`python -m
+universal_agent.scripts.zai_token_report --hours 24`) renders the same aggregation as a
+terminal table — the operator's on-demand "where did our tokens go" snapshot.
 
 ### 5.2 The watchdog (`zai_inference_health.py`)
 

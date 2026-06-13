@@ -182,6 +182,64 @@ def _model_from_request(request: httpx.Request) -> str:
         return "unknown"
 
 
+# ── Token usage extraction ─────────────────────────────────────────────────
+
+def _is_streaming_response(response: httpx.Response) -> bool:
+    """True for SSE / streamed bodies that must NEVER be force-read — reading
+    them would consume the stream out from under the SDK consumer. Anthropic-
+    and OpenAI-compatible streaming both set ``content-type: text/event-stream``.
+    No ZAI call in this codebase streams today (verified 2026-06-13), so this is
+    future-proofing: a buffered (non-SSE) body is always safe to ``read()``."""
+    try:
+        ctype = (response.headers.get("content-type") or "").lower()
+        return "text/event-stream" in ctype
+    except Exception:  # noqa: BLE001 — header access issue: treat as non-stream
+        return False
+
+
+def _usage_from_response(response: httpx.Response) -> dict[str, int]:
+    """Parse the token-usage block from an ALREADY-READ, non-streaming ZAI body.
+
+    Handles the Anthropic-compatible shape (``usage.input_tokens`` /
+    ``output_tokens`` / ``cache_creation_input_tokens`` /
+    ``cache_read_input_tokens``) AND the OpenAI-compatible shape
+    (``usage.prompt_tokens`` / ``completion_tokens``). The model id still comes
+    from the REQUEST body (`_model_from_request`); only the token counts come
+    from the response. Fail-soft to zeros — same contract as
+    ``_model_from_request``: ANY problem (unread streaming body, non-JSON,
+    missing ``usage``) yields zeros so the event is still captured."""
+    zero = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    try:
+        raw = response.content  # already buffered by the hook's read(); no I/O
+        if not raw:
+            return zero
+        data = json.loads(raw)
+        usage = data.get("usage") if isinstance(data, dict) else None
+        if not isinstance(usage, dict):
+            return zero
+
+        def _i(*keys: str) -> int:
+            for k in keys:
+                v = usage.get(k)
+                if isinstance(v, (int, float)):
+                    return int(v)
+            return 0
+
+        return {
+            "input_tokens": _i("input_tokens", "prompt_tokens"),
+            "output_tokens": _i("output_tokens", "completion_tokens"),
+            "cache_creation_input_tokens": _i("cache_creation_input_tokens"),
+            "cache_read_input_tokens": _i("cache_read_input_tokens"),
+        }
+    except Exception:  # noqa: BLE001 — fail-soft, never break the hook
+        return zero
+
+
 # ── Caller attribution ────────────────────────────────────────────────────
 
 # Frame-path fragments to skip when walking the stack. These are framework
@@ -213,6 +271,47 @@ _SKIP_FRAME_FRAGMENTS = (
 _SKIP_FRAME_FUNCS = frozenset({"with_rate_limit_retry", "_call_llm"})
 
 
+def _resolve_caller_frame():
+    """Return the ``FrameSummary`` of the first stack frame OUTSIDE
+    framework/SDK/wrapper code — the real UA caller that issued the ZAI
+    request — or ``None``. Shared by ``_identify_caller`` (file path) and
+    ``_identify_caller_fn`` (file::function) so both attributions come from a
+    single stack walk and can never disagree. Best-effort — never raises."""
+    try:
+        stack = traceback.extract_stack()
+        for frame in reversed(stack):
+            filename = frame.filename
+            if any(skip in filename for skip in _SKIP_FRAME_FRAGMENTS):
+                continue
+            if frame.name in _SKIP_FRAME_FUNCS:
+                continue
+            return frame
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _frame_to_caller(frame) -> str:
+    """Format a resolved caller frame as a source-file path: relative to
+    ``universal_agent/`` for UA-source frames, else the last two path
+    segments. ``"unknown"`` when there is no frame."""
+    if frame is None:
+        return "unknown"
+    filename = frame.filename
+    # Only treat as a UA-source frame if it's actually under the source tree,
+    # not the venv. The skip list already excludes .venv/ and site-packages,
+    # so any frame matching "universal_agent/" here is a real UA-source file.
+    if "/universal_agent/" in filename:
+        parts = filename.split("/universal_agent/")
+        if len(parts) > 1:
+            return f"universal_agent/{parts[-1]}"
+    # Non-UA, non-framework frame (e.g. user script, REPL).
+    parts = filename.split("/")
+    if len(parts) >= 2:
+        return "/".join(parts[-2:])
+    return filename
+
+
 def _identify_caller() -> str:
     """Walk the stack to find the first frame OUTSIDE framework/SDK/wrapper code.
     Returns a path relative to universal_agent/ if the caller is a UA
@@ -226,30 +325,21 @@ def _identify_caller() -> str:
     past the limiter/`_call_llm` seam wrappers so the named culprit is the
     real consumer, not the shared plumbing.
     """
-    try:
-        stack = traceback.extract_stack()
-        for frame in reversed(stack):
-            filename = frame.filename
-            if any(skip in filename for skip in _SKIP_FRAME_FRAGMENTS):
-                continue
-            if frame.name in _SKIP_FRAME_FUNCS:
-                continue
-            # Only treat as a UA-source frame if it's actually under the
-            # source tree, not the venv. The skip list already excludes
-            # .venv/ and site-packages, so any frame matching
-            # "universal_agent/" here is a real UA-source file.
-            if "/universal_agent/" in filename:
-                parts = filename.split("/universal_agent/")
-                if len(parts) > 1:
-                    return f"universal_agent/{parts[-1]}"
-            # Non-UA, non-framework frame (e.g. user script, REPL).
-            parts = filename.split("/")
-            if len(parts) >= 2:
-                return "/".join(parts[-2:])
-            return filename
-    except Exception:  # noqa: BLE001
-        return "unknown"
-    return "unknown"
+    return _frame_to_caller(_resolve_caller_frame())
+
+
+def _identify_caller_fn(frame=None) -> str:
+    """``file::function`` for the resolved caller frame — the STAGE granularity
+    the token panel/catalog keys on (e.g.
+    ``universal_agent/services/proactive_convergence.py::_detect_clusters_llm_async``
+    vs ``...::triage_candidate``). Falls back to the bare file path when the
+    function name is unavailable. Pass a pre-resolved ``frame`` to reuse a
+    single walk (``_capture`` does this); omit it to resolve independently."""
+    if frame is None:
+        frame = _resolve_caller_frame()
+    caller = _frame_to_caller(frame)
+    fn = getattr(frame, "name", None) if frame is not None else None
+    return f"{caller}::{fn}" if fn else caller
 
 
 # ── Event persistence ─────────────────────────────────────────────────────
@@ -376,11 +466,23 @@ def _capture(request: httpx.Request, response: httpx.Response) -> None:
 
     model = _model_from_request(request)
 
+    # Token usage from the RESPONSE body — only for non-streaming successes
+    # (the body was force-read in the hook; streaming bodies are never read).
+    # The model still comes from the REQUEST; only token counts come from here.
+    if response.status_code < 400 and not _is_streaming_response(response):
+        usage = _usage_from_response(response)
+    else:
+        usage = {}
+
     # `fup_texted` is orthogonal to `category`: it marks ANY response whose body
     # matches the FUP keyword set (incl. ZAI's standard 1313-texted 429 throttle),
     # while `category` reserves `fup_signal` for the NON-429 cliff. Lets the
     # monitor/watchdog see 1313 throttle pressure without it counting as a cliff.
     fup_texted = _is_fup_body(body_snippet)
+
+    # One stack walk feeds both the file-level `caller` (back-compat) and the
+    # `file::function` `caller_fn` (stage granularity for the token panel).
+    caller_frame = _resolve_caller_frame()
 
     event = {
         "ts": time.time(),
@@ -395,7 +497,12 @@ def _capture(request: httpx.Request, response: httpx.Response) -> None:
         "ratelimit_limit": response.headers.get("x-ratelimit-limit"),
         "category": _classify_response(response.status_code, body_snippet, response.reason_phrase or ""),
         "fup_texted": fup_texted,
-        "caller": _identify_caller(),
+        "caller": _frame_to_caller(caller_frame),
+        "caller_fn": _identify_caller_fn(caller_frame),
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+        "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
     }
     if body_snippet:
         event["body_snippet"] = body_snippet
@@ -405,12 +512,15 @@ def _capture(request: httpx.Request, response: httpx.Response) -> None:
 
 def _on_response_sync(response: httpx.Response) -> None:
     try:
-        # At response-hook time with a real transport the body is not yet
-        # read, so `_capture`'s `response.text` raises `httpx.ResponseNotRead`
-        # and the snippet comes back empty — which darkens FUP classification.
-        # Force-read error bodies here (httpx caches content, so downstream
-        # consumption is unaffected). Never force-read streaming successes.
-        if response.status_code >= 400:
+        # At response-hook time with a real transport the body is not yet read,
+        # so `_capture`'s `response.text` (errors) and `_usage_from_response`
+        # (2xx) both need the body buffered first. Force-read any NON-STREAMING
+        # body — httpx caches the content, so the SDK consumer reads the same
+        # buffer and is unaffected. This widens the old `status >= 400` gate to
+        # 2xx so per-call token usage can be parsed from successful responses.
+        # Streaming bodies (text/event-stream) are NEVER read — that would
+        # consume the stream out from under the consumer.
+        if not _is_streaming_response(response):
             try:
                 response.read()
             except Exception:  # noqa: BLE001 — fail-soft; capture still runs
@@ -422,8 +532,8 @@ def _on_response_sync(response: httpx.Response) -> None:
 
 async def _on_response_async(response: httpx.Response) -> None:
     try:
-        # See `_on_response_sync` — same error-body force-read, async variant.
-        if response.status_code >= 400:
+        # See `_on_response_sync` — same non-streaming force-read, async variant.
+        if not _is_streaming_response(response):
             try:
                 await response.aread()
             except Exception:  # noqa: BLE001 — fail-soft; capture still runs
