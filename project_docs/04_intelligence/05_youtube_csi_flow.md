@@ -197,9 +197,10 @@ calls route through the **ZAI proxy** (`_build_anthropic_client_for_zai` →
   produces a ~50%-length "Compressed Retelling" + a `per_video_classification`
   JSON block (`value_score` 0-100, `value_tier`, `code_implementation_prospect`,
   `concept_only`, `evidence_quality`). Model defaults to `glm-4.5-air`
-  (`UA_YOUTUBE_DIGEST_MAP_MODEL`); concurrency 3
-  (`UA_YOUTUBE_DIGEST_MAP_CONCURRENCY`) but effective parallelism is
-  `min(semaphore, ZAI_MAX_CONCURRENT)`. The map LLM never sees other videos.
+  (`UA_YOUTUBE_DIGEST_MAP_MODEL`); concurrency **1 / sequential** (default 3 → 1
+  on 2026-06-13, storm-avoidance — the map step was the worst 429 source, ~81%
+  over 12h; once-daily batch so sequential costs trivial wall-clock)
+  (`UA_YOUTUBE_DIGEST_MAP_CONCURRENCY`). The map LLM never sees other videos.
 - **Reduce step** (`_reduce_meta_synthesize`): sees only titles + thesis lines +
   classifications (not full retellings), so context stays small on 30+ video
   days. Emits meta-synthesis prose ONLY (Cross-Video Themes / Learning Insights
@@ -610,7 +611,7 @@ native playlist learning dispatch. Keyword sets: `YOUTUBE_CODE_HINT_KEYWORDS`
 | `UA_YOUTUBE_DAILY_DIGEST_TIMEZONE` | `America/Chicago` | Digest TZ |
 | `UA_YOUTUBE_DIGEST_PIPELINE` | `map_reduce` | `map_reduce` or `single_call` |
 | `UA_YOUTUBE_DIGEST_MAP_MODEL` | `glm-4.5-air` | Map-step model |
-| `UA_YOUTUBE_DIGEST_MAP_CONCURRENCY` | `3` | Map parallelism (capped by `ZAI_MAX_CONCURRENT`) |
+| `UA_YOUTUBE_DIGEST_MAP_CONCURRENCY` | `1` | Map parallelism (3 → 1 on 2026-06-13, storm-avoidance / sequential) |
 | `UA_YOUTUBE_DIGEST_REDUCE_MODEL` | `opus`→`glm-5.1` | Reduce-step model |
 | `UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N` | `4` | Tutorial dispatch count |
 | `UA_YOUTUBE_DIGEST_DEMO_GATE_MIN_SCORE` | `70` | Demo-worthiness score floor |

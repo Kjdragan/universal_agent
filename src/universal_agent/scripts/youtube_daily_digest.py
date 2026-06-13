@@ -90,7 +90,15 @@ DIGEST_PIPELINE_DEFAULT = "map_reduce"
 # throttle (Z.AI error 1313) when concurrency >= 5, so concurrency caps below
 # are conservative.
 DIGEST_MAP_MODEL_DEFAULT = "glm-4.5-air"
-DIGEST_MAP_CONCURRENCY_DEFAULT = 3
+# 3 -> 1 (2026-06-13, storm-avoidance pass). The map step was the worst single
+# 429 source in prod (~81% reject over 12h): any concurrency self-overlaps, and
+# ZAI Fair-Usage is concurrency-driven — a ZAI call sent while another is in
+# flight rejects ~77% vs ~10% with nothing else in flight. The digest is a
+# once-daily batch, so sequential (concurrency 1) costs trivial wall-clock and
+# eliminates the self-collision. Raise UA_YOUTUBE_DIGEST_MAP_CONCURRENCY only if
+# a measured need appears. (A deeper fix — routing the bespoke _zai_call_with_retry
+# through the per-tier AIMD limiter — is a separate follow-up.)
+DIGEST_MAP_CONCURRENCY_DEFAULT = 1
 DIGEST_MAP_TIMEOUT_SECONDS_DEFAULT = 180
 DIGEST_MAP_MAX_TOKENS_DEFAULT = 6000  # raised from 4000 alongside the 50% retell target — longest videos in the playlist need ~5300 tokens of headroom
 DIGEST_MAP_TRANSCRIPT_CHAR_LIMIT_DEFAULT = 50_000
