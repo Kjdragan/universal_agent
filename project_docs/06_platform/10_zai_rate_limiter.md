@@ -515,8 +515,8 @@ sites, **only three** acquired the limiter:
   `model_resolution.py::resolve_opus` = `glm-5.1`): `classify_priority`,
   `classify_agent_route`, `generate_calendar_task_description`, `extract_due_at`,
   `extract_disjointed_tasks`, `classify_tutorial_buildability`, plus the convergence
-  steps `proactive_convergence.py::_refine_cluster_with_llm` (fired up to 2-wide — lowered
-  from 6 on 2026-06-10 — via a *local* `asyncio.Semaphore`, **not** the ZAI limiter; now
+  steps `proactive_convergence.py::_refine_cluster_with_llm` (sequential / 1-wide — lowered
+  6 → 2 → 1 (2026-06-13, storm-avoidance) — via a *local* `asyncio.Semaphore`, **not** the ZAI limiter; now
   defaults to the sonnet tier `glm-5-turbo`, not opus, per the A/B), the ideation sweep,
   and the signature path. (Only `proactive_convergence.py::triage_candidate` lowers itself,
   to `glm-4.5-air`.)

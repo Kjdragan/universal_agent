@@ -150,8 +150,10 @@ run finishes under the cron's `timeout_seconds`
    - **Bounded cost (2026-06-02 fix).** `include_secondary` recall yields *dozens*
      of buckets; refining them one-at-a-time at ~5–15s each (opus-tier) overran
      the 900s cron timeout *every* run (consistent `[ERROR] Autonomous Task
-     Failed` flood). The per-bucket refines now run **concurrently**, bounded by
-     `UA_CONVERGENCE_LLM_CONCURRENCY` (default 6), and the whole LLM section
+     Failed` flood). The per-bucket refines are bounded by
+     `UA_CONVERGENCE_LLM_CONCURRENCY` (default **1 / sequential** as of 2026-06-13,
+     lowered 6 → 2 → 1 — storm-avoidance: ZAI 429s are concurrency-driven, so the
+     judge runs one bucket at a time), and the whole LLM section
      (clustering + triage + ideation) is time-boxed by a shared deadline
      `UA_CSI_CONVERGENCE_BUDGET_SECONDS` (default 600s): work not reached this run
      is idempotently re-detected next tick. Every LLM call is also bounded by

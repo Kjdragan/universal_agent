@@ -286,9 +286,13 @@ must carry context is where a small model over/under-splits or drops detail.
 The precision layer: judges whether a coarse SQL bucket genuinely converges on one
 thesis across independent channels, dropping false buckets. As of 2026-06-10 it
 defaults to the **sonnet tier (`glm-5-turbo`)**, down from the former opus default
-(`glm-5.1`), and runs **2-wide** (`UA_CONVERGENCE_LLM_CONCURRENCY`, default lowered
-6 → 2) — both to stop this fan-out being the dominant ZAI Fair-Usage 429/1313 burst
-contributor. **A/B-confirmed** (`scripts/convergence_model_ab.py`, 30 live buckets,
+(`glm-5.1`), and runs **sequential, 1-wide** (`UA_CONVERGENCE_LLM_CONCURRENCY`,
+default lowered 6 → 2 on 2026-06-10, then **2 → 1 on 2026-06-13**) — both to stop
+this fan-out being the dominant ZAI Fair-Usage 429/1313 burst contributor. The
+final 2 → 1 is a storm-avoidance step: ZAI 429s are driven by request *concurrency*
+(a call overlapping another rejects ~77% vs ~10% sequential), so even 2-wide
+self-overlaps; a batched-vs-per-bucket POC (2026-06-13) confirmed the sequential
+per-bucket judge keeps full quality (F1 0.78 vs adjudicated truth) within budget. **A/B-confirmed** (`scripts/convergence_model_ab.py`, 30 live buckets,
 run twice): glm-5-turbo matches the opus default's precision (both 2/30) at ~35%
 lower latency, while `glm-4.5-air` (15/30) and `glm-4.7` (11/30) over-confirm
 broad-topic buckets and fail this precision gate. **Turbo is the precision floor; air

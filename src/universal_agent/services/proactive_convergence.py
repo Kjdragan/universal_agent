@@ -605,17 +605,22 @@ def _convergence_llm_concurrency() -> int:
     """Max concurrent per-bucket refine calls. `include_secondary` recall
     produces dozens of coarse buckets. The refine LLM path is NOT wrapped by the
     ZAIRateLimiter, so this is the ONLY bound on concurrent load against the ZAI
-    proxy from this stage. Lowered 6 -> 2 (2026-06-10) because the 6-wide
-    cluster-refine fan-out was the dominant source of ZAI Fair-Usage 429/1313
-    bursts; paired with the sonnet-tier judge (`glm-5-turbo`, ~35% faster than
-    the former opus default) so the smaller fan-out still clears its bucket set
-    well within the convergence budget. Override with
-    UA_CONVERGENCE_LLM_CONCURRENCY. Default 2."""
-    raw = str(os.getenv("UA_CONVERGENCE_LLM_CONCURRENCY", "2")).strip()
+    proxy from this stage. History: 6 -> 2 (2026-06-10), then **2 -> 1
+    (2026-06-13)** — a storm-avoidance pass. Empirically, ZAI Fair-Usage 429s are
+    driven by account-wide request *concurrency*, not rate: a ZAI call sent while
+    another is in flight rejects ~77%, while a call with nothing else in flight
+    rejects ~10% (12h prod analysis). So even a 2-wide fan-out self-overlaps and
+    invites the storm. A 1-wide (sequential) judge never overlaps itself, and a
+    batched-vs-per-bucket POC (2026-06-13) confirmed the sequential per-bucket
+    judge keeps full quality (F1 0.78 vs adjudicated truth) and clears all 61
+    live buckets in ~76s — well within the convergence budget (hourly, latency-
+    tolerant). Raise UA_CONVERGENCE_LLM_CONCURRENCY only if a measured need
+    appears. Default 1 (sequential)."""
+    raw = str(os.getenv("UA_CONVERGENCE_LLM_CONCURRENCY", "1")).strip()
     try:
         return max(1, min(16, int(raw)))
     except ValueError:
-        return 2
+        return 1
 
 
 def _convergence_budget_seconds() -> float:
