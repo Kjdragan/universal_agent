@@ -1,10 +1,12 @@
-"""Regression tests for the csi_convergence_sync timeout fix (2026-06-02).
+"""Regression tests for the csi_convergence_sync timeout fix (2026-06-02) and the
+batched judge (2026-06-13).
 
-The convergence detection ran one sequential opus-tier LLM refine per coarse
-bucket; a recall window of dozens of buckets overran the 900s cron timeout every
-run, flooding the operator's inbox with `[ERROR] Autonomous Task Failed`. The fix
-parallelises the per-bucket refines (bounded concurrency) and time-boxes the LLM
-phases (UA_CSI_CONVERGENCE_BUDGET_SECONDS) so the run always exits cleanly.
+The convergence detection originally ran one sequential opus-tier LLM refine per
+coarse bucket; a recall window of dozens of buckets overran the 900s cron timeout
+every run. The 2026-06-13 batched judge replaces N per-bucket calls with one
+structured-output call per CHUNK of ``UA_CONVERGENCE_JUDGE_BATCH_SIZE`` buckets
+(default 20) — collapsing the call count — while a shared deadline
+(UA_CSI_CONVERGENCE_BUDGET_SECONDS) still time-boxes the run.
 """
 
 from __future__ import annotations
@@ -15,30 +17,33 @@ import time
 from universal_agent.services import proactive_convergence as pc
 
 
-def test_detect_clusters_llm_runs_refines_concurrently(monkeypatch):
-    """12 buckets × 0.1s refine at concurrency 6 must finish well under the 1.2s
-    a sequential loop would take."""
-    buckets = [[{"video_id": f"v{i}", "channel_name": f"c{i}"}] for i in range(12)]
+def test_detect_clusters_llm_batches_buckets(monkeypatch):
+    """The batched judge makes ceil(N / batch_size) LLM calls, not N — the
+    call-count collapse. 12 buckets at batch_size 5 -> 3 chunk calls, all judged."""
+    buckets = [
+        [{"video_id": f"v{i}", "channel_name": f"c{i}a"},
+         {"video_id": f"w{i}", "channel_name": f"c{i}b"}]
+        for i in range(12)
+    ]
     monkeypatch.setattr(pc, "_detect_clusters_sql", lambda *a, **k: buckets)
-
-    async def slow_refine(bucket, *, min_channels):
-        await asyncio.sleep(0.1)
-        return {"signatures": bucket, "thesis": "t", "signal_strength": 9.0}
-
-    monkeypatch.setattr(pc, "_refine_cluster_with_llm", slow_refine)
-    monkeypatch.setenv("UA_CONVERGENCE_LLM_CONCURRENCY", "6")
-    # Disable the refine cache so synchronous DB I/O doesn't serialize the
-    # concurrent refine tasks and falsely blow the timing budget.
+    monkeypatch.setenv("UA_CONVERGENCE_JUDGE_BATCH_SIZE", "5")
     monkeypatch.setenv("UA_CONVERGENCE_REFINE_CACHE_ENABLED", "0")
 
-    t0 = time.monotonic()
-    out = asyncio.run(
-        pc._detect_clusters_llm_async(None, source_window_hours=72, min_channels=2)
-    )
-    elapsed = time.monotonic() - t0
+    chunk_calls = {"n": 0}
 
-    assert len(out) == 12
-    assert elapsed < 0.6, f"refines did not run concurrently (took {elapsed:.2f}s)"
+    async def fake_batched(chunk, *, min_channels):
+        chunk_calls["n"] += 1
+        return [{"signatures": b, "thesis": "t", "signal_strength": 9.0} for b in chunk]
+
+    monkeypatch.setattr(pc, "_refine_clusters_batched", fake_batched)
+
+    stats: dict = {}
+    out = asyncio.run(
+        pc._detect_clusters_llm_async(None, source_window_hours=72, min_channels=2, stats=stats)
+    )
+    assert len(out) == 12              # every bucket judged
+    assert chunk_calls["n"] == 3       # 12 buckets / batch 5 = 3 calls, not 12
+    assert stats["sonnet_calls_made"] == 3
 
 
 def test_detect_clusters_llm_respects_deadline(monkeypatch):
@@ -48,14 +53,13 @@ def test_detect_clusters_llm_respects_deadline(monkeypatch):
     monkeypatch.setattr(pc, "_detect_clusters_sql", lambda *a, **k: buckets)
     calls = {"n": 0}
 
-    async def counting_refine(bucket, *, min_channels):
+    async def counting_batched(chunk, *, min_channels):
         calls["n"] += 1
-        return {"signatures": bucket, "thesis": "t", "signal_strength": 9.0}
+        return [{"signatures": b, "thesis": "t", "signal_strength": 9.0} for b in chunk]
 
-    monkeypatch.setattr(pc, "_refine_cluster_with_llm", counting_refine)
-    monkeypatch.setenv("UA_CONVERGENCE_LLM_CONCURRENCY", "2")
+    monkeypatch.setattr(pc, "_refine_clusters_batched", counting_batched)
     # Disable the refine cache so the deadline check is the sole gating
-    # mechanism (the test verifies 0 refine calls on an expired deadline).
+    # mechanism (the test verifies 0 LLM chunk calls on an expired deadline).
     monkeypatch.setenv("UA_CONVERGENCE_REFINE_CACHE_ENABLED", "0")
 
     out = asyncio.run(

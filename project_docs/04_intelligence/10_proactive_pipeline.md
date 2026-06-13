@@ -73,7 +73,7 @@ flowchart TD
 
     subgraph SYN[Bounded retrieval + LLM synthesis]
         SQLREC[_detect_clusters_sql: GROUP BY topic across distinct channels]
-        LLMPREC[_detect_clusters_llm: per-bucket LLM judge]
+        LLMPREC[_detect_clusters_llm: batched LLM judge ~20 buckets/call]
         IDEA[_run_ideation_sweep -> track_b_ideation_synthesis]
         REFLECT[reflection_engine: idle-time ideation prompt]
     end
@@ -143,17 +143,26 @@ run finishes under the cron's `timeout_seconds`
 3. **Convergence detection (Track A).** `_detect_clusters_sql` does SQL recall —
    GROUP BY primary topic across *distinct* channels within
    `source_window_hours` (default 72h, `min_channels=2`). When
-   `UA_CONVERGENCE_LLM_CLUSTERING=1` (default), each SQL bucket is refined by a
-   per-bucket LLM judge (`_detect_clusters_llm`) that confirms a genuine shared
-   thesis and emits only high-strength clusters (floor `UA_CONVERGENCE_MIN_STRENGTH`,
-   default 7). Set the flag to 0 to fall back to raw SQL buckets.
+   `UA_CONVERGENCE_LLM_CLUSTERING=1` (default), the SQL buckets are refined by a
+   **batched LLM judge** (`_detect_clusters_llm` → `_refine_clusters_batched`) that
+   confirms a genuine shared thesis per bucket and emits only high-strength
+   clusters (floor `UA_CONVERGENCE_MIN_STRENGTH`, default 7). Set the flag to 0 to
+   fall back to raw SQL buckets.
+   - **Batched judge (2026-06-13).** One structured-output call judges a CHUNK of
+     `UA_CONVERGENCE_JUDGE_BATCH_SIZE` buckets (default **20**) rather than one
+     call per bucket. A batch-size sweep (61 live buckets vs blind-adjudicated
+     truth) found ~20/call dominates both extremes — per-bucket (F1 0.78, 61
+     calls) and one-giant-call (F1 0.67) — at **F1 0.84, 4 calls, ~half the
+     tokens**: moderate batches give the judge comparative context without
+     diluting attention. Set the knob to `1` for legacy per-bucket. Each verdict
+     still passes identical precision gates (`_gate_cluster_verdict`: strength
+     floor + ≥2 independent channels).
    - **Bounded cost (2026-06-02 fix).** `include_secondary` recall yields *dozens*
-     of buckets; refining them one-at-a-time at ~5–15s each (opus-tier) overran
-     the 900s cron timeout *every* run (consistent `[ERROR] Autonomous Task
-     Failed` flood). The per-bucket refines are bounded by
-     `UA_CONVERGENCE_LLM_CONCURRENCY` (default **1 / sequential** as of 2026-06-13,
-     lowered 6 → 2 → 1 — storm-avoidance: ZAI 429s are concurrency-driven, so the
-     judge runs one bucket at a time), and the whole LLM section
+     of buckets; refining them one-at-a-time at ~5–15s each overran the 900s cron
+     timeout *every* run. Chunks run sequentially, bounded by
+     `UA_CONVERGENCE_LLM_CONCURRENCY` (default **1** as of 2026-06-13, lowered
+     6 → 2 → 1 — storm-avoidance: ZAI 429s are concurrency-driven), and the whole
+     LLM section
      (clustering + triage + ideation) is time-boxed by a shared deadline
      `UA_CSI_CONVERGENCE_BUDGET_SECONDS` (default 600s): work not reached this run
      is idempotently re-detected next tick. Every LLM call is also bounded by
