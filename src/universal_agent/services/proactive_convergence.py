@@ -234,8 +234,14 @@ def sync_topic_signatures_from_csi(
     if csi_db_path is None or not csi_db_path.exists():
         return {"seen": 0, "upserted": 0, "convergence_events": 0, "candidates_written": 0}
     ensure_schema(conn)
-    db = sqlite3.connect(str(csi_db_path))
+    # csi.db is shared with the ~13-process CSI ingester fleet. Set a busy_timeout
+    # so a momentary write lock WAITS instead of raising "database is locked" (this
+    # is the one csi.db writer that runs as `ua` rather than root, and it does not
+    # go through csi_ingester.store.sqlite.connect()). WAL journal mode, enabled by
+    # the ingester, is a persistent db property this connection inherits for free.
+    db = sqlite3.connect(str(csi_db_path), timeout=15.0)
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA busy_timeout=15000")
 
     # Relevance gate (default ON): drop non-domain categories (geopolitics,
     # cooking, health, noise, ...) at ingest so they never become topic
