@@ -86,3 +86,76 @@ def test_deploy_window_probe_failure_defaults_to_loud(monkeypatch):
     assert severity == "error"
     assert requires_action is True
     assert channels is None
+
+
+class TestInferenceThrottleDetection:
+    """``_looks_like_inference_throttle`` recognises ZAI/GLM 429 FUP rejections.
+
+    These surface as the model's verbatim final assistant text on a 0-tool-call
+    turn — the dominant root cause of the convergence-candidate lifecycle-miss
+    flood (78/80 in the 2026-06-13 incident).
+    """
+
+    def test_matches_verbatim_zai_fup_429(self):
+        text = (
+            "API Error: Request rejected (429) · [1313][Your account's current "
+            "usage pattern does not comply with the Fair Usage Policy...]"
+        )
+        assert gs._looks_like_inference_throttle(text) is True
+
+    def test_case_insensitive(self):
+        assert gs._looks_like_inference_throttle("FAIR USAGE POLICY") is True
+
+    def test_matches_generic_rate_limit(self):
+        assert gs._looks_like_inference_throttle("429 Too Many Requests") is True
+
+    def test_non_throttle_text_is_false(self):
+        assert gs._looks_like_inference_throttle("I'll author the brief now.") is False
+        assert gs._looks_like_inference_throttle("") is False
+
+
+class TestLifecycleMissLikelyCause:
+    """``_lifecycle_miss_likely_cause`` gives the operator a plain-language verdict.
+
+    Five mutually-exclusive cases, in priority order: deploy casualty, inference
+    throttle, empty turn, talked-but-no-tools, worked-but-no-close.
+    """
+
+    def test_deploy_casualty_takes_priority(self):
+        # Even with a throttle-looking text, a deploy casualty wins.
+        msg = gs._lifecycle_miss_likely_cause(
+            tool_calls=0,
+            final_text="Fair Usage Policy",
+            deploy_restart_casualty=True,
+        )
+        assert "Deploy/restart" in msg
+
+    def test_inference_throttle(self):
+        msg = gs._lifecycle_miss_likely_cause(
+            tool_calls=0,
+            final_text="API Error: Request rejected (429) [1313] Fair Usage Policy",
+            deploy_restart_casualty=False,
+        )
+        assert "throttle" in msg.lower()
+
+    def test_empty_turn(self):
+        msg = gs._lifecycle_miss_likely_cause(
+            tool_calls=0, final_text="", deploy_restart_casualty=False
+        )
+        assert "Empty model turn" in msg
+
+    def test_talked_but_no_tools(self):
+        msg = gs._lifecycle_miss_likely_cause(
+            tool_calls=0,
+            final_text="I'll get started on that.",
+            deploy_restart_casualty=False,
+        )
+        assert "no tool calls" in msg
+
+    def test_worked_but_no_close_is_distinct(self):
+        # The 70/80 majority subtype: real work, no closing mutation.
+        msg = gs._lifecycle_miss_likely_cause(
+            tool_calls=20, final_text="done", deploy_restart_casualty=False
+        )
+        assert "20 tool call" in msg
+        assert "close-discipline" in msg

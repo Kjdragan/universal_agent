@@ -6816,6 +6816,80 @@ def _lifecycle_miss_notification_routing(
     return severity, requires_action, channels, deploy_restart_casualty, goal_message
 
 
+# Substrings that mark an upstream inference throttle in the model's final
+# output (ZAI / GLM Fair Usage Policy 429s surface as a verbatim assistant
+# message, e.g. ``[1313] ... Fair Usage Policy``). Matched case-insensitively.
+_INFERENCE_THROTTLE_MARKERS = (
+    "fair usage policy",
+    "[1313]",
+    "request rejected (429)",
+    "rate limit",
+    "429 too many requests",
+)
+
+
+def _looks_like_inference_throttle(text: str) -> bool:
+    """Return True when ``text`` looks like an upstream inference 429/FUP block."""
+    haystack = str(text or "").lower()
+    return any(marker in haystack for marker in _INFERENCE_THROTTLE_MARKERS)
+
+
+def _lifecycle_miss_likely_cause(
+    *,
+    tool_calls: int,
+    final_text: str,
+    deploy_restart_casualty: bool,
+) -> str:
+    """Plain-language interpretation of a todo-execution lifecycle miss.
+
+    The operator (or a debugging agent) should be able to read the email and
+    know *why* the run produced no durable Task Hub mutation without opening the
+    VPS. The four cases, in priority order:
+
+    1. **Deploy/restart casualty** — already downgraded to a dashboard warning,
+       but include the line for completeness when it does surface.
+    2. **Upstream inference throttle** — the model's final text is a verbatim
+       ZAI/GLM 429 / Fair Usage Policy rejection. This is the dominant cause of
+       the convergence-candidate flood; the work item was reopened and retries.
+    3. **Empty turn** — no text and no tool calls: an aborted/throttled
+       inference that never started.
+    4. **Talked-but-no-tools** — produced text but called nothing: the model did
+       not invoke the required skill or close the task.
+    5. **Worked-but-no-close** — made tool calls (real work) yet never emitted a
+       durable lifecycle mutation: a close-discipline gap, not an inference
+       failure.
+    """
+    if deploy_restart_casualty:
+        return (
+            "Deploy/restart terminated the run mid-flight (transient). The work "
+            "item was reopened and will be retried automatically."
+        )
+    if _looks_like_inference_throttle(final_text):
+        return (
+            "Upstream inference throttle — the model's final output is a 429 / "
+            "Fair Usage Policy rejection, so the run was blocked before it could "
+            "act (0 durable mutation). The work item was reopened and will retry. "
+            "Fix is reducing inference burst load or moving this lane off the "
+            "throttled tier, not the run itself."
+        )
+    if tool_calls == 0 and not final_text:
+        return (
+            "Empty model turn — no text and no tool calls, i.e. an aborted or "
+            "throttled inference that never started. The work item was reopened "
+            "for retry."
+        )
+    if tool_calls == 0:
+        return (
+            "The model returned text but made no tool calls — it did not invoke "
+            "the required skill or close the task. See the model output below."
+        )
+    return (
+        f"The model made {tool_calls} tool call(s) (real work) but never emitted "
+        "a durable Task Hub lifecycle mutation to close/defer/skip the task — a "
+        "close-discipline gap, not an inference failure."
+    )
+
+
 def _record_todo_execution_result(
     *,
     session_id: str,
@@ -7026,6 +7100,14 @@ async def _run_gateway_session_request(
     execution_duration_seconds = 0.0
     execution_start_ts = time.time()
     terminal_reason: Optional[str] = None
+    # Diagnostic capture for the execution_missing_lifecycle_mutation email:
+    # the model's final assistant text and the turn's stop_reason are streamed
+    # through the loop below but otherwise discarded. Retaining them (only for
+    # todo_execution, to avoid overhead on interactive chat) lets the alert show
+    # what the model actually said/returned — e.g. a verbatim ZAI 429/FUP
+    # rejection on a 0-tool-call turn — instead of an echo of the prompt.
+    final_assistant_text = ""
+    turn_stop_reason = ""
     if _heartbeat_service and request_run_kind == "heartbeat":
         _heartbeat_service.busy_sessions.add(session_id)
     if _todo_dispatch_service and request_run_kind == "todo_execution":
@@ -7142,6 +7224,12 @@ async def _run_gateway_session_request(
                 )
                 if isinstance(event.data.get("tool_calls"), int):
                     tool_call_count = int(event.data["tool_calls"])
+                # Keep the latest non-empty stop_reason for the lifecycle-miss
+                # diagnostic (distinguishes 'end_turn' = model chose not to act
+                # from a truncated/errored turn). Discarded everywhere else.
+                _iter_stop_reason = str(event.data.get("stop_reason") or "").strip()
+                if _iter_stop_reason:
+                    turn_stop_reason = _iter_stop_reason
 
             # ── Run.log persistence (BEFORE final dedup) ──
             # Write text events to run.log regardless of final flag so that
@@ -7151,6 +7239,12 @@ async def _run_gateway_session_request(
                 rl_text = (event.data.get("text") or "").rstrip()
                 if rl_text:
                     _rl_write(f"[{rl_ts}] 🤖 ASSISTANT: {rl_text}")
+                    if request_run_kind == "todo_execution":
+                        # Roll the model's text into a bounded tail buffer for
+                        # the lifecycle-miss email (last ~4KB is plenty to show
+                        # a refusal, an empty 'I'll do this', or a verbatim
+                        # 429/FUP rejection).
+                        final_assistant_text = (final_assistant_text + "\n" + rl_text)[-4000:]
             elif event.type == EventType.TOOL_CALL and isinstance(event.data, dict):
                 tool_name = event.data.get("name") or "unknown"
                 _rl_write(f"[{rl_ts}] 🔧 TOOL CALL: {tool_name}")
@@ -7160,6 +7254,10 @@ async def _run_gateway_session_request(
             elif event.type == EventType.ERROR and isinstance(event.data, dict):
                 err = event.data.get("message") or event.data.get("error") or "unknown"
                 _rl_write(f"[{rl_ts}] ERROR: {err}")
+                if request_run_kind == "todo_execution":
+                    final_assistant_text = (
+                        final_assistant_text + f"\n[ERROR] {err}"
+                    )[-4000:]
 
             # ── Final dedup: skip WS broadcast of redundant final text ──
             if (
@@ -7336,8 +7434,30 @@ async def _run_gateway_session_request(
                     notification_metadata_extra["invalid_task_ids"] = diag_task_ids
                 diag_workspace = active_execution_workspace or session.workspace_dir or ""
                 log_tail = _read_run_log_tail(diag_workspace) if diag_workspace else None
+                # The active workspace's run.log can be the empty retry shell
+                # while the run that actually produced model output (and the
+                # error) is the run_id workspace. Fall back to it so the tail is
+                # never blank.
+                if not log_tail:
+                    alt_workspace = _session_active_run_workspace(session) or ""
+                    if alt_workspace and alt_workspace != diag_workspace:
+                        log_tail = _read_run_log_tail(alt_workspace)
                 if log_tail:
                     notification_metadata_extra["log_tail"] = log_tail
+                # The single most useful field: what the model actually emitted
+                # on the failing turn. Rendered as a dedicated block so it is not
+                # crowded out by the prompt-dominated run.log byte-tail.
+                final_text = final_assistant_text.strip()
+                if final_text:
+                    notification_metadata_extra["final_response"] = final_text[-2000:]
+                notification_metadata_extra["response_empty"] = not bool(final_text)
+                if turn_stop_reason:
+                    notification_metadata_extra["stop_reason"] = turn_stop_reason
+                notification_metadata_extra["likely_cause"] = _lifecycle_miss_likely_cause(
+                    tool_calls=tool_call_count,
+                    final_text=final_text,
+                    deploy_restart_casualty=deploy_restart_casualty,
+                )
             _add_notification(
                 kind=notification_kind,
                 title=notification_title,
