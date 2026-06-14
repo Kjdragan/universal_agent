@@ -475,7 +475,7 @@ cluster/insight becomes queued work:
     deterministic verdicts — a live probe found the missing temperature was ~40%
     per-item coin-flip). Both knobs default to today's behavior, so the gate is inert
     until the operator flips them. See
-    [`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md) §7.1.
+    [`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md) §7.1.1.
   - **Batched triage pre-pass (`UA_INTEL_TRIAGE_BATCH_SIZE`, default `1` = legacy
     per-candidate).** When `>1`, `sync_topic_signatures_from_csi` runs a sweep-level
     batched pre-pass (`_run_batched_triage` → `batched_judge`, see

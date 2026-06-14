@@ -633,7 +633,8 @@ was worse. Three changes resulted (all default-inert):
 - **Graded score + threshold gates.** Because `temperature=0` *categorical* triage
   ships ~everything (no filter), the P2 triage (`proactive_convergence.py::triage_candidate`
   / `_batched_triage_overrides_async`) and P3 buildability
-  (`llm_classifier.py::classify_tutorial_buildability` / `_batched`) gates gained an
+  (`llm_classifier.py::classify_tutorial_buildability` /
+  `classify_tutorial_buildability_batched`) gates gained an
   **opt-in graded 0–100 score + code-side cutoff** (`UA_INTEL_TRIAGE_SHIP_THRESHOLD` /
   `UA_TUTORIAL_BUILD_THRESHOLD`, default unset = categorical/binary). This is the same
   `signal_strength` + `_min_signal_strength` pattern the cluster judge

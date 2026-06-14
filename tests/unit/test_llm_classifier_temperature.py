@@ -144,3 +144,31 @@ def test_coerce_score_missing_is_none():
     assert lc._coerce_score(None) is None
     assert lc._coerce_score("ship") is None
     assert lc._coerce_score({}) is None
+
+
+def test_coerce_score_nan_and_inf():
+    assert lc._coerce_score(float("nan")) is None  # NaN guard
+    assert lc._coerce_score(float("inf")) == 100.0  # clamps high
+    assert lc._coerce_score(float("-inf")) == 0.0  # clamps low
+    assert lc._coerce_score("85.5") == 85.5  # numeric string
+
+
+# ── _tutorial_build_threshold ───────────────────────────────────────────────
+
+
+def test_tutorial_build_threshold_unset_and_garbage(monkeypatch):
+    monkeypatch.delenv("UA_TUTORIAL_BUILD_THRESHOLD", raising=False)
+    assert lc._tutorial_build_threshold() is None
+    monkeypatch.setenv("UA_TUTORIAL_BUILD_THRESHOLD", "not-a-number")
+    assert lc._tutorial_build_threshold() is None
+    monkeypatch.setenv("UA_TUTORIAL_BUILD_THRESHOLD", "   ")
+    assert lc._tutorial_build_threshold() is None
+
+
+def test_tutorial_build_threshold_clamps(monkeypatch):
+    monkeypatch.setenv("UA_TUTORIAL_BUILD_THRESHOLD", "150")
+    assert lc._tutorial_build_threshold() == 100
+    monkeypatch.setenv("UA_TUTORIAL_BUILD_THRESHOLD", "-50")
+    assert lc._tutorial_build_threshold() == 0
+    monkeypatch.setenv("UA_TUTORIAL_BUILD_THRESHOLD", "72")
+    assert lc._tutorial_build_threshold() == 72

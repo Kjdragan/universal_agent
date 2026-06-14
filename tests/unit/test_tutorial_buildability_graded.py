@@ -64,6 +64,37 @@ def test_graded_single_forwards_temperature(monkeypatch):
     assert record[0]["temperature"] == 0.0
 
 
+def test_graded_single_per_gate_temperature_wins(monkeypatch):
+    monkeypatch.setenv("UA_TUTORIAL_BUILD_THRESHOLD", "70")
+    monkeypatch.setenv("UA_LLM_JUDGE_TEMPERATURE", "0.5")
+    monkeypatch.setenv("UA_TUTORIAL_BUILD_TEMPERATURE", "0")
+    record: list = []
+    _patch_single(monkeypatch, {"score": 50, "reasoning": "x"}, record)
+    asyncio.run(lc.classify_tutorial_buildability(title="t", summary_text="x"))
+    assert record[0]["temperature"] == 0.0  # per-gate overrides global
+
+
+def test_graded_single_score_at_threshold_buildable(monkeypatch):
+    monkeypatch.setenv("UA_TUTORIAL_BUILD_THRESHOLD", "70")
+    _patch_single(monkeypatch, {"score": 70, "reasoning": "exactly at cutoff"})
+    out = asyncio.run(lc.classify_tutorial_buildability(title="t", summary_text="build"))
+    assert out["buildable"] is True  # >= cutoff
+
+
+def test_graded_batched_per_gate_temperature_wins(monkeypatch):
+    monkeypatch.setenv("UA_TUTORIAL_BUILD_THRESHOLD", "70")
+    monkeypatch.setenv("UA_LLM_JUDGE_TEMPERATURE", "0.5")
+    monkeypatch.setenv("UA_TUTORIAL_BUILD_TEMPERATURE", "0")
+    record: list = []
+    _install_fake_graded_batch(monkeypatch, record=record)
+    asyncio.run(
+        lc.classify_tutorial_buildability_batched(
+            [{"video_id": "a", "title": "t", "channel_name": "c", "summary_text": "build"}], batch_size=20
+        )
+    )
+    assert record[0]["overrides"].get("temperature") == 0.0  # per-gate overrides global
+
+
 def test_categorical_single_unaffected(monkeypatch):
     monkeypatch.delenv("UA_TUTORIAL_BUILD_THRESHOLD", raising=False)
     monkeypatch.delenv("UA_LLM_JUDGE_TEMPERATURE", raising=False)

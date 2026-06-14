@@ -1999,6 +1999,11 @@ def write_convergence_candidate(
                 "demo_amenable": bool(triage.get("demo_amenable")),
                 "model": triage.get("model", ""),
             }
+            # Graded mode carries a 0-100 score; persist it as provenance for
+            # threshold tuning. Categorical mode has no score → key omitted (the
+            # metadata stays byte-identical to the pre-graded behavior).
+            if triage.get("score") is not None:
+                metadata_payload["triage"]["score"] = triage["score"]
             if inflight_mission_id:
                 logger.info(
                     "Skipping convergence re-queue for candidate %s (task %s): "
@@ -2053,6 +2058,8 @@ def write_convergence_candidate(
             "demo_amenable": bool(triage.get("demo_amenable")),
             "model": triage.get("model", ""),
         }
+        if triage.get("score") is not None:
+            row_metadata["triage"]["score"] = triage["score"]
     conn.execute(
         """
         INSERT INTO convergence_candidates (

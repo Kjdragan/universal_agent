@@ -195,3 +195,141 @@ def test_batched_graded_forwards_temperature(monkeypatch):
     conn = _conn()
     pc._run_batched_triage(conn, [_spec("v0")], idx_text="I")
     assert record[0]["overrides"].get("temperature") == 0.0
+
+
+# ── boundaries / thresholds / determinism wiring (review fast-follow) ────────
+
+
+def test_graded_triage_score_at_ship_threshold_ships(monkeypatch):
+    monkeypatch.setenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", "70")
+    _patch_call_llm(monkeypatch, {"score": 70, "reasoning": "exactly at cutoff", "demo_amenable": False})
+    conn = _conn()
+    out = pc.triage_candidate(conn, candidate_kind="convergence", thesis="t", value="", signatures=[_sig("v1")])
+    assert out["kind"] == "ship"  # >= cutoff
+
+
+def test_graded_triage_score_at_defer_threshold_defers(monkeypatch):
+    monkeypatch.setenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", "70")
+    monkeypatch.setenv("UA_INTEL_TRIAGE_DEFER_THRESHOLD", "50")
+    _patch_call_llm(monkeypatch, {"score": 50, "reasoning": "exactly at defer", "demo_amenable": False})
+    conn = _conn()
+    out = pc.triage_candidate(conn, candidate_kind="convergence", thesis="t", value="", signatures=[_sig("v1")])
+    assert out["kind"] == "defer"  # >= defer, < ship
+
+
+def test_graded_triage_defer_ge_ship_fails_safe_to_skip(monkeypatch):
+    # Misconfiguration: defer >= ship → the defer band is suppressed (fail safe).
+    monkeypatch.setenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", "70")
+    monkeypatch.setenv("UA_INTEL_TRIAGE_DEFER_THRESHOLD", "70")
+    _patch_call_llm(monkeypatch, {"score": 60, "reasoning": "below ship", "demo_amenable": False})
+    conn = _conn()
+    out = pc.triage_candidate(conn, candidate_kind="convergence", thesis="t", value="", signatures=[_sig("v1")])
+    assert out["kind"] == "skip"
+
+
+def test_graded_triage_per_gate_temperature_wins(monkeypatch):
+    monkeypatch.setenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", "70")
+    monkeypatch.setenv("UA_LLM_JUDGE_TEMPERATURE", "0.5")
+    monkeypatch.setenv("UA_INTEL_TRIAGE_TEMPERATURE", "0")
+    record: list = []
+    _patch_call_llm(monkeypatch, {"score": 50, "reasoning": "x", "demo_amenable": False}, record)
+    conn = _conn()
+    pc.triage_candidate(conn, candidate_kind="convergence", thesis="t", value="", signatures=[_sig("v1")])
+    assert record[0]["temperature"] == 0.0  # per-gate overrides the global
+
+
+def test_categorical_global_temperature_still_forwards(monkeypatch):
+    # Threshold UNSET (categorical) but a global judge temperature SET → it still
+    # forwards. The determinism knob is INDEPENDENT of the graded switch (intended).
+    monkeypatch.delenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", raising=False)
+    monkeypatch.setenv("UA_LLM_JUDGE_TEMPERATURE", "0")
+    record: list = []
+    _patch_call_llm(monkeypatch, {"verdict": "ship", "reasoning": "x", "demo_amenable": False}, record)
+    conn = _conn()
+    out = pc.triage_candidate(conn, candidate_kind="convergence", thesis="t", value="", signatures=[_sig("v1")])
+    assert out["kind"] == "ship"
+    assert record[0]["temperature"] == 0.0
+
+
+def test_intel_thresholds_unset_garbage_and_clamp(monkeypatch):
+    monkeypatch.delenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", raising=False)
+    assert pc._intel_ship_threshold() is None
+    monkeypatch.setenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", "garbage")
+    assert pc._intel_ship_threshold() is None
+    monkeypatch.setenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", "150")
+    assert pc._intel_ship_threshold() == 100
+    monkeypatch.setenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", "-5")
+    assert pc._intel_ship_threshold() == 0
+    monkeypatch.delenv("UA_INTEL_TRIAGE_DEFER_THRESHOLD", raising=False)
+    assert pc._intel_defer_threshold() is None
+    monkeypatch.setenv("UA_INTEL_TRIAGE_DEFER_THRESHOLD", "x")
+    assert pc._intel_defer_threshold() is None
+
+
+def test_batched_graded_score_string_and_float(monkeypatch):
+    monkeypatch.setenv("UA_INTEL_TRIAGE_BATCH_SIZE", "20")
+    monkeypatch.setenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", "70")
+    import universal_agent.services.llm_classifier as llm_classifier
+
+    scores = {"v_str": "85", "v_float": 85.5, "v_low": "40"}
+
+    async def fake(*, system, user, max_tokens, **overrides):
+        payload = json.loads(user)
+        verdicts = [
+            {"index": c["index"], "score": scores[c["thesis"]], "reasoning": "r", "demo_amenable": False}
+            for c in payload["candidates"]
+        ]
+        return json.dumps({"verdicts": verdicts})
+
+    monkeypatch.setattr(llm_classifier, "_call_llm", fake)
+    conn = _conn()
+    specs = [_spec("v_str", thesis="v_str"), _spec("v_float", thesis="v_float"), _spec("v_low", thesis="v_low")]
+    out = pc._run_batched_triage(conn, specs, idx_text="I")
+    cid = pc._candidate_id_for_signatures
+    assert out[cid([{"video_id": "v_str"}])]["kind"] == "ship"
+    assert out[cid([{"video_id": "v_str"}])]["score"] == 85.0  # numeric string coerced
+    assert out[cid([{"video_id": "v_float"}])]["kind"] == "ship"
+    assert out[cid([{"video_id": "v_float"}])]["score"] == 85.5  # float preserved
+    assert out[cid([{"video_id": "v_low"}])]["kind"] == "skip"
+
+
+def test_batched_graded_per_gate_temperature_wins(monkeypatch):
+    monkeypatch.setenv("UA_INTEL_TRIAGE_BATCH_SIZE", "20")
+    monkeypatch.setenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", "70")
+    monkeypatch.setenv("UA_LLM_JUDGE_TEMPERATURE", "0.5")
+    monkeypatch.setenv("UA_INTEL_TRIAGE_TEMPERATURE", "0")
+    record: list = []
+    _install_fake_graded_batch(monkeypatch, record=record)
+    conn = _conn()
+    pc._run_batched_triage(conn, [_spec("v0")], idx_text="I")
+    assert record[0]["overrides"].get("temperature") == 0.0  # per-gate overrides global
+
+
+# ── score persisted into metadata.triage (the P1 fix) ───────────────────────
+
+
+def test_graded_ship_persists_score_in_metadata(monkeypatch):
+    from universal_agent import task_hub
+
+    monkeypatch.setenv("UA_INTEL_TRIAGE_ENABLED", "1")
+    monkeypatch.setenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", "70")
+    _patch_call_llm(monkeypatch, {"score": 82, "reasoning": "x", "demo_amenable": False})
+    conn = _conn()
+    task_hub.ensure_schema(conn)
+    result = pc.write_convergence_candidate(conn, signatures=[_sig("v1"), _sig("v2", "B")])
+    row = pc._get_convergence_candidate(conn, result["candidate_id"])
+    assert row["metadata"]["triage"]["kind"] == "ship"
+    assert row["metadata"]["triage"]["score"] == 82.0  # graded provenance persisted
+
+
+def test_categorical_ship_omits_score_in_metadata(monkeypatch):
+    from universal_agent import task_hub
+
+    monkeypatch.setenv("UA_INTEL_TRIAGE_ENABLED", "1")
+    monkeypatch.delenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD", raising=False)
+    _patch_call_llm(monkeypatch, {"verdict": "ship", "reasoning": "x", "demo_amenable": False})
+    conn = _conn()
+    task_hub.ensure_schema(conn)
+    result = pc.write_convergence_candidate(conn, signatures=[_sig("v1"), _sig("v2", "B")])
+    row = pc._get_convergence_candidate(conn, result["candidate_id"])
+    assert "score" not in row["metadata"]["triage"]  # categorical shape unchanged
