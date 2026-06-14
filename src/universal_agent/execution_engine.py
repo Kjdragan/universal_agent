@@ -458,7 +458,49 @@ class ProcessTurnAdapter:
         self._pending_inputs: dict[str, asyncio.Future[str]] = {}
         self._trace: dict[str, Any] = {}
         self._applied_extra_disallowed_tools: tuple[str, ...] = tuple()
-        
+
+    def _record_turn_tokens(self, start_idx: int) -> None:
+        """Record THIS turn's in-process SDK token usage into
+        ``activity_state.db::token_usage_events`` (the all-lane consolidation sink
+        for the bulk of ZAI spend the httpx hook cannot see — Simone heartbeat/
+        daemon + in-process VP coder run the SDK in-process and return usage via
+        the ``ResultMessage``, not the patched httpx client).
+
+        Called from ``run_engine``'s ``finally`` with the ``sdk_result_messages``
+        length snapshotted at turn entry, so it sums only this turn's delta and
+        fires on success, error, AND cancellation/timeout. Synchronous (a single
+        bounded INSERT — matches ``cody_token_tracking``; awaiting ``to_thread``
+        during cancellation could re-raise) and strictly fail-soft: NEVER raises
+        into the caller. ``run_source`` (→ ``principal``) comes from the adapter's
+        reliable ``config._run_source``. See ``services/principal_token_tracking``.
+        """
+        try:
+            from universal_agent.services.principal_token_tracking import (
+                record_session_token_usage,
+                slice_turn_delta,
+            )
+
+            delta, baseline = slice_turn_delta(
+                self._trace.get("sdk_result_messages") or [], start_idx
+            )
+            if not delta:
+                return
+            record_session_token_usage(
+                delta_messages=delta,
+                run_source=str(
+                    self.config.__dict__.get("_run_source", "user") or "user"
+                ),
+                baseline_cost_usd=baseline,
+                session_id=self._trace.get("session_id")
+                or self._trace.get("provider_session_id")
+                or self._trace.get("run_id"),
+                run_id=self.config.run_id,
+            )
+        except Exception:  # noqa: BLE001 — telemetry must never break a turn
+            logger.warning(
+                "principal token capture failed (swallowed)", exc_info=False
+            )
+
     @property
     def workspace_dir(self) -> str:
         return self.config.workspace_dir
@@ -892,38 +934,10 @@ class ProcessTurnAdapter:
             finally:
                 # Capture in-process SDK token usage on EVERY exit path — success,
                 # error, AND cancellation/timeout. This finally runs even on
-                # CancelledError (a BaseException the `except Exception` above does
-                # NOT catch), so cancelled daemon turns — a large share of Simone
-                # heartbeat/todo spend (e.g. a 190s turn killed by the wall-clock
-                # cap) — are recorded too. Synchronous + fail-soft: a single
-                # bounded INSERT (matches cody_token_tracking's pattern), never
-                # awaited here (to_thread could re-raise during cancellation) and
-                # never raised into teardown.
-                try:
-                    from universal_agent.services.principal_token_tracking import (
-                        record_session_token_usage,
-                        slice_turn_delta,
-                    )
-
-                    _tok_delta, _tok_baseline = slice_turn_delta(
-                        self._trace.get("sdk_result_messages") or [], _tok_start_idx
-                    )
-                    if _tok_delta:
-                        record_session_token_usage(
-                            delta_messages=_tok_delta,
-                            run_source=str(
-                                self.config.__dict__.get("_run_source", "user") or "user"
-                            ),
-                            baseline_cost_usd=_tok_baseline,
-                            session_id=self._trace.get("session_id")
-                            or self._trace.get("provider_session_id")
-                            or self._trace.get("run_id"),
-                            run_id=self.config.run_id,
-                        )
-                except Exception:
-                    logger.warning(
-                        "principal token capture failed (swallowed)", exc_info=False
-                    )
+                # CancelledError (the `except Exception` above misses it), so
+                # cancelled daemon turns are recorded too. Extracted to a method so
+                # it is unit-testable independent of the live daemon.
+                self._record_turn_tokens(_tok_start_idx)
                 # Signal completion
                 await event_queue.put(AgentEvent(
                     type=EventType.STATUS,
