@@ -23,7 +23,7 @@ code_paths:
   - deployment/systemd/
   - web-ui/app/dashboard/tutorials/
   - web-ui/app/dashboard/claude-code-intel/
-last_verified: 2026-06-11
+last_verified: 2026-06-14
 ---
 
 # ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign
@@ -61,7 +61,10 @@ overlap on videos (double-processing confirmed: `Dk4MD6TNiWE`, `j6hnjNhx_MM` eac
    videos (haiku tier; `method='fallback'` ⇒ not cached / retried — byte-identical cache rules). The win
    is concentrated on cold-cache/backfill; **HIGH-precision ⇒ default-OFF until a live A/B holds**
    (`python -m universal_agent.scripts.zai_batch_triage_ab`). See
-   [`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md) §7.1. `todo_dispatch_service.py` routes `tutorial_build`
+   [`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md) §7.1. The judge also has
+   an **opt-in graded mode** (`UA_TUTORIAL_BUILD_THRESHOLD` → 0–100 score + cutoff, default unset = binary;
+   set HIGH to suppress false positives) and a determinism knob (`UA_TUTORIAL_BUILD_TEMPERATURE` /
+   `UA_LLM_JUDGE_TEMPERATURE=0`) — both inert by default. See §7.1.1 there. `todo_dispatch_service.py` routes `tutorial_build`
    → Cody (`vp.coder.primary`), which builds the runnable demo in `/opt/ua_demos/<id>`. **This lane is driven
    solely by the dedicated systemd timer** `universal-agent-proactive-demo-build-sweep`
    (`scripts/proactive_demo_build_sweep.py`, 3×/day), which calls `sync_build_oriented_csi_videos` directly

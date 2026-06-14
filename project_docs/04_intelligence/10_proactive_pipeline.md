@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/scripts/proactive_signal_card_sync.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-11
+last_verified: 2026-06-14
 ---
 
 # Proactive Pipeline
@@ -459,6 +459,23 @@ cluster/insight becomes queued work:
   12000). The triage verdict is carried in
   `metadata.triage = {kind, reasoning, demo_amenable, model}` on both the task and
   the candidate row.
+  - **Graded score gate (`UA_INTEL_TRIAGE_SHIP_THRESHOLD`, default unset = legacy
+    categorical).** When set, both the per-candidate and batched paths switch from a
+    categorical `ship`/`skip`/`defer` verdict to a 0–100 **score** (anchored rubric:
+    source-strength + novelty + specificity) that a code-side cutoff maps back to
+    `ship` (`score ≥ threshold`) / optional `defer` (`UA_INTEL_TRIAGE_DEFER_THRESHOLD`,
+    a lower band) / `skip`. This unifies triage with the established cluster-judge
+    pattern (`_gate_cluster_verdict` gating `signal_strength` at
+    `UA_CONVERGENCE_MIN_STRENGTH`) and restores a tunable filter that a deterministic
+    categorical judge cannot (`temperature=0` categorical triage ships ~everything). A
+    missing/garbled score fails closed to `retry`, exactly like an out-of-vocab
+    categorical verdict, so `metadata.triage` (plus an extra `score`) stays the same
+    shape. Determinism is a **separate** knob: `UA_INTEL_TRIAGE_TEMPERATURE` /
+    `UA_LLM_JUDGE_TEMPERATURE` (default unset → provider default ~1.0; set `0` for
+    deterministic verdicts — a live probe found the missing temperature was ~40%
+    per-item coin-flip). Both knobs default to today's behavior, so the gate is inert
+    until the operator flips them. See
+    [`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md) §7.1.
   - **Batched triage pre-pass (`UA_INTEL_TRIAGE_BATCH_SIZE`, default `1` = legacy
     per-candidate).** When `>1`, `sync_topic_signatures_from_csi` runs a sweep-level
     batched pre-pass (`_run_batched_triage` → `batched_judge`, see
