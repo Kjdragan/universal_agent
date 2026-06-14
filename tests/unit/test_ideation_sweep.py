@@ -145,7 +145,7 @@ def test_ideation_efficiency_knobs(monkeypatch):
     monkeypatch.setenv("UA_IDEATION_MAX_CORPUS", "bad")
     assert pc._ideation_max_corpus() == 120
     monkeypatch.delenv("UA_IDEATION_MAX_TOKENS", raising=False)
-    assert pc._ideation_max_tokens() == 2500
+    assert pc._ideation_max_tokens() == 8000
     monkeypatch.delenv("UA_IDEATION_MIN_NEW_SIGNATURES", raising=False)
     assert pc._ideation_min_new_signatures() == 5
     monkeypatch.setenv("UA_IDEATION_MIN_NEW_SIGNATURES", "0")

@@ -185,7 +185,9 @@ run finishes under the cron's `timeout_seconds`
 4. **Ideation sweep (Track B).** When `UA_IDEATION_SWEEP_ENABLED=1` (default),
    `_run_ideation_sweep` → `track_b_ideation_synthesis` runs **one** LLM call over
    the **full** recent signature corpus (up to `UA_IDEATION_MAX_CORPUS`, default
-   120; output budget `UA_IDEATION_MAX_TOKENS`, default 2500) looking for
+   120; output budget `UA_IDEATION_MAX_TOKENS`, default 8000 — a ceiling, not a
+   target: live calls land ~1100-1700 tokens, headroom covers content-heavy runs
+   and glm-5.2's thinking tokens) looking for
    *non-obvious* abstract patterns (convergence = "same story / news saturation";
    ideation = "interesting cross-cutting relationships"). The single whole-corpus
    call replaced the former 3×20 recency batches (each blind to the others) so the
