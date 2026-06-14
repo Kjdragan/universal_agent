@@ -377,8 +377,8 @@ def sync_build_oriented_csi_videos(
     finally:
         db.close()
 
-    # ── Collect buildable candidates (don't queue inside the loop anymore) ──
-    candidates: list[dict[str, Any]] = []
+    # ── Prefilter rows (cheap, deterministic) into preliminary candidates ──
+    prelim: list[dict[str, Any]] = []
     for row in rows:
         subject = _json_loads_obj(row["subject_json"])
         analysis = _json_loads_obj(row["analysis_json"])
@@ -390,26 +390,35 @@ def sync_build_oriented_csi_videos(
             continue
         title = str(subject.get("title") or subject.get("media_title") or video_id)
         channel = str(subject.get("channel_name") or subject.get("author_name") or "")
-        if not is_video_buildable_with_judge(
-            conn,
-            video_id=video_id,
-            title=title,
-            channel_name=channel,
-            summary_text=summary,
-        ):
-            continue
-        transcript_ok = str(row["transcript_status"] or "").lower() == "ok"
-        candidates.append(
+        prelim.append(
             {
                 "video_id": video_id,
                 "title": title,
                 "channel": channel,
+                "summary": summary,
                 "url": str(subject.get("url") or ""),
                 "extraction_plan": _extraction_plan_from_analysis(analysis=analysis, row=row),
-                "transcript_ok": transcript_ok,
+                "transcript_ok": str(row["transcript_status"] or "").lower() == "ok",
                 "occurred_at": str(row["occurred_at"] or ""),
             }
         )
+
+    # ── LLM buildability gate. UA_TUTORIAL_BUILDABILITY_BATCH_SIZE=1 (default) ⇒
+    # legacy per-video judge (one is_video_buildable_with_judge call each); >1 ⇒
+    # one batched structured-output call per ~N UNCACHED videos (cache-read FIRST,
+    # so steady-state cache hits never reach the LLM — the win is concentrated on
+    # cold-cache/backfill). Default-OFF until a live batched-vs-per-item A/B holds. ──
+    buildable_ids = _judge_buildable_ids(conn, prelim)
+    # Keep one candidate per qualifying ROW (preserving legacy's duplicate-row
+    # behavior) but EXCLUDE empty-summary rows — legacy's is_video_buildable_with_judge
+    # returns False on a blank summary regardless of cache, so an empty-summary
+    # duplicate of a buildable video was never a candidate (and must not consume a
+    # daily-ceiling position behind queue_tutorial_builds_with_ceiling's idx-based
+    # allocation).
+    candidates = [
+        c for c in prelim
+        if c["video_id"] in buildable_ids and str(c.get("summary") or "").strip()
+    ]
 
     # ── Rank: transcript-ok first, then newest upload (no numeric score exists) ──
     candidates.sort(key=lambda c: (c["transcript_ok"], c["occurred_at"]), reverse=True)
@@ -880,6 +889,148 @@ def _judge_disabled() -> bool:
     """Allow tests / ops to bypass the LLM judge entirely."""
     raw = str(os.getenv("UA_TUTORIAL_BUILD_JUDGE_ENABLED", "1") or "1").strip().lower()
     return raw in {"0", "false", "no", "off"}
+
+
+def _buildability_batch_size() -> int:
+    """Videos per batched buildability call (driver-side gate). Default **1 ==
+    legacy per-video judge**. Mirrors
+    ``llm_classifier._tutorial_buildability_batch_size`` so the gate and the
+    entrypoint default read the same ``UA_TUTORIAL_BUILDABILITY_BATCH_SIZE``."""
+    try:
+        n = int(os.getenv("UA_TUTORIAL_BUILDABILITY_BATCH_SIZE", "1") or "1")
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(60, n))
+
+
+def _judge_buildable_ids(
+    conn: sqlite3.Connection,
+    prelim: list[dict[str, Any]],
+    *,
+    deadline: float | None = None,
+    stats: dict | None = None,
+) -> set[str]:
+    """Return the set of buildable ``video_id``s among prefiltered ``prelim`` rows.
+
+    Default (``UA_TUTORIAL_BUILDABILITY_BATCH_SIZE=1``) → legacy per-video path via
+    :func:`is_video_buildable_with_judge` (cache + one LLM call per uncached
+    video). When >1 → :func:`_judge_buildable_ids_batched`: cache-read FIRST
+    (steady-state hits skip the LLM entirely), then ONE structured-output call per
+    chunk of uncached videos. The empty-summary skip, the cache MISS rules, and the
+    ``method=='fallback' ⇒ don't-cache`` rule are preserved byte-for-byte from
+    :func:`is_video_buildable_with_judge`."""
+    if (not _judge_disabled()) and _buildability_batch_size() > 1:
+        return _judge_buildable_ids_batched(conn, prelim, deadline=deadline, stats=stats)
+    # Legacy per-video path (also the judge-disabled path: returns False uncached).
+    out: set[str] = set()
+    judged: set[str] = set()
+    for c in prelim:
+        vid = c["video_id"]
+        if vid in judged:
+            continue  # same video re-asked would just hit the cache — reuse decision
+        # Skip blank-summary rows WITHOUT marking the video judged, so a later
+        # (older) row of the SAME video_id that DOES carry the analyzed summary
+        # still gets judged. Rows arrive newest-first (ORDER BY e.id DESC) and a
+        # re-ingested/analysis-lagged video's newest row is often the empty one;
+        # marking it judged here would starve the video (it returns False on the
+        # empty-summary short-circuit and never caches) — the exact 534/534
+        # no_summary starvation the cache MISS rules were written to prevent. The
+        # old per-row loop had no dedup and was order-independent; this preserves
+        # that. (_judge_buildable_ids_batched already skips empties the same way.)
+        if not str(c.get("summary") or "").strip():
+            continue
+        judged.add(vid)
+        if is_video_buildable_with_judge(
+            conn,
+            video_id=vid,
+            title=c["title"],
+            channel_name=c["channel"],
+            summary_text=c["summary"],
+        ):
+            out.add(vid)
+    return out
+
+
+def _judge_buildable_ids_batched(
+    conn: sqlite3.Connection,
+    prelim: list[dict[str, Any]],
+    *,
+    deadline: float | None = None,
+    stats: dict | None = None,
+) -> set[str]:
+    """Batched buildability judge. Cache-read first, then one call per chunk of
+    uncached videos. Mirrors the cache/method semantics of
+    :func:`is_video_buildable_with_judge` exactly."""
+    # Dedupe by video_id (first non-empty-summary occurrence wins — matches the
+    # cache-by-video_id, first-write semantics). Empty-summary videos are excluded
+    # (never judged, never cached) exactly like is_video_buildable_with_judge.
+    by_id: dict[str, dict[str, Any]] = {}
+    for c in prelim:
+        vid = c["video_id"]
+        if vid in by_id:
+            continue
+        if not str(c.get("summary") or "").strip():
+            continue
+        by_id[vid] = c
+
+    out: set[str] = set()
+    uncached: list[dict[str, Any]] = []
+    for vid, c in by_id.items():
+        cached = _get_cached_judge_verdict(conn, vid)
+        if cached is not None:
+            if cached["buildable"]:
+                out.add(vid)
+        else:
+            uncached.append(
+                {
+                    "video_id": vid,
+                    "title": c["title"],
+                    "channel_name": c["channel"],
+                    "summary_text": c["summary"],
+                }
+            )
+    if not uncached:
+        return out
+
+    verdicts = _run_buildability_batch(uncached, deadline=deadline, stats=stats)
+    for vid, verdict in verdicts.items():
+        method = str(verdict.get("method") or "llm")
+        if method == "fallback":
+            # LLM unavailable for this video — don't cache, retry next sweep.
+            continue
+        buildable = bool(verdict.get("buildable"))
+        _cache_judge_verdict(
+            conn,
+            video_id=vid,
+            buildable=buildable,
+            reasoning=str(verdict.get("reasoning") or ""),
+            method=method,
+        )
+        if buildable:
+            out.add(vid)
+    return out
+
+
+def _run_buildability_batch(
+    items: list[dict[str, Any]],
+    *,
+    deadline: float | None = None,
+    stats: dict | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Sync wrapper around the async batched buildability classifier. Any failure
+    ⇒ empty dict ⇒ every uncached video is skipped this sweep (fail-closed,
+    re-judged next sweep) — never misroute on a judge failure."""
+    try:
+        from universal_agent.services.llm_classifier import (
+            classify_tutorial_buildability_batched,
+        )
+
+        return asyncio.run(
+            classify_tutorial_buildability_batched(items, deadline=deadline, stats=stats)
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("tutorial-build batched judge failed: %s", exc)
+        return {}
 
 
 def _extraction_plan_from_analysis(*, analysis: dict[str, Any], row: Any) -> dict[str, Any]:

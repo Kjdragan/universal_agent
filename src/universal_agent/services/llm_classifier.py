@@ -841,6 +841,18 @@ Transcript summary:
 {summary}
 """
 
+# Batched twin of _TUTORIAL_BUILDABILITY_SYSTEM (PR P3). Many videos judged in one
+# structured-output call, keyed by index. Same strict bar per video.
+_TUTORIAL_BUILDABILITY_BATCH_SYSTEM = _TUTORIAL_BUILDABILITY_SYSTEM + """
+
+BATCH MODE: You are given MULTIPLE videos AT ONCE in a `videos` array, each with a
+numeric `index`. Judge EACH video INDEPENDENTLY by the rules above, applying the
+SAME strict bar to every one — do NOT become lax because there are many videos.
+Return ONLY a JSON object with one verdict per index, covering EVERY index you were
+given:
+{"verdicts":[{"index":0,"buildable":true,"reasoning":"1-2 sentences citing the summary"}]}
+"""
+
 
 async def classify_tutorial_buildability(
     *,
@@ -884,3 +896,101 @@ async def classify_tutorial_buildability(
             "reasoning": f"Fallback (LLM unavailable: {exc})",
             "method": "fallback",
         }
+
+
+def _tutorial_buildability_batch_size() -> int:
+    """Videos per batched buildability call. Default **1 == legacy per-video
+    path** (the batched judge stays OFF until a live batched-vs-per-item A/B holds
+    — the win is concentrated on cold-cache/backfill, small at steady state).
+    ``UA_TUTORIAL_BUILDABILITY_BATCH_SIZE``, clamped [1, 60]."""
+    try:
+        n = int(os.getenv("UA_TUTORIAL_BUILDABILITY_BATCH_SIZE", "1") or "1")
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(60, n))
+
+
+async def classify_tutorial_buildability_batched(
+    items: list[dict[str, Any]],
+    *,
+    model: Optional[str] = None,
+    batch_size: Optional[int] = None,
+    deadline: Optional[float] = None,
+    stats: Optional[dict[str, Any]] = None,
+) -> dict[str, "TutorialBuildabilityResult"]:
+    """Batched twin of :func:`classify_tutorial_buildability` over many videos.
+
+    ``items``: ``[{video_id, title, channel_name, summary_text}]``. Returns
+    ``{video_id: {buildable, reasoning, method}}`` for every item with a non-empty
+    summary (empty-summary items are dropped — never judged, never cached, exactly
+    like the single-video path's ``return False`` short-circuit). Built on the
+    shared :func:`batched_judge` helper: one structured-output call judges up to
+    ``batch_size`` videos at the Haiku tier.
+
+    Per-item ``method`` semantics match the single-video path EXACTLY so the
+    caller's cache rule is byte-identical: a video the batch judged →
+    ``method='llm'`` (CACHE it, buildable True or False); a whole-chunk failure /
+    missing verdict → ``method='fallback'`` (skip + do NOT cache + retry next
+    sweep). A Fair-Usage signal trips ``batched_judge``'s one-shot breaker
+    (remaining videos stay 'fallback')."""
+    from universal_agent.services.batched_judge import batched_judge
+
+    valid = [it for it in items if str((it or {}).get("summary_text") or "").strip()]
+    if not valid:
+        return {}
+
+    resolved_model = (
+        model
+        or (os.getenv("UA_TUTORIAL_BUILDABILITY_MODEL") or "").strip()
+        or resolve_haiku()
+    )
+    bs = batch_size if batch_size is not None else _tutorial_buildability_batch_size()
+
+    def build_prompt(chunk: list[dict[str, Any]]) -> str:
+        return json.dumps(
+            {
+                "videos": [
+                    {
+                        "index": i,
+                        "title": str(it.get("title") or "(unknown)"),
+                        "channel": str(it.get("channel_name") or "(unknown)"),
+                        "summary": (str(it.get("summary_text") or "").strip()[:4000] or "(empty)"),
+                    }
+                    for i, it in enumerate(chunk)
+                ]
+            },
+            ensure_ascii=True,
+        )
+
+    def parse(item: dict[str, Any], verdict: dict[str, Any]) -> "TutorialBuildabilityResult":
+        # A present verdict (even a malformed one defaulting to buildable=False) is a
+        # real judgement → method='llm' (cacheable) — identical to the single path.
+        return {
+            "buildable": bool(verdict.get("buildable", False)),
+            "reasoning": str(verdict.get("reasoning") or "").strip(),
+            "method": "llm",
+        }
+
+    fail_closed: "TutorialBuildabilityResult" = {
+        "buildable": False,
+        "reasoning": "Fallback (batch unavailable)",
+        "method": "fallback",
+    }
+
+    results = await batched_judge(
+        valid,
+        build_prompt=build_prompt,
+        parse=parse,
+        fail_closed=fail_closed,
+        system=_TUTORIAL_BUILDABILITY_BATCH_SYSTEM,
+        batch_size=bs,
+        model_overrides={"model": resolved_model},
+        deadline=deadline,
+        stats=stats,
+    )
+    out: dict[str, "TutorialBuildabilityResult"] = {}
+    for it, res in zip(valid, results):
+        vid = str(it.get("video_id") or "").strip()
+        if vid:
+            out[vid] = res.value
+    return out

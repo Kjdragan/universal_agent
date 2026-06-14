@@ -54,7 +54,14 @@ overlap on videos (double-processing confirmed: `Dk4MD6TNiWE`, `j6hnjNhx_MM` eac
 2. **Proactive-signals lane** — `proactive_tutorial_builds.py::sync_build_oriented_csi_videos` reads the
    *broad* CSI feed (`events WHERE source='youtube_channel_rss'`), LLM-judges buildability
    (`is_video_buildable_with_judge`), and enqueues `tutorial_build` Task Hub rows
-   (`queue_tutorial_build_task`, `source=csi_auto_route`). `todo_dispatch_service.py` routes `tutorial_build`
+   (`queue_tutorial_build_task`, `source=csi_auto_route`). The per-video judge has an optional
+   **batched pre-pass** (`_judge_buildable_ids` → `classify_tutorial_buildability_batched`, knob
+   `UA_TUTORIAL_BUILDABILITY_BATCH_SIZE`, default **1 = legacy per-video**): cache-read FIRST so
+   steady-state cache hits never reach the LLM, then ONE structured-output call per chunk of uncached
+   videos (haiku tier; `method='fallback'` ⇒ not cached / retried — byte-identical cache rules). The win
+   is concentrated on cold-cache/backfill; **HIGH-precision ⇒ default-OFF until a live A/B holds**
+   (`python -m universal_agent.scripts.zai_batch_triage_ab`). See
+   [`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md) §7.1. `todo_dispatch_service.py` routes `tutorial_build`
    → Cody (`vp.coder.primary`), which builds the runnable demo in `/opt/ua_demos/<id>`. **This lane is driven
    solely by the dedicated systemd timer** `universal-agent-proactive-demo-build-sweep`
    (`scripts/proactive_demo_build_sweep.py`, 3×/day), which calls `sync_build_oriented_csi_videos` directly
