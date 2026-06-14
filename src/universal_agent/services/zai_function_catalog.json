@@ -125,8 +125,8 @@
       "role": "judge",
       "tier_current": "haiku",
       "tier_verdict": "appropriate",
-      "notes": "Binary judgment — haiku tier intentional (UA_TUTORIAL_BUILDABILITY_MODEL).",
-      "source_sha": "f076854af294caf0"
+      "notes": "Binary judgment — haiku tier intentional (UA_TUTORIAL_BUILDABILITY_MODEL). Graded-judge redesign: forwards an optional temperature (UA_TUTORIAL_BUILD_TEMPERATURE / UA_LLM_JUDGE_TEMPERATURE) for determinism; when UA_TUTORIAL_BUILD_THRESHOLD is set the judge scores 0-100 and buildable = score >= threshold (set HIGH to suppress false positives). Default unset = binary, inert.",
+      "source_sha": "1ff13f209496bcc2"
     },
     "universal_agent/services/proactive_work_recap.py::_call_llm_recap_evaluator": {
       "label": "Proactive work-recap evaluator",
