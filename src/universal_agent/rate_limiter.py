@@ -9,7 +9,13 @@ This module provides a singleton rate limiter that:
 
 Configuration (environment variables):
     ZAI_MAX_CONCURRENT: Max parallel requests (default: 2)
-    ZAI_INITIAL_BACKOFF: Initial backoff floor in seconds (default: 1.0)
+    ZAI_INITIAL_BACKOFF: Initial backoff floor in seconds (default: 10.0).
+        Deliberately conservative: a 1s first step is a glitchy-server retry,
+        not a rate-limiting posture. ZAI's throttle is a frequency-based Fair-
+        Usage limiter, so the first backoff after a 429 should be a real pause
+        that drains the frequency window rather than immediately re-firing and
+        feeding the storm. The floor only ever applies AFTER a 429, so a larger
+        value costs nothing on healthy traffic.
     ZAI_MAX_BACKOFF: Maximum backoff cap in seconds (default: 30.0)
     ZAI_MIN_INTERVAL: Minimum seconds between request starts (default: 0.5)
 """
@@ -259,7 +265,7 @@ class ZAIRateLimiter:
         # Config from environment
         # Default to 2 concurrent - ZAI rate limits are strict
         self._max_concurrent = max_concurrent or int(os.getenv("ZAI_MAX_CONCURRENT", "2"))
-        self._initial_backoff = float(os.getenv("ZAI_INITIAL_BACKOFF", "1.0"))
+        self._initial_backoff = float(os.getenv("ZAI_INITIAL_BACKOFF", "10.0"))
         self._max_backoff = float(os.getenv("ZAI_MAX_BACKOFF", "30.0"))
 
         # State
@@ -499,8 +505,14 @@ class ZAIRateLimiter:
             # If 429s are happening within 10s of each other, they're related
             if now - self._last_429_time < 10:
                 self._consecutive_429s += 1
-                # Raise floor after repeated 429s (max 8s floor)
-                self._backoff_floor = min(8.0, self._initial_backoff * (1.5 ** self._consecutive_429s))
+                # Ratchet the floor up on sustained 429s, bounded by a ceiling —
+                # but NEVER below the configured initial floor, so a conservative
+                # ZAI_INITIAL_BACKOFF (e.g. 10s) isn't silently clamped down mid-storm.
+                # (For the historical 1s default, max(1.0, 8.0)=8.0 — behavior unchanged.)
+                self._backoff_floor = min(
+                    max(self._initial_backoff, 8.0),
+                    self._initial_backoff * (1.5 ** self._consecutive_429s),
+                )
             else:
                 self._consecutive_429s = 1
                 self._backoff_floor = self._initial_backoff
@@ -512,7 +524,7 @@ class ZAIRateLimiter:
                 if now - self._tier_last_429[tier] < 10:
                     self._tier_consecutive_429s[tier] += 1
                     self._tier_backoff_floor[tier] = min(
-                        8.0,
+                        max(self._initial_backoff, 8.0),
                         self._initial_backoff * (1.5 ** self._tier_consecutive_429s[tier]),
                     )
                 else:
