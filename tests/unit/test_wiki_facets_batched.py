@@ -17,7 +17,13 @@ from universal_agent.wiki import core as wiki_core, llm as wiki_llm
 def _install_fake_call_llm(monkeypatch, *, record=None, raise_exc=None):
     """Patch llm_classifier._call_llm (the backend batched_judge lazily imports)
     with a deterministic fake that answers entities/concepts vs summary by system
-    prompt and echoes each source's chunk-local index."""
+    prompt and echoes each source's chunk-local index.
+
+    Import the module and patch the OBJECT (not a dotted string) so resolution
+    doesn't depend on whether a prior test already imported the submodule — a
+    string target intermittently fails as 'no attribute' depending on test order.
+    """
+    import universal_agent.services.llm_classifier as llm_classifier
 
     async def fake_call_llm(*, system, user, max_tokens, **overrides):
         if record is not None:
@@ -35,7 +41,7 @@ def _install_fake_call_llm(monkeypatch, *, record=None, raise_exc=None):
             ]
         return json.dumps({"verdicts": verdicts})
 
-    monkeypatch.setattr("universal_agent.services.llm_classifier._call_llm", fake_call_llm)
+    monkeypatch.setattr(llm_classifier, "_call_llm", fake_call_llm)
 
 
 def test_extract_facets_batched_maps_each_source(monkeypatch):
