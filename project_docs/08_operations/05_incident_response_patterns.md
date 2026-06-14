@@ -15,7 +15,7 @@ code_paths:
   - "scripts/deploy_validate_runtime.sh"
   - "scripts/check_crashloop.sh"
   - "scripts/check_heartbeat_liveness.py"
-last_verified: 2026-06-11
+last_verified: 2026-06-13
 ---
 
 # Incident Response Patterns
@@ -463,11 +463,35 @@ hint of *which* task failed or *why*. The emit site (`gateway_server.py`, the
 the notification metadata: `task_id` / `invalid_task_ids`, `run_id`, `workspace_dir`,
 `tool_calls`, and the `log_tail` (`gateway_server.py::_read_run_log_tail`). The email renderer
 (`notification_dispatcher.py::_format_email_html`) surfaces those in a context table plus an
-escaped `<pre>` run-log tail. **`tool_calls: 0` is the tell** that the run never started — the
-most common cause is an upstream ZAI `429`/Fair-Usage-Policy `[1313]` rejection (see
-[`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md)) that killed both
-the original VP mission and the rescue run before either could close the Task Hub loop, so the
-operator can recognize the throttle from the inbox instead of SSHing to read `run.log`.
+escaped `<pre>` run-log tail.
+
+**The run-log tail alone was misleading** (PR-era fix, 2026-06-13): `run.log` opens with the
+entire echoed execution prompt (`👤 USER: <manifest>`), so a raw last-4 KB byte-tail is dominated
+by the *prompt*, not the model's answer — and on the empty-retry workspace it showed nothing but
+the closing `=== Turn completed (0 tool calls) ===` line. The emit site now also captures and
+surfaces the model's **actual final output** and a plain-language verdict:
+
+- **`final_response`** — the model's final assistant text (accumulated from `TEXT` events in
+  `gateway_server.py::_run_gateway_session_request`), rendered as its own *"Model output (final
+  turn)"* `<pre>` block above the run-log tail. This is where a verbatim ZAI `429`/Fair-Usage-Policy
+  `[1313]` rejection now appears directly in the inbox.
+- **`stop_reason`** — the turn's stop reason (read off the `ITERATION_END` event, previously
+  discarded), distinguishing `end_turn` (model chose not to act) from a truncated/errored turn.
+- **`response_empty`** — boolean: `True` when the turn produced no text *and* no tool calls (an
+  aborted/throttled inference).
+- **`likely_cause`** — a one-line verdict from `gateway_server.py::_lifecycle_miss_likely_cause`,
+  the lead row in the context table. Five mutually-exclusive cases in priority order: deploy
+  casualty → **inference throttle** (`gateway_server.py::_looks_like_inference_throttle` matches
+  `429`/Fair-Usage-Policy/`[1313]`) → empty turn → talked-but-no-tools → **worked-but-no-close**.
+
+**Reading the email:** `tool_calls: 0` with an inference-throttle `likely_cause` ⇒ an upstream ZAI
+`429`/`[1313]` rejection (see [`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md))
+killed the run before it could close the Task Hub loop — the work item was reopened and retries; the
+fix is reducing inference burst load, not the run. By contrast `tool_calls > 0` with a
+*worked-but-no-close* `likely_cause` is a **distinct** failure mode: the model did real work but
+never emitted a closing lifecycle mutation (a close-discipline gap), which is the **majority subtype**
+when the throttle is not active (70 of 80 misses in the 2026-06-13 convergence-candidate flood) and
+warrants a different fix than the throttle.
 
 ### Crashloop fail-fast (`scripts/check_crashloop.sh`)
 

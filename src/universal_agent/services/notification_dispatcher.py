@@ -120,16 +120,22 @@ def _channels_list(record: dict) -> list[str]:
 
 
 # Metadata keys surfaced in the diagnostic-context table, in render order.
-# ``task_id``/``run_id``/``workspace_dir``/``tool_calls``/``session_id`` make a
-# todo-execution failure (e.g. ``execution_missing_lifecycle_mutation``)
-# debuggable straight from the inbox; the trailing keys cover cron/infra alerts.
+# ``likely_cause`` leads because it is the plain-language verdict (e.g. "upstream
+# inference throttle"); ``task_id``/``run_id``/``workspace_dir``/``tool_calls``/
+# ``stop_reason``/``response_empty``/``session_id`` make a todo-execution failure
+# (e.g. ``execution_missing_lifecycle_mutation``) debuggable straight from the
+# inbox; the trailing keys cover cron/infra alerts. The model's actual final
+# output is rendered separately (see ``final_response`` in ``_format_email_html``).
 _EMAIL_CONTEXT_KEYS = (
+    "likely_cause",
     "task_id",
     "invalid_task_ids",
     "session_id",
     "run_id",
     "workspace_dir",
     "tool_calls",
+    "stop_reason",
+    "response_empty",
     "deploy_restart_casualty",
     "job_id",
     "task_name",
@@ -163,6 +169,23 @@ def _format_email_html(record: dict) -> str:
             f"<td>{_html_escape(str(value))}</td></tr>"
         )
     rows_html = "\n".join(rows) if rows else ""
+    # Model output (final turn): what the model ACTUALLY emitted on the failing
+    # turn — the single most diagnostic field (e.g. a verbatim ZAI 429/FUP
+    # rejection, a refusal, or an "I'll do this" with no tool calls). Rendered
+    # ABOVE the run-log tail because the run.log byte-tail is dominated by the
+    # echoed prompt; this block is the clean answer.
+    final_response = str(metadata.get("final_response") or "").strip()
+    final_html = ""
+    if final_response:
+        if len(final_response) > 3000:
+            final_response = "…(truncated)…\n" + final_response[-3000:]
+        final_html = (
+            "<p style=\"margin:12px 0 4px;\"><b>Model output (final turn)</b></p>"
+            "<pre style=\"background:#fff8f0;border:1px solid #e0c0a0;padding:8px;"
+            "white-space:pre-wrap;word-break:break-word;font-size:12px;"
+            "overflow-x:auto;\">"
+            f"{_html_escape(final_response)}</pre>"
+        )
     # Run-log tail: the actual error transcript (e.g. an upstream ZAI 429/FUP
     # line). Escaped and capped, rendered in a <pre> so the operator can read
     # the real failure without opening the VPS.
@@ -183,6 +206,7 @@ def _format_email_html(record: dict) -> str:
         f"<h2 style=\"color:#b00020;\">[{severity}] {title}</h2>"
         f"<p>{message}</p>"
         + (f"<table cellpadding=4 cellspacing=0 border=1>{rows_html}</table>" if rows_html else "")
+        + final_html
         + log_html
         + (f"<p style=\"color:#666;font-size:11px;\">kind: {kind}</p>" if kind else "")
         + "</body></html>"

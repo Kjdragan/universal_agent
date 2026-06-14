@@ -203,6 +203,49 @@ class TestFormatEmailHtmlDiagnosticContext:
         html = _format_email_html({"metadata": {"unrelated_key": "value"}})
         assert "<table" not in html
 
+    def test_surfaces_likely_cause_stop_reason_and_response_empty(self):
+        # The new plain-language verdict + turn diagnostics must render in the
+        # context table so the operator gets the answer without SSHing the VPS.
+        html = _format_email_html({
+            "kind": "execution_missing_lifecycle_mutation",
+            "metadata": {
+                "likely_cause": "Upstream inference throttle — 429 / Fair Usage Policy.",
+                "stop_reason": "end_turn",
+                "response_empty": False,
+                "tool_calls": 0,
+            },
+        })
+        assert "likely_cause" in html
+        assert "Upstream inference throttle" in html
+        assert "stop_reason" in html
+        assert "end_turn" in html
+        # response_empty=False must still render (False is not the skip sentinel).
+        assert "response_empty" in html
+
+    def test_renders_final_response_block_above_run_log(self):
+        # The model's actual final output (here a verbatim 429/FUP rejection)
+        # gets its own escaped <pre> block, distinct from the run-log tail.
+        html = _format_email_html({
+            "kind": "execution_missing_lifecycle_mutation",
+            "metadata": {
+                "final_response": "API Error: Request rejected (429) · [1313] Fair Usage Policy",
+                "log_tail": "[01:34:11] === Turn completed (0 tool calls) ===",
+            },
+        })
+        assert "Model output (final turn)" in html
+        assert "Fair Usage Policy" in html
+        # Both blocks present, model output rendered before the run-log tail.
+        assert html.index("Model output (final turn)") < html.index("Run log tail")
+
+    def test_final_response_is_html_escaped_and_truncated(self):
+        # Markup placed at the END so it survives the trailing-window truncation.
+        html = _format_email_html({
+            "metadata": {"final_response": "Y" * 5000 + "<script>x</script>"},
+        })
+        assert "<script>x</script>" not in html
+        assert "&lt;script&gt;" in html
+        assert "truncated" in html
+
 
 class TestFormatTelegramText:
     def test_basic_format(self):
