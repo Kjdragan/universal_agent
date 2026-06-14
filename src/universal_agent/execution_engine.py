@@ -1043,7 +1043,14 @@ class ProcessTurnAdapter:
                     engine_task.cancel()
                     try:
                         await engine_task
-                    except Exception:
+                    except BaseException:
+                        # MUST be BaseException: cancelling engine_task makes
+                        # `await engine_task` re-raise asyncio.CancelledError,
+                        # which is a BaseException (NOT Exception) on py3.8+. With
+                        # a bare `except Exception` the CancelledError would
+                        # propagate out of execute() and the kill-reason ERROR
+                        # event below would never be yielded — defeating the
+                        # whole point of this kill path (now the primary one).
                         pass
                     yield AgentEvent(
                         type=EventType.ERROR,

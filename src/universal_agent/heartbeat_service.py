@@ -85,7 +85,17 @@ DEFAULT_HEARTBEAT_CONTINUATION_DELAY_SECONDS = max(
     1,
     int(os.getenv("UA_HEARTBEAT_CONTINUATION_DELAY_SECONDS", "1") or 1),
 )
-DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 1600
+# The heartbeat wraps the whole agent run in an outer ``asyncio.wait_for`` (see
+# ``_collect_events``). This is a LAST-RESORT ceiling, NOT the primary timeout:
+# the in-process ``ProcessTurnAdapter`` already governs live turns with the
+# ``timeout_policy.LivenessWatchdog`` (idle / no-progress kill + a high absolute
+# backstop) which fires first with a clean ERROR event + token capture. Before
+# 2026-06-14 this outer cap defaulted to 1600 s — SHORTER than the inner backstop
+# — so it could hard-kill a live, progressing Simone daemon turn, exactly the
+# failure the liveness redesign set out to remove. It is now sized ABOVE the
+# inner backstop (backstop + buffer) so the inner watchdog is always the binding
+# control on a live turn. See ``_resolve_exec_timeout_seconds``.
+DEFAULT_HEARTBEAT_EXEC_BACKSTOP_BUFFER = 600
 MIN_HEARTBEAT_EXEC_TIMEOUT = 600
 DEFAULT_ACK_MAX_CHARS = 300
 DEFAULT_OK_TOKENS = ["UA_HEARTBEAT_OK", "HEARTBEAT_OK"]
@@ -1025,7 +1035,25 @@ def heartbeat_drain_on_shutdown_enabled() -> bool:
 
 
 def _resolve_exec_timeout_seconds() -> int:
-    timeout = _parse_int(os.getenv("UA_HEARTBEAT_EXEC_TIMEOUT"), DEFAULT_HEARTBEAT_EXEC_TIMEOUT)
+    """Outer last-resort wall-clock ceiling for a heartbeat agent run.
+
+    NOT the primary control. The in-process ``ProcessTurnAdapter``'s
+    ``LivenessWatchdog`` (idle/no-progress kill + absolute backstop) governs live
+    turns and fires first. This ceiling only catches a collect loop wedged
+    independently of the adapter, so it is sized ABOVE the inner absolute
+    backstop (``UA_PROCESS_TURN_ABSOLUTE_BACKSTOP_SECONDS``) + a buffer. An
+    explicit ``UA_HEARTBEAT_EXEC_TIMEOUT`` overrides the derived default.
+    """
+    from universal_agent.timeout_policy import (
+        process_turn_absolute_backstop_seconds,
+    )
+
+    default = max(
+        MIN_HEARTBEAT_EXEC_TIMEOUT,
+        int(process_turn_absolute_backstop_seconds())
+        + DEFAULT_HEARTBEAT_EXEC_BACKSTOP_BUFFER,
+    )
+    timeout = _parse_int(os.getenv("UA_HEARTBEAT_EXEC_TIMEOUT"), default)
     if timeout < MIN_HEARTBEAT_EXEC_TIMEOUT:
         logger.warning(
             "UA_HEARTBEAT_EXEC_TIMEOUT=%s is too low for current heartbeat workloads; using %ss",

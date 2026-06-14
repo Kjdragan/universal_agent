@@ -1,17 +1,22 @@
-"""Tier resolution for the ProcessTurnAdapter wall-clock cap.
+"""Tier resolution for the ProcessTurnAdapter (``_tier_for_model``).
 
-Regression guard for the Simone daemon stall (2026-06-14): after the glm-5.1→5.2
-opus-map migration (2026-06-13), a daemon session still pinned to ``glm-5.1`` no
-longer matched ``ZAI_MODEL_MAP['opus'] == 'glm-5.2'`` and fell through to the
-sonnet 180s default. Every long Simone work turn was then killed at 180s — ~13h
-with zero completed daemon turns (journal: ``wall-clock cap: 180s
-(tier=sonnet, model='glm-5.1')`` → ``timed out after 180.0s``).
+As of the 2026-06-14 liveness redesign, ``_tier_for_model`` no longer drives a
+wall-clock kill — the adapter is governed by the idle / no-progress
+``LivenessWatchdog`` (see ``test_liveness_watchdog.py`` /
+``test_execution_engine_turn_timeout.py``). The mapping is now an **informational
+label** in the adapter's liveness log line. It is retained (and still tested
+here) because the glm-5.x→opus rule is the migration-proofing that prevents a
+recurrence of the Simone daemon stall: after the glm-5.1→5.2 opus-map migration
+(2026-06-13) a daemon session pinned to ``glm-5.1`` no longer matched
+``ZAI_MODEL_MAP['opus'] == 'glm-5.2'`` and would mis-label as sonnet — back when
+that label *did* drive a 180s kill (~13h with zero completed daemon turns). The
+label is correct now so the historical journal lines stay meaningful, but the
+kill it once caused is gone.
 """
 
 import pytest
 
 from universal_agent.execution_engine import _tier_for_model
-from universal_agent.utils.model_resolution import model_call_timeout_seconds
 
 
 @pytest.mark.parametrize("model,tier", [
@@ -31,13 +36,9 @@ def test_tier_for_model(model, tier):
     assert _tier_for_model(model) == tier
 
 
-def test_opus_cap_exceeds_sonnet_cap():
-    # The whole point: opus turns get a much larger wall-clock cap than sonnet,
-    # so a glm-5.1 Simone turn is no longer killed at the 180s sonnet default.
-    assert model_call_timeout_seconds("opus") > model_call_timeout_seconds("sonnet")
-
-
-def test_glm_5_1_gets_opus_cap_not_180s():
-    # End-to-end of the fix: glm-5.1 -> opus tier -> opus cap (>> 180s).
-    cap = model_call_timeout_seconds(_tier_for_model("glm-5.1"))
-    assert cap > 180.0
+def test_glm_dot_flagship_is_opus_label_migration_proof():
+    # The migration-proofing invariant: ANY glm-5.x dot-flagship labels as opus,
+    # so a version bump (5.1 -> 5.2 -> 5.3 ...) can never mis-label as sonnet.
+    # (Now an informational label only; the adapter no longer caps on tier.)
+    for v in ("glm-5.1", "glm-5.2", "glm-5.9", "glm-5.10"):
+        assert _tier_for_model(v) == "opus"
