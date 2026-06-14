@@ -13,7 +13,7 @@ code_paths:
   - src/universal_agent/services/vp_failure_rescue.py
   - src/universal_agent/services/wiki_rescue_policy.py
   - src/universal_agent/services/wiki_rescue_driver.py
-last_verified: 2026-06-11
+last_verified: 2026-06-14
 ---
 
 # VP Workers & Delegation
@@ -381,15 +381,20 @@ rate-limit error (`429`/overloaded), the loop reports to `CapacityGovernor`.
 **No-progress (idle) kill.** A mission is reaped after
 `UA_VP_NO_PROGRESS_KILL_SECONDS` (default 600s = 10 min) with **no progress
 signal** — a CLI stream line on the CLI path, or an SDK event on the
-SDK/generalist path. This is idle-based, *not* a wall-clock cap: a mission that
-keeps emitting output runs freely (so a long-but-productive build isn't cut
-off), and only a genuinely hung one is killed (failure_mode
-`no_progress_timeout`). CLI path: `claude_cli_client._monitor_cli_output`
-(previously this stall check only *logged*; it now kills). SDK path: the shared
-`clients/base.consume_adapter_events_with_idle_timeout` helper wraps
-`adapter.execute()` with a per-event idle timeout. The engine's wall-clock cap
-(`UA_PROCESS_TURN_TIMEOUT_SECONDS` / tier default) still applies as an outer
-backstop.
+SDK/generalist path — **while no tool is in flight** (a long build emits a
+`tool_call` then nothing until its `tool_result`; that gap is exempt). This is
+idle-based, *not* a wall-clock cap: a mission that keeps emitting output runs
+freely (so a long-but-productive build isn't cut off), and only a genuinely hung
+one is killed (failure_mode `no_progress_timeout`). All lanes share the canonical
+`timeout_policy.py::LivenessWatchdog` policy object (see
+[`02_execution_core/01_gateway_sessions_execution.md`](../02_execution_core/01_gateway_sessions_execution.md)
+§ "Liveness / no-progress timeout"). CLI path:
+`claude_cli_client.py::_monitor_cli_output`. SDK path: the shared
+`vp/clients/base.py::consume_adapter_events_with_idle_timeout` helper wraps
+`adapter.execute()`. The in-process adapter's own idle watchdog + a high
+absolute backstop (`UA_PROCESS_TURN_ABSOLUTE_BACKSTOP_SECONDS`, default 2 h)
+apply underneath; the legacy `UA_PROCESS_TURN_TIMEOUT_SECONDS` is an opt-in hard
+cap only.
 
 **The worker loop is structurally serial.** `_tick` claims exactly ONE mission
 (`claim_next_vp_mission`) and runs it to completion via `_execute_mission_logic`

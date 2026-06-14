@@ -35,11 +35,13 @@ from universal_agent.memory.paths import (
     resolve_shared_memory_workspace,
 )
 from universal_agent.runtime_env import ensure_runtime_path
-from universal_agent.timeout_policy import process_turn_timeout_seconds
-from universal_agent.utils.model_resolution import (
-    ZAI_MODEL_MAP,
-    model_call_timeout_seconds,
+from universal_agent.timeout_policy import (
+    LivenessWatchdog,
+    process_turn_absolute_backstop_seconds,
+    process_turn_idle_kill_seconds,
+    process_turn_timeout_seconds,
 )
+from universal_agent.utils.model_resolution import ZAI_MODEL_MAP
 
 try:
     import logfire
@@ -974,62 +976,70 @@ class ProcessTurnAdapter:
         
         engine_task = asyncio.create_task(run_engine())
 
-        # Resolve the wall-clock cap for this turn. Priority order:
-        #   1. Per-request ``turn_timeout_seconds`` from caller metadata
-        #      (e.g. cron jobs with a configured ``timeout_seconds``).
-        #      This is the right knob for "this workflow is legitimately
-        #      multi-step and slow" — set it generously per-job rather
-        #      than fighting global tier defaults.
-        #   2. Explicit UA_PROCESS_TURN_TIMEOUT_SECONDS env (legacy override).
-        #   3. Tier-aware default keyed off the configured agent model
-        #      (haiku=120s, sonnet=180s, opus=1800s).
-        #   4. No cap (0).
+        # Liveness / no-progress watchdog — NOT a hard wall-clock cap. Operator
+        # requirement (2026-06-14): never kill a live, working turn at an
+        # arbitrary cap; long coding/build turns can legitimately exceed 30 min.
+        # Kill ONLY when the turn shows no sign of life (no event) for the idle
+        # threshold AND no tool is in flight — a long build/test emits no
+        # inference output between its tool_call and tool_result, so that gap is
+        # exempt (tools carry their own timeouts). A very high absolute backstop
+        # catches a fully-wedged process where even tool timeouts fail. Every
+        # event dequeued below is a sign of life.
         #
-        # An unbounded turn is a UX disaster: a single slow inference
-        # call can sit on the wire for several minutes before erroring
-        # out, and the dispatcher's natural retry cadence can't kick in
-        # until it releases. With a tier-aware cap the turn aborts
-        # cleanly, the dispatcher's stuck-assignment sweep
-        # (todo_dispatch_service.py) catches it, the task reopens, and
-        # the next dispatch tick re-runs in ~10s.
-        per_request_cap_s = 0.0
+        # The policy lives in timeout_policy.LivenessWatchdog so the in-process
+        # adapter, the VP SDK consumer (vp/clients/base.py), and the
+        # claude --print subprocess (vp/clients/claude_cli_client.py) all share
+        # ONE convention. See project_docs/02_execution_core/01_gateway_sessions_execution.md
+        # § "Liveness / no-progress timeout (NOT a hard wall-clock cap)".
+        #
+        # Explicit caller hard cap (preserved, opt-in only): a cron's per-job
+        # ``turn_timeout_seconds`` budget, else the legacy
+        # ``UA_PROCESS_TURN_TIMEOUT_SECONDS`` env escape hatch. When set it is an
+        # ADDITIONAL ceiling on top of the idle kill, not a replacement for it.
+        hard_cap_s = 0.0
         if isinstance(request_metadata, dict):
             raw = request_metadata.get("turn_timeout_seconds")
             if raw is not None:
                 try:
-                    per_request_cap_s = max(0.0, float(raw))
+                    hard_cap_s = max(0.0, float(raw))
                 except (TypeError, ValueError):
-                    per_request_cap_s = 0.0
-        legacy_override_s = process_turn_timeout_seconds()
-        if per_request_cap_s > 0:
-            max_runtime_s = per_request_cap_s
-            logger.info(
-                "ProcessTurnAdapter wall-clock cap: %.0fs (per-request override)",
-                max_runtime_s,
-            )
-        elif legacy_override_s > 0:
-            max_runtime_s = legacy_override_s
-        else:
-            configured_model = ""
-            opt_obj = getattr(self, "_options", None)
-            if opt_obj is not None:
-                configured_model = str(getattr(opt_obj, "model", "") or "").strip()
-            tier_for_cap = _tier_for_model(configured_model)
-            max_runtime_s = model_call_timeout_seconds(tier_for_cap)
-            if max_runtime_s > 0:
-                logger.info(
-                    "ProcessTurnAdapter wall-clock cap: %.0fs (tier=%s, model=%r)",
-                    max_runtime_s,
-                    tier_for_cap,
-                    configured_model or "<unknown>",
-                )
-        deadline = (time.time() + max_runtime_s) if max_runtime_s > 0 else None
-        
-        # Yield events as they come in
+                    hard_cap_s = 0.0
+        if hard_cap_s <= 0:
+            hard_cap_s = process_turn_timeout_seconds()  # legacy env escape hatch
+
+        idle_kill_s = process_turn_idle_kill_seconds()
+        backstop_s = process_turn_absolute_backstop_seconds()
+        configured_model = ""
+        opt_obj = getattr(self, "_options", None)
+        if opt_obj is not None:
+            configured_model = str(getattr(opt_obj, "model", "") or "").strip()
+        watchdog = LivenessWatchdog(
+            idle_kill_seconds=idle_kill_s,
+            absolute_backstop_seconds=backstop_s,
+            hard_cap_seconds=hard_cap_s,
+        )
+        logger.info(
+            "ProcessTurnAdapter liveness: idle_kill=%.0fs backstop=%.0fs "
+            "hard_cap=%.0fs (tier=%s model=%r)",
+            idle_kill_s,
+            backstop_s,
+            hard_cap_s,
+            _tier_for_model(configured_model),
+            configured_model or "<unknown>",
+        )
+
+        # Yield events as they come in. Each dequeued event is a sign of life
+        # for the watchdog; TOOL_CALL / TOOL_RESULT additionally bracket
+        # tool-in-flight time so the idle kill is suspended while a tool runs.
         while True:
             try:
-                if deadline and time.time() > deadline:
-                    logger.error("ProcessTurnAdapter timed out after %.1fs", max_runtime_s)
+                kill_reason = watchdog.overdue()
+                if kill_reason:
+                    logger.error(
+                        "ProcessTurnAdapter killing turn: %s (elapsed %.1fs)",
+                        kill_reason,
+                        time.time() - start_ts,
+                    )
                     engine_task.cancel()
                     try:
                         await engine_task
@@ -1038,18 +1048,24 @@ class ProcessTurnAdapter:
                     yield AgentEvent(
                         type=EventType.ERROR,
                         data={
-                            "message": f"Execution timed out after {max_runtime_s:.1f}s",
+                            "message": f"Execution killed: {kill_reason}",
                             "duration_seconds": round(time.time() - start_ts, 2),
                         },
                     )
                     break
                 event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
-                
+
                 if event.data.get("status") == "engine_complete":
                     break
-                
+
+                # Sign of life; bracket tool-in-flight time.
+                watchdog.note_activity(
+                    tool_started=event.type == EventType.TOOL_CALL,
+                    tool_finished=event.type == EventType.TOOL_RESULT,
+                )
+
                 yield event
-                
+
             except asyncio.TimeoutError:
                 if engine_task.done():
                     while not event_queue.empty():

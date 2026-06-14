@@ -32,6 +32,7 @@ from universal_agent.guardrails.workspace_guard import (
     WorkspaceGuardError,
     enforce_external_target_path,
 )
+from universal_agent.timeout_policy import LivenessWatchdog
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 
 # Lazy-import session budget to avoid circular dependencies
@@ -688,14 +689,17 @@ async def _monitor_cli_output(
     cost_info: dict[str, Any] = {}
     tool_calls = 0
     errors: list[str] = []
-    last_output_time = time.monotonic()
     stream_lines: list[str] = []
     cli_session_id: str = ""
-    # Idle-based no-progress kill threshold (0 disables). Distinct from the
-    # wall-clock ``timeout_seconds`` deadline: this kills a mission that has
-    # gone silent (no stream output) for too long, while letting a mission that
-    # keeps emitting output run up to the wall-clock cap.
+    # Idle-based no-progress kill (0 disables), via the shared
+    # ``timeout_policy.LivenessWatchdog`` — the SAME policy object the in-process
+    # ``ProcessTurnAdapter`` and VP SDK consumer use, so all lanes share one
+    # convention. Distinct from the wall-clock ``timeout_seconds`` deadline
+    # (kept below as the lane's hard cap): the watchdog kills a mission that has
+    # gone silent (no stream output) for too long, while a mission that keeps
+    # emitting output runs up to the wall-clock cap.
     no_progress_kill_s = vp_no_progress_kill_seconds()
+    watchdog = LivenessWatchdog(idle_kill_seconds=no_progress_kill_s)
 
     # Open run.log handle for live rehydration source. The viewer's
     # rehydration path reads this file (see app/page.tsx). We write
@@ -770,9 +774,9 @@ async def _monitor_cli_output(
                 # kill it. This is what makes the previously toothless stall
                 # check actually terminate a stuck mission (it used to only
                 # log). Idle-based, so a mission that keeps streaming output is
-                # never cut off here.
-                stall_duration = time.monotonic() - last_output_time
-                if no_progress_kill_s > 0 and stall_duration > no_progress_kill_s:
+                # never cut off here. Decision delegated to the shared watchdog.
+                if watchdog.overdue() is not None:
+                    stall_duration = watchdog.idle_seconds()
                     logger.warning(
                         "CLI mission %s killed: no progress for %ds (threshold %ds)",
                         mission_id, int(stall_duration), no_progress_kill_s,
@@ -799,7 +803,7 @@ async def _monitor_cli_output(
                 # EOF — process finished
                 break
 
-            last_output_time = time.monotonic()
+            watchdog.note_activity()  # stream output = sign of life
             line = line_bytes.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
