@@ -18,6 +18,16 @@ Configuration (environment variables):
         value costs nothing on healthy traffic.
     ZAI_MAX_BACKOFF: Maximum backoff cap in seconds (default: 30.0)
     ZAI_MIN_INTERVAL: Minimum seconds between request starts (default: 0.5)
+    ZAI_MAX_RETRIES: Default retry attempts per logical call (default: 5)
+    ZAI_OPUS_MAX_RETRIES: Retry attempts for the OPUS tier only. Fewer retries
+        on the cap-1, FUP-contended opus tier = less hammering (each failed
+        retry feeds ZAI's frequency throttle); the failed logical task
+        re-queues. Unset → ZAI_MAX_RETRIES. Set via Infisical (prod: 3).
+    ZAI_OPUS_MIN_INTERVAL: Post-response gap in seconds between consecutive
+        opus calls — paces cap-1 opus bursts (e.g. convergence ideation
+        synthesis) so they don't trip ZAI's account-level frequency throttle.
+        Default 0.0 (off, so tests/non-prod are unaffected); enable in
+        production via Infisical (prod: 8).
 """
 
 import asyncio
@@ -285,6 +295,16 @@ class ZAIRateLimiter:
         # Minimum inter-request spacing to avoid burst rate limits
         self._min_request_interval = float(os.getenv("ZAI_MIN_INTERVAL", "0.5"))
         self._last_request_time = 0.0
+
+        # Per-tier post-response spacing for the CONTENDED opus tier. The global
+        # interval above paces ALL request STARTS by a small amount; this adds a
+        # real gap AFTER each opus response before the next opus call starts
+        # ("call → response → delay → next"), so a cap-1 opus burst (e.g.
+        # convergence ideation synthesis) can't feed ZAI's account-level
+        # frequency throttle. Default 0.0 (off) so tests / non-prod are
+        # unaffected; enable in production via ZAI_OPUS_MIN_INTERVAL (Infisical).
+        self._opus_min_interval = max(0.0, float(os.getenv("ZAI_OPUS_MIN_INTERVAL", "0.0")))
+        self._tier_last_release: dict[str, float] = dict.fromkeys(TIERS, 0.0)
 
         # Per-loop asyncio primitives (see _LoopPrimitives). Guarded by a
         # threading.Lock because bundles can be created from different
@@ -849,6 +869,10 @@ class ZAIRateLimiter:
         prims = self._get_loop_primitives()
         gate = prims.semaphore if tier is None else prims.get_tier_gate(tier, self)
         await gate.acquire()
+        # Post-response spacing applies ONLY to the contended opus tier, and
+        # only when enabled (ZAI_OPUS_MIN_INTERVAL > 0). Captured locally so the
+        # finally always pairs with the value used.
+        opus_space = self._opus_min_interval if tier == "opus" else 0.0
         try:
             # Enforce minimum spacing between ALL requests (not just concurrent)
             # This prevents burst rate limits from sliding window quotas.
@@ -864,8 +888,18 @@ class ZAIRateLimiter:
                     wait_time += random.uniform(0.05, 0.15)
                     await asyncio.sleep(wait_time)
                 self._last_request_time = time.time()
+            # Opus burst-pacing: wait out the remainder of the gap since the
+            # PREVIOUS opus call released (response → delay → next). This sleep
+            # is held under the cap-1 opus gate, so it serializes + spaces opus
+            # without blocking haiku/sonnet (different gates, different loop).
+            if opus_space > 0.0:
+                gap = time.time() - self._tier_last_release.get(tier, 0.0)
+                if gap < opus_space:
+                    await asyncio.sleep(opus_space - gap + random.uniform(0.05, 0.25))
             yield
         finally:
+            if opus_space > 0.0:
+                self._tier_last_release[tier] = time.time()
             gate.release()
 
     def note_retry_exhausted(self) -> None:
@@ -901,10 +935,32 @@ class ZAIRateLimiter:
         }
 
 
+def _resolve_max_retries(model_tier: str | None) -> int:
+    """Tier-aware retry budget. The opus tier is cap-1 and the most
+    FUP-contended, and ~85% of its 429s need 2+ retries while the worst
+    exhaust anyway — so each late retry is mostly wasted AND feeds ZAI's
+    account-level frequency throttle. ``ZAI_OPUS_MAX_RETRIES`` lets the opus
+    tier give up sooner (the failed logical task re-queues). Other tiers use
+    ``ZAI_MAX_RETRIES`` (default 5, preserving historical behavior).
+    """
+    try:
+        default = max(1, int(os.getenv("ZAI_MAX_RETRIES", "5") or "5"))
+    except ValueError:
+        default = 5
+    if (model_tier or "").strip().lower() == "opus":
+        raw = (os.getenv("ZAI_OPUS_MAX_RETRIES") or "").strip()
+        if raw:
+            try:
+                return max(1, int(raw))
+            except ValueError:
+                pass
+    return default
+
+
 async def with_rate_limit_retry(
     func: Callable[..., Awaitable[T]],
     *args: Any,
-    max_retries: int = 5,
+    max_retries: int | None = None,
     context: str = "",
     model_tier: str | None = None,
     max_total_seconds: float | None = None,
@@ -933,7 +989,12 @@ async def with_rate_limit_retry(
     Args:
         func: Async function to execute
         *args: Positional arguments for func
-        max_retries: Maximum retry attempts (default: 5)
+        max_retries: Maximum retry attempts. ``None`` (default) resolves
+            tier-aware via ``_resolve_max_retries``: the opus tier uses
+            ``ZAI_OPUS_MAX_RETRIES`` if set (fewer doomed retries on the
+            cap-1, FUP-contended tier — each failed retry feeds ZAI's
+            frequency throttle), else ``ZAI_MAX_RETRIES`` (default 5).
+            An explicit int always wins.
         context: Context string for logging
         model_tier: Tier bucket of the model on the wire
             (``utils/model_resolution.py::model_id_to_tier``)
@@ -952,6 +1013,8 @@ async def with_rate_limit_retry(
         Last exception if all retries exhausted
     """
     limiter = ZAIRateLimiter.get_instance()
+    if max_retries is None:
+        max_retries = _resolve_max_retries(model_tier)
     last_error: Exception | None = None
     started = time.monotonic()
     had_429 = False

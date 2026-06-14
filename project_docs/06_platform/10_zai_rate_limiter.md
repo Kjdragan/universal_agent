@@ -133,10 +133,14 @@ slot.
 
 ### 4.2 `with_rate_limit_retry()` — the wrapper callers should use
 
-The ergonomic entry point. `with_rate_limit_retry(func, *args, max_retries=5,
+The ergonomic entry point. `with_rate_limit_retry(func, *args, max_retries=None,
 context="...", model_tier=None, max_total_seconds=None, **kwargs)` loops up to
 `max_retries` times; each attempt runs inside `acquire(context, model_tier=…)` and
-dispatches on the outcome:
+dispatches on the outcome. `max_retries=None` (the default) resolves **tier-aware**
+via `rate_limiter.py::_resolve_max_retries` — the opus tier uses `ZAI_OPUS_MAX_RETRIES`
+if set (fewer doomed retries on the cap-1, FUP-contended tier — each failed retry
+itself feeds ZAI's frequency throttle; the failed logical task re-queues), every other
+tier uses `ZAI_MAX_RETRIES` (default 5). An explicit int always wins. Outcome dispatch:
 
 ```text
 success                  → record_success(model_tier); return result
@@ -208,6 +212,9 @@ Defaults below are the **actual code defaults** in `ZAIRateLimiter.__init__`.
 | `ZAI_INITIAL_BACKOFF` | **`10.0`** | Starting backoff floor (seconds) — conservative-by-default; only fires after a 429 |
 | `ZAI_MAX_BACKOFF` | **`30.0`** | Hard cap on any single backoff |
 | `ZAI_MIN_INTERVAL` | **`0.5`** | Minimum seconds between request *starts* (global, all tiers) |
+| `ZAI_MAX_RETRIES` | **`5`** | Default retry attempts per logical call (non-opus tiers) |
+| `ZAI_OPUS_MAX_RETRIES` | prod **`3`** | Opus-tier retry budget — fewer doomed retries on the cap-1, FUP-contended tier (each failed retry feeds the frequency throttle; the failed task re-queues). Unset → `ZAI_MAX_RETRIES`. |
+| `ZAI_OPUS_MIN_INTERVAL` | code **`0.0`** / prod **`8`** | Post-response gap (s) between consecutive **opus** calls — paces the cap-1 opus burst (e.g. convergence ideation synthesis) so it can't trip the account-level frequency throttle. "call → response → delay → next", held under the opus gate so it never blocks haiku/sonnet. Default off; enabled via Infisical. |
 | `UA_ZAI_INFERENCE_STATE_PATH` | (derived) | Override snapshot location |
 | `ZAI_TIER_CAP_{OPUS,SONNET,MID,HAIKU}` | **`1/2/3/4`** | Per-tier AIMD seed caps (§4.7) |
 | `ZAI_TIER_CAP_MIN_*` / `ZAI_TIER_CAP_MAX_*` | **`1` / `3,5,5,6`** | Per-tier AIMD bounds |
