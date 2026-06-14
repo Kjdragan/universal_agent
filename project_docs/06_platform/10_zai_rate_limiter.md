@@ -592,9 +592,27 @@ keeps its A/B `base_url`/`api_key` routing. Each call-site keeps the *semantics*
 It returns `list[BatchedResult]` aligned 1:1 with `items`; `BatchedResult.ok` is
 **False** when the value is a fail-closed substitution. **Cache contract:** a call-site
 that caches verdicts must only `cache_put` results where `.ok is True` — caching a
-fail-closed value would suppress a real item until the TTL expires. First adopter:
-`wiki/llm.py::extract_facets_batched` (see
-[`04_intelligence/07_llm_wiki.md`](../04_intelligence/07_llm_wiki.md)).
+fail-closed value would suppress a real item until the TTL expires.
+
+**Adopters:**
+- **P1 — `wiki/llm.py::extract_facets_batched`** (default-ON behind a kill-switch;
+  wiki = low precision-risk). See
+  [`04_intelligence/07_llm_wiki.md`](../04_intelligence/07_llm_wiki.md).
+- **P2 — `proactive_convergence.py::_batched_triage_overrides_async`** (sweep-level
+  editorial triage; the index is lifted into the shared `system` once/chunk).
+  Knob `UA_INTEL_TRIAGE_BATCH_SIZE` (default **1 = legacy per-candidate**). Fail-closed
+  ⇒ `retry` (verdict='', no Task Hub card), never a silent `ship`. See
+  [`04_intelligence/10_proactive_pipeline.md`](../04_intelligence/10_proactive_pipeline.md).
+- **P3 — `llm_classifier.py::classify_tutorial_buildability_batched`** (cache-read
+  FIRST, so steady-state cache hits never reach the LLM; the win is concentrated on
+  cold-cache/backfill). Knob `UA_TUTORIAL_BUILDABILITY_BATCH_SIZE` (default **1 =
+  legacy per-video**). Per-item `method='fallback'` ⇒ not cached / retried. See
+  [`04_intelligence/15_demo_tutorial_pipeline_adr.md`](../04_intelligence/15_demo_tutorial_pipeline_adr.md).
+
+P2 and P3 are **HIGH-precision gates → default-OFF until a live batched-vs-per-item
+A/B holds** (call/token reduction **and** verdict agreement on real data). The A/B
+harness is `python -m universal_agent.scripts.zai_batch_triage_ab` (read-only on the
+prod DBs; emits a JSON + Markdown report with a per-item divergence table).
 
 ## 8. Worked example — the 2026-06-10 burst
 

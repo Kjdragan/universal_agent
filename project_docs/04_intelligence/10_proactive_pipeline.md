@@ -459,6 +459,21 @@ cluster/insight becomes queued work:
   12000). The triage verdict is carried in
   `metadata.triage = {kind, reasoning, demo_amenable, model}` on both the task and
   the candidate row.
+  - **Batched triage pre-pass (`UA_INTEL_TRIAGE_BATCH_SIZE`, default `1` = legacy
+    per-candidate).** When `>1`, `sync_topic_signatures_from_csi` runs a sweep-level
+    batched pre-pass (`_run_batched_triage` → `batched_judge`, see
+    [`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md) §7.1)
+    that judges up to N un-finalized candidates in ONE structured-output call and
+    lifts the shared `recent_briefs_index` into the system prompt **once per chunk**
+    instead of repeating it per candidate (the dominant token cost). Verdicts feed
+    `write_convergence_candidate(triage_override=…)` so every downstream invariant
+    (finalized short-circuit, in-flight mission dedup, the row UPSERT,
+    `metadata.triage`) is unchanged. Fail-closed is identical to the per-candidate
+    path — any batch failure / out-of-vocab verdict maps that candidate to `retry`
+    (verdict='', no task), **never** a silent `ship`. **HIGH-precision ⇒ default-OFF**
+    until a live batched-vs-per-item A/B
+    (`python -m universal_agent.scripts.zai_batch_triage_ab`) shows call/token
+    reduction **and** verdict agreement (operator quality bar).
   > **Stall incident (2026-06-03).** `recent_briefs_index` grew unbounded to ~100K
   > tokens (~400KB); the whole index was embedded in every triage prompt, pushing the
   > glm/ZAI call past the (then 60s) `UA_LLM_CALL_TIMEOUT_SECONDS` cap on essentially
