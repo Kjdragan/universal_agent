@@ -1262,15 +1262,22 @@ def _ideation_max_corpus() -> int:
 
 
 def _ideation_max_tokens() -> int:
-    """Output token budget for the whole-corpus synthesis call (default 2500).
+    """Output token budget for the whole-corpus synthesis call (default 8000).
 
-    Up from 1500: one call over the full corpus can surface several cross-cutting
-    insights, so give the JSON room. Override with ``UA_IDEATION_MAX_TOKENS``.
+    ``max_tokens`` is a CEILING, not a target — the API requires it and you only
+    pay for tokens actually generated (live whole-corpus calls land ~1100-1700 on
+    glm-5.1). It's set generous for two reasons: (1) headroom so a content-heavy
+    run's JSON is never truncated (the one-call design already exceeds the old
+    1500 cap), and (2) future-proofing — when the opus tier moves to glm-5.2
+    (thinking ON by default, and thinking tokens count against ``max_tokens``),
+    a tight budget would truncate the answer. NOTE: when 5.2 lands, the proper
+    lever is managing the thinking budget explicitly, not just this ceiling.
+    Override with ``UA_IDEATION_MAX_TOKENS``.
     """
     try:
-        return max(256, int(os.getenv("UA_IDEATION_MAX_TOKENS", "2500") or "2500"))
+        return max(256, int(os.getenv("UA_IDEATION_MAX_TOKENS", "8000") or "8000"))
     except (TypeError, ValueError):
-        return 2500
+        return 8000
 
 
 def _ideation_min_new_signatures() -> int:
