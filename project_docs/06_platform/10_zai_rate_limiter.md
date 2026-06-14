@@ -614,6 +614,45 @@ A/B holds** (call/token reduction **and** verdict agreement on real data). The A
 harness is `python -m universal_agent.scripts.zai_batch_triage_ab` (read-only on the
 prod DBs; emits a JSON + Markdown report with a per-item divergence table).
 
+### 7.1.1 Judge determinism + graded gates (graded-judge redesign)
+
+The first live A/B surfaced a bigger issue than the batching question it set out to
+answer: `llm_classifier.py::_call_llm` set **no `temperature`** on either
+`messages.create` path, so every judgment gate ran at the provider default (~1.0) and
+was ~40% non-deterministic (n=10: **60%** per-item self-agreement → **100%** at
+`temperature=0`). "Agreement" was therefore being measured against the judge's own
+variance, not zero — a 50% batched-vs-per-item agreement was never evidence the batch
+was worse. Three changes resulted (all default-inert):
+
+- **Temperature plumbing.** `_call_llm` gained an optional `temperature` (forwarded to
+  `messages.create` only when set, so every other caller is byte-unchanged; batched
+  sites ride it in via `model_overrides`, which `batched_judge` splats verbatim).
+  Resolved by `_resolve_judge_temperature` from `UA_LLM_JUDGE_TEMPERATURE` (+ per-gate
+  `UA_INTEL_TRIAGE_TEMPERATURE` / `UA_TUTORIAL_BUILD_TEMPERATURE`). Default unset = no
+  temperature key = today's behavior.
+- **Graded score + threshold gates.** Because `temperature=0` *categorical* triage
+  ships ~everything (no filter), the P2 triage (`proactive_convergence.py::triage_candidate`
+  / `_batched_triage_overrides_async`) and P3 buildability
+  (`llm_classifier.py::classify_tutorial_buildability` /
+  `classify_tutorial_buildability_batched`) gates gained an
+  **opt-in graded 0–100 score + code-side cutoff** (`UA_INTEL_TRIAGE_SHIP_THRESHOLD` /
+  `UA_TUTORIAL_BUILD_THRESHOLD`, default unset = categorical/binary). This is the same
+  `signal_strength` + `_min_signal_strength` pattern the cluster judge
+  (`_gate_cluster_verdict`) already uses — triage/buildability were the categorical
+  outliers. A missing/garbled score fails closed exactly like an out-of-vocab verdict.
+- **Self-agreement control arm.** `zai_batch_triage_ab --control` runs the per-item
+  path a SECOND time over identical inputs and reports the **noise floor**, so batched
+  agreement is judged against intrinsic variance (and watched climbing to ~100% at
+  `UA_LLM_JUDGE_TEMPERATURE=0`).
+
+All knobs default to today's effective behavior; the redesign is inert until the
+operator flips them after a calm-window re-measure (the threshold values + temp
+default are product decisions). See
+[`04_intelligence/10_proactive_pipeline.md`](../04_intelligence/10_proactive_pipeline.md)
+for the triage gate and
+[`04_intelligence/15_demo_tutorial_pipeline_adr.md`](../04_intelligence/15_demo_tutorial_pipeline_adr.md)
+for the buildability gate.
+
 ## 8. Worked example — the 2026-06-10 burst
 
 The morning `zai_inference_health` CRITICAL ("ZAI 429 burst — 108 responses in 10 min,

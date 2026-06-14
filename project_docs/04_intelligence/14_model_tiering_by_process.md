@@ -32,7 +32,7 @@ code_paths:
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/gateway_server.py
   - src/universal_agent/services/transcript_corpus.py
-last_verified: 2026-06-12
+last_verified: 2026-06-14
 ---
 
 # Intelligence Model Tiering by Process
@@ -248,7 +248,11 @@ driven by the proactive-signal sync, which loops over uncached build-oriented CS
 videos (up to ~200 per row-limit) on a ~5-minute cooldown — **the single
 highest-volume caller and the prime suspect in the 2026-06-10 burst**. It is a binary
 gate with an explicit "when uncertain, return false" rule and a fail-closed fallback.
-**Air is sufficient**, and the volume makes it the highest-value downgrade.
+**Air is sufficient**, and the volume makes it the highest-value downgrade. (The
+graded-judge redesign adds an opt-in 0–100 score + `UA_TUTORIAL_BUILD_THRESHOLD`
+cutoff and a determinism knob `UA_TUTORIAL_BUILD_TEMPERATURE` /
+`UA_LLM_JUDGE_TEMPERATURE` — both default unset = today's binary behavior; the tier is
+unchanged. See [`06_platform/10_zai_rate_limiter.md`](../06_platform/10_zai_rate_limiter.md) §7.1.1.)
 
 **CSI URL judge** — `csi_url_judge.py`.
 Per-URL classification (worth_fetching boolean + fixed-enum category) over a candidate

@@ -201,8 +201,17 @@ async def _call_llm(
     max_tokens: int = 1024,  # doubled from 512 per audit
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
+    temperature: Optional[float] = None,
 ) -> str:
     """Make an LLM call and return the raw text response.
+
+    ``temperature`` (default ``None``) is threaded into ``messages.create`` ONLY
+    when set, so every existing caller is byte-unchanged (no ``temperature`` key =
+    the provider default, ~1.0). Judgment gates pass ``temperature=0`` (via
+    :func:`_resolve_judge_temperature`) to make their verdicts DETERMINISTic — a
+    live probe found ``_call_llm``'s missing temperature was the single source of
+    ~40% per-item coin-flip across the triage/buildability/cluster gates (n=10:
+    60% self-agreement at the default temperature -> 100% at ``temperature=0``).
 
     Closes the per-call ``AsyncAnthropic`` client deterministically (``try/finally``)
     so its underlying httpx ``AsyncClient`` is shut down inside the live event loop.
@@ -228,6 +237,16 @@ async def _call_llm(
         api_key=api_key,
         max_retries=0 if use_limiter else None,
     )
+    # Shared create() kwargs for BOTH paths. ``temperature`` is added only when
+    # set so callers that don't pass it keep their exact prior wire payload.
+    create_kwargs: dict[str, Any] = dict(
+        model=resolved_model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    if temperature is not None:
+        create_kwargs["temperature"] = temperature
     try:
         if use_limiter:
             from universal_agent.rate_limiter import with_rate_limit_retry
@@ -238,18 +257,10 @@ async def _call_llm(
                 context="llm_classifier",
                 model_tier=model_id_to_tier(resolved_model),
                 max_total_seconds=_limiter_call_budget_seconds(),
-                model=resolved_model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
+                **create_kwargs,
             )
         else:
-            response = await client.messages.create(
-                model=resolved_model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-            )
+            response = await client.messages.create(**create_kwargs)
 
         raw_text = ""
         for block in response.content:
@@ -263,6 +274,41 @@ async def _call_llm(
             await client.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+def _resolve_judge_temperature(env_name: Optional[str] = None) -> Optional[float]:
+    """Resolve the determinism temperature for a judgment gate.
+
+    Reads a per-gate override env (e.g. ``UA_INTEL_TRIAGE_TEMPERATURE``) first,
+    then the shared ``UA_LLM_JUDGE_TEMPERATURE``. Returns ``None`` when neither is
+    set (today's behavior — no temperature passed, provider default ~1.0). Set
+    either to ``0`` to make the gate deterministic. A non-numeric value is
+    ignored (falls through to the next source / ``None``), never raising.
+    """
+    for name in (env_name, "UA_LLM_JUDGE_TEMPERATURE"):
+        if not name:
+            continue
+        raw = (os.getenv(name) or "").strip()
+        if not raw:
+            continue
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _coerce_score(raw: Any) -> Optional[float]:
+    """Coerce an LLM-emitted graded score into a clamped ``0..100`` float, or
+    ``None`` when the value is missing/non-numeric (an un-decidable verdict the
+    caller fails closed, exactly like an out-of-vocab categorical verdict)."""
+    try:
+        score = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if score != score:  # NaN guard
+        return None
+    return max(0.0, min(100.0, score))
 
 
 def _parse_json_response(raw: str) -> dict[str, Any]:
@@ -853,6 +899,56 @@ given:
 {"verdicts":[{"index":0,"buildable":true,"reasoning":"1-2 sentences citing the summary"}]}
 """
 
+# ── Graded variant (PR: graded-judge redesign) ──────────────────────────────
+# Asks for a 0-100 buildability SCORE instead of a binary buildable/not, so a
+# code-side threshold (UA_TUTORIAL_BUILD_THRESHOLD) can be set HIGH to suppress
+# the false positives the P3 batched judge leaned toward. Activated only when the
+# threshold is set; default (unset) keeps the binary prompt above. Rubric anchored
+# to spread the score band.
+_TUTORIAL_BUILDABILITY_GRADED_SYSTEM = """\
+You decide HOW BUILDABLE a YouTube video is as a coding tutorial — whether an
+autonomous coding agent could build a small but working code demo from it — and
+return a 0-100 score.
+
+Inputs: the video title, the channel name, and a Claude-distilled summary of the
+actual transcript (~1-2 paragraphs). The summary is your primary signal; the
+title and channel are context, not evidence.
+
+Judge THREE sub-dimensions, then COMBINE into one score:
+- CONCRETE FUNCTIONALITY: does it teach/demonstrate concrete software (writing
+  code, building an agent/script/tool, integrating an API/SDK, configuring a
+  framework)? News/opinion/commentary that merely *mentions* tech scores low.
+- REPLICABILITY: could a reasonable engineer rebuild a working artifact (script,
+  repo, demo, notebook) from what the summary describes, even if the exact code
+  isn't shown? Vague "the future of X" framing scores low.
+- SPECIFICITY: is the summary technical and specific (named tools, concrete
+  steps), versus high-level?
+
+Anchor the combined 0-100 score:
+- 85-100: clearly a buildable coding tutorial — specific tools, replicable steps.
+- 70-84: buildable, with one soft dimension (e.g. light on exact steps).
+- 50-69: borderline — technical but thin on what to actually build.
+- 25-49: weak — about tech but no buildable functionality (news/opinion/demo-less).
+- 0-24: not technical / not buildable (vlog, reaction, podcast chat, announcement).
+
+Be strict: false positives create wasted work for a downstream coding agent. Do
+NOT default to a round number; if torn between two bands pick a SPECIFIC value
+inside one (e.g. 62 or 78 — never a flat 70 or 75).
+
+Respond with ONLY a JSON object:
+{"score": <integer 0-100>, "reasoning": "1-2 sentences citing specific evidence from the summary"}
+"""
+
+_TUTORIAL_BUILDABILITY_GRADED_BATCH_SYSTEM = _TUTORIAL_BUILDABILITY_GRADED_SYSTEM + """
+
+BATCH MODE: You are given MULTIPLE videos AT ONCE in a `videos` array, each with a
+numeric `index`. SCORE EACH video INDEPENDENTLY by the rubric above, applying the
+SAME anchors to every one — do NOT become lax because there are many videos.
+Return ONLY a JSON object with one verdict per index, covering EVERY index you were
+given:
+{"verdicts":[{"index":0,"score":<integer 0-100>,"reasoning":"1-2 sentences citing the summary"}]}
+"""
+
 
 async def classify_tutorial_buildability(
     *,
@@ -878,16 +974,28 @@ async def classify_tutorial_buildability(
             summary=(summary_text or "").strip()[:4000] or "(empty)",
         )
         # Binary buildable/not judgment — Haiku tier (glm-4.5-air) by default;
-        # override with UA_TUTORIAL_BUILDABILITY_MODEL.
+        # override with UA_TUTORIAL_BUILDABILITY_MODEL. When UA_TUTORIAL_BUILD_THRESHOLD
+        # is set, switch to the graded 0-100 score + code-side cutoff (set HIGH).
+        threshold = _tutorial_build_threshold()
+        graded = threshold is not None
+        system = _TUTORIAL_BUILDABILITY_GRADED_SYSTEM if graded else _TUTORIAL_BUILDABILITY_SYSTEM
+        temperature = _resolve_judge_temperature("UA_TUTORIAL_BUILD_TEMPERATURE")
         raw = await _call_llm(
-            system=_TUTORIAL_BUILDABILITY_SYSTEM,
+            system=system,
             user=user_msg,
             max_tokens=400,
             model=model or (os.getenv("UA_TUTORIAL_BUILDABILITY_MODEL") or "").strip() or resolve_haiku(),
+            temperature=temperature,
         )
         parsed = _parse_json_response(raw)
-        buildable = bool(parsed.get("buildable", False))
         reasoning = str(parsed.get("reasoning") or "").strip()
+        if graded:
+            # Missing/garbled score ⇒ fail closed to not-buildable (method='llm',
+            # cacheable) — identical conservatism to a malformed binary verdict.
+            score = _coerce_score(parsed.get("score"))
+            buildable = score is not None and score >= threshold
+            return {"buildable": buildable, "reasoning": reasoning, "method": "llm"}
+        buildable = bool(parsed.get("buildable", False))
         return {"buildable": buildable, "reasoning": reasoning, "method": "llm"}
     except Exception as exc:
         logger.warning("LLM tutorial-buildability judge failed: %s", exc)
@@ -908,6 +1016,23 @@ def _tutorial_buildability_batch_size() -> int:
     except (TypeError, ValueError):
         n = 1
     return max(1, min(60, n))
+
+
+def _tutorial_build_threshold() -> Optional[int]:
+    """Graded buildability cutoff. ``UA_TUTORIAL_BUILD_THRESHOLD`` (0-100).
+
+    UNSET (default) ⇒ the legacy binary buildable/not judgment (byte-identical to
+    today, PR inert). SET ⇒ the judge emits a 0-100 score and ``buildable =
+    score >= this``. Lean HIGH — the P3 batched-vs-per-item divergence was
+    false-positive-leaning and a high cutoff directly suppresses weak 'buildable'
+    calls. A non-numeric value is treated as unset."""
+    raw = (os.getenv("UA_TUTORIAL_BUILD_THRESHOLD") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0, min(100, int(float(raw))))
+    except (TypeError, ValueError):
+        return None
 
 
 async def classify_tutorial_buildability_batched(
@@ -945,6 +1070,11 @@ async def classify_tutorial_buildability_batched(
         or resolve_haiku()
     )
     bs = batch_size if batch_size is not None else _tutorial_buildability_batch_size()
+    # Graded vs binary — the SAME switch as the single-video classify path.
+    threshold = _tutorial_build_threshold()
+    graded = threshold is not None
+    temperature = _resolve_judge_temperature("UA_TUTORIAL_BUILD_TEMPERATURE")
+    system = _TUTORIAL_BUILDABILITY_GRADED_BATCH_SYSTEM if graded else _TUTORIAL_BUILDABILITY_BATCH_SYSTEM
 
     def build_prompt(chunk: list[dict[str, Any]]) -> str:
         return json.dumps(
@@ -963,8 +1093,16 @@ async def classify_tutorial_buildability_batched(
         )
 
     def parse(item: dict[str, Any], verdict: dict[str, Any]) -> "TutorialBuildabilityResult":
-        # A present verdict (even a malformed one defaulting to buildable=False) is a
+        # A present verdict (even a malformed one defaulting to not-buildable) is a
         # real judgement → method='llm' (cacheable) — identical to the single path.
+        if graded:
+            score = _coerce_score(verdict.get("score"))
+            buildable = score is not None and score >= threshold
+            return {
+                "buildable": buildable,
+                "reasoning": str(verdict.get("reasoning") or "").strip(),
+                "method": "llm",
+            }
         return {
             "buildable": bool(verdict.get("buildable", False)),
             "reasoning": str(verdict.get("reasoning") or "").strip(),
@@ -977,14 +1115,18 @@ async def classify_tutorial_buildability_batched(
         "method": "fallback",
     }
 
+    model_overrides: dict[str, Any] = {"model": resolved_model}
+    if temperature is not None:
+        model_overrides["temperature"] = temperature
+
     results = await batched_judge(
         valid,
         build_prompt=build_prompt,
         parse=parse,
         fail_closed=fail_closed,
-        system=_TUTORIAL_BUILDABILITY_BATCH_SYSTEM,
+        system=system,
         batch_size=bs,
-        model_overrides={"model": resolved_model},
+        model_overrides=model_overrides,
         deadline=deadline,
         stats=stats,
     )

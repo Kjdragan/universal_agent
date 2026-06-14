@@ -15,7 +15,12 @@ from typing import Any, Callable, Optional
 
 from universal_agent import task_hub
 from universal_agent.rate_limiter import _is_fup_error
-from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
+from universal_agent.services.llm_classifier import (
+    _call_llm,
+    _coerce_score,
+    _parse_json_response,
+    _resolve_judge_temperature,
+)
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
     make_artifact_id,
@@ -1349,6 +1354,67 @@ recent_briefs_index (last 48h, shared across all candidates below):
 """
 
 
+# ── Graded variant (PR: graded-judge redesign) ──────────────────────────────
+# The categorical prompts above emit a ship/skip/defer label; at temperature=0 a
+# categorical judge ships ~everything (no filter). The graded prompt asks for a
+# 0-100 SCORE instead, which a code-side threshold (_intel_ship_threshold) turns
+# back into a real, tunable gate. Same editorial bar, but the rubric is ANCHORED
+# to spread the score band (a live probe found a categorical judge piles verdicts
+# at one value). Activated only when UA_INTEL_TRIAGE_SHIP_THRESHOLD is set; the
+# default (unset) keeps the categorical prompts above. Mirrors the established
+# #989 cluster-judge pattern (signal_strength + _min_signal_strength).
+_INTEL_TRIAGE_GRADED_SYSTEM = """\
+You are an editorial gate for a proactive intelligence system. A candidate
+pattern has been detected across recent AI/developer videos. SCORE how worth
+turning into an operator-facing intel brief it is, from 0 to 100.
+
+You are given the candidate's thesis, an optional "why it matters" value, the
+per-source claims that support it, and an index of the recent briefs already
+shipped/skipped in the last 48 hours.
+
+Judge THREE sub-dimensions, then COMBINE them into one score:
+- SOURCE STRENGTH: is it a REAL pattern genuinely supported by the SPECIFIC
+  claims of >=2 INDEPENDENT sources (not apophenia / over-generalization from too
+  few or weak signals)? Single-source or hand-wavy support scores low.
+- NOVELTY: is it NEW versus the recent briefs index — not a near-duplicate of
+  something already shipped OR skipped in the last 48h? A near-duplicate scores
+  very low no matter how strong the pattern is.
+- SPECIFICITY: is the thesis concrete and actionable (a specific, falsifiable
+  claim an operator could act on), versus generic/obvious commentary?
+
+Weight NOVELTY and SOURCE STRENGTH most. Anchor the combined 0-100 score:
+- 85-100: strong, well-sourced, clearly novel, specific — definitely brief it.
+- 70-84: solid and novel enough to ship, with a minor weakness in one dimension.
+- 50-69: borderline — promising but under-sourced or only partially novel.
+- 25-49: weak — generic, thinly sourced, or largely overlapping a recent brief.
+- 0-24: a clear duplicate, unsupported claim, or non-pattern.
+
+Do NOT default to a round number. If torn between two bands, pick a SPECIFIC
+value inside one of them (e.g. 62 or 78 — never a flat 70 or 75).
+
+Also set demo_amenable=true ONLY if the candidate implies a concrete, buildable
+software/coding demo.
+
+Return ONLY JSON:
+{"score": <integer 0-100>, "reasoning": "one or two sentences citing the sub-dimensions", "demo_amenable": false}
+"""
+
+# Batched twin of the graded prompt — shared recent_briefs_index appended ONCE.
+_INTEL_TRIAGE_GRADED_BATCH_SYSTEM_PREFIX = _INTEL_TRIAGE_GRADED_SYSTEM + """
+
+BATCH MODE: You are given MULTIPLE candidates AT ONCE in a `candidates` array,
+each with a numeric `index`. SCORE EACH candidate INDEPENDENTLY by the rubric
+above, applying the SAME anchors to every one — do NOT become lax (or harsher)
+because there are many candidates. The recent_briefs_index (shared novelty
+context for ALL candidates) is provided ONCE below; use it to judge novelty for
+every candidate. Return ONLY JSON with one verdict per index, covering EVERY
+index you were given:
+{"verdicts":[{"index":0,"score":<integer 0-100>,"reasoning":"one or two sentences","demo_amenable":false}]}
+
+recent_briefs_index (last 48h, shared across all candidates below):
+"""
+
+
 def _intel_triage_enabled() -> bool:
     return str(os.getenv("UA_INTEL_TRIAGE_ENABLED", "1")).strip().lower() in {
         "1", "true", "yes", "on",
@@ -1365,6 +1431,53 @@ def _intel_triage_batch_size() -> int:
     except (TypeError, ValueError):
         n = 1
     return max(1, min(60, n))
+
+
+def _intel_ship_threshold() -> Optional[int]:
+    """Graded-triage ship cutoff. ``UA_INTEL_TRIAGE_SHIP_THRESHOLD`` (0-100).
+
+    UNSET (default) ⇒ triage stays on the legacy CATEGORICAL verdict path
+    (ship/skip/defer emitted directly) — byte-identical to today, so the PR ships
+    inert. SET ⇒ triage switches to the graded 0-100 score path and ships when
+    ``score >= this``. The single operator lever that activates graded triage;
+    pick against desired briefs/day (a live probe: ~70 ⇒ ~8/10 ship, ~80 ⇒
+    ~1/10). A non-numeric value is treated as unset."""
+    raw = (os.getenv("UA_INTEL_TRIAGE_SHIP_THRESHOLD") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0, min(100, int(float(raw))))
+    except (TypeError, ValueError):
+        return None
+
+
+def _intel_defer_threshold() -> Optional[int]:
+    """Optional graded-triage DEFER band. ``UA_INTEL_TRIAGE_DEFER_THRESHOLD``
+    (0-100). When set BELOW the ship cutoff, a score in ``[defer, ship)`` ⇒
+    'defer' instead of 'skip'. Unset ⇒ no defer band (ship/skip only)."""
+    raw = (os.getenv("UA_INTEL_TRIAGE_DEFER_THRESHOLD") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0, min(100, int(float(raw))))
+    except (TypeError, ValueError):
+        return None
+
+
+def _grade_to_triage_kind(
+    score: float, ship_threshold: int, defer_threshold: Optional[int]
+) -> str:
+    """Map a graded 0-100 score to the triage kind vocabulary the downstream
+    consumer (``write_convergence_candidate``) already handles (ship/defer/skip)."""
+    if score >= ship_threshold:
+        return "ship"
+    if (
+        defer_threshold is not None
+        and defer_threshold < ship_threshold
+        and score >= defer_threshold
+    ):
+        return "defer"
+    return "skip"
 
 
 def _triage_index_text(conn: sqlite3.Connection) -> str:
@@ -1422,14 +1535,25 @@ def _candidate_id_for_signatures(signatures: list[dict[str, Any]]) -> Optional[s
     return f"cand_{hashlib.sha256(seed.encode()).hexdigest()[:16]}"
 
 
-def _run_triage_llm(*, system: str, user: str, max_tokens: int = 400, model: str | None = None) -> str:
+def _run_triage_llm(
+    *,
+    system: str,
+    user: str,
+    max_tokens: int = 400,
+    model: str | None = None,
+    temperature: float | None = None,
+) -> str:
     """Sync wrapper around the async ``_call_llm`` seam.
 
     Kept thin and separate so tests can monkeypatch
     ``proactive_convergence._call_llm`` with either a sync or async callable.
     Mirrors the loop-handling pattern used by the clustering/ideation wrappers.
+    ``temperature`` (default None) forwards to ``_call_llm`` for graded-gate
+    determinism — None leaves the call byte-unchanged.
     """
-    result = _call_llm(system=system, user=user, max_tokens=max_tokens, model=model)
+    result = _call_llm(
+        system=system, user=user, max_tokens=max_tokens, model=model, temperature=temperature
+    )
     if not asyncio.iscoroutine(result):
         return result
     try:
@@ -1474,18 +1598,41 @@ def triage_candidate(
 
     # Triage is deliberately cheap (Haiku tier); override with UA_INTEL_TRIAGE_MODEL.
     model = os.getenv("UA_INTEL_TRIAGE_MODEL", "").strip() or resolve_haiku()
+    ship_threshold = _intel_ship_threshold()
+    graded = ship_threshold is not None
+    system_prompt = _INTEL_TRIAGE_GRADED_SYSTEM if graded else _INTEL_TRIAGE_SYSTEM
+    temperature = _resolve_judge_temperature("UA_INTEL_TRIAGE_TEMPERATURE")
+    _retry = {"kind": "retry", "reasoning": "triage unavailable", "demo_amenable": False, "model": model}
     try:
-        raw = _run_triage_llm(system=_INTEL_TRIAGE_SYSTEM, user=user, max_tokens=400, model=model)
+        raw = _run_triage_llm(
+            system=system_prompt, user=user, max_tokens=400, model=model, temperature=temperature
+        )
         parsed = _parse_json_response(raw)
     except Exception as exc:  # noqa: BLE001
         logger.warning("intel triage LLM failed: %s", exc)
-        return {"kind": "retry", "reasoning": "triage unavailable", "demo_amenable": False, "model": model}
+        return dict(_retry)
 
     if not isinstance(parsed, dict):
-        return {"kind": "retry", "reasoning": "triage unavailable", "demo_amenable": False, "model": model}
+        return dict(_retry)
+
+    if graded:
+        # Graded 0-100 score → code-side threshold. A missing/garbled score is an
+        # un-decidable verdict → fail-closed 'retry' (no task, re-tried next sweep),
+        # identical to an out-of-vocab categorical verdict.
+        score = _coerce_score(parsed.get("score"))
+        if score is None:
+            return dict(_retry)
+        return {
+            "kind": _grade_to_triage_kind(score, ship_threshold, _intel_defer_threshold()),
+            "reasoning": str(parsed.get("reasoning") or "").strip(),
+            "demo_amenable": bool(parsed.get("demo_amenable")),
+            "model": model,
+            "score": score,
+        }
+
     verdict = str(parsed.get("verdict") or "").strip().lower()
     if verdict not in _TRIAGE_ALLOWED_VERDICTS:
-        return {"kind": "retry", "reasoning": "triage unavailable", "demo_amenable": False, "model": model}
+        return dict(_retry)
     return {
         "kind": verdict,
         "reasoning": str(parsed.get("reasoning") or "").strip(),
@@ -1542,7 +1689,15 @@ async def _batched_triage_overrides_async(
     # Triage is deliberately cheap (Haiku tier); override with UA_INTEL_TRIAGE_MODEL
     # — identical resolution to triage_candidate.
     model = os.getenv("UA_INTEL_TRIAGE_MODEL", "").strip() or resolve_haiku()
-    system = _INTEL_TRIAGE_BATCH_SYSTEM_PREFIX + (idx_text or "(none)")
+    # Graded vs categorical — the SAME switch as the per-candidate triage_candidate.
+    ship_threshold = _intel_ship_threshold()
+    graded = ship_threshold is not None
+    defer_threshold = _intel_defer_threshold()
+    temperature = _resolve_judge_temperature("UA_INTEL_TRIAGE_TEMPERATURE")
+    prefix = (
+        _INTEL_TRIAGE_GRADED_BATCH_SYSTEM_PREFIX if graded else _INTEL_TRIAGE_BATCH_SYSTEM_PREFIX
+    )
+    system = prefix + (idx_text or "(none)")
 
     def build_prompt(chunk: list[dict[str, Any]]) -> str:
         return json.dumps(
@@ -1562,6 +1717,19 @@ async def _batched_triage_overrides_async(
         )
 
     def parse(item: dict[str, Any], verdict: dict[str, Any]) -> dict[str, Any]:
+        if graded:
+            # Graded score → threshold. A missing/garbled score is a per-ITEM clean
+            # miss → this candidate stays fail-closed ('retry'), rest unaffected.
+            score = _coerce_score(verdict.get("score"))
+            if score is None:
+                raise ValueError(f"missing/invalid graded triage score: {verdict.get('score')!r}")
+            return {
+                "kind": _grade_to_triage_kind(score, ship_threshold, defer_threshold),
+                "reasoning": str(verdict.get("reasoning") or "").strip(),
+                "demo_amenable": bool(verdict.get("demo_amenable")),
+                "model": model,
+                "score": score,
+            }
         v = str(verdict.get("verdict") or "").strip().lower()
         if v not in _TRIAGE_ALLOWED_VERDICTS:
             # Out-of-vocab → per-ITEM clean miss → this candidate stays fail-closed
@@ -1581,6 +1749,10 @@ async def _batched_triage_overrides_async(
         "model": model,
     }
 
+    model_overrides: dict[str, Any] = {"model": model}
+    if temperature is not None:
+        model_overrides["temperature"] = temperature
+
     results = await batched_judge(
         eligible,
         build_prompt=build_prompt,
@@ -1588,7 +1760,7 @@ async def _batched_triage_overrides_async(
         fail_closed=fail_closed,
         system=system,
         batch_size=_intel_triage_batch_size(),
-        model_overrides={"model": model},
+        model_overrides=model_overrides,
         deadline=deadline,
         stats=stats,
     )
@@ -1827,6 +1999,11 @@ def write_convergence_candidate(
                 "demo_amenable": bool(triage.get("demo_amenable")),
                 "model": triage.get("model", ""),
             }
+            # Graded mode carries a 0-100 score; persist it as provenance for
+            # threshold tuning. Categorical mode has no score → key omitted (the
+            # metadata stays byte-identical to the pre-graded behavior).
+            if triage.get("score") is not None:
+                metadata_payload["triage"]["score"] = triage["score"]
             if inflight_mission_id:
                 logger.info(
                     "Skipping convergence re-queue for candidate %s (task %s): "
@@ -1881,6 +2058,8 @@ def write_convergence_candidate(
             "demo_amenable": bool(triage.get("demo_amenable")),
             "model": triage.get("model", ""),
         }
+        if triage.get("score") is not None:
+            row_metadata["triage"]["score"] = triage["score"]
     conn.execute(
         """
         INSERT INTO convergence_candidates (
