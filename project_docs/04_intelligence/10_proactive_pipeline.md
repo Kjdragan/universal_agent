@@ -183,11 +183,27 @@ run finishes under the cron's `timeout_seconds`
      ideation sweep. Non-FUP refine errors still fail closed (no candidate) and
      do **not** trip the breaker.
 4. **Ideation sweep (Track B).** When `UA_IDEATION_SWEEP_ENABLED=1` (default),
-   `_run_ideation_sweep` → `track_b_ideation_synthesis` runs an LLM over the
-   recent signature corpus looking for *non-obvious* abstract patterns
-   (convergence = "same story / news saturation"; ideation = "interesting
-   cross-cutting relationships"). Insights below `UA_IDEATION_MIN_CONFIDENCE`
-   (default 0.7) are dropped downstream.
+   `_run_ideation_sweep` → `track_b_ideation_synthesis` runs **one** LLM call over
+   the **full** recent signature corpus (up to `UA_IDEATION_MAX_CORPUS`, default
+   120; output budget `UA_IDEATION_MAX_TOKENS`, default 2500) looking for
+   *non-obvious* abstract patterns (convergence = "same story / news saturation";
+   ideation = "interesting cross-cutting relationships"). The single whole-corpus
+   call replaced the former 3×20 recency batches (each blind to the others) so the
+   model reasons across the entire universe at once — the prerequisite for genuine
+   cross-cutting macro-trends — at one-third the call count. The model is the
+   flagship/opus tier by default; `UA_IDEATION_MODEL` overrides it (e.g.
+   `glm-5-turbo`) as an escape hatch off the contended opus tier. Insights below
+   `UA_IDEATION_MIN_CONFIDENCE` (default 0.7) are dropped downstream.
+   - **New-content gate (`_ideation_should_run`).** Because the cron re-runs
+     hourly even when little new has landed, the sweep is gated on freshness: it
+     SKIPS unless ≥`UA_IDEATION_MIN_NEW_SIGNATURES` (default 5) signatures are
+     newer than the `last_synth_watermark` — a row in `proactive_ideation_state`,
+     advanced by `_ideation_advance_watermark` only after a *successful* call (a
+     thrown/throttled call leaves it so the next tick retries). This collapses the
+     redundant re-synthesis of the same recent window — the dominant source of
+     flagship/opus 429s — from ~16 sweeps/day to only those with fresh material.
+     The gate fails **open** (runs) on the first run, `min_new=0`, or any
+     state-read error, so the intel pipeline is never silently starved.
 5. Each cluster/insight is written via `write_convergence_candidate` (below).
 
 **Relevance gate (step 1, default ON).** Before a row becomes a signature,

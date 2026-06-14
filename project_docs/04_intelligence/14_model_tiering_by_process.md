@@ -174,7 +174,7 @@ change, so a tier can be tuned up or down per process if quality or cost dictate
 | Process | Location | Why flagship |
 |---|---|---|
 | CSI knowledge-vault extraction | `csi_intelligence_pass.py` | Explicit GLM-5.1 module contract; CREATE/EXTEND/REVISE + canonicalization + relation typing |
-| Track-B ideation synthesis | `proactive_convergence.py::track_b_ideation_synthesis` | Non-obvious cross-cutting macro-trend synthesis — the high-value engine |
+| Track-B ideation synthesis | `proactive_convergence.py::track_b_ideation_synthesis` | Non-obvious cross-cutting macro-trend synthesis — the high-value engine. **Kept on flagship by default but now low-volume:** one whole-corpus call (was 3×20 recency batches) + a new-content gate (`_ideation_should_run`) cut it from ~16 sweeps/day to only sweeps with fresh material, so flagship quality is affordable without throttling. Escape hatch: `UA_IDEATION_MODEL` (e.g. `glm-5-turbo`) moves it off the contended opus tier with no deploy |
 | Feedback → rules distiller | `proactive_signals.py::distill_feedback_to_rules` | Rewrites an entire rules markdown doc in place; weak model risks clobbering it |
 | Task decomposition (gateway) | `decomposition_agent.py` | Free-form multi-step planning; split/ordering cascades into every subagent |
 | URW task decomposer | `urw/decomposer.py` (`LLMDecomposer`) | Free-form atomic-task-graph planning that drives the whole URW run |
