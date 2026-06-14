@@ -191,9 +191,14 @@ def test_empty_body_returns_extraction_with_blank_content(monkeypatch: pytest.Mo
 
 def test_strict_max_bytes_truncates_huge_response(monkeypatch: pytest.MonkeyPatch) -> None:
     # Response just over MAX_BYTES — extraction should still succeed on the
-    # truncated prefix without raising. Each <p>x</p> is 8 bytes, so
-    # 600_000 reps = 4.8 MiB > MAX_BYTES (4 MiB).
-    big_html = "<html><body><article><h1>T</h1>" + ("<p>x</p>" * 600_000) + "</article></body></html>"
+    # truncated prefix without raising. Use a NODE-LIGHT fixture (a handful of
+    # large prose paragraphs) rather than 600k tiny <p> elements: both exceed
+    # MAX_BYTES so the byte-truncation in _fetch_html still fires, but the
+    # post-truncation DOM here has ~100 nodes instead of ~500k, so parsing is
+    # ~0.4s instead of ~56s (the latter tripped the 60s pytest-timeout). Same
+    # behavior under test, just without the pathological node count.
+    paragraph = "<p>" + ("The quick brown fox jumps over the lazy dog. " * 1000) + "</p>"
+    big_html = "<html><body><article><h1>T</h1>" + (paragraph * 100) + "</article></body></html>"
     assert len(big_html) > reader.MAX_BYTES
     _patch_transport(monkeypatch, lambda req: _html_response(big_html))
 

@@ -26,6 +26,13 @@ from universal_agent.services.proactive_preferences import (
 def _connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    # Test data is disposable: disable per-commit fsync. These tests insert
+    # hundreds of rows with a commit PER row (_insert_signal), so on a host with
+    # high fsync latency the default synchronous=FULL serializes into >45s and
+    # trips the 60s pytest-timeout. synchronous=OFF + an in-memory journal makes
+    # the commit loop effectively instant without changing any assertion.
+    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute("PRAGMA journal_mode=MEMORY")
     ensure_schema(conn)
     return conn
 

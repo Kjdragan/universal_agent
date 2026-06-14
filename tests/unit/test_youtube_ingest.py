@@ -3,7 +3,46 @@ from __future__ import annotations
 import sys
 import types
 
+import pytest
+
 from universal_agent import youtube_ingest
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_youtube_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip ambient YouTube API + proxy env so these tests don't depend on the
+    shell they run in.
+
+    A dev shell exports ``YOUTUBE_API_KEY`` (which makes
+    ``youtube_ingest.ingest_youtube_transcript`` take the API-first metadata path
+    in ``_run_youtube_data_api_metadata`` — issuing a REAL network request and
+    returning the live title instead of the mocked one) and ``PROXY_PROVIDER`` /
+    ``*_PROXY_*`` creds (which make ``_build_proxy_config`` resolve a real proxy
+    mode instead of ``disabled``). Clearing them pins the offline/default path the
+    tests assert. Tests that need a specific value still ``monkeypatch.setenv`` it
+    after this autouse fixture runs.
+    """
+    for var in (
+        "YOUTUBE_API_KEY",
+        "PROXY_PROVIDER",
+        "PROXY_USERNAME",
+        "PROXY_PASSWORD",
+        "PROXY_HOST",
+        "PROXY_PORT",
+        "PROXY_LOCATIONS",
+        "PROXY_FILTER_IP_LOCATIONS",
+        "YT_PROXY_FILTER_IP_LOCATIONS",
+        "WEBSHARE_PROXY_USER",
+        "WEBSHARE_PROXY_PASS",
+        "WEBSHARE_PROXY_HOST",
+        "WEBSHARE_PROXY_PORT",
+        "WEBSHARE_PROXY_LOCATIONS",
+        "DATAIMPULSE_PROXY_USER",
+        "DATAIMPULSE_PROXY_PASS",
+        "DATAIMPULSE_PROXY_HOST",
+        "DATAIMPULSE_PROXY_PORT",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
 def test_extract_video_id_from_watch_url() -> None:

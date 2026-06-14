@@ -24,6 +24,24 @@ from universal_agent import task_hub
 from universal_agent.services import dispatch_service
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_loop_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize ambient loop-gate env so this file asserts PROD-default
+    semantics regardless of the shell it runs in.
+
+    A dev shell exports ``UA_RUNTIME_STAGE=development``, which flips
+    ``loop_control.should_run_loop`` into its dev branch — that branch defaults
+    loops OFF and ignores ``UA_<NAME>_ENABLED`` truthy values, defeating the
+    ``prod_default=True`` behavior every test here relies on (the stale sweep is
+    gated by ``dispatch_service._stale_sweep_enabled`` → ``should_run_loop``).
+    Tests that need a specific value still ``monkeypatch.setenv`` it after this
+    autouse fixture runs.
+    """
+    monkeypatch.delenv("UA_RUNTIME_STAGE", raising=False)
+    monkeypatch.delenv("UA_DISPATCH_STALE_SWEEP_ENABLED", raising=False)
+    monkeypatch.delenv("UA_DISPATCH_STALE_AFTER_SECONDS", raising=False)
+
+
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
