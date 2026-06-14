@@ -331,6 +331,17 @@ def sync_topic_signatures_from_csi(
 
     candidates_written = 0
     refine_stats: dict = {"sonnet_calls_made": 0, "cache_hits": 0}
+
+    # Sweep-level BATCHED triage pre-pass (PR P2). Default OFF:
+    # UA_INTEL_TRIAGE_BATCH_SIZE=1 ⇒ legacy per-candidate triage inside each
+    # write_convergence_candidate call. When >1, one structured-output call judges
+    # up to N candidates and lifts recent_briefs_index into the shared system
+    # prompt once — stays OFF until a live batched-vs-per-item A/B holds (operator
+    # quality bar). The index is built ONCE per sweep and reused for both passes.
+    triage_batch_on = _intel_triage_enabled() and _intel_triage_batch_size() > 1
+    triage_idx_text = _triage_index_text(conn) if triage_batch_on else ""
+    triage_stats: dict = {"calls_made": 0, "chunks_failed": 0, "skipped": 0}
+
     if _llm_clustering_enabled():
         confirmed = _detect_clusters_llm(
             conn,
@@ -353,16 +364,31 @@ def sync_topic_signatures_from_csi(
             )
         ]
 
+    cluster_overrides: dict[str, dict[str, Any]] = {}
+    if triage_batch_on and clusters:
+        cluster_overrides = _run_batched_triage(
+            conn,
+            [
+                {"signatures": sigs, "thesis": thesis, "value": "", "candidate_kind": "convergence"}
+                for sigs, thesis, _strength in clusters
+            ],
+            idx_text=triage_idx_text,
+            deadline=deadline,
+            stats=triage_stats,
+        )
+
     for cluster_signatures, thesis, strength in clusters:
         if time.monotonic() >= deadline:
             break
         try:
+            cid = _candidate_id_for_signatures(cluster_signatures)
             result = write_convergence_candidate(
                 conn,
                 signatures=cluster_signatures,
                 source_window_hours=source_window_hours,
                 thesis=thesis,
                 signal_strength=strength,
+                triage_override=cluster_overrides.get(cid) if cid else None,
             )
             # Only count rows that newly queued a task (verdict='' and a fresh task_id).
             if result and result.get("_newly_queued"):
@@ -388,18 +414,40 @@ def sync_topic_signatures_from_csi(
         except Exception as exc:  # noqa: BLE001
             logger.warning("ideation sweep failed: %s", exc)
             ideations = []
+
+        ideation_overrides: dict[str, dict[str, Any]] = {}
+        if triage_batch_on and ideations:
+            ideation_overrides = _run_batched_triage(
+                conn,
+                [
+                    {
+                        "signatures": ins.get("signatures") or [],
+                        "thesis": str(ins.get("narrative") or ""),
+                        "value": str(ins.get("value") or ""),
+                        "candidate_kind": "ideation",
+                    }
+                    for ins in ideations
+                ],
+                idx_text=triage_idx_text,
+                deadline=deadline,
+                stats=triage_stats,
+            )
+
         for ins in ideations:
             if time.monotonic() >= deadline:
                 break
             try:
+                ins_sigs = ins.get("signatures") or []
+                cid = _candidate_id_for_signatures(ins_sigs)
                 result = write_convergence_candidate(
                     conn,
-                    signatures=ins.get("signatures") or [],
+                    signatures=ins_sigs,
                     source_window_hours=source_window_hours,
                     thesis=str(ins.get("narrative") or ""),
                     value=str(ins.get("value") or ""),
                     signal_strength=float(ins.get("confidence") or 0.0) * 10.0,
                     candidate_kind="ideation",
+                    triage_override=ideation_overrides.get(cid) if cid else None,
                 )
                 if result and result.get("_newly_queued"):
                     ideation_written += 1
@@ -415,6 +463,9 @@ def sync_topic_signatures_from_csi(
         "ideation_candidates_written": ideation_written,
         "sonnet_calls_made": refine_stats["sonnet_calls_made"],
         "cache_hits": refine_stats["cache_hits"],
+        # Batched triage telemetry (0 when UA_INTEL_TRIAGE_BATCH_SIZE=1 / off).
+        "triage_batch_calls": triage_stats["calls_made"],
+        "triage_batch_chunks_failed": triage_stats["chunks_failed"],
     }
 
 
@@ -1280,11 +1331,95 @@ Return ONLY JSON:
 
 _TRIAGE_ALLOWED_VERDICTS = {"ship", "skip", "defer"}
 
+# Batched twin of _INTEL_TRIAGE_SYSTEM (PR P2). The shared recent_briefs_index is
+# appended ONCE per chunk (lifted into the system prompt) instead of being repeated
+# inside every per-candidate user payload — that repetition is the token cost the
+# batched pre-pass amortizes. Each candidate still gets the SAME editorial bar.
+_INTEL_TRIAGE_BATCH_SYSTEM_PREFIX = _INTEL_TRIAGE_SYSTEM + """
+
+BATCH MODE: You are given MULTIPLE candidates AT ONCE in a `candidates` array,
+each with a numeric `index`. Judge EACH candidate INDEPENDENTLY by the editorial
+test above, applying the SAME bar to every one — do NOT become lax because there
+are many candidates. The recent_briefs_index (shared novelty context for ALL
+candidates) is provided ONCE below; use it to judge novelty for every candidate.
+Return ONLY JSON with one verdict per index, covering EVERY index you were given:
+{"verdicts":[{"index":0,"verdict":"ship|skip|defer","reasoning":"one or two sentences","demo_amenable":false}]}
+
+recent_briefs_index (last 48h, shared across all candidates below):
+"""
+
 
 def _intel_triage_enabled() -> bool:
     return str(os.getenv("UA_INTEL_TRIAGE_ENABLED", "1")).strip().lower() in {
         "1", "true", "yes", "on",
     }
+
+
+def _intel_triage_batch_size() -> int:
+    """Candidates per batched triage LLM call. Default **1 == legacy per-candidate
+    path** (the batched pre-pass stays OFF until a live batched-vs-per-item A/B
+    holds — operator quality bar). ``UA_INTEL_TRIAGE_BATCH_SIZE``, clamped [1, 60]
+    (mirrors :func:`_convergence_judge_batch_size`)."""
+    try:
+        n = int(os.getenv("UA_INTEL_TRIAGE_BATCH_SIZE", "1") or "1")
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(60, n))
+
+
+def _triage_index_text(conn: sqlite3.Connection) -> str:
+    """Bounded recent-briefs index injected into triage prompts.
+
+    Shared verbatim by the per-candidate (:func:`triage_candidate`) and batched
+    (:func:`_batched_triage_overrides_async`) paths so both judge novelty against
+    an IDENTICAL context — load-bearing for the batched-vs-per-item A/B. The index
+    grows unbounded (~100K tokens / ~400KB observed 2026-06-03); embedding it whole
+    pushed the glm/ZAI triage call past the per-call timeout, so it is hard-capped
+    at ``UA_INTEL_TRIAGE_INDEX_MAX_CHARS`` chars (triage only needs a recency
+    SAMPLE for novelty/dedup, not the full corpus)."""
+    from universal_agent.services.recent_briefs_index import read_index_or_fallback
+
+    try:
+        idx = read_index_or_fallback(conn, lookback_hours=48, limit=200)
+    except Exception:  # noqa: BLE001 — defensive; helper should never raise.
+        idx = ""
+    try:
+        _idx_budget = int(os.getenv("UA_INTEL_TRIAGE_INDEX_MAX_CHARS", "12000") or "12000")
+    except (TypeError, ValueError):
+        _idx_budget = 12000
+    if _idx_budget > 0 and len(idx) > _idx_budget:
+        idx = idx[:_idx_budget].rstrip() + "\n…[index truncated for triage]"
+    return idx
+
+
+def _compact_triage_sources(signatures: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Per-source projection sent to the triage LLM. Shared by the per-candidate
+    and batched paths so each candidate's evidence is byte-identical across the
+    A/B."""
+    return [
+        {
+            "channel_name": s.get("channel_name") or s.get("channel_id") or "",
+            "video_title": s.get("video_title") or "",
+            "key_claims": (s.get("key_claims") or [])[:6],
+        }
+        for s in (signatures or [])
+    ]
+
+
+def _candidate_id_for_signatures(signatures: list[dict[str, Any]]) -> Optional[str]:
+    """Deterministic ``cand_<sha256(sorted_video_ids)[:16]>`` for a signature set,
+    or ``None`` when no video_id is present. The single source of truth for the
+    candidate id — used by both the batched triage pre-pass (to key overrides) and
+    :func:`write_convergence_candidate` (to key the row) so they never drift."""
+    video_ids = sorted({
+        str(item.get("video_id") or "").strip()
+        for item in (signatures or [])
+        if str(item.get("video_id") or "").strip()
+    })
+    if not video_ids:
+        return None
+    seed = "|".join(video_ids)
+    return f"cand_{hashlib.sha256(seed.encode()).hexdigest()[:16]}"
 
 
 def _run_triage_llm(*, system: str, user: str, max_tokens: int = 400, model: str | None = None) -> str:
@@ -1322,33 +1457,8 @@ def triage_candidate(
     failed/parsed badly — the caller must NOT finalize and NOT create a task
     (it will be re-tried on the next sweep run because verdict='' is not final).
     """
-    from universal_agent.services.recent_briefs_index import read_index_or_fallback
-
-    try:
-        idx = read_index_or_fallback(conn, lookback_hours=48, limit=200)
-    except Exception:  # noqa: BLE001 — defensive; helper should never raise.
-        idx = ""
-
-    # Bound the index injected into the (Haiku-tier) triage prompt. recent_briefs_index
-    # grows unbounded (~100K tokens / ~400KB observed 2026-06-03); embedding it whole pushed
-    # the glm/ZAI triage call past the per-call timeout, so triage failed -> candidates were
-    # never promoted (verdict='' / no task_hub_item). Triage only needs a recency SAMPLE for
-    # novelty/dedup, not the full corpus. Hard char budget, env-overridable.
-    try:
-        _idx_budget = int(os.getenv("UA_INTEL_TRIAGE_INDEX_MAX_CHARS", "12000") or "12000")
-    except (TypeError, ValueError):
-        _idx_budget = 12000
-    if _idx_budget > 0 and len(idx) > _idx_budget:
-        idx = idx[:_idx_budget].rstrip() + "\n…[index truncated for triage]"
-
-    compact_sources = [
-        {
-            "channel_name": s.get("channel_name") or s.get("channel_id") or "",
-            "video_title": s.get("video_title") or "",
-            "key_claims": (s.get("key_claims") or [])[:6],
-        }
-        for s in (signatures or [])
-    ]
+    idx = _triage_index_text(conn)
+    compact_sources = _compact_triage_sources(signatures)
     user = json.dumps(
         {
             "candidate_kind": str(candidate_kind or "convergence"),
@@ -1384,6 +1494,131 @@ def triage_candidate(
     }
 
 
+async def _batched_triage_overrides_async(
+    conn: sqlite3.Connection,
+    specs: list[dict[str, Any]],
+    *,
+    idx_text: str,
+    deadline: float | None,
+    stats: dict | None,
+) -> dict[str, dict[str, Any]]:
+    """Sweep-level BATCHED editorial triage. Returns ``{candidate_id: triage_dict}``.
+
+    The direct twin of the per-candidate :func:`triage_candidate`, collapsed onto
+    the shared :func:`batched_judge` helper (the same pattern PR #989 proved on the
+    cluster judge). One structured-output call judges up to
+    ``UA_INTEL_TRIAGE_BATCH_SIZE`` candidates, and the shared
+    ``recent_briefs_index`` is lifted into the system prompt ONCE per chunk instead
+    of repeated per candidate — that repetition is the token win.
+
+    Each returned ``triage_dict`` has the SAME shape ``triage_candidate`` returns
+    (``{kind, reasoning, demo_amenable, model}``) so it can be handed to
+    :func:`write_convergence_candidate` as a ``triage_override`` with identical
+    downstream handling (ship→queue / skip,defer→record / retry→verdict='').
+
+    Fail-closed is IDENTICAL to the per-candidate path: any chunk failure, missing
+    verdict, or out-of-vocab verdict maps that candidate to ``kind='retry'`` (no
+    task, verdict='', re-tried next idempotent sweep). A Fair-Usage signal trips
+    ``batched_judge``'s one-shot breaker (remaining candidates stay 'retry').
+    Only UN-finalized candidates enter the batch — the exact set the per-candidate
+    path would triage (a finalized candidate short-circuits inside
+    :func:`write_convergence_candidate` regardless)."""
+    from universal_agent.services.batched_judge import batched_judge
+    from universal_agent.utils.model_resolution import resolve_haiku
+
+    final_verdicts = {"ship", "skip", "defer", "error"}
+    eligible: list[dict[str, Any]] = []
+    for spec in specs:
+        cid = _candidate_id_for_signatures(spec.get("signatures") or [])
+        if not cid:
+            continue
+        existing = _get_convergence_candidate(conn, cid)
+        if existing and str(existing.get("verdict") or "").strip() in final_verdicts:
+            continue
+        eligible.append({**spec, "candidate_id": cid})
+    if not eligible:
+        return {}
+
+    # Triage is deliberately cheap (Haiku tier); override with UA_INTEL_TRIAGE_MODEL
+    # — identical resolution to triage_candidate.
+    model = os.getenv("UA_INTEL_TRIAGE_MODEL", "").strip() or resolve_haiku()
+    system = _INTEL_TRIAGE_BATCH_SYSTEM_PREFIX + (idx_text or "(none)")
+
+    def build_prompt(chunk: list[dict[str, Any]]) -> str:
+        return json.dumps(
+            {
+                "candidates": [
+                    {
+                        "index": i,
+                        "candidate_kind": str(spec.get("candidate_kind") or "convergence"),
+                        "thesis": str(spec.get("thesis") or ""),
+                        "value": str(spec.get("value") or ""),
+                        "sources": _compact_triage_sources(spec.get("signatures") or []),
+                    }
+                    for i, spec in enumerate(chunk)
+                ]
+            },
+            ensure_ascii=True,
+        )
+
+    def parse(item: dict[str, Any], verdict: dict[str, Any]) -> dict[str, Any]:
+        v = str(verdict.get("verdict") or "").strip().lower()
+        if v not in _TRIAGE_ALLOWED_VERDICTS:
+            # Out-of-vocab → per-ITEM clean miss → this candidate stays fail-closed
+            # (its seeded 'retry' value), the rest of the chunk is unaffected.
+            raise ValueError(f"out-of-vocab triage verdict: {v!r}")
+        return {
+            "kind": v,
+            "reasoning": str(verdict.get("reasoning") or "").strip(),
+            "demo_amenable": bool(verdict.get("demo_amenable")),
+            "model": model,
+        }
+
+    fail_closed = {
+        "kind": "retry",
+        "reasoning": "triage unavailable (batch)",
+        "demo_amenable": False,
+        "model": model,
+    }
+
+    results = await batched_judge(
+        eligible,
+        build_prompt=build_prompt,
+        parse=parse,
+        fail_closed=fail_closed,
+        system=system,
+        batch_size=_intel_triage_batch_size(),
+        model_overrides={"model": model},
+        deadline=deadline,
+        stats=stats,
+    )
+    return {spec["candidate_id"]: res.value for spec, res in zip(eligible, results)}
+
+
+def _run_batched_triage(
+    conn: sqlite3.Connection,
+    specs: list[dict[str, Any]],
+    *,
+    idx_text: str,
+    deadline: float | None = None,
+    stats: dict | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Sync wrapper around :func:`_batched_triage_overrides_async` (mirrors the
+    loop-handling pattern used by :func:`_detect_clusters_llm` and the other sync
+    wrappers in this module)."""
+    coro = _batched_triage_overrides_async(
+        conn, specs, idx_text=idx_text, deadline=deadline, stats=stats
+    )
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import nest_asyncio
+
+    nest_asyncio.apply()
+    return loop.run_until_complete(coro)
+
+
 def write_convergence_candidate(
     conn: sqlite3.Connection,
     *,
@@ -1393,8 +1628,18 @@ def write_convergence_candidate(
     signal_strength: float = 0.0,
     candidate_kind: str = "convergence",
     value: str = "",
+    triage_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Upsert a ``convergence_candidates`` row and (idempotently) queue Atlas.
+
+    ``triage_override`` (optional) is a pre-computed triage verdict (the shape
+    :func:`triage_candidate` returns: ``{kind, reasoning, demo_amenable, model}``).
+    When provided for a non-finalized candidate, it is used in place of an inline
+    per-candidate :func:`triage_candidate` call — this is how the sweep-level
+    BATCHED triage pre-pass (:func:`_run_batched_triage`) feeds its verdicts in
+    while every downstream invariant (finalized short-circuit, in-flight mission
+    dedup, the row UPSERT, ``_newly_queued`` accounting, metadata.triage) is
+    preserved unchanged. ``None`` ⇒ legacy inline triage.
 
     ``candidate_id`` is ``f"cand_{sha256(sorted_video_ids).hexdigest()[:16]}"`` —
     deterministic across CSI runs for the exact same source cluster. If a
@@ -1423,8 +1668,7 @@ def write_convergence_candidate(
     })
     if not video_ids:
         raise ValueError("signatures must include at least one video_id")
-    seed = "|".join(video_ids)
-    candidate_id = f"cand_{hashlib.sha256(seed.encode()).hexdigest()[:16]}"
+    candidate_id = _candidate_id_for_signatures(signatures)  # single source of truth
 
     existing = _get_convergence_candidate(conn, candidate_id)
     final_verdicts = {"ship", "skip", "defer", "error"}
@@ -1560,13 +1804,19 @@ def write_convergence_candidate(
             persist_task_id = str(task.get("task_id") or task_id)
             newly_queued = True
     else:
-        triage = triage_candidate(
-            conn,
-            candidate_kind=candidate_kind,
-            thesis=thesis,
-            value=value,
-            signatures=signatures,
-        )
+        # Use the pre-computed batched verdict when the sweep ran a batched triage
+        # pre-pass for this candidate; otherwise fall back to the inline
+        # per-candidate call (legacy path / single-candidate callers).
+        if triage_override is not None:
+            triage = dict(triage_override)
+        else:
+            triage = triage_candidate(
+                conn,
+                candidate_kind=candidate_kind,
+                thesis=thesis,
+                value=value,
+                signatures=signatures,
+            )
         v = str(triage.get("kind") or "retry")
         if v == "ship":
             # Worth a card — queue the Task Hub item exactly as before. The
