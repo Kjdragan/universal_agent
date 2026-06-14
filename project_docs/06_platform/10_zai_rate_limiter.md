@@ -18,8 +18,9 @@ code_paths:
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/utils/model_resolution.py
   - src/universal_agent/infisical_loader.py
+  - src/universal_agent/services/batched_judge.py
   - web-ui/app/dashboard/zai-control/page.tsx
-last_verified: 2026-06-13
+last_verified: 2026-06-14
 ---
 
 # ZAI Rate Limiter & Inference Governance
@@ -561,6 +562,32 @@ model tier reduces a flow's *pressure*; routing it through the limiter addresses
 5. **You're already observed.** You do not need to add logging for 429s — the httpx
    hook captures every request. But the hook does **not** throttle; observation is not
    enforcement.
+6. **If you're judging/classifying/extracting N independent items in a loop, BATCH.**
+   Fewer *calls* is the actual Fair-Usage lever (rejection is concurrency/frequency-
+   driven, not token-driven). Replace a `for item in items:` LLM fan-out with one
+   structured-output call per chunk of ~20 items returning a verdict array keyed by
+   index. Use the shared helper rather than re-deriving the mechanics (see §7.1).
+
+### 7.1 The `batched_judge` helper (`services/batched_judge.py`)
+
+`batched_judge(items, *, build_prompt, parse, fail_closed, ...)` owns the *mechanics*
+of the batching pattern proven in PR #989 (the convergence cluster judge): chunking at
+`batch_size` (default 20 — the empirically-best inverted-U point: a 61-bucket sweep
+found ~20/call beats both per-item and one-giant-call on F1, call count, *and* tokens),
+the sequential/bounded fan-out under `Semaphore(concurrency)` (default 1, storm-
+avoidance), mapping the `{"verdicts":[{index,...}]}` array back to items by index (with
+a single-item bare-verdict fallback), fail-closed **per chunk** on a non-FUP error, the
+one-shot **FUP circuit breaker** (re-raise → skip remaining chunks), and a monotonic
+`deadline`. It threads a full `model_overrides` dict (not a bare model id) so a site
+keeps its A/B `base_url`/`api_key` routing. Each call-site keeps the *semantics*:
+`build_prompt`, the schema, the per-item cache, and the gate (inside `parse`).
+
+It returns `list[BatchedResult]` aligned 1:1 with `items`; `BatchedResult.ok` is
+**False** when the value is a fail-closed substitution. **Cache contract:** a call-site
+that caches verdicts must only `cache_put` results where `.ok is True` — caching a
+fail-closed value would suppress a real item until the TTL expires. First adopter:
+`wiki/llm.py::extract_facets_batched` (see
+[`04_intelligence/07_llm_wiki.md`](../04_intelligence/07_llm_wiki.md)).
 
 ## 8. Worked example — the 2026-06-10 burst
 

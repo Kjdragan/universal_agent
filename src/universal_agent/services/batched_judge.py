@@ -53,9 +53,9 @@ verdict (cacheable) from a fail-closed substitution (not cacheable).
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 import time
-from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Sequence
 
 logger = logging.getLogger(__name__)

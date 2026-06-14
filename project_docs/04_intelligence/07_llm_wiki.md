@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/tools/wiki_bridge.py
   - src/universal_agent/tools/kb_bridge.py
   - src/universal_agent/services/csi_intelligence_persistence.py
-last_verified: 2026-06-11
+last_verified: 2026-06-14
 ---
 
 # LLM Wiki System
@@ -119,17 +119,36 @@ the memex primitives). For example, CSI ingest calls
 ## External ingest flow
 
 `wiki_ingest_external_source(vault_slug, source_title, source_content, source_id=None,
-root_override=None)` (`wiki/core.py`):
+root_override=None, facets=None, defer_index=False)` (`wiki/core.py`):
 
 1. `ensure_vault("external", vault_slug, ...)`.
-2. Run LLM extraction on the content: `extract_entities`, `extract_concepts`,
-   `generate_summary`.
+2. Resolve facets: when `facets is None`, run per-source LLM extraction
+   (`extract_entities`, `extract_concepts`, `generate_summary` — 3 calls); when a
+   caller supplies precomputed `facets` (`{entities, concepts, summary}`), use them
+   and skip the per-source LLM fan-out entirely.
 3. Build a `source` page (frontmatter `provenance_kind="external_ingest"`, tags =
    `["external", *entities, *concepts]`, `source_ids=[source_id]`, `summary=...`).
-4. Write to `sources/<slug>.md`, then `update_index` + `refresh_overview`.
+4. Write to `sources/<slug>.md`. Then `update_index` + `refresh_overview` **unless**
+   `defer_index=True` (a batch driver does one final rebuild instead of one per
+   source; `ensure_vault` still refreshes on each call).
 
 `source_id` defaults to `ext_<timestamp>`. The slug is derived from the first 50 chars
 of the title.
+
+### Batched packet ingest (`claude_code_intel_replay.py::ingest_packet_into_external_vault`)
+
+The CSI report ingest is the high-volume caller — a packet fans out over posts +
+work-products + linked sources, each previously firing **3** LLM calls
+(`extract_entities` + `extract_concepts` + `generate_summary`), i.e. `3·N` calls per
+packet. `ingest_packet_into_external_vault` now **collects** all source specs first
+(preserving the tier-1 min-signal gate and the linked-source canonical-target dedup),
+calls `wiki/llm.py::extract_facets_batched` once to batch the extraction, then writes
+each page with the precomputed `facets` and `defer_index=True`, and rebuilds the index
+once. This collapses `3·N → 2·⌈N/B⌉` LLM calls (`B` = `UA_WIKI_EXTRACT_BATCH_SIZE`,
+default 20 → ~30× fewer calls at N=20). Kill-switch `UA_WIKI_INGEST_BATCHED=0` reverts
+to per-source extraction (the collect→write→index-once restructure is behavior-
+equivalent either way; only the LLM-call shape changes). On any batch failure the
+write phase falls back to per-source extraction, so a bad batch never drops a source.
 
 Production callers: `services/claude_code_intel_replay.py` (CSI report ingest) and the
 `src/universal_agent/scripts/nightly_wiki_agent.py` script. The proactive-signals "Create Wiki" action also
@@ -294,9 +313,27 @@ Anthropic client built by `_get_anthropic_client()`:
 
 **Every function fails gracefully to a heuristic.** If the LLM call raises (no key,
 import error, network), `extract_entities` falls back to title-case regex word
-extraction (limit 5), `extract_concepts` returns `[]`, and `generate_summary` returns the
-first sentence (truncated to ~200 chars). This means ingest never hard-fails on LLM
+extraction (limit 5, `wiki/llm.py::_heuristic_entities`), `extract_concepts` returns
+`[]`, and `generate_summary` returns the first sentence (truncated to ~200 chars,
+`wiki/llm.py::_heuristic_summary`). This means ingest never hard-fails on LLM
 unavailability — it just produces lower-quality metadata.
+
+### Batched extraction (`wiki/llm.py::extract_facets_batched`)
+
+For the high-volume packet path, `extract_facets_batched(sources)` (where each source
+is `{source_id, text}`) collapses the per-source 3-call fan-out into **two** batched
+structured calls per chunk of `UA_WIKI_EXTRACT_BATCH_SIZE` (default 20): one
+**sonnet** call (`model=_extract_model()`) returning `{entities, concepts}` per source,
+and one **opus** call (`model=resolve_opus()`) returning `{summary}` per source —
+`3·N → 2·⌈N/20⌉`. The tiers are split deliberately so summary generation keeps its
+opus tier (it is generative/quality-sensitive) instead of being silently downgraded;
+batching also collapses those throttle-fragile opus *calls*. It runs over the shared
+`services/batched_judge.py::batched_judge` helper (chunking, verdict-array-by-index,
+one-shot FUP breaker, fail-closed). Any per-source/per-facet failure falls back to the
+**same** `_heuristic_entities` / `[]` / `_heuristic_summary` fallbacks as the
+per-source path, so a bad batch never drops a source. It is a synchronous wrapper
+(`asyncio.run`) that degrades to per-source extraction if called inside a running event
+loop (the CSI replay chain is synchronous today, so this is a defensive fallback).
 
 ## Knowledge Base registry (`wiki/kb_registry.py`)
 

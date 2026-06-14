@@ -722,17 +722,37 @@ def wiki_ingest_external_source(
     source_content: str,
     source_id: str | None = None,
     root_override: str | None = None,
+    facets: dict[str, Any] | None = None,
+    defer_index: bool = False,
 ) -> dict[str, Any]:
-    """Ingest external content, enriching it via LLM semantic extraction."""
+    """Ingest external content, enriching it via LLM semantic extraction.
+
+    ``facets`` lets a caller supply PRECOMPUTED ``{entities, concepts, summary}``
+    (e.g. from the batched extractor ``wiki.llm.extract_facets_batched``) so the
+    per-source 3-call LLM fan-out is skipped here. When ``facets is None`` the
+    legacy per-source extraction runs (3 LLM calls), unchanged.
+
+    ``defer_index=True`` skips the END-OF-INGEST ``update_index`` /
+    ``refresh_overview`` rescans so a batch driver can do a single final rebuild
+    after writing all pages instead of one per source (``ensure_vault`` still
+    refreshes on each call, so this skips the *additional* per-source rebuild).
+    Deferring is behavior-equivalent because the index/overview are derived purely
+    from files on disk; the driver's final rebuild includes the last page written.
+    """
     context = ensure_vault("external", vault_slug, root_override=root_override)
-    
+
     slug = _slugify(source_title[:50], fallback="source")
     source_id = source_id or f"ext_{_timestamp_slug()}"
-    
-    entities = extract_entities(source_content)
-    concepts = extract_concepts(source_content)
-    summary = generate_summary(source_content)
-    
+
+    if facets is None:
+        entities = extract_entities(source_content)
+        concepts = extract_concepts(source_content)
+        summary = generate_summary(source_content)
+    else:
+        entities = list(facets.get("entities") or [])
+        concepts = list(facets.get("concepts") or [])
+        summary = str(facets.get("summary") or "")
+
     meta = _default_page_meta(
         source_title,
         "source",
@@ -741,13 +761,14 @@ def wiki_ingest_external_source(
         source_ids=[source_id]
     )
     meta["summary"] = summary
-    
+
     dest = context.path / "sources" / f"{slug}.md"
     _write_page(dest, meta, source_content)
-    
-    update_index(context.path)
-    refresh_overview(context.path)
-    
+
+    if not defer_index:
+        update_index(context.path)
+        refresh_overview(context.path)
+
     return {
         "status": "success",
         "path": _relative(dest, context.path),

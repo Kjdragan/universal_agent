@@ -49,7 +49,7 @@ def test_replay_writes_candidate_ledger_and_external_vault(monkeypatch, tmp_path
     monkeypatch.setenv("UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED", "0")
     calls: list[tuple[str, str]] = []
 
-    def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None):
+    def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None, facets=None, defer_index: bool = False):
         calls.append((source_title, source_id or ""))
         vault_root = Path(root_override or tmp_path / "knowledge-vaults" / vault_slug)
         path = vault_root / "sources" / f"{source_id or 'source'}.md"
@@ -111,7 +111,7 @@ def test_replay_writes_candidate_ledger_and_external_vault(monkeypatch, tmp_path
 
 def test_replay_fetches_linked_sources_and_writes_metadata(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED", "0")
-    def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None):
+    def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None, facets=None, defer_index: bool = False):
         vault_root = Path(root_override or tmp_path / "knowledge-vaults" / vault_slug)
         path = vault_root / "sources" / f"{source_id or 'source'}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +228,7 @@ def test_replay_skips_tco_redirects_into_browser_gated_x_pages(monkeypatch, tmp_
 
     calls: list[tuple[str, str]] = []
 
-    def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None):
+    def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None, facets=None, defer_index: bool = False):
         calls.append((source_title, source_id or ""))
         vault_root = Path(root_override or tmp_path / "knowledge-vaults" / vault_slug)
         path = vault_root / "sources" / f"{source_id or 'source'}.md"
