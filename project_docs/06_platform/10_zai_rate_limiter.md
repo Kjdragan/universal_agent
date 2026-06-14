@@ -171,7 +171,12 @@ All three take `_state_lock` and call `_persist_snapshot()`:
 
 - **`record_429(context)`** — if this 429 is within 10s of the previous one it is
   treated as *related*: `_consecutive_429s` increments and the backoff **floor**
-  ramps `min(8.0, initial_backoff * 1.5**consecutive)`. Otherwise the streak resets.
+  ramps `min(max(initial_backoff, 8.0), initial_backoff * 1.5**consecutive)`. The
+  ceiling is `max(initial_backoff, 8.0)` so a conservative `ZAI_INITIAL_BACKOFF`
+  (now **10s** by default) is never clamped *down* mid-storm — a 1s first backoff
+  is a glitchy-retry pattern, not a rate-limiting posture, and the floor only ever
+  applies *after* a 429 so a larger value is free on healthy traffic. (For the old
+  1.0 default the ceiling is `max(1.0, 8.0)=8.0` — unchanged.) Otherwise the streak resets.
 - **`record_success()`** — decays the floor back toward `initial_backoff` (`* 0.9`)
   and walks `_consecutive_429s` down. The system self-heals once ZAI recovers.
 - **`record_fup_signal(context, snippet)`** — increments `_total_fup_events`, stores
@@ -200,7 +205,7 @@ Defaults below are the **actual code defaults** in `ZAIRateLimiter.__init__`.
 | Env var | Code default | Meaning |
 |---|---|---|
 | `ZAI_MAX_CONCURRENT` | **`2`** | Max parallel ZAI requests through the legacy (tierless) gate |
-| `ZAI_INITIAL_BACKOFF` | **`1.0`** | Starting backoff floor (seconds) |
+| `ZAI_INITIAL_BACKOFF` | **`10.0`** | Starting backoff floor (seconds) — conservative-by-default; only fires after a 429 |
 | `ZAI_MAX_BACKOFF` | **`30.0`** | Hard cap on any single backoff |
 | `ZAI_MIN_INTERVAL` | **`0.5`** | Minimum seconds between request *starts* (global, all tiers) |
 | `UA_ZAI_INFERENCE_STATE_PATH` | (derived) | Override snapshot location |
