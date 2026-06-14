@@ -12,7 +12,8 @@ code_paths:
   - scripts/_claude_launcher.py
   - scripts/claude_with_mcp_env.sh
   - src/universal_agent/services/invariants/zai_inference_health.py
-last_verified: 2026-06-11
+  - src/universal_agent/scripts/glm52_probe.py
+last_verified: 2026-06-13
 ---
 
 # Model Choice & Resolution
@@ -90,6 +91,47 @@ The thin wrappers express intent at call sites:
 | `resolve_opus()` | `glm-5.1` | `model_resolution.py::resolve_opus` |
 | `resolve_goal_eval_model(cody_mode)` | `glm-5-turbo` on ZAI, `None` on anthropic | `model_resolution.py::resolve_goal_eval_model` |
 | `resolve_claude_code_model(default="sonnet")` | tier passthrough | the string passed to claude-agent-sdk |
+
+### GLM-5.2 — validated opus-tier candidate (thinking semantics)
+
+ZAI's GLM-5.2 has been **validated as a drop-in opus-tier replacement** for `glm-5.1`
+on UA's existing Anthropic-compatible path (verified 2026-06-13 through the production
+limiter + observability via `scripts/glm52_probe.py`). The opus map is still `glm-5.1`;
+migration is a two-line flip — `ANTHROPIC_DEFAULT_OPUS_MODEL` (Infisical prod+dev) and
+the `ZAI_MODEL_MAP["opus"]` literal — with **no other code change required**. The thinking
+semantics differ from every prior ZAI model UA has run, so know them before using it:
+
+- **Wire id is the bare string `glm-5.2`.** `glm-5.2[1m]` returns HTTP 400 "Unknown Model"
+  on the `/v1/messages` endpoint — the `[1m]` suffix is a Claude-Code *settings.json*
+  convention the CLI parses, never a wire id. (ZAI also appears to alias `glm-5.1`→`glm-5.2`
+  server-side already.)
+- **`glm-5.2` is NOT in `ZAI_MODEL_MAP`**, so `model_resolution.py::model_id_to_tier("glm-5.2")`
+  falls through to the safe default **`sonnet`**. Any direct-SDK caller that wants it bucketed
+  as opus (cap-1) must pass `model_tier="opus"` explicitly until the map is updated, or the
+  limiter will run it at sonnet-tier concurrency.
+- **GLM-5.1 had no thinking mode; GLM-5.2 adds it and defaults it ON.** This corrects the older
+  "GLM-5.1 has no thinking mode — do NOT pass `thinking`" guidance (e.g. the 2026-05-07
+  knowledge-extraction note), which is true for 5.1 but **wrong for 5.2**. The ZAI thinking
+  parameter shape is `thinking: {"type": "enabled" | "disabled" | "auto"}`; the Anthropic-native
+  `{"type": "enabled", "budget_tokens": N}` is also accepted. All shapes return HTTP 200.
+- **No empty-response risk on UA's path.** The infamous empty-response gotcha (reasoning landing
+  in `reasoning_content`) is specific to ZAI's *OpenAI-compatible* endpoint. On the
+  *Anthropic-compatible* endpoint UA uses, a thinking-enabled response is `[thinking block,
+  text block]`; UA's text extraction (`for b in resp.content: if hasattr(b, "text")`) skips the
+  thinking block and still gets the answer. The default call (no `thinking`) also returns
+  non-empty text. **No parser change needed.**
+- **Thinking is expensive — budget-bound it.** On a trivial prompt: ~30 output tokens with thinking
+  off (`disabled`/`auto`/default), but **428 with a 1024 budget and 724 with no budget**. So for
+  cheap/fast crons (extraction, classification, triage) pass `thinking: {"type": "disabled"}` to
+  keep 5.1-like cost/latency, and **always set `budget_tokens` when enabling** — the no-budget
+  shape runs reasoning unbounded. Reserve thinking-on for genuine opus-tier reasoning work. Reasoning
+  *depth* (High vs Max effort) is a Claude-Code reasoning-effort setting, not a wire parameter.
+
+The eval harness `scripts/glm52_probe.py` runs both an SDK lane (UA's real call path) and a raw-httpx
+lane (for the ZAI-specific shapes the SDK validates away client-side), routes every call through
+`rate_limiter.py::with_rate_limit_retry` (FUP-respectful pacing) after `initialize_runtime_secrets()`
+(so the calls are captured by the observability hook and show on the ZAI Control panel), and self-checks
+panel visibility. Run it on the VPS: `python -m universal_agent.scripts.glm52_probe`.
 
 ### Haiku and sonnet resolve to different models
 
