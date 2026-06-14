@@ -201,8 +201,17 @@ async def _call_llm(
     max_tokens: int = 1024,  # doubled from 512 per audit
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
+    temperature: Optional[float] = None,
 ) -> str:
     """Make an LLM call and return the raw text response.
+
+    ``temperature`` (default ``None``) is threaded into ``messages.create`` ONLY
+    when set, so every existing caller is byte-unchanged (no ``temperature`` key =
+    the provider default, ~1.0). Judgment gates pass ``temperature=0`` (via
+    :func:`_resolve_judge_temperature`) to make their verdicts DETERMINISTic — a
+    live probe found ``_call_llm``'s missing temperature was the single source of
+    ~40% per-item coin-flip across the triage/buildability/cluster gates (n=10:
+    60% self-agreement at the default temperature -> 100% at ``temperature=0``).
 
     Closes the per-call ``AsyncAnthropic`` client deterministically (``try/finally``)
     so its underlying httpx ``AsyncClient`` is shut down inside the live event loop.
@@ -228,6 +237,16 @@ async def _call_llm(
         api_key=api_key,
         max_retries=0 if use_limiter else None,
     )
+    # Shared create() kwargs for BOTH paths. ``temperature`` is added only when
+    # set so callers that don't pass it keep their exact prior wire payload.
+    create_kwargs: dict[str, Any] = dict(
+        model=resolved_model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    if temperature is not None:
+        create_kwargs["temperature"] = temperature
     try:
         if use_limiter:
             from universal_agent.rate_limiter import with_rate_limit_retry
@@ -238,18 +257,10 @@ async def _call_llm(
                 context="llm_classifier",
                 model_tier=model_id_to_tier(resolved_model),
                 max_total_seconds=_limiter_call_budget_seconds(),
-                model=resolved_model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
+                **create_kwargs,
             )
         else:
-            response = await client.messages.create(
-                model=resolved_model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-            )
+            response = await client.messages.create(**create_kwargs)
 
         raw_text = ""
         for block in response.content:
@@ -263,6 +274,41 @@ async def _call_llm(
             await client.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+def _resolve_judge_temperature(env_name: Optional[str] = None) -> Optional[float]:
+    """Resolve the determinism temperature for a judgment gate.
+
+    Reads a per-gate override env (e.g. ``UA_INTEL_TRIAGE_TEMPERATURE``) first,
+    then the shared ``UA_LLM_JUDGE_TEMPERATURE``. Returns ``None`` when neither is
+    set (today's behavior — no temperature passed, provider default ~1.0). Set
+    either to ``0`` to make the gate deterministic. A non-numeric value is
+    ignored (falls through to the next source / ``None``), never raising.
+    """
+    for name in (env_name, "UA_LLM_JUDGE_TEMPERATURE"):
+        if not name:
+            continue
+        raw = (os.getenv(name) or "").strip()
+        if not raw:
+            continue
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _coerce_score(raw: Any) -> Optional[float]:
+    """Coerce an LLM-emitted graded score into a clamped ``0..100`` float, or
+    ``None`` when the value is missing/non-numeric (an un-decidable verdict the
+    caller fails closed, exactly like an out-of-vocab categorical verdict)."""
+    try:
+        score = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if score != score:  # NaN guard
+        return None
+    return max(0.0, min(100.0, score))
 
 
 def _parse_json_response(raw: str) -> dict[str, Any]:
