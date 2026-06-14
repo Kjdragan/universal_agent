@@ -18,7 +18,7 @@ code_paths:
   - src/universal_agent/utils/db_health_monitor.py
   - CSI_Ingester/development/csi_ingester/store/sqlite.py
   - src/universal_agent/services/proactive_convergence.py
-last_verified: 2026-06-13
+last_verified: 2026-06-14
 ---
 
 # Database Architecture
@@ -115,7 +115,8 @@ conn = connect_runtime_db(get_activity_db_path())   # → activity_state.db
 - **`task_hub_assignments`** — the **claim ledger** (started/ended/state, `worker_pid`, workflow/provider session linkage). `worker_pid` is the spawned subprocess PID for owned-subprocess assignments (cron `!script`, VP CLI, demo workspace) and NULL for in-process assignments (SDK, ToDo, heartbeat) which share the gateway daemon PID.
 - **`task_hub_runs`** — per-attempt durable history (outcome/summary/metadata/error) alongside the claim ledger. Additive: assignments are the "an attempt occurred" record; runs are "what actually happened".
 - **`task_hub_evaluations`** — judge decisions (`decision`, `reason`, `score`, `judge_payload_json`).
-- **`cody_token_usage`** — per-mission Cody token telemetry (input/output/cache tokens, `total_cost_usd`, `cody_mode`, `model`). The dashboard tile sums rows where `recorded_at >=` the `cody_token_tracking_window.reset_at` cursor in `task_hub_settings`.
+- **`cody_token_usage`** — per-mission Cody token telemetry (input/output/cache tokens, `total_cost_usd`, `cody_mode`, `model`). The dashboard tile sums rows where `recorded_at >=` the `cody_token_tracking_window.reset_at` cursor in `task_hub_settings`. Written by external `claude --print` subprocess missions (`vp/clients/claude_cli_client.py::_record_mission_token_usage`).
+- **`token_usage_events`** — per-turn token telemetry for **IN-PROCESS** Claude Agent SDK principal turns (Simone heartbeat/daemon + in-process VP coder) that the httpx hook (`services/zai_observability.py`) cannot see (those calls return via the SDK `ResultMessage`, not the patched httpx client). One row per `main.py::process_turn` invocation, written by `services/principal_token_tracking.py::record_session_token_usage`. `source` = capture site (`cli-in-process`; the double-count invariant); `principal` = who spent (`simone`/`vp-coder`/…, from `UA_RUN_SOURCE`). Distinct lane from `cody_token_usage` (subprocess) and the `zai_inference_events.jsonl` httpx lane. `total_cost_usd` is the per-turn delta of the cumulative SDK cost; token counts SUM the per-iteration `ResultMessage.usage` (incl. cache tokens).
 - **`task_hub_dispatch_queue`** — materialized ranked dispatch queue (`queue_build_id`, `rank`, `eligible`, `skip_reason`).
 - **`task_hub_comments`**, **`task_hub_question_queue`**, **`task_hub_workstreams`**, **`task_hub_settings`** (key/`value_json`), **`task_hub_notifications`** (`UNIQUE(task_id, event_key)` dedup), **`task_hub_delivery_evidence`** (AgentMail message/thread/draft + work-product paths).
 
@@ -141,7 +142,7 @@ Task Hub is the only operational DB with explicit row-level pruning:
 
 `task_hub.py::prune_settled_tasks(conn, *, retention_days=21)` deletes, in order, `task_hub_evaluations` → `task_hub_assignments` → `task_hub_items` for tasks whose `status IN ('completed', 'parked')` and whose `updated_at < datetime('now', '-{retention_days} days')`. Default retention is **21 days**. The only production caller is the Simone heartbeat (`heartbeat_service.py`), which calls it with `retention_days=21`.
 
-> Note: `prune_settled_tasks` does **not** prune `task_hub_runs`, `cody_token_usage`, or `task_hub_delivery_evidence`. Those grow unbounded by row count; storage management for them relies on the file-level `auto_vacuum=INCREMENTAL` pragma only. `[VERIFY: whether task_hub_runs growth is intentional or a missed prune target.]`
+> Note: `prune_settled_tasks` does **not** prune `task_hub_runs`, `cody_token_usage`, `token_usage_events`, or `task_hub_delivery_evidence`. Those grow unbounded by row count; storage management for them relies on the file-level `auto_vacuum=INCREMENTAL` pragma only. `[VERIFY: whether task_hub_runs growth is intentional or a missed prune target.]`
 
 There is no equivalent row-pruner for `runtime_state.db` `runs`/`run_attempts` in the DB layer — stale-run handling is recovery (reaping), not deletion (see §6). Space reclamation across all DBs is handled passively by `PRAGMA auto_vacuum=INCREMENTAL` rather than scheduled `VACUUM`.
 

@@ -402,6 +402,41 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_cody_token_mission ON cody_token_usage(mission_id);
         CREATE INDEX IF NOT EXISTS idx_cody_token_task ON cody_token_usage(task_id);
 
+        -- All-lane token capture: IN-PROCESS Claude Agent SDK principal turns
+        -- (Simone heartbeat/daemon + in-process VP coder) land here, one row per
+        -- main.py::process_turn invocation, written by
+        -- services/principal_token_tracking.record_session_token_usage. This is
+        -- the consolidation lane for the bulk of ZAI spend the httpx hook
+        -- (services/zai_observability.py) cannot see (those calls return via the
+        -- SDK ResultMessage, not the patched httpx client). Distinct from
+        -- cody_token_usage (external `claude --print` subprocess missions) and
+        -- the httpx JSONL lane (zai_inference_events.jsonl). `source` = capture
+        -- site (the double-count invariant); `principal` = who spent the tokens.
+        CREATE TABLE IF NOT EXISTS token_usage_events (
+            id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts                          REAL NOT NULL,
+            recorded_at                 TEXT NOT NULL,
+            source                      TEXT NOT NULL,
+            principal                   TEXT,
+            model                       TEXT,
+            caller                      TEXT,
+            caller_fn                   TEXT,
+            status                      TEXT,
+            input_tokens                INTEGER NOT NULL DEFAULT 0,
+            output_tokens               INTEGER NOT NULL DEFAULT 0,
+            cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_read_input_tokens     INTEGER NOT NULL DEFAULT 0,
+            total_cost_usd              REAL NOT NULL DEFAULT 0.0,
+            num_turns                   INTEGER NOT NULL DEFAULT 0,
+            mission_id                  TEXT,
+            task_id                     TEXT,
+            session_id                  TEXT,
+            run_id                      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_tue_ts ON token_usage_events(ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_tue_source_ts ON token_usage_events(source, ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_tue_principal_ts ON token_usage_events(principal, ts DESC);
+
         -- Hermes Phase D: per-attempt durable history alongside task_hub_assignments.
         -- task_hub_assignments is the claim-ledger (started/ended/state) while
         -- task_hub_runs holds the closing outcome/summary/metadata/error so
