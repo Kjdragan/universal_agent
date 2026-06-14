@@ -31,21 +31,33 @@ package is src-layout, so PYTHONPATH=src is required for the bare venv python:
 
     cd /opt/universal_agent && UA_DEPLOYMENT_PROFILE=vps PYTHONPATH=src \
         .venv/bin/python -m universal_agent.scripts.zai_batch_triage_ab \
-        --target both --limit 16 --batch-size 20 --delay 0.6
+        --target both --limit 16 --batch-size 20 --delay 0.6 --control
 
 The buildability target reads the CSI ingester DB at CSI_DB_PATH (default
 /var/lib/universal-agent/csi/csi.db — the production path); override with
 UA_CSI_DB_PATH.
 
-Decision rule: adopt the batched default only when agreement is (near-)100% AND the
-call/token reduction is material. Where verdicts diverge, read the divergence table
-and eyeball which decision is right.
+``--control`` adds a SELF-AGREEMENT arm: it runs the per-item path a SECOND time
+over the SAME inputs and reports per-item-vs-per-item agreement — the NOISE FLOOR.
+The first live run found that noise floor is ~60% at the default temperature (the
+judge sets no temperature), so a 50% batched agreement was never evidence the
+batch was worse — it was the judge's own variance. The harness drives the REAL
+gate, so it automatically picks up the graded-judge knobs: set
+``UA_LLM_JUDGE_TEMPERATURE=0`` and the self-agreement should jump to ~100%; set
+``UA_INTEL_TRIAGE_SHIP_THRESHOLD`` / ``UA_TUTORIAL_BUILD_THRESHOLD`` and both arms
+run the graded 0-100 + threshold gate instead of the categorical/binary one.
+
+Decision rule: adopt the batched default only when batched agreement is at/above
+the self-agreement noise floor (i.e. batching adds no variance beyond the judge's
+own) AND the call/token reduction is material. Where verdicts diverge, read the
+divergence table and eyeball which decision is right.
 
 First live run (2026-06-14, n=12 triage / n=10 buildability): both showed large
 call/token/latency wins (triage 12→1 calls, −78% tokens; buildability 10→1, −59%)
-but agreement BELOW the bar (triage 50%, buildability 80%) with systematic,
-opposite-direction divergence (batched triage stricter; batched buildability more
-lenient). ⇒ both defaults stay OFF pending prompt tuning + a calm-window re-run.
+but agreement BELOW the (then naive) 100% bar — triage 50%, buildability 80% —
+which the ~60% noise floor later explained. ⇒ defaults stay OFF until a calm-window
+re-run with ``--control`` + ``UA_LLM_JUDGE_TEMPERATURE=0`` shows batched agreement
+holding at the (now ~100%) floor at batch ~8.
 """
 
 from __future__ import annotations
@@ -134,17 +146,12 @@ def _load_triage_specs(conn: sqlite3.Connection, *, limit: int) -> list[dict[str
     return specs
 
 
-def _ab_triage(conn, specs, *, batch_size, delay, is_fup) -> dict[str, Any]:
-    from universal_agent.services import proactive_convergence as pc
-    import universal_agent.services.llm_classifier as llm
-
-    idx_text = pc._triage_index_text(conn)
-
-    # PER-ITEM arm (the legacy path). triage_candidate uses pc._call_llm.
-    per_counter = _Counter()
-    pc_orig = pc._call_llm
-    pc._call_llm = _make_counting_call_llm(pc_orig, per_counter, is_fup)
-    per_verdicts: dict[str, str] = {}
+def _per_item_triage_pass(conn, specs, *, pc, pc_orig, is_fup, delay) -> tuple[dict[str, str], "_Counter", float]:
+    """One full per-item triage pass over ``specs`` (each via triage_candidate),
+    with call counting + self-throttle. Returns (verdicts, counter, latency_ms)."""
+    counter = _Counter()
+    pc._call_llm = _make_counting_call_llm(pc_orig, counter, is_fup)
+    verdicts: dict[str, str] = {}
     t0 = time.monotonic()
     try:
         for s in specs:
@@ -156,13 +163,34 @@ def _ab_triage(conn, specs, *, batch_size, delay, is_fup) -> dict[str, Any]:
                     value=s["value"],
                     signatures=s["signatures"],
                 )
-                per_verdicts[s["candidate_id"]] = str(v.get("kind") or "retry")
+                verdicts[s["candidate_id"]] = str(v.get("kind") or "retry")
             except Exception as exc:  # noqa: BLE001
-                per_verdicts[s["candidate_id"]] = f"error:{str(exc)[:60]}"
+                verdicts[s["candidate_id"]] = f"error:{str(exc)[:60]}"
             time.sleep(max(0.0, delay))
     finally:
         pc._call_llm = pc_orig
-    per_latency = round((time.monotonic() - t0) * 1000.0, 1)
+    return verdicts, counter, round((time.monotonic() - t0) * 1000.0, 1)
+
+
+def _ab_triage(conn, specs, *, batch_size, delay, is_fup, control: bool = False) -> dict[str, Any]:
+    from universal_agent.services import proactive_convergence as pc
+    import universal_agent.services.llm_classifier as llm
+
+    idx_text = pc._triage_index_text(conn)
+
+    # PER-ITEM arm (the legacy path). triage_candidate uses pc._call_llm.
+    pc_orig = pc._call_llm
+    per_verdicts, per_counter, per_latency = _per_item_triage_pass(
+        conn, specs, pc=pc, pc_orig=pc_orig, is_fup=is_fup, delay=delay
+    )
+
+    # CONTROL arm (opt-in): a SECOND identical per-item pass → the noise floor.
+    self_agreement = None
+    if control:
+        per_verdicts_b, _ctrl_counter, _ctrl_latency = _per_item_triage_pass(
+            conn, specs, pc=pc, pc_orig=pc_orig, is_fup=is_fup, delay=delay
+        )
+        self_agreement = _self_agreement(specs, per_verdicts, per_verdicts_b)
 
     # BATCHED arm. _run_batched_triage routes through batched_judge → llm._call_llm.
     bat_counter = _Counter()
@@ -182,7 +210,7 @@ def _ab_triage(conn, specs, *, batch_size, delay, is_fup) -> dict[str, Any]:
     bat_latency = round((time.monotonic() - t1) * 1000.0, 1)
     bat_verdicts = {cid: str((v or {}).get("kind") or "retry") for cid, v in overrides.items()}
 
-    return _compare(
+    result = _compare(
         kind="triage",
         specs=specs,
         per_verdicts=per_verdicts,
@@ -193,6 +221,9 @@ def _ab_triage(conn, specs, *, batch_size, delay, is_fup) -> dict[str, Any]:
         bat_latency=bat_latency,
         batch_size=batch_size,
     )
+    if self_agreement is not None:
+        result["self_agreement"] = self_agreement
+    return result
 
 
 # ── P3: tutorial buildability ──────────────────────────────────────────────
@@ -246,14 +277,12 @@ def _load_buildability_items(
     return items
 
 
-def _ab_buildability(items, *, batch_size, delay, is_fup) -> dict[str, Any]:
-    import universal_agent.services.llm_classifier as llm
-
-    # PER-ITEM arm (legacy classify_tutorial_buildability, one asyncio.run each).
-    per_counter = _Counter()
-    orig = llm._call_llm
-    llm._call_llm = _make_counting_call_llm(orig, per_counter, is_fup)
-    per_verdicts: dict[str, str] = {}
+def _per_item_buildability_pass(items, *, llm, orig, is_fup, delay) -> tuple[dict[str, str], "_Counter", float]:
+    """One full per-item buildability pass (each via classify_tutorial_buildability,
+    one asyncio.run). Returns (verdicts, counter, latency_ms)."""
+    counter = _Counter()
+    llm._call_llm = _make_counting_call_llm(orig, counter, is_fup)
+    verdicts: dict[str, str] = {}
     t0 = time.monotonic()
     try:
         for it in items:
@@ -263,13 +292,35 @@ def _ab_buildability(items, *, batch_size, delay, is_fup) -> dict[str, Any]:
                         title=it["title"], channel_name=it["channel_name"], summary_text=it["summary_text"]
                     )
                 )
-                per_verdicts[it["video_id"]] = "buildable" if v.get("buildable") else "no"
+                verdicts[it["video_id"]] = "buildable" if v.get("buildable") else "no"
             except Exception as exc:  # noqa: BLE001
-                per_verdicts[it["video_id"]] = f"error:{str(exc)[:60]}"
+                verdicts[it["video_id"]] = f"error:{str(exc)[:60]}"
             time.sleep(max(0.0, delay))
     finally:
         llm._call_llm = orig
-    per_latency = round((time.monotonic() - t0) * 1000.0, 1)
+    return verdicts, counter, round((time.monotonic() - t0) * 1000.0, 1)
+
+
+def _ab_buildability(items, *, batch_size, delay, is_fup, control: bool = False) -> dict[str, Any]:
+    import universal_agent.services.llm_classifier as llm
+
+    # PER-ITEM arm (legacy classify_tutorial_buildability, one asyncio.run each).
+    orig = llm._call_llm
+    per_verdicts, per_counter, per_latency = _per_item_buildability_pass(
+        items, llm=llm, orig=orig, is_fup=is_fup, delay=delay
+    )
+
+    # CONTROL arm (opt-in): a SECOND identical per-item pass → the noise floor.
+    self_agreement = None
+    if control:
+        per_verdicts_b, _ctrl_counter, _ctrl_latency = _per_item_buildability_pass(
+            items, llm=llm, orig=orig, is_fup=is_fup, delay=delay
+        )
+        self_agreement = _self_agreement(
+            [{"candidate_id": it["video_id"], "thesis": it["title"]} for it in items],
+            per_verdicts,
+            per_verdicts_b,
+        )
 
     # BATCHED arm.
     bat_counter = _Counter()
@@ -285,7 +336,7 @@ def _ab_buildability(items, *, batch_size, delay, is_fup) -> dict[str, Any]:
         for vid, v in out.items()
     }
 
-    return _compare(
+    result = _compare(
         kind="buildability",
         specs=[{"candidate_id": it["video_id"], "thesis": it["title"]} for it in items],
         per_verdicts=per_verdicts,
@@ -296,9 +347,39 @@ def _ab_buildability(items, *, batch_size, delay, is_fup) -> dict[str, Any]:
         bat_latency=bat_latency,
         batch_size=batch_size,
     )
+    if self_agreement is not None:
+        result["self_agreement"] = self_agreement
+    return result
 
 
 # ── shared comparison + reporting ──────────────────────────────────────────
+
+
+def _self_agreement(specs, run_a: dict[str, str], run_b: dict[str, str]) -> dict[str, Any]:
+    """Per-item ↔ per-item agreement across two identical runs = the NOISE FLOOR.
+
+    The batched-vs-per-item "agreement" is only meaningful relative to this: if two
+    identical per-item runs agree only 60% of the time (the measured default-temp
+    noise), a 50% batched agreement is not evidence of a worse judge — it is the
+    judge's own variance. At UA_LLM_JUDGE_TEMPERATURE=0 this jumps to ~100%."""
+    agree = disagree = 0
+    flips: list[dict[str, Any]] = []
+    for s in specs:
+        cid = s["candidate_id"]
+        a = run_a.get(cid, "missing")
+        b = run_b.get(cid, "missing")
+        if a == b:
+            agree += 1
+        else:
+            disagree += 1
+            flips.append({"id": cid, "label": str(s.get("thesis") or "")[:80], "run_a": a, "run_b": b})
+    total = len(specs)
+    return {
+        "agree": agree,
+        "disagree": disagree,
+        "pct": round(100.0 * agree / total, 1) if total else 0.0,
+        "flips": flips,
+    }
 
 
 def _compare(*, kind, specs, per_verdicts, bat_verdicts, per_counter, bat_counter, per_latency, bat_latency, batch_size) -> dict[str, Any]:
@@ -349,6 +430,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
         out.append(f"- **Call reduction:** {r['call_reduction']}  ·  **Input-token reduction:** {r['input_token_reduction_pct']}%")
         ag = r["agreement"]
         out.append(f"- **Verdict agreement: {ag['agree']}/{r['n']} = {ag['pct']}%**  (disagree: {ag['disagree']})")
+        sa = r.get("self_agreement")
+        if sa:
+            out.append(
+                f"- **Self-agreement (noise floor): {sa['agree']}/{r['n']} = {sa['pct']}%**  "
+                f"— per-item vs per-item over identical inputs. Judge the batched agreement "
+                f"above RELATIVE to this (UA_LLM_JUDGE_TEMPERATURE=0 should drive it to ~100%)."
+            )
         out.append("")
         if r["divergences"]:
             out.append("### Divergences (read these — which decision is right?)")
@@ -370,6 +458,13 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=20, help="max items per target (keep bounded)")
     ap.add_argument("--batch-size", type=int, default=20)
     ap.add_argument("--delay", type=float, default=0.6, help="inter-call sleep on the per-item arm (self-throttle)")
+    ap.add_argument(
+        "--control",
+        action="store_true",
+        help="add a self-agreement control arm: run the per-item path a SECOND time and "
+        "report per-item-vs-per-item agreement (the noise floor the batched agreement is "
+        "judged against). Doubles the per-item call count — keep --limit small.",
+    )
     ap.add_argument("--out", default="", help="output dir (default <artifacts>/proactive/zai_batch_ab)")
     args = ap.parse_args()
 
@@ -391,7 +486,11 @@ def main() -> int:
             specs = _load_triage_specs(conn, limit=args.limit)
             if specs:
                 print(f"[triage] {len(specs)} un-finalized candidates")
-                results.append(_ab_triage(conn, specs, batch_size=args.batch_size, delay=args.delay, is_fup=is_fup))
+                results.append(
+                    _ab_triage(
+                        conn, specs, batch_size=args.batch_size, delay=args.delay, is_fup=is_fup, control=args.control
+                    )
+                )
             else:
                 print("[triage] no un-finalized candidates in the DB — skipping")
 
@@ -415,7 +514,11 @@ def main() -> int:
                         items = _load_buildability_items(csi_conn, conn, limit=args.limit)
                     if items:
                         print(f"[buildability] {len(items)} uncached build-oriented videos")
-                        results.append(_ab_buildability(items, batch_size=args.batch_size, delay=args.delay, is_fup=is_fup))
+                        results.append(
+                            _ab_buildability(
+                                items, batch_size=args.batch_size, delay=args.delay, is_fup=is_fup, control=args.control
+                            )
+                        )
                     else:
                         print("[buildability] no uncached build-oriented videos — skipping")
             except Exception as exc:  # noqa: BLE001
