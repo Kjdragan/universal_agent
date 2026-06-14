@@ -9,7 +9,7 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/config/intel_lanes.yaml
   - src/universal_agent/utils/model_resolution.py
-last_verified: 2026-06-08
+last_verified: 2026-06-14
 ---
 
 # URL Judging & Research Grounding
@@ -109,7 +109,7 @@ Survivors become `candidates`. Matching is host-exact or suffix
 `UrlJudgmentResult` / `UrlVerdict` Pydantic models. The model is
 **`resolve_opus()`** — i.e. the flagship tier. `model_resolution.resolve_model`
 checks `ANTHROPIC_DEFAULT_OPUS_MODEL` first and only falls back to
-`ZAI_MODEL_MAP["opus"]` (`glm-5.1` on the ZAI proxy) when that env var is empty,
+`ZAI_MODEL_MAP["opus"]` (`glm-5.2` on the ZAI proxy, migrated from glm-5.1 2026-06-13) when that env var is empty,
 so the env var takes precedence.
 
 > **Correction vs. legacy docs:** older documentation claimed this judge uses
@@ -220,7 +220,7 @@ excerpts).
 The model-routing env vars (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
 `ANTHROPIC_DEFAULT_OPUS_MODEL`, etc.) are loaded from Infisical at process start
 by `initialize_runtime_secrets()` and are **never** written to `.env` on disk.
-On the ZAI proxy, `resolve_opus()` returns `glm-5.1` unless
+On the ZAI proxy, `resolve_opus()` returns `glm-5.2` (migrated from glm-5.1 2026-06-13) unless
 `ANTHROPIC_DEFAULT_OPUS_MODEL` overrides it.
 
 ---

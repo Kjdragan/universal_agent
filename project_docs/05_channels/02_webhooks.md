@@ -7,7 +7,7 @@ code_paths:
   - src/universal_agent/gateway_server.py
   - src/universal_agent/hooks_service.py
   - src/universal_agent/signals_ingest.py
-last_verified: 2026-06-07
+last_verified: 2026-06-14
 ---
 
 # Webhook Architecture
@@ -196,7 +196,7 @@ and status. On success (`200`/`207`) it iterates `extract_valid_events(payload)`
 flowchart TD
     A[POST /api/v1/signals/ingest] --> B[process_signals_ingest_payload]
     B -->|200/207| C{for each event}
-    C -->|to_manual_youtube_payload != None| D[build_manual_youtube_action]
+    C -->|to_manual_youtube_payload(event) returns dict| D[build_manual_youtube_action]
     D --> E[_hooks_service.dispatch_internal_action]
     C -->|non-YouTube CSI event| F[derive title/summary/full_md]
     F --> G[_add_csi_digest → SQLite]

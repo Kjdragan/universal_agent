@@ -13,7 +13,7 @@ code_paths:
   - src/universal_agent/scripts/claude_code_intel_sync.py
   - src/universal_agent/scripts/claude_code_intel_run_report.py
   - src/universal_agent/config/intel_lanes.yaml
-last_verified: 2026-06-08
+last_verified: 2026-06-14
 ---
 
 # ClaudeDevs X Intelligence
@@ -342,7 +342,8 @@ handles, `research_allowlist`, `vault_slug`, `capability_library_slug`,
 |---|---|---|
 | `UA_CLAUDE_CODE_INTEL_CRON_ENABLED` | 1 | register the system cron |
 | `UA_CLAUDE_CODE_INTEL_CRON_EXPR` | `0 8,16,22 * * *` | poll schedule |
-| `UA_CLAUDE_CODE_INTEL_X_HANDLE(S)` | lane yaml → `ClaudeDevs,bcherny` | handles to poll |
+| `UA_CLAUDE_CODE_INTEL_X_HANDLE` | (unset) | single-handle override, checked first |
+| `UA_CLAUDE_CODE_INTEL_X_HANDLES` | lane yaml → `ClaudeDevs,bcherny` | comma-separated multi-handle override (falls back to `DEFAULT_HANDLES`) |
 | `UA_CLAUDE_CODE_INTEL_MAX_RESULTS` | 25 (5–100) | posts per poll |
 | `UA_CLAUDE_CODE_INTEL_QUEUE_TASKS` | 1 | enqueue tier-3+ to Task Hub |
 | `UA_CLAUDE_CODE_INTEL_LLM_CLASSIFIER_ENABLED` | 1 | LLM tier classifier (vs heuristic only) |
@@ -391,9 +392,12 @@ handles, `research_allowlist`, `vault_slug`, `capability_library_slug`,
   from the same domain can collide on one page; grounded titles embed an
   8-char URL hash and ingest dedups defensively so `wiki_pages` counts don't
   lie.
-- **The Memex pass uses GLM-5.1 via `resolve_opus()` and must not pass
-  `thinking`/`reasoning_effort`** — GLM-5.1 has no thinking mode
-  (`csi_intelligence_pass.py` hard rules).
+- **The Memex pass uses `resolve_opus()` (currently `glm-5.2`, migrated from
+  glm-5.1 2026-06-13) and must not pass `thinking`/`reasoning_effort`** — the pass
+  calls `model=resolve_opus()` with no thinking parameters
+  (`csi_intelligence_pass.py` hard rules). *(Note: `csi_intelligence_pass.py`'s own
+  docstring still says "glm-5.1" — a stale code comment from the migration, tracked
+  for the code-comment escalation lane.)*
 - **Operational: a broken deploy can crash the 08:00 CDT poll.** The Simone
   heartbeat runs autonomously in the production checkout; an unreviewed branch
   introducing a `SyntaxError` mid-flight has crashed the `claude_code_intel`

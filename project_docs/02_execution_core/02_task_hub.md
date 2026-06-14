@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/services/execution_run_service.py
   - src/universal_agent/services/worker_exit_classifier.py
   - src/universal_agent/services/cron_task_hub_link.py
-last_verified: 2026-06-06
+last_verified: 2026-06-14
 ---
 
 # Task Hub & Dispatch
