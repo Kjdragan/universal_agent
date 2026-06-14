@@ -31,6 +31,7 @@ from universal_agent.rate_limiter import (
     ZAIRateLimiter,
     _AdaptiveGate,
     _get_state_path,
+    _resolve_max_retries,
     with_rate_limit_retry,
 )
 
@@ -450,3 +451,110 @@ def test_snapshot_carries_tier_state_and_identity(limiter):
     assert sonnet["cap"] == 1  # halved 2 → 1 by the first congestion event
     assert sonnet["decrease_count"] == 1
     assert snap["total_429s_exhausted"] == 0
+
+
+# ── Tier-aware efficiency knobs (opus burst-pacing + retry budget) ──────────
+
+
+class TestTierAwareRetryBudget:
+    def test_default_falls_back_to_zai_max_retries(self, monkeypatch):
+        monkeypatch.delenv("ZAI_OPUS_MAX_RETRIES", raising=False)
+        monkeypatch.setenv("ZAI_MAX_RETRIES", "5")
+        assert _resolve_max_retries("opus") == 5
+        assert _resolve_max_retries("sonnet") == 5
+        assert _resolve_max_retries("haiku") == 5
+        assert _resolve_max_retries(None) == 5
+
+    def test_opus_override_only_affects_opus(self, monkeypatch):
+        monkeypatch.setenv("ZAI_MAX_RETRIES", "5")
+        monkeypatch.setenv("ZAI_OPUS_MAX_RETRIES", "2")
+        assert _resolve_max_retries("opus") == 2  # opus gives up sooner
+        assert _resolve_max_retries("sonnet") == 5  # other tiers untouched
+        assert _resolve_max_retries("haiku") == 5
+        assert _resolve_max_retries(None) == 5
+
+    def test_opus_override_floored_at_one(self, monkeypatch):
+        monkeypatch.setenv("ZAI_OPUS_MAX_RETRIES", "0")
+        assert _resolve_max_retries("opus") == 1
+
+    def test_explicit_max_retries_wins(self, limiter):
+        # An explicit int passed to with_rate_limit_retry is never overridden.
+        calls = {"n": 0}
+
+        async def always_429() -> str:
+            calls["n"] += 1
+            raise RuntimeError(FUP_429_TEXT)
+
+        with pytest.raises(RuntimeError, match="429"):
+            asyncio.run(
+                with_rate_limit_retry(
+                    always_429, max_retries=2, context="t", model_tier="opus"
+                )
+            )
+        assert calls["n"] == 2
+
+
+class TestOpusBurstPacing:
+    def _fresh(self, tmp_path, monkeypatch, opus_interval):
+        monkeypatch.setenv("UA_ZAI_INFERENCE_STATE_PATH", str(tmp_path / "s.json"))
+        monkeypatch.setenv("ZAI_MIN_INTERVAL", "0.0")
+        monkeypatch.setenv("ZAI_OPUS_MIN_INTERVAL", str(opus_interval))
+        ZAIRateLimiter.reset_instance()
+        return ZAIRateLimiter.get_instance()
+
+    def test_opus_calls_are_spaced_post_response(self, tmp_path, monkeypatch):
+        lim = self._fresh(tmp_path, monkeypatch, 0.2)
+        try:
+
+            async def run() -> float:
+                import time as _t
+
+                start = _t.monotonic()
+                async with lim.acquire("t", model_tier="opus"):
+                    pass
+                async with lim.acquire("t", model_tier="opus"):
+                    pass
+                return _t.monotonic() - start
+
+            elapsed = asyncio.run(run())
+            assert elapsed >= 0.2  # 2nd opus call waited out the gap
+        finally:
+            ZAIRateLimiter.reset_instance()
+
+    def test_sonnet_is_not_paced_by_opus_interval(self, tmp_path, monkeypatch):
+        lim = self._fresh(tmp_path, monkeypatch, 0.5)
+        try:
+
+            async def run() -> float:
+                import time as _t
+
+                start = _t.monotonic()
+                async with lim.acquire("t", model_tier="sonnet"):
+                    pass
+                async with lim.acquire("t", model_tier="sonnet"):
+                    pass
+                return _t.monotonic() - start
+
+            elapsed = asyncio.run(run())
+            assert elapsed < 0.3  # sonnet untouched by the opus gap
+        finally:
+            ZAIRateLimiter.reset_instance()
+
+    def test_disabled_by_default(self, tmp_path, monkeypatch):
+        lim = self._fresh(tmp_path, monkeypatch, 0.0)
+        try:
+
+            async def run() -> float:
+                import time as _t
+
+                start = _t.monotonic()
+                async with lim.acquire("t", model_tier="opus"):
+                    pass
+                async with lim.acquire("t", model_tier="opus"):
+                    pass
+                return _t.monotonic() - start
+
+            elapsed = asyncio.run(run())
+            assert elapsed < 0.2  # no pacing when ZAI_OPUS_MIN_INTERVAL=0
+        finally:
+            ZAIRateLimiter.reset_instance()
