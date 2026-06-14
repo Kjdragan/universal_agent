@@ -133,6 +133,79 @@ lane (for the ZAI-specific shapes the SDK validates away client-side), routes ev
 (so the calls are captured by the observability hook and show on the ZAI Control panel), and self-checks
 panel visibility. Run it on the VPS: `python -m universal_agent.scripts.glm52_probe`.
 
+### Migration runbook: switch the opus tier `glm-5.1` → `glm-5.2`
+
+**Status (2026-06-13):** GLM-5.2 is validated working on UA's real path (SDK + raw-httpx lanes,
+all `thinking` shapes return HTTP 200, UA's parser gets non-empty text, panel-visible) — see the
+section above. This runbook is the change procedure to make `glm-5.2` the opus-tier default. It is
+a **high-blast-radius** change: the opus tier is the default daemon model (Simone, Atlas, dispatch
+sweep) and Cody-on-ZAI, so every autonomous principal moves to 5.2 at once. Do it deliberately.
+
+**What changes — and what explicitly does NOT:**
+
+| Tier | Before | After | Touched? |
+|---|---|---|---|
+| opus | `glm-5.1` | `glm-5.2` | **YES** |
+| sonnet | `glm-5-turbo` | `glm-5-turbo` | **NO — leave it** |
+| haiku | `glm-4.5-air` | `glm-4.5-air` | **NO — operator-locked** |
+
+> **The "glm-5.2 mis-buckets to sonnet" note is NOT a sonnet-model change.** It refers only to the
+> rate-limiter *concurrency bucket*: until `glm-5.2` is in `ZAI_MODEL_MAP`, `model_resolution.py::model_id_to_tier`
+> falls back to the `sonnet` bucket for it. **The opus flip fixes this automatically** — step 2 sets
+> `ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.2`, which `model_id_to_tier` reads via its intent-env path and
+> returns `opus`; step 3 makes the reverse-`ZAI_MODEL_MAP` path agree. The sonnet **model**
+> (`glm-5-turbo`) is never involved and never changes.
+
+```mermaid
+flowchart TD
+    A[Pre-flight: run glm52_probe on VPS] -->|all 200, non-empty text| B[Step 2: Infisical flip<br/>ANTHROPIC_DEFAULT_OPUS_MODEL = glm-5.2 prod+dev]
+    A -->|any failure| Z[STOP — do not migrate]
+    B --> C[Step 3: code hygiene<br/>ZAI_MODEL_MAP opus = glm-5.2 + docstring]
+    C --> D[Step 4: deploy/restart<br/>limiter + resolvers re-read env]
+    D --> E[Step 5: verify<br/>resolve_opus == glm-5.2 · panel shows glm-5.2 · version SHA]
+    E -->|regression| R[Rollback: env back to glm-5.1 + revert code]
+```
+
+**Step 1 — Pre-flight.** Re-run the harness on the VPS and confirm clean 200s:
+`python -m universal_agent.scripts.glm52_probe`. If any lane errors (not a 429 — those are just
+throttle), **stop**.
+
+**Step 2 — The live lever (Infisical).** Flip `ANTHROPIC_DEFAULT_OPUS_MODEL` in **both** `production`
+and `development` from `glm-5.1` to `glm-5.2`. `model_resolution.py::resolve_model` reads this env
+var first (it wins over `ZAI_MODEL_MAP`), so this alone changes runtime opus resolution on the next
+restart — **and** it fixes the tier bucketing, because `model_id_to_tier` matches `glm-5.2` against
+`ANTHROPIC_DEFAULT_OPUS_MODEL` via its intent-env path → returns `opus`. Do **not** touch
+`ANTHROPIC_DEFAULT_SONNET_MODEL` (`glm-5-turbo`) or `ANTHROPIC_DEFAULT_HAIKU_MODEL` (`glm-4.5-air`).
+
+**Step 3 — Code hygiene (a normal branch→PR).** In `model_resolution.py::ZAI_MODEL_MAP` set
+`"opus": "glm-5.2"` (leave `sonnet`/`haiku` lines as-is) and update the `model_resolution.py::resolve_opus`
+docstring. This keeps the *fallback* default (used when the env var is unset) and the
+reverse-`ZAI_MODEL_MAP` bucketing consistent with the env. Optional: refresh the cosmetic `glm-5.1`
+comments scattered in `cron_service.py`, `agent_setup.py`, `wiki/llm.py`, `csi_intelligence_pass.py`,
+`youtube_daily_digest.py` (they don't affect behavior). **No parser change is needed** — UA's text
+extractor already skips the `thinking` block 5.2 emits.
+
+**Step 4 — Activate.** The step-3 PR's deploy restarts the stack, which re-reads Infisical (picking up
+step 2) and reconstructs the resolvers/limiter. (Or restart `universal-agent-gateway` to activate the
+Infisical flip immediately without waiting for the code PR.)
+
+**Step 5 — Verify.**
+- `resolve_opus()` returns `glm-5.2` in a bootstrapped process.
+- The ZAI Control "Token use by process" panel shows opus-tier callers (e.g. `proactive_convergence`)
+  now emitting `model=glm-5.2`, bucketed under the **opus** cap (not sonnet).
+- `/api/v1/version` SHA matches the deployed step-3 commit.
+
+**Cost watch-out (the one real operational consideration).** GLM-5.2 **defaults `thinking` ON**, which
+is 10–24× the output tokens of 5.1's no-thinking calls. After the flip, the cheap/fast opus-tier crons
+(extraction, triage, classification) will get slower and pricier unless they pass
+`thinking={"type":"disabled"}`. Decide per-caller: keep thinking ON for genuine reasoning work
+(briefings, convergence synthesis), turn it OFF for high-volume mechanical calls. Watch the
+token-use panel for the first 24h.
+
+**Rollback.** Set `ANTHROPIC_DEFAULT_OPUS_MODEL` back to `glm-5.1` in Infisical (prod+dev) and revert
+the step-3 commit; restart. Because the env lever wins, the Infisical revert alone restores 5.1 on the
+next restart even before the code revert lands.
+
 ### Haiku and sonnet resolve to different models
 
 `resolve_haiku()` returns `glm-4.5-air` (operator-locked; verified working) and
