@@ -432,6 +432,34 @@ class EngineSession:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+def _tier_for_model(configured_model: str) -> str:
+    """Map a configured model id to its timeout tier (haiku / sonnet / opus).
+
+    Robust to the glm-5.1 → glm-5.2 opus migration (2026-06-13): ANY ``glm-5.x``
+    flagship (dot-versioned: ``glm-5.1``, ``glm-5.2``, …) is **opus**, while
+    ``glm-5-turbo`` (dash) is sonnet (handled by the exact-match loop). Before
+    this, a session still pinned to ``glm-5.1`` after ``ZAI_MODEL_MAP['opus']``
+    moved to ``glm-5.2`` fell through to the sonnet 180s default and every long
+    opus turn was killed at 180s — the Simone daemon stall observed 2026-06-14
+    (≈13h with no completed daemon turn; journal: ``wall-clock cap: 180s
+    (tier=sonnet, model='glm-5.1')`` → ``timed out after 180.0s``). Anthropic-style
+    ids (``claude-opus-4-8`` etc.) match by the tier name embedded in the id.
+    Unknown / empty → sonnet (the safe default).
+    """
+    configured = (configured_model or "").strip()
+    if not configured:
+        return "sonnet"
+    configured_lower = configured.lower()
+    if configured_lower.startswith("glm-5."):  # glm-5.1 / glm-5.2 / … flagship
+        return "opus"
+    for tier_name, mapped in ZAI_MODEL_MAP.items():
+        if configured == mapped or configured.startswith(mapped):
+            return tier_name
+        if tier_name in configured_lower:
+            return tier_name
+    return "sonnet"
+
+
 class ProcessTurnAdapter:
     """
     Adapts process_turn() to the gateway's event-streaming interface.
@@ -986,24 +1014,7 @@ class ProcessTurnAdapter:
             opt_obj = getattr(self, "_options", None)
             if opt_obj is not None:
                 configured_model = str(getattr(opt_obj, "model", "") or "").strip()
-            tier_for_cap = "sonnet"  # safe default
-            configured_lower = configured_model.lower()
-            # Match either a ZAI-mapped model string (glm-5.1 etc.) OR an
-            # Anthropic-style model id containing the tier name
-            # (e.g. ``claude-opus-4-8``, ``claude-sonnet-4-6``,
-            # ``claude-haiku-4-5``). Without the Anthropic
-            # branch, post-2026-05-11 Cody runs on Anthropic Max silently
-            # fall through to the sonnet default (180 s), which kills
-            # legitimate long opus work like the paper_to_podcast cron.
-            for tier_name, mapped in ZAI_MODEL_MAP.items():
-                if configured_model and (
-                    configured_model == mapped or configured_model.startswith(mapped)
-                ):
-                    tier_for_cap = tier_name
-                    break
-                if tier_name in configured_lower:
-                    tier_for_cap = tier_name
-                    break
+            tier_for_cap = _tier_for_model(configured_model)
             max_runtime_s = model_call_timeout_seconds(tier_for_cap)
             if max_runtime_s > 0:
                 logger.info(

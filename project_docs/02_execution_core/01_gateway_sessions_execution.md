@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/timeout_policy.py
   - src/universal_agent/api/server.py
   - src/universal_agent/api/gateway_bridge.py
-last_verified: 2026-06-10
+last_verified: 2026-06-14
 ---
 
 # Gateway, Sessions & Execution
@@ -293,12 +293,19 @@ constant — there's a comment in the code warning exactly about this.
    legitimately long, multi-step workflows — set it per cron job).
 2. Legacy env `UA_PROCESS_TURN_TIMEOUT_SECONDS` (`process_turn_timeout_seconds()`,
    default `0` = no hard timeout).
-3. **Tier-aware default** keyed off the configured model: haiku=120 s,
-   sonnet=180 s, opus=1800 s (via `model_call_timeout_seconds`). Model matching
-   handles both ZAI-mapped strings (`glm-5.1`) and Anthropic ids
-   (`claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`). The Anthropic
-   branch matters: without it, post-2026-05-11 Cody-on-Anthropic-Max runs fall
-   through to the 180 s sonnet default and kill legitimate long opus work.
+3. **Tier-aware default** keyed off the configured model via
+   `execution_engine.py::_tier_for_model` → `model_call_timeout_seconds`:
+   haiku=120 s, sonnet=180 s, opus=1800 s. Matching handles (a) any `glm-5.x`
+   dot-versioned flagship (`glm-5.1`, `glm-5.2`, …) as **opus** — `glm-5-turbo`
+   (dash) stays sonnet; (b) exact/prefix ZAI-mapped strings; (c) Anthropic ids
+   (`claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`) by the tier name
+   in the id. Unknown/empty → sonnet. **Why (a) exists:** after the glm-5.1→5.2
+   opus-map migration (2026-06-13), a daemon session still pinned to `glm-5.1` no
+   longer matched `ZAI_MODEL_MAP['opus']=='glm-5.2'` and fell through to the
+   sonnet 180 s default — killing every long Simone work turn at 180 s (≈13 h
+   with zero completed daemon turns, 2026-06-14). The `glm-5.x`-family rule makes
+   the cap robust to opus-flagship version bumps. Regression guard:
+   `tests/unit/test_execution_engine_tier_resolution.py`.
 4. No cap (`0`).
 
 On timeout the engine task is cancelled and an `ERROR` event is yielded. The
