@@ -8959,67 +8959,6 @@ async def process_turn(
     )
     _ctx = _require_ctx()
 
-    # ── All-lane token capture (lane B, in-process) ────────────────────────
-    # Snapshot the sdk_result_messages length + run_source at turn ENTRY so the
-    # end-of-turn recorder sums ONLY this turn's delta. The trace is REUSED across
-    # turns for persistent daemon adapters, so idempotency must be per-INVOCATION
-    # (a local flag) — a trace flag would block every turn after the first.
-    # run_source is snapshotted here (invocation-scoped) rather than read at record
-    # time, where a concurrent _temporary_env on the shared loop could transiently
-    # expose a wrong value. Empirically (real Simone trace) ResultMessage.usage is
-    # per-iteration (sum the slice) while total_cost_usd is cumulative (delta vs
-    # baseline). See services/principal_token_tracking.
-    try:
-        _token_turn_start_idx = (
-            len(_ctx.trace.get("sdk_result_messages") or [])
-            if isinstance(_ctx.trace, dict)
-            else 0
-        )
-    except Exception:
-        _token_turn_start_idx = 0
-    _token_run_source = (
-        os.getenv("UA_RUN_SOURCE", "")
-        or (_ctx.trace.get("run_source", "") if isinstance(_ctx.trace, dict) else "")
-        or "user"
-    )
-    _token_usage_recorded = {"done": False}
-
-    async def _record_principal_token_usage_once() -> None:
-        """Fail-soft, non-blocking, exactly-once-per-invocation capture of this
-        turn's in-process SDK token usage into activity_state.db."""
-        if _token_usage_recorded["done"]:
-            return
-        _token_usage_recorded["done"] = True
-        try:
-            if not isinstance(_ctx.trace, dict):
-                return
-            from universal_agent.services.principal_token_tracking import (
-                record_session_token_usage,
-                slice_turn_delta,
-            )
-
-            delta, baseline = slice_turn_delta(
-                _ctx.trace.get("sdk_result_messages") or [], _token_turn_start_idx
-            )
-            if not delta:
-                return
-            await asyncio.to_thread(
-                record_session_token_usage,
-                delta_messages=delta,
-                run_source=_token_run_source,
-                baseline_cost_usd=baseline,
-                session_id=(
-                    _ctx.trace.get("session_id")
-                    or _ctx.trace.get("provider_session_id")
-                    or _ctx.run_id
-                ),
-                run_id=_ctx.run_id,
-            )
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "principal token capture failed (swallowed)", exc_info=False
-            )
-
     # Ephemeral system events (cron completions, exec finishes, monitors) are
     # injected by the gateway/heartbeat service via env for this single turn.
     # This is intentionally not persisted in chat history.
@@ -9404,10 +9343,6 @@ async def process_turn(
                     except Exception:
                         pass
 
-                    # Capture token spend even on the guardrail-tripped path —
-                    # these are often the highest-burn (runaway loop) turns.
-                    await _record_principal_token_usage_once()
-
                     try:
                         hook_events.emit_status_event(
                             f"Guardrail tripped ({reason}). Recovery handoff written to {paths.md_path}",
@@ -9691,11 +9626,6 @@ async def process_turn(
     end_ts = time.time()
     _ctx.trace["end_time"] = datetime.now().isoformat()
     _ctx.trace["total_duration_seconds"] = round(end_ts - _ctx.start_ts, 3)
-
-    # Capture this turn's in-process SDK token usage (Simone/VP-coder) into the
-    # all-lane sink. Exactly-once per invocation via the local flag; no-ops when
-    # the turn produced no SDK result messages (e.g. /reset paths never reach here).
-    await _record_principal_token_usage_once()
 
     _clear_hook_events()
     return ExecutionResult(

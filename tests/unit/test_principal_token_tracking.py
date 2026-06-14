@@ -100,6 +100,9 @@ def test_record_disabled_by_env(monkeypatch):
 @pytest.mark.parametrize("run_source,expected", [
     ("heartbeat", ("cli-in-process", "simone")),
     ("cron", ("cli-in-process", "simone")),
+    ("todo_dispatcher", ("cli-in-process", "simone")),  # observed live 2026-06-14
+    ("daemon", ("cli-in-process", "simone")),
+    ("simone_chat", ("cli-in-process", "simone")),
     ("vp.coder.external", ("cli-in-process", "vp-coder")),
     ("vp.coder", ("cli-in-process", "vp-coder")),
     ("vp.general.primary", ("cli-in-process", "vp")),
