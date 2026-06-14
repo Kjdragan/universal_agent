@@ -44,8 +44,8 @@ Return ONLY JSON with this shape:
 """
 
 _IDEATION_SYSTEM = """\
-You are an expert intelligence synthesizer analyzing a batch of recent video schemas from a specific domain.
-Do you see any abstract relationships, interesting consistencies, conflicting viewpoints, or macro-trends emerging that aren't obvious? Capture the spirit of the activity.
+You are an expert intelligence synthesizer analyzing the FULL set of recent video schemas from a domain — the complete recent corpus, not a sample.
+Reason ACROSS the entire corpus: what abstract relationships, interesting consistencies, conflicting viewpoints, or macro-trends connect videos that wouldn't obviously be grouped together? The most valuable insights span multiple channels/sub-topics — look for cross-cutting patterns over the whole set, not summaries of any single cluster. Capture the spirit of the activity.
 Return ONLY JSON:
 {
   "insights": [
@@ -141,6 +141,19 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_convergence_refine_cache_judged
             ON convergence_refine_cache(judged_at DESC);
+
+        -- Tiny key/value state for the Track B ideation sweep.  Holds the
+        -- "last_synth_watermark" (the newest signature ``ingested_at`` that was
+        -- successfully synthesized) so the hourly sweep can SKIP when no
+        -- materially-new corpus has arrived since the last run, instead of
+        -- re-synthesizing the same recent window every cycle (the dominant
+        -- source of redundant flagship/opus calls + ZAI 429s).  See
+        -- ``_ideation_should_run`` / ``_ideation_advance_watermark``.
+        CREATE TABLE IF NOT EXISTS proactive_ideation_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
         """
     )
     conn.commit()
@@ -1224,6 +1237,124 @@ def _ideation_min_confidence() -> float:
         return 0.7
 
 
+def _ideation_model() -> str | None:
+    """Model for the ideation synthesis call.
+
+    Default ``None`` → ``_call_llm`` resolves the flagship/opus tier (unchanged
+    behavior). Set ``UA_IDEATION_MODEL`` (e.g. ``glm-5-turbo``) as an escape
+    hatch to move ideation off the contended opus tier *without a deploy* if the
+    (now low-volume) flagship calls ever throttle. Not a downgrade by default.
+    """
+    return (os.getenv("UA_IDEATION_MODEL", "") or "").strip() or None
+
+
+def _ideation_max_corpus() -> int:
+    """Max signatures fed to ONE whole-corpus synthesis call (default 120).
+
+    Replaces the old hardcoded ``limit=60`` + 20-item batch cap. 120 comfortably
+    covers the full 72h window (≈131 observed) so the model reasons over the
+    whole universe in a single call instead of 3 isolated recency slices.
+    """
+    try:
+        return max(2, int(os.getenv("UA_IDEATION_MAX_CORPUS", "120") or "120"))
+    except (TypeError, ValueError):
+        return 120
+
+
+def _ideation_max_tokens() -> int:
+    """Output token budget for the whole-corpus synthesis call (default 2500).
+
+    Up from 1500: one call over the full corpus can surface several cross-cutting
+    insights, so give the JSON room. Override with ``UA_IDEATION_MAX_TOKENS``.
+    """
+    try:
+        return max(256, int(os.getenv("UA_IDEATION_MAX_TOKENS", "2500") or "2500"))
+    except (TypeError, ValueError):
+        return 2500
+
+
+def _ideation_min_new_signatures() -> int:
+    """New-content gate threshold (default 5).
+
+    The hourly sweep SKIPS unless at least this many signatures have arrived
+    since the last *successful* synthesis — so we stop re-synthesizing the same
+    recent window every cycle (the dominant source of redundant opus calls/429s).
+    Set ``UA_IDEATION_MIN_NEW_SIGNATURES=0`` to disable the gate (always run).
+    Raising it → fewer, richer runs (more new material per synthesis).
+    """
+    try:
+        return max(0, int(os.getenv("UA_IDEATION_MIN_NEW_SIGNATURES", "5") or "5"))
+    except (TypeError, ValueError):
+        return 5
+
+
+_IDEATION_WATERMARK_KEY = "last_synth_watermark"
+
+
+def _ideation_read_watermark(conn: sqlite3.Connection) -> str:
+    """Newest signature ``ingested_at`` synthesized on the last successful run ('' if none)."""
+    ensure_schema(conn)
+    row = conn.execute(
+        "SELECT value FROM proactive_ideation_state WHERE key = ?",
+        (_IDEATION_WATERMARK_KEY,),
+    ).fetchone()
+    if row is None:
+        return ""
+    return str(row[0] or "")
+
+
+def _ideation_write_watermark(conn: sqlite3.Connection, watermark: str) -> None:
+    """Persist the synthesis watermark (best-effort; idempotent upsert)."""
+    ensure_schema(conn)
+    conn.execute(
+        "INSERT INTO proactive_ideation_state(key, value, updated_at) VALUES(?, ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        (_IDEATION_WATERMARK_KEY, str(watermark), _now_iso()),
+    )
+    conn.commit()
+
+
+def _ideation_should_run(conn: sqlite3.Connection | None, sigs: list[dict[str, Any]]) -> bool:
+    """New-content gate. Fail-OPEN: run unless we can prove little is new.
+
+    Returns ``True`` (run) when ``conn`` is None, the gate is disabled
+    (``min_new<=0``), there's no prior watermark (first run), or anything goes
+    wrong reading state — we never silently starve the intel pipeline. Returns
+    ``False`` (skip) only when a watermark exists AND fewer than ``min_new``
+    signatures are newer than it.
+    """
+    if conn is None:
+        return True
+    min_new = _ideation_min_new_signatures()
+    if min_new <= 0:
+        return True
+    try:
+        watermark = _ideation_read_watermark(conn)
+    except Exception:  # noqa: BLE001 — gate must never break the sweep
+        return True
+    if not watermark:
+        return True
+    new_count = sum(1 for s in sigs if str(s.get("ingested_at") or "") > watermark)
+    return new_count >= min_new
+
+
+def _ideation_advance_watermark(conn: sqlite3.Connection | None, sigs: list[dict[str, Any]]) -> None:
+    """Advance the watermark to the newest ``ingested_at`` in the synthesized corpus.
+
+    Called ONLY after a successful synthesis call (even if it yielded zero
+    insights — the corpus was still processed). A failed/throttled call leaves
+    the watermark untouched so the next cycle retries the same material.
+    """
+    if conn is None or not sigs:
+        return
+    try:
+        newest = max((str(s.get("ingested_at") or "") for s in sigs), default="")
+        if newest:
+            _ideation_write_watermark(conn, newest)
+    except Exception:  # noqa: BLE001 — best-effort; never break the sweep
+        pass
+
+
 def _load_recent_signatures(
     conn: sqlite3.Connection, *, source_window_hours: int, limit: int = 60
 ) -> list[dict[str, Any]]:
@@ -1246,40 +1377,57 @@ async def _run_ideation_sweep_async(
     conn: sqlite3.Connection,
     *,
     source_window_hours: int,
-    max_signatures: int = 60,
+    max_signatures: int | None = None,
     deadline: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Run Track B ideation synthesis over the recent corpus.
+    """Run Track B ideation synthesis over the FULL recent corpus in ONE call.
 
-    Chunks the corpus into batches of 20 (track_b's analysis cap) so more than
-    20 recent videos are covered, gates each insight on the confidence floor,
-    and returns ``[{narrative, value, confidence, signatures}]``. Fails closed
-    per batch (a failed LLM call drops that batch, never a false insight).
-    ``deadline`` (monotonic seconds) stops launching new batches once the
-    convergence budget is spent.
+    Loads up to ``UA_IDEATION_MAX_CORPUS`` (default 120) of the recent window —
+    the whole universe, not a 60-cap sample — and synthesizes it in a SINGLE
+    flagship call so the model can surface cross-cutting macro-trends the old
+    3×20 recency batching could never see (each batch was blind to the others).
+
+    A new-content gate (:func:`_ideation_should_run`) SKIPS the sweep when too
+    few signatures are new since the last successful synthesis, collapsing the
+    hourly cron's redundant re-synthesis of the same window — the dominant
+    source of flagship/opus 429s. On a successful call the watermark advances; a
+    failed/throttled call leaves it so the next cycle retries the same material.
+
+    Returns ``[{narrative, value, confidence, signatures}]`` filtered to the
+    confidence floor. Fails closed (a failed LLM call yields no insights, never
+    a false one). ``deadline`` (monotonic seconds) skips the call when the
+    convergence budget is already spent.
     """
     sigs = _load_recent_signatures(
-        conn, source_window_hours=source_window_hours, limit=max_signatures
+        conn,
+        source_window_hours=source_window_hours,
+        limit=max_signatures or _ideation_max_corpus(),
     )
     if len(sigs) < 2:
         return []
+    if not _ideation_should_run(conn, sigs):
+        logger.info(
+            "ideation sweep skipped: <%d new signatures since last synthesis (corpus=%d)",
+            _ideation_min_new_signatures(), len(sigs),
+        )
+        return []
+    if deadline is not None and time.monotonic() >= deadline:
+        logger.info("ideation sweep skipped: convergence budget already spent")
+        return []
+    try:
+        raw_insights = await track_b_ideation_synthesis(sigs)
+    except Exception as exc:  # noqa: BLE001 — fail closed; do NOT advance the watermark
+        logger.warning("ideation sweep failed (corpus=%d): %s", len(sigs), exc)
+        return []
+    # The corpus was processed successfully — advance the watermark even on a
+    # zero-insight result, so a barren-but-new window isn't re-run every hour.
+    _ideation_advance_watermark(conn, sigs)
     floor = _ideation_min_confidence()
-    insights: list[dict[str, Any]] = []
-    for start in range(0, len(sigs), 20):
-        if deadline is not None and time.monotonic() >= deadline:
-            break
-        batch = sigs[start:start + 20]
-        if len(batch) < 2:
-            continue
-        try:
-            batch_insights = await track_b_ideation_synthesis(batch)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("ideation sweep batch failed (size=%d): %s", len(batch), exc)
-            continue
-        for ins in batch_insights:
-            if float(ins.get("confidence") or 0.0) >= floor and len(ins.get("signatures") or []) >= 2:
-                insights.append(ins)
-    return insights
+    return [
+        ins
+        for ins in raw_insights
+        if float(ins.get("confidence") or 0.0) >= floor and len(ins.get("signatures") or []) >= 2
+    ]
 
 
 def _run_ideation_sweep(
@@ -2348,7 +2496,12 @@ async def extract_topic_signature_from_text(
 async def track_b_ideation_synthesis(
     batch: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Track B: LLM Ideation / Synthesis on a batch of schemas."""
+    """Track B: LLM ideation / synthesis over the recent corpus in one call.
+
+    ``batch`` is the whole recent corpus (capped at ``UA_IDEATION_MAX_CORPUS``),
+    not a 20-item slice — the model reasons across the full set in a single call.
+    Model is the flagship/opus tier by default; ``UA_IDEATION_MODEL`` overrides.
+    """
     if len(batch) < 2:
         return []
 
@@ -2361,7 +2514,7 @@ async def track_b_ideation_synthesis(
             "secondary_topics": item.get("secondary_topics"),
             "key_claims": item.get("key_claims"),
         }
-        for item in batch[:20]
+        for item in batch[: _ideation_max_corpus()]
     ]
     user = json.dumps(
         {"recent_schemas": compact_batch},
@@ -2374,7 +2527,12 @@ async def track_b_ideation_synthesis(
             _parse_json_response,
         )
 
-        raw = await _call_llm(system=_IDEATION_SYSTEM, user=user, max_tokens=1500)
+        raw = await _call_llm(
+            system=_IDEATION_SYSTEM,
+            user=user,
+            model=_ideation_model(),
+            max_tokens=_ideation_max_tokens(),
+        )
         parsed = _parse_json_response(raw)
 
         if not isinstance(parsed, dict):

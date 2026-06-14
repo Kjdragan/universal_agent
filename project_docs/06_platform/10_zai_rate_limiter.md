@@ -215,7 +215,7 @@ Defaults below are the **actual code defaults** in `ZAIRateLimiter.__init__`.
 | `ZAI_MIN_INTERVAL` | **`0.5`** | Minimum seconds between request *starts* (global, all tiers) |
 | `ZAI_MAX_RETRIES` | **`5`** | Default retry attempts per logical call (non-opus tiers) |
 | `ZAI_OPUS_MAX_RETRIES` | prod **`3`** | Opus-tier retry budget — fewer doomed retries on the cap-1, FUP-contended tier (each failed retry feeds the frequency throttle; the failed task re-queues). Unset → `ZAI_MAX_RETRIES`. |
-| `ZAI_OPUS_MIN_INTERVAL` | code **`0.0`** / prod **`8`** | Post-response gap (s) between consecutive **opus** calls — paces the cap-1 opus burst (e.g. convergence ideation synthesis) so it can't trip the account-level frequency throttle. "call → response → delay → next", held under the opus gate so it never blocks haiku/sonnet. Default off; enabled via Infisical. |
+| `ZAI_OPUS_MIN_INTERVAL` | code **`0.0`** / prod **`8`** | Post-response gap (s) between consecutive **opus** calls — paces any back-to-back flagship burst so it can't trip the account-level frequency throttle. "call → response → delay → next", held under the opus gate so it never blocks haiku/sonnet. Default off; enabled via Infisical. (NB: the convergence *ideation* sweep — the original motivating example — was consolidated to a **single new-content-gated call** on 2026-06-14, so it no longer fires a 3-chunk opus burst; this knob still guards any other consecutive opus calls.) |
 | `UA_ZAI_INFERENCE_STATE_PATH` | (derived) | Override snapshot location |
 | `ZAI_TIER_CAP_{OPUS,SONNET,MID,HAIKU}` | **`1/2/3/4`** | Per-tier AIMD seed caps (§4.7) |
 | `ZAI_TIER_CAP_MIN_*` / `ZAI_TIER_CAP_MAX_*` | **`1` / `3,5,5,6`** | Per-tier AIMD bounds |
