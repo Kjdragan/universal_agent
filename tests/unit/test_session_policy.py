@@ -12,7 +12,15 @@ def test_default_policy_includes_persona_and_yolo():
     assert policy["hard_stops"]["no_payments"] is True
 
 
-def test_policy_denies_money_movement():
+def test_policy_denies_money_movement(monkeypatch):
+    # The hard-deny for money movement is gated by `not feature_flags.link_enabled()`
+    # (session_policy.evaluate_request_against_policy). A dev shell exports
+    # UA_ENABLE_LINK=1, which would make link_enabled() True and route the request
+    # to the Link-approval path instead of the deny path. Pin both Link vars off so
+    # link_enabled() returns its default False and the no-payment-channel deny is
+    # exercised deterministically.
+    monkeypatch.delenv("UA_ENABLE_LINK", raising=False)
+    monkeypatch.delenv("UA_DISABLE_LINK", raising=False)
     policy = default_session_policy("session_x", "user_x")
     result = evaluate_request_against_policy(
         policy,

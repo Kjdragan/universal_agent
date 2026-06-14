@@ -4,8 +4,14 @@ from __future__ import annotations
 def test_heartbeat_enabled_defaults_on(monkeypatch):
     from universal_agent.feature_flags import heartbeat_enabled
 
+    # Assert the PROD default-ON path. Pin the stage to production (matching the
+    # sibling *_in_prod tests) and clear every override the prod branch reads, so
+    # an ambient dev-shell UA_RUNTIME_STAGE=development / UA_HEARTBEAT_ENABLED
+    # cannot leak in and flip this into the dev default-OFF branch.
+    monkeypatch.setenv("UA_RUNTIME_STAGE", "production")
     monkeypatch.delenv("UA_ENABLE_HEARTBEAT", raising=False)
     monkeypatch.delenv("UA_DISABLE_HEARTBEAT", raising=False)
+    monkeypatch.delenv("UA_HEARTBEAT_ENABLED", raising=False)
 
     assert heartbeat_enabled() is True
 
@@ -13,8 +19,12 @@ def test_heartbeat_enabled_defaults_on(monkeypatch):
 def test_cron_enabled_defaults_on(monkeypatch):
     from universal_agent.feature_flags import cron_enabled
 
+    # Assert the PROD default-ON path (see the heartbeat sibling above for why we
+    # pin the stage + clear the modern/legacy flags).
+    monkeypatch.setenv("UA_RUNTIME_STAGE", "production")
     monkeypatch.delenv("UA_ENABLE_CRON", raising=False)
     monkeypatch.delenv("UA_DISABLE_CRON", raising=False)
+    monkeypatch.delenv("UA_CRON_ENABLED", raising=False)
 
     assert cron_enabled() is True
 
