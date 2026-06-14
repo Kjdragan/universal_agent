@@ -35,8 +35,20 @@ from universal_agent.services.claude_code_intel import (
 )
 from universal_agent.wiki.core import (
     ensure_vault,
+    refresh_overview,
+    update_index,
     wiki_ingest_external_source,
 )
+from universal_agent.wiki.llm import extract_facets_batched
+
+
+def _wiki_ingest_batched_enabled() -> bool:
+    """Kill-switch for the batched wiki facet extraction (default ON). Set
+    ``UA_WIKI_INGEST_BATCHED=0`` to revert to per-source extraction (the index
+    is still rebuilt once per packet either way)."""
+    return str(os.getenv("UA_WIKI_INGEST_BATCHED", "1")).strip().lower() not in {
+        "0", "false", "no", "off",
+    }
 
 
 @dataclass(frozen=True)
@@ -901,6 +913,17 @@ def ingest_packet_into_external_vault(
     work_product_pages: list[str] = []
     action_map = {str(a.get("post_id") or "").strip(): dict(a) for a in actions if str(a.get("post_id") or "").strip()}
 
+    # ── Phase 1: COLLECT source specs (preserving the tier-1 gate + linked
+    #    dedup) so the LLM semantic extraction can run in BATCHES (one structured
+    #    call per ~20 sources) instead of 3 calls per source. Each spec carries
+    #    source_id / title / content / bucket / post_id.
+    specs: list[dict[str, Any]] = []
+    seen_source_ids: set[str] = set()
+    # Linked sources dedup by source_id (same canonical target -> same id). Record
+    # every (post_id, source_id) reference IN ENTRY ORDER so the per-post link
+    # lists rebuild identically to the legacy reuse behavior after writing.
+    linked_refs_ordered: list[tuple[str, str]] = []
+
     tier1_gate_enabled = _tier1_min_signal_enabled()
     tier1_skipped_count = 0
     for post in posts:
@@ -922,18 +945,13 @@ def ingest_packet_into_external_vault(
         ):
             tier1_skipped_count += 1
             continue
-        content = _post_source_markdown(handle=handle, post=post, action=action)
-        result = wiki_ingest_external_source(
-            vault_slug=KB_SLUG,
-            source_title=f"ClaudeDevs post {post_id}",
-            source_content=content,
-            source_id=f"x_post_{post_id}",
-            root_override=str(vault_root),
-        )
-        if isinstance(result, dict) and result.get("path"):
-            page_path = str(result["path"])
-            pages.append(page_path)
-            post_pages_by_post_id.setdefault(post_id, []).append(page_path)
+        specs.append({
+            "source_id": f"x_post_{post_id}",
+            "title": f"ClaudeDevs post {post_id}",
+            "content": _post_source_markdown(handle=handle, post=post, action=action),
+            "bucket": "post",
+            "post_id": post_id,
+        })
 
     if work_product_dir and work_product_dir.exists():
         for path in sorted(work_product_dir.iterdir()):
@@ -941,21 +959,14 @@ def ingest_packet_into_external_vault(
                 continue
             if path.suffix.lower() not in {".md", ".html", ".txt"}:
                 continue
-            content = path.read_text(encoding="utf-8", errors="replace")
-            result = wiki_ingest_external_source(
-                vault_slug=KB_SLUG,
-                source_title=f"Claude Code work product: {path.stem}",
-                source_content=content,
-                source_id=f"work_product_{path.stem}",
-                root_override=str(vault_root),
-            )
-            if isinstance(result, dict) and result.get("path"):
-                page_path = str(result["path"])
-                pages.append(page_path)
-                work_product_pages.append(page_path)
+            specs.append({
+                "source_id": f"work_product_{path.stem}",
+                "title": f"Claude Code work product: {path.stem}",
+                "content": path.read_text(encoding="utf-8", errors="replace"),
+                "bucket": "work_product",
+                "post_id": None,
+            })
 
-    seen_linked_targets: set[str] = set()
-    linked_result_by_target: dict[str, str] = {}
     for entry in linked_source_entries:
         if str(entry.get("fetch_status") or "") != "fetched":
             continue
@@ -976,26 +987,83 @@ def ingest_packet_into_external_vault(
             if metadata_path.exists() and metadata_path.is_file():
                 metadata = _load_json(metadata_path) or {}
         canonical_target = str(metadata.get("final_url") or entry.get("url") or "").strip()
-        if canonical_target and canonical_target in linked_result_by_target:
-            linked_pages_by_post_id.setdefault(str(entry.get("post_id") or "").strip(), []).append(linked_result_by_target[canonical_target])
+        post_id = str(entry.get("post_id") or "").strip()
+        source_id = (
+            f"linked_source_{hashlib.sha256(canonical_target.encode('utf-8')).hexdigest()[:16]}"
+            if canonical_target
+            else f"linked_source_{entry.get('source_hash')}"
+        )
+        # Record the reference for every entry (dedup or not); only INGEST the
+        # first occurrence of a given source_id (same canonical target == same id).
+        linked_refs_ordered.append((post_id, source_id))
+        if source_id in seen_source_ids:
             continue
-        if canonical_target:
-            seen_linked_targets.add(canonical_target)
-        content = source_path.read_text(encoding="utf-8", errors="replace")
-        source_id = f"linked_source_{hashlib.sha256(canonical_target.encode('utf-8')).hexdigest()[:16]}" if canonical_target else f"linked_source_{entry.get('source_hash')}"
+        seen_source_ids.add(source_id)
+        specs.append({
+            "source_id": source_id,
+            "title": f"Claude Code linked source: {metadata.get('title') or entry.get('title') or entry.get('url')}",
+            "content": source_path.read_text(encoding="utf-8", errors="replace"),
+            "bucket": "linked",
+            "post_id": post_id,
+        })
+
+    # ── Phase 2: BATCH-EXTRACT semantic facets for ALL sources at once
+    #    (UA_WIKI_INGEST_BATCHED, default on): 3*N per-source calls -> 2*ceil(N/B)
+    #    structured calls. On any batch failure facets stay empty and the write
+    #    phase falls back to per-source extraction — so a bad batch never drops a
+    #    source.
+    facets_by_id: dict[str, dict[str, Any]] = {}
+    if specs and _wiki_ingest_batched_enabled():
+        try:
+            facets_by_id = extract_facets_batched(
+                [{"source_id": s["source_id"], "text": s["content"]} for s in specs]
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "batched wiki facet extraction failed; falling back to per-source extraction"
+            )
+            facets_by_id = {}
+
+    # ── Phase 3: WRITE each source page with the precomputed facets (when facets
+    #    is None, wiki_ingest_external_source runs the legacy per-source 3-call
+    #    extraction). defer_index=True so the whole-vault rescan happens once below.
+    page_by_source_id: dict[str, str] = {}
+    for spec in specs:
         result = wiki_ingest_external_source(
             vault_slug=KB_SLUG,
-            source_title=f"Claude Code linked source: {metadata.get('title') or entry.get('title') or entry.get('url')}",
-            source_content=content,
-            source_id=source_id,
+            source_title=spec["title"],
+            source_content=spec["content"],
+            source_id=spec["source_id"],
             root_override=str(vault_root),
+            facets=facets_by_id.get(spec["source_id"]),
+            defer_index=True,
         )
-        if isinstance(result, dict) and result.get("path"):
-            page_path = str(result["path"])
-            pages.append(page_path)
-            linked_pages_by_post_id.setdefault(str(entry.get("post_id") or "").strip(), []).append(page_path)
-            if canonical_target:
-                linked_result_by_target[canonical_target] = page_path
+        if not (isinstance(result, dict) and result.get("path")):
+            continue
+        page_path = str(result["path"])
+        page_by_source_id[spec["source_id"]] = page_path
+        pages.append(page_path)
+        if spec["bucket"] == "post":
+            post_pages_by_post_id.setdefault(spec["post_id"], []).append(page_path)
+        elif spec["bucket"] == "work_product":
+            work_product_pages.append(page_path)
+
+    # Linked bookkeeping: map each written page back to ALL posts that referenced
+    # its target, in entry order — preserving the legacy per-post reuse behavior.
+    for post_id, source_id in linked_refs_ordered:
+        page_path = page_by_source_id.get(source_id)
+        if page_path:
+            linked_pages_by_post_id.setdefault(post_id, []).append(page_path)
+
+    # ── Phase 4: one final index + overview rebuild after all writes, so the
+    #    last-written page is included (each per-source end-of-ingest rebuild was
+    #    deferred above — ensure_vault still refreshes on every call, so this
+    #    roughly halves the whole-vault rescans rather than eliminating them).
+    if page_by_source_id:
+        update_index(context.path)
+        refresh_overview(context.path)
 
     email_evidence_ids = _collect_email_evidence_ids(work_product_dir)
 
