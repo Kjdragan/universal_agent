@@ -9,16 +9,24 @@ observes them. (External ``claude --print`` subprocess missions are a different
 lane, captured separately into ``cody_token_usage`` by
 ``vp/clients/claude_cli_client.py::_record_mission_token_usage``.)
 
-One row per ``main.py::process_turn`` invocation is written to
-``activity_state.db::token_usage_events`` (schema in
-``task_hub.py::ensure_schema``). The dashboard fans this in alongside the JSONL
-lane and CSI's ``csi.db`` (see ``services/zai_status.py``).
+One row per turn is written to ``activity_state.db::token_usage_events`` (schema
+in ``task_hub.py::ensure_schema``) from the **adapter** that wraps every
+gateway-driven turn: ``execution_engine.py::ProcessTurnAdapter`` records in the
+``finally`` of its ``run_engine`` task. Capturing at the adapter (not inside
+``process_turn``) is deliberate — the ``finally`` runs on EVERY exit path
+including **cancellation/timeout** (CancelledError is a BaseException that
+``process_turn``'s ``except`` clauses miss), and cancelled daemon turns are a
+large share of Simone spend (verified live 2026-06-14: the first observed daemon
+turn was a 190s/4-tool-call turn killed by the wall-clock cap). The dashboard
+fans this in alongside the JSONL lane and CSI's ``csi.db`` (see
+``services/zai_status.py``).
 
 Strictly best-effort: every public function swallows all exceptions and NEVER
 raises into the caller (mirrors
-``claude_cli_client._record_mission_token_usage``). The heartbeat runs inside
-the gateway asyncio loop, so callers MUST offload the write via
-``asyncio.to_thread`` and never block the loop.
+``claude_cli_client._record_mission_token_usage``). The write is a single
+bounded INSERT done SYNCHRONOUSLY from the adapter's ``finally`` — not via
+``asyncio.to_thread``, which could re-raise during cancellation. (Cody's
+recorder already writes the same DB synchronously in production.)
 
 Empirically verified (2026-06-14, real Simone ``trace.json`` on the VPS):
 
@@ -34,13 +42,12 @@ Empirically verified (2026-06-14, real Simone ``trace.json`` on the VPS):
 * ``activity_state.db`` is the home of ``cody_token_usage``; this lane writes
   there too (NOT ``runtime_state.db`` / ``_ctx.runtime_db_conn``).
 
-Coverage boundary: only turns that reach ``process_turn``'s end-of-turn / guardrail
-recorder are captured. The ``/reset``, ``/harness`` outer-wrapper, and
-auth-required early returns, plus the SIMPLE fast path (``handle_simple_query``
-consumes its ``ResultMessage`` without appending to ``sdk_result_messages``),
-record an empty delta and therefore no row. These are UNDER-counts (never
-double-counts); the bulk lanes (Simone heartbeat/daemon, in-process VP coder)
-force the STANDARD path, so the omission is immaterial to the headline ~259M/day.
+Coverage boundary: only turns that run through ``ProcessTurnAdapter`` are
+captured — i.e. all gateway-driven turns (Simone heartbeat/daemon/todo, in-process
+VP coder, interactive chat). The rare non-adapter ``process_turn`` callers
+(``/harness`` inner turns, direct-CLI ``main()``) are NOT captured; these are
+interactive/dev paths, immaterial to the headline ~259M/day daemon bulk. A turn
+whose SDK produced no ResultMessage records an empty delta and therefore no row.
 """
 
 from __future__ import annotations
@@ -55,30 +62,34 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
-# ── run_source (UA_RUN_SOURCE) → (source, principal) ───────────────────────
+# ── run_source → (source, principal) ───────────────────────────────────────
 # `source` = WHERE the bytes were captured (the double-count invariant — this
 # module owns only `cli-in-process`). `principal` = WHO spent them (the operator
-# breakdown). Derived from UA_RUN_SOURCE, set deterministically by
-# gateway.py::_run_adapter / claude_code_client.run_mission / execution_engine.
-_PRINCIPAL_MAP: dict[str, tuple[str, str]] = {
-    "heartbeat": ("cli-in-process", "simone"),
-    "cron": ("cli-in-process", "simone"),
-    "daemon": ("cli-in-process", "simone"),
-    "vp.coder": ("cli-in-process", "vp-coder"),
-    "vp.coder.external": ("cli-in-process", "vp-coder"),
-}
+# breakdown). run_source is read from `config._run_source` at the adapter (set
+# deterministically by gateway.py::_run_adapter / claude_code_client.run_mission).
+# Observed Simone-daemon values (verified live 2026-06-14): `heartbeat`, `cron`,
+# `todo_dispatcher`, `daemon`. VP coder: `vp.coder` / `vp.coder.external`.
+_SIMONE_SOURCES: frozenset[str] = frozenset({
+    "heartbeat", "cron", "daemon", "todo_dispatcher", "todo",
+    "autonomous", "dispatch", "simone",
+})
 
 
 def classify_run_source(run_source: str) -> tuple[str, str]:
-    """Map a UA_RUN_SOURCE value to ``(source, principal)``. Unknown sources are
+    """Map a run_source value to ``(source, principal)``. Unknown sources are
     kept (never dropped) as ``interactive`` so spend stays visible+attributable."""
     rs = (run_source or "user").strip().lower()
-    if rs in _PRINCIPAL_MAP:
-        return _PRINCIPAL_MAP[rs]
     if rs.startswith("vp.coder"):
         return ("cli-in-process", "vp-coder")
     if rs.startswith("vp."):
         return ("cli-in-process", "vp")
+    if (
+        rs in _SIMONE_SOURCES
+        or "simone" in rs
+        or "heartbeat" in rs
+        or rs.endswith("_dispatcher")
+    ):
+        return ("cli-in-process", "simone")
     return ("cli-in-process", "interactive")
 
 

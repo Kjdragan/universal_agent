@@ -690,6 +690,12 @@ class ProcessTurnAdapter:
         result_holder: dict[str, Any] = {}
         
         async def run_engine():
+            # All-lane token capture (lane B, in-process): snapshot the
+            # sdk_result_messages length at turn entry so the finally records ONLY
+            # this turn's delta. self._trace is reused across turns for the
+            # persistent adapter, so slicing from here keeps adjacent turns
+            # disjoint. See services/principal_token_tracking.
+            _tok_start_idx = len(self._trace.get("sdk_result_messages") or [])
             try:
                 from universal_agent.durable.db import (
                     connect_runtime_db,
@@ -884,6 +890,40 @@ class ProcessTurnAdapter:
                     except Exception:
                         pass
             finally:
+                # Capture in-process SDK token usage on EVERY exit path — success,
+                # error, AND cancellation/timeout. This finally runs even on
+                # CancelledError (a BaseException the `except Exception` above does
+                # NOT catch), so cancelled daemon turns — a large share of Simone
+                # heartbeat/todo spend (e.g. a 190s turn killed by the wall-clock
+                # cap) — are recorded too. Synchronous + fail-soft: a single
+                # bounded INSERT (matches cody_token_tracking's pattern), never
+                # awaited here (to_thread could re-raise during cancellation) and
+                # never raised into teardown.
+                try:
+                    from universal_agent.services.principal_token_tracking import (
+                        record_session_token_usage,
+                        slice_turn_delta,
+                    )
+
+                    _tok_delta, _tok_baseline = slice_turn_delta(
+                        self._trace.get("sdk_result_messages") or [], _tok_start_idx
+                    )
+                    if _tok_delta:
+                        record_session_token_usage(
+                            delta_messages=_tok_delta,
+                            run_source=str(
+                                self.config.__dict__.get("_run_source", "user") or "user"
+                            ),
+                            baseline_cost_usd=_tok_baseline,
+                            session_id=self._trace.get("session_id")
+                            or self._trace.get("provider_session_id")
+                            or self._trace.get("run_id"),
+                            run_id=self.config.run_id,
+                        )
+                except Exception:
+                    logger.warning(
+                        "principal token capture failed (swallowed)", exc_info=False
+                    )
                 # Signal completion
                 await event_queue.put(AgentEvent(
                     type=EventType.STATUS,
