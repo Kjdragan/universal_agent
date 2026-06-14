@@ -44,8 +44,8 @@
       "role": "triage",
       "tier_current": "haiku",
       "tier_verdict": "appropriate",
-      "notes": "Driven by triage_candidate (resolve_haiku). Index bounded to UA_INTEL_TRIAGE_INDEX_MAX_CHARS (default 12000) after a 100K-token bloat incident.",
-      "source_sha": "0217d2d58db4cfb3"
+      "notes": "Driven by triage_candidate (resolve_haiku). Index bounded to UA_INTEL_TRIAGE_INDEX_MAX_CHARS (default 12000) after a 100K-token bloat incident. Graded-judge redesign: forwards an optional temperature (UA_INTEL_TRIAGE_TEMPERATURE / UA_LLM_JUDGE_TEMPERATURE) for determinism; when UA_INTEL_TRIAGE_SHIP_THRESHOLD is set the gate scores 0-100 instead of emitting a categorical verdict (default unset = categorical, inert).",
+      "source_sha": "60ba3a02c921b735"
     },
     "universal_agent/services/proactive_convergence.py::extract_topic_signature_from_text": {
       "label": "Convergence — topic signature extraction",
