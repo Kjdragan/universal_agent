@@ -30,7 +30,7 @@ from universal_agent.utils.model_resolution import (
 
 # The Z.AI API requires lowercase model identifiers. If these names drift,
 # agents will get error 1211 "Unknown Model, please check the model code."
-KNOWN_ZAI_MODELS = {"glm-4.5-air", "glm-5-turbo", "glm-5.1"}
+KNOWN_ZAI_MODELS = {"glm-4.5-air", "glm-5-turbo", "glm-5.2", "glm-5.1"}
 
 
 class TestZaiModelMap:
@@ -250,11 +250,12 @@ class TestModelIdToTier:
     def test_turbo_is_sonnet(self, clean_tier_env):
         assert model_id_to_tier("glm-5-turbo") == "sonnet"
 
-    def test_glm51_is_opus(self, clean_tier_env):
-        assert model_id_to_tier("glm-5.1") == "opus"
+    def test_glm52_is_opus(self, clean_tier_env):
+        # opus wire-id is glm-5.2 since the 2026-06-13 migration (was glm-5.1).
+        assert model_id_to_tier("glm-5.2") == "opus"
 
     def test_case_insensitive_reverse_map(self, clean_tier_env):
-        assert model_id_to_tier("GLM-5.1") == "opus"
+        assert model_id_to_tier("GLM-5.2") == "opus"
         assert model_id_to_tier("Glm-5-Turbo") == "sonnet"
 
     # Rule 2 — literal mid-tier ids that bypass ZAI_MODEL_MAP.
@@ -273,8 +274,8 @@ class TestModelIdToTier:
         assert model_id_to_tier("glm-5-turbo") == "sonnet"
 
     def test_wire_identity_wins_over_haiku_env(self, clean_tier_env, monkeypatch):
-        monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "glm-5.1")
-        assert model_id_to_tier("glm-5.1") == "opus"
+        monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "glm-5.2")
+        assert model_id_to_tier("glm-5.2") == "opus"
 
     # Rule 3 — env vars classify UNKNOWN ids (no wire match).
     def test_env_claims_unknown_id_opus(self, clean_tier_env, monkeypatch):
@@ -327,7 +328,7 @@ class TestModelIdToTier:
         """The tier set is {opus, sonnet, mid, haiku} — model_call_timeout_seconds
         tiers (opus/sonnet/haiku) plus the new mid."""
         produced = {
-            model_id_to_tier("glm-5.1"),
+            model_id_to_tier("glm-5.2"),
             model_id_to_tier("glm-5-turbo"),
             model_id_to_tier("glm-4.5-air"),
             model_id_to_tier("glm-4.7"),
