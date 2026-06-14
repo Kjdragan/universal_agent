@@ -13,7 +13,7 @@ code_paths:
   - src/universal_agent/services/hourly_intel_digest.py
   - src/universal_agent/services/atlas_direct_dispatch.py
   - src/universal_agent/systemd_migrated_jobs.py
-last_verified: 2026-06-09
+last_verified: 2026-06-14
 ---
 
 # Task Type & Mission System Registry
