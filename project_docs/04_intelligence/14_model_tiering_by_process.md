@@ -291,8 +291,11 @@ default lowered 6 → 2 on 2026-06-10, then **2 → 1 on 2026-06-13**) — both 
 this fan-out being the dominant ZAI Fair-Usage 429/1313 burst contributor. The
 final 2 → 1 is a storm-avoidance step: ZAI 429s are driven by request *concurrency*
 (a call overlapping another rejects ~77% vs ~10% sequential), so even 2-wide
-self-overlaps; a batched-vs-per-bucket POC (2026-06-13) confirmed the sequential
-per-bucket judge keeps full quality (F1 0.78 vs adjudicated truth) within budget. **A/B-confirmed** (`scripts/convergence_model_ab.py`, 30 live buckets,
+self-overlaps. As of 2026-06-13 the judge also runs **BATCHED** — one structured-
+output call per chunk of `UA_CONVERGENCE_JUDGE_BATCH_SIZE` buckets (default 20,
+`_refine_clusters_batched`); a batch-size sweep (61 live buckets vs adjudicated
+truth) showed ~20/call beats both per-bucket (F1 0.78, 61 calls) and one-giant-call
+(F1 0.67) at **F1 0.84, 4 calls, ~half the tokens**. **A/B-confirmed** (`scripts/convergence_model_ab.py`, 30 live buckets,
 run twice): glm-5-turbo matches the opus default's precision (both 2/30) at ~35%
 lower latency, while `glm-4.5-air` (15/30) and `glm-4.7` (11/30) over-confirm
 broad-topic buckets and fail this precision gate. **Turbo is the precision floor; air

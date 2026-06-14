@@ -536,6 +536,21 @@ Rules:
 """
 
 
+# Batched variant of the judge prompt: judges MANY coarse buckets in one call
+# (see `_convergence_judge_batch_size`). The closing instruction forces the same
+# precision bar per bucket and a verdict array keyed by bucket_id.
+_BATCHED_REFINE_SYSTEM = _CLUSTER_REFINE_SYSTEM + """
+
+You are given MULTIPLE coarse topic buckets AT ONCE, each with a numeric
+`bucket_id`. Judge EACH bucket INDEPENDENTLY by the rules above, applying the
+SAME precision bar to every one — do NOT become lax because there are many
+buckets. Use the other buckets only as comparative context (most are broad-tag
+lumps; flag only the genuinely specific multi-channel convergences). Return ONLY
+JSON with one verdict per bucket_id, covering EVERY bucket_id you were given:
+{"verdicts": [{"bucket_id": 0, "is_convergence": true, "thesis": "...", "converging_video_ids": ["id1","id2"], "signal_strength": 8}]}
+"""
+
+
 # Non-domain CSI categories excluded from the ideation/convergence corpus by
 # the relevance gate. These are the EMPIRICAL category values the live CSI
 # classifier actually emits (verified against rss_event_analysis.category in
@@ -621,6 +636,25 @@ def _convergence_llm_concurrency() -> int:
         return max(1, min(16, int(raw)))
     except ValueError:
         return 1
+
+
+def _convergence_judge_batch_size() -> int:
+    """Number of coarse buckets judged per LLM call.
+
+    A 2026-06-13 batch-size sweep (61 live buckets, scored against a blind-
+    adjudicated reference truth) found a clear inverted-U: one-bucket-per-call
+    (F1 0.78, 61 calls) and one-giant-call (F1 0.67 — attention diluted across
+    all buckets) BOTH lose to MODERATE batches. ~20 buckets/call hit **F1 0.84 at
+    4 calls and ~half the tokens** — the best point on every axis. Moderate
+    batching gives the judge *comparative context* across buckets (sharpening the
+    precision call — "these are all just broad-topic lumps; THIS one is a specific
+    story") without diluting attention. Default 20; ``UA_CONVERGENCE_JUDGE_BATCH_SIZE``
+    overrides. **1 == legacy per-bucket** (one call per bucket)."""
+    raw = str(os.getenv("UA_CONVERGENCE_JUDGE_BATCH_SIZE", "20")).strip()
+    try:
+        return max(1, min(60, int(raw)))
+    except ValueError:
+        return 20
 
 
 def _convergence_budget_seconds() -> float:
@@ -785,6 +819,43 @@ def _cluster_judge_overrides() -> dict[str, str]:
     return overrides
 
 
+def _gate_cluster_verdict(
+    bucket: list[dict[str, Any]],
+    parsed: Optional[dict[str, Any]],
+    *,
+    min_channels: int,
+) -> Optional[dict[str, Any]]:
+    """Apply the convergence precision gates to ONE parsed LLM verdict against
+    its bucket. Returns a confirmed cluster ``{signatures, thesis, signal_strength}``
+    or None. SHARED by the per-bucket (`_refine_cluster_with_llm`) and batched
+    (`_refine_clusters_batched`) judges so both enforce identical guards:
+    ``is_convergence`` true, ``signal_strength >= _min_signal_strength()``, and a
+    confirmed subset spanning **>=2 INDEPENDENT channels** (the hard structural
+    guard against single-channel / topical-only over-confirmation)."""
+    if not isinstance(parsed, dict) or not parsed.get("is_convergence"):
+        return None
+    try:
+        strength = float(parsed.get("signal_strength") or 0)
+    except (TypeError, ValueError):
+        strength = 0.0
+    if strength < _min_signal_strength():
+        return None
+    confirmed_ids = {
+        str(v).strip()
+        for v in (parsed.get("converging_video_ids") or [])
+        if str(v).strip()
+    }
+    confirmed = [s for s in bucket if str(s.get("video_id") or "").strip() in confirmed_ids]
+    # The LLM must have kept a real multi-channel subset.
+    if len(_independent_channels(confirmed)) < max(2, int(min_channels or 2)):
+        return None
+    return {
+        "signatures": confirmed,
+        "thesis": str(parsed.get("thesis") or "").strip(),
+        "signal_strength": strength,
+    }
+
+
 async def _refine_cluster_with_llm(
     bucket: list[dict[str, Any]],
     *,
@@ -839,29 +910,94 @@ async def _refine_cluster_with_llm(
         logger.warning("convergence LLM refine failed (bucket size=%d): %s", len(bucket), exc)
         return None
 
-    if not isinstance(parsed, dict) or not parsed.get("is_convergence"):
-        return None
-    try:
-        strength = float(parsed.get("signal_strength") or 0)
-    except (TypeError, ValueError):
-        strength = 0.0
-    if strength < _min_signal_strength():
-        return None
+    return _gate_cluster_verdict(bucket, parsed, min_channels=min_channels)
 
-    confirmed_ids = {
-        str(v).strip()
-        for v in (parsed.get("converging_video_ids") or [])
-        if str(v).strip()
+
+async def _refine_clusters_batched(
+    chunk: list[list[dict[str, Any]]],
+    *,
+    min_channels: int,
+) -> list[Optional[dict[str, Any]]]:
+    """Judge a CHUNK of coarse buckets in ONE batched LLM call.
+
+    Returns a list aligned 1:1 to ``chunk`` — each element a confirmed cluster
+    dict (``{signatures, thesis, signal_strength}``) or None, the same per-bucket
+    contract as ``_refine_cluster_with_llm``. Re-raises on a Fair-Usage ([1313])
+    signal so the caller's circuit breaker can trip; any other failure or parse
+    miss fails CLOSED (every bucket in the chunk -> None, re-detected on the next
+    idempotent run). Batching at ``_convergence_judge_batch_size`` both collapses
+    the call count AND lifts precision via cross-bucket comparative context
+    (2026-06-13 sweep). Each bucket's verdict still passes the identical
+    ``_gate_cluster_verdict`` precision guards."""
+    out: list[Optional[dict[str, Any]]] = [None] * len(chunk)
+    if not chunk:
+        return out
+    payload = {
+        "buckets": [
+            {
+                "bucket_id": i,
+                "videos": [
+                    {
+                        "video_id": s.get("video_id"),
+                        "channel": s.get("channel_name") or s.get("channel_id"),
+                        "title": s.get("video_title"),
+                        "primary_topics": s.get("primary_topics"),
+                        "key_claims": (s.get("key_claims") or [])[:4],
+                    }
+                    for s in bucket
+                ],
+            }
+            for i, bucket in enumerate(chunk)
+        ]
     }
-    confirmed = [s for s in bucket if str(s.get("video_id") or "").strip() in confirmed_ids]
-    # The LLM must have kept a real multi-channel subset.
-    if len(_independent_channels(confirmed)) < max(2, int(min_channels or 2)):
-        return None
-    return {
-        "signatures": confirmed,
-        "thesis": str(parsed.get("thesis") or "").strip(),
-        "signal_strength": strength,
-    }
+    user = json.dumps(payload, ensure_ascii=True)
+    # Output budget scales with chunk size (one verdict per bucket), bounded.
+    max_tokens = min(8000, 400 + 220 * len(chunk))
+    try:
+        from universal_agent.services.llm_classifier import (
+            _call_llm,
+            _parse_json_response,
+        )
+
+        raw = await _call_llm(
+            system=_BATCHED_REFINE_SYSTEM,
+            user=user,
+            max_tokens=max_tokens,
+            **_cluster_judge_overrides(),
+        )
+        parsed = _parse_json_response(raw)
+    except Exception as exc:  # noqa: BLE001
+        if _is_fup_error(str(exc)):
+            logger.warning(
+                "convergence batched refine hit a Fair-Usage signal (chunk=%d): %s",
+                len(chunk), exc,
+            )
+            raise
+        logger.warning("convergence batched refine failed (chunk=%d): %s", len(chunk), exc)
+        return out
+    verdicts = parsed.get("verdicts") if isinstance(parsed, dict) else None
+    if not isinstance(verdicts, list):
+        # Single-bucket chunk: a model may return a BARE verdict object instead
+        # of a 1-element `verdicts` array — accept it as the verdict for bucket 0.
+        # (The production path uses ~20-bucket chunks and always gets the array.)
+        if len(chunk) == 1 and isinstance(parsed, dict) and "is_convergence" in parsed:
+            verdicts = [{**parsed, "bucket_id": 0}]
+        else:
+            logger.warning(
+                "convergence batched refine: response had no 'verdicts' array (chunk=%d) — "
+                "failing closed for this chunk", len(chunk),
+            )
+            return out
+    for v in verdicts:
+        if not isinstance(v, dict):
+            continue
+        try:
+            bid = int(v.get("bucket_id"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= bid < len(chunk):
+            out[bid] = _gate_cluster_verdict(chunk[bid], v, min_channels=min_channels)
+    return out
 
 
 async def _detect_clusters_llm_async(
@@ -872,19 +1008,24 @@ async def _detect_clusters_llm_async(
     deadline: float | None = None,
     stats: dict | None = None,
 ) -> list[dict[str, Any]]:
-    """Recall (SQL buckets) → precision (LLM refine each). Returns confirmed
-    clusters as dicts with ``signatures`` / ``thesis`` / ``signal_strength``.
+    """Recall (SQL buckets) → precision (LLM refine). Returns confirmed clusters
+    as dicts with ``signatures`` / ``thesis`` / ``signal_strength``.
 
-    The per-bucket refine calls are independent, so they run concurrently
-    (bounded by ``_convergence_llm_concurrency``) instead of serially — a coarse
-    recall window routinely yields dozens of buckets, and one-at-a-time opus
-    refines overran the 900s cron budget. ``deadline`` (monotonic seconds) caps
-    total wall time: buckets not yet started when the budget is spent are skipped
-    cheaply and re-detected on the next run (candidate writes are idempotent).
+    The LLM judges buckets in **batches** of ``_convergence_judge_batch_size``
+    (default 20) — one structured-output call per chunk rather than one per
+    bucket. A 2026-06-13 batch-size sweep showed ~20/call dominates both extremes
+    (per-bucket and one-giant-call) on F1, call count, AND tokens (it gives the
+    judge comparative context across buckets without diluting attention). Set
+    ``UA_CONVERGENCE_JUDGE_BATCH_SIZE=1`` for legacy per-bucket behavior. Chunks
+    run sequentially (bounded by ``_convergence_llm_concurrency``, default 1 —
+    storm-avoidance). ``deadline`` (monotonic seconds) caps total wall time:
+    chunks not started when the budget is spent are skipped and re-detected next
+    run (candidate writes are idempotent). The per-bucket refine cache is honored
+    bucket-by-bucket up front, so only UNCACHED buckets reach the LLM.
 
-    ``stats`` (optional mutable dict) accumulates ``sonnet_calls_made`` and
-    ``cache_hits`` across all per-bucket refine tasks for the caller to surface
-    in ``latest_sync.json``."""
+    ``stats`` (optional mutable dict) accumulates ``sonnet_calls_made`` (now =
+    batched chunk calls) and ``cache_hits`` for the caller to surface in
+    ``latest_sync.json``."""
     buckets = _detect_clusters_sql(
         conn,
         source_window_hours=source_window_hours,
@@ -893,71 +1034,81 @@ async def _detect_clusters_llm_async(
     )
     if not buckets:
         return []
-    sem = asyncio.Semaphore(_convergence_llm_concurrency())
-    # FUP circuit breaker: a single Fair-Usage ([1313]) signal means ZAI is
-    # account-level throttling us — the remaining buckets would just be ~60 more
-    # doomed LLM calls. The first `_refine_one` that catches a FUP-classified
-    # exception flips this flag; every subsequent `_refine_one` then returns None
-    # immediately (checked right after acquiring the semaphore, alongside the
-    # deadline check). The next hourly run re-detects the skipped buckets —
-    # candidate writes are idempotent, so nothing is lost.
-    fup_tripped = False
-    skipped_after_breaker = 0
     _stats = stats if stats is not None else {}
     _stats.setdefault("sonnet_calls_made", 0)
     _stats.setdefault("cache_hits", 0)
+    cache_on = _convergence_refine_cache_enabled()
 
-    async def _refine_one(bucket: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    # Cache pass: resolve cached buckets up front, collect the uncached for the
+    # batched LLM pass. Keeps per-bucket cache granularity even though the LLM
+    # now judges buckets in chunks.
+    confirmed: list[dict[str, Any]] = []
+    to_judge: list[list[dict[str, Any]]] = []
+    for bucket in buckets:
+        key = _refine_cluster_key(bucket) if cache_on else ""
+        if key:
+            cached = _refine_cache_get(key)
+            if cached is not None:
+                _stats["cache_hits"] += 1
+                if cached["is_convergence"]:
+                    ids = {v for v in cached["converging_video_ids"] if v}
+                    csig = [s for s in bucket if str(s.get("video_id") or "").strip() in ids]
+                    if len(_independent_channels(csig)) >= max(2, int(min_channels or 2)):
+                        confirmed.append({
+                            "signatures": csig,
+                            "thesis": cached["thesis"],
+                            "signal_strength": cached["signal_strength"],
+                        })
+                continue
+        to_judge.append(bucket)
+
+    # Batched LLM pass over uncached buckets — sequential chunks, with the FUP
+    # circuit breaker and the wall-clock deadline applied per chunk. A single
+    # Fair-Usage ([1313]) signal means ZAI is account-throttling us, so the
+    # breaker skips the remaining chunks (re-detected next idempotent run).
+    batch_size = _convergence_judge_batch_size()
+    chunks = [to_judge[i:i + batch_size] for i in range(0, len(to_judge), batch_size)]
+    sem = asyncio.Semaphore(_convergence_llm_concurrency())
+    fup_tripped = False
+    skipped_after_breaker = 0
+
+    async def _judge_chunk(chunk: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
         nonlocal fup_tripped, skipped_after_breaker
         async with sem:
             if fup_tripped:
-                skipped_after_breaker += 1
-                return None
+                skipped_after_breaker += len(chunk)
+                return []
             if deadline is not None and time.monotonic() >= deadline:
-                return None
-
-            key = _refine_cluster_key(bucket) if _convergence_refine_cache_enabled() else ""
-            if key:
-                cached = _refine_cache_get(key)
-                if cached is not None:
-                    _stats["cache_hits"] += 1
-                    if not cached["is_convergence"]:
-                        return None
-                    ids = {v for v in cached["converging_video_ids"] if v}
-                    confirmed = [s for s in bucket if str(s.get("video_id") or "").strip() in ids]
-                    if len(_independent_channels(confirmed)) < max(2, int(min_channels or 2)):
-                        return None
-                    return {
-                        "signatures": confirmed,
-                        "thesis": cached["thesis"],
-                        "signal_strength": cached["signal_strength"],
-                    }
+                skipped_after_breaker += len(chunk)
+                return []
             try:
-                result = await _refine_cluster_with_llm(bucket, min_channels=min_channels)
+                results = await _refine_clusters_batched(chunk, min_channels=min_channels)
             except Exception as exc:  # noqa: BLE001
                 if _is_fup_error(str(exc)):
-                    # This bucket DID make the (failed) LLM call that surfaced the
-                    # FUP signal; it is not counted in `skipped_after_breaker`,
-                    # which tracks only the buckets short-circuited WITHOUT a call.
                     fup_tripped = True
-                    return None
-                logger.warning("convergence refine task failed: %s", exc)
-                return None
+                    return []
+                logger.warning("convergence chunk judge failed: %s", exc)
+                return []
             _stats["sonnet_calls_made"] += 1
-            if key:
-                _refine_cache_put(key, result)
-            return result
+            if cache_on:
+                for bucket, res in zip(chunk, results):
+                    key = _refine_cluster_key(bucket)
+                    if key:
+                        _refine_cache_put(key, res)
+            return [r for r in results if r]
 
-    results = await asyncio.gather(*[_refine_one(b) for b in buckets])
+    chunk_lists = await asyncio.gather(*[_judge_chunk(c) for c in chunks])
+    for cl in chunk_lists:
+        confirmed.extend(cl)
     if fup_tripped:
         logger.warning(
             "convergence FUP circuit breaker tripped: a Fair-Usage ([1313]) signal "
-            "aborted this run; %d of %d buckets skipped without an LLM call. The next "
-            "hourly run re-detects them (candidate writes are idempotent).",
+            "aborted this run; %d of %d uncached buckets skipped without an LLM call. "
+            "The next hourly run re-detects them (candidate writes are idempotent).",
             skipped_after_breaker,
-            len(buckets),
+            len(to_judge),
         )
-    return [r for r in results if r]
+    return confirmed
 
 
 def _detect_clusters_llm(

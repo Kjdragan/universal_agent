@@ -11,14 +11,23 @@
       "notes": "opus->sonnet 2026-06-13 (#982) — was the single largest 429 source (100% opus, ~67% reject).",
       "source_sha": "c3c7699b5ddd632a"
     },
-    "universal_agent/services/proactive_convergence.py::_refine_cluster_with_llm": {
-      "label": "Convergence — cluster judge",
-      "description": "Judges whether a SQL-recalled bucket of recent videos from different channels is a genuine converging theme. One bounded LLM call per candidate bucket.",
+    "universal_agent/services/proactive_convergence.py::_refine_clusters_batched": {
+      "label": "Convergence — cluster judge (batched)",
+      "description": "Judges a CHUNK of ~20 candidate buckets in ONE structured-output call (verdict array keyed by bucket_id). The DEFAULT convergence judge call-site; each per-bucket verdict still passes the shared _gate_cluster_verdict precision gates.",
       "role": "judge",
       "tier_current": "sonnet",
       "tier_verdict": "appropriate",
-      "notes": "opus->sonnet 2026-06-10 after a 30-bucket A/B: equal precision, ~35% faster, less FUP pressure. Validate tier changes with scripts/convergence_model_ab.py.",
-      "source_sha": "a37d172f6fe5622c"
+      "notes": "PR #989 (2026-06-13). A 61-bucket batch-size sweep found an inverted-U: ~20/call hits F1 0.84 at 4 calls vs per-bucket 0.78 at 61 — fewer CALLS (the throttle lever) AND better precision via cross-bucket comparative context. UA_CONVERGENCE_JUDGE_BATCH_SIZE (default 20; =1 reverts to _refine_cluster_with_llm).",
+      "source_sha": "6b2f3f2e2a33bc4a"
+    },
+    "universal_agent/services/proactive_convergence.py::_refine_cluster_with_llm": {
+      "label": "Convergence — cluster judge (legacy per-bucket)",
+      "description": "Judges whether a SQL-recalled bucket of recent videos from different channels is a genuine converging theme. The legacy ONE-call-per-bucket path, used only when UA_CONVERGENCE_JUDGE_BATCH_SIZE=1; shares the _gate_cluster_verdict precision gate with the batched judge.",
+      "role": "judge",
+      "tier_current": "sonnet",
+      "tier_verdict": "appropriate",
+      "notes": "opus->sonnet 2026-06-10 after a 30-bucket A/B: equal precision, ~35% faster, less FUP pressure. PR #989 (2026-06-13) extracted the shared gate and made batching the default — see _refine_clusters_batched. Validate tier changes with scripts/convergence_model_ab.py.",
+      "source_sha": "ee9e62da92734a0e"
     },
     "universal_agent/services/proactive_convergence.py::track_b_ideation_synthesis": {
       "label": "Convergence — ideation/brief synthesis",

@@ -52,24 +52,31 @@ def _buckets(n: int) -> list[list[dict]]:
 
 
 def test_fup_signal_trips_breaker_and_skips_remaining_buckets(monkeypatch):
-    """A [1313] Fair-Usage error on an early bucket must abort the run: the
-    refine function is called only a handful of times (≈ concurrency), not once
-    per bucket."""
+    """A [1313] Fair-Usage error on an early CHUNK must abort the run: the batched
+    refine is called only a handful of times (≈ concurrency), not once per chunk.
+
+    Since PR #989 the judge runs in BATCHED chunks (``_refine_clusters_batched``)
+    rather than one call per bucket, and the FUP circuit breaker lives at the
+    chunk level inside ``_detect_clusters_llm_async``. We size the batch small
+    (2 buckets/chunk → 6 chunks) so there ARE remaining chunks for the breaker to
+    skip, and patch the batched seam (the analog of the old per-bucket seam)."""
     buckets = _buckets(12)
     monkeypatch.setattr(pc, "_detect_clusters_sql", lambda *a, **k: buckets)
     monkeypatch.setenv("UA_CONVERGENCE_LLM_CONCURRENCY", "2")
+    monkeypatch.setenv("UA_CONVERGENCE_JUDGE_BATCH_SIZE", "2")  # 12 buckets -> 6 chunks
+    monkeypatch.setenv("UA_CONVERGENCE_REFINE_CACHE_ENABLED", "0")  # hermetic: no DB
 
     calls = {"n": 0}
 
-    async def fup_first_refine(bucket, *, min_channels):
+    async def fup_first_batched(chunk, *, min_channels):
         calls["n"] += 1
-        # The FIRST refine raises a FUP-classified ([1313]) error; the rest would
+        # The FIRST chunk raises a FUP-classified ([1313]) error; the rest would
         # succeed if they ran — but the breaker should stop them.
         if calls["n"] == 1:
             raise RuntimeError("HTTP 429: [1313] Fair Usage Policy — back off")
-        return {"signatures": bucket, "thesis": "t", "signal_strength": 9.0}
+        return [{"signatures": b, "thesis": "t", "signal_strength": 9.0} for b in chunk]
 
-    monkeypatch.setattr(pc, "_refine_cluster_with_llm", fup_first_refine)
+    monkeypatch.setattr(pc, "_refine_clusters_batched", fup_first_batched)
 
     out = asyncio.run(
         pc._detect_clusters_llm_async(None, source_window_hours=72, min_channels=2)
@@ -77,40 +84,48 @@ def test_fup_signal_trips_breaker_and_skips_remaining_buckets(monkeypatch):
 
     # The run completes (no exception propagates) ...
     assert isinstance(out, list)
-    # ... with no/partial clusters (the tripping bucket produced nothing, and the
+    # ... with no/partial clusters (the tripping chunk produced nothing, and the
     # rest were skipped before their LLM call).
     assert len(out) < len(buckets)
-    # The breaker stopped the fan-out far short of one-call-per-bucket. With
-    # concurrency 2, at most ~2-3 buckets start before the flag is observed.
-    assert calls["n"] <= 3, f"breaker did not stop the fan-out ({calls['n']} refine calls)"
+    # The breaker stopped the fan-out far short of one-call-per-chunk. With
+    # concurrency 2, at most ~2-3 chunks start before the flag is observed.
+    assert calls["n"] <= 3, f"breaker did not stop the fan-out ({calls['n']} batched calls)"
 
 
 def test_non_fup_error_does_not_trip_breaker(monkeypatch):
-    """A plain (non-FUP) error on one bucket must NOT abort the run — every other
-    bucket is still processed and a partial result is returned."""
+    """A plain (non-FUP) error on one CHUNK must NOT abort the run — every other
+    chunk is still processed and a partial result is returned.
+
+    Batched path (PR #989): 8 buckets at batch_size 2 → 4 chunks; the chunk
+    carrying v0a fails with a generic error, so its 2 buckets yield nothing while
+    the other 3 chunks (6 buckets) still produce clusters and the breaker never
+    trips."""
     buckets = _buckets(8)
     monkeypatch.setattr(pc, "_detect_clusters_sql", lambda *a, **k: buckets)
     monkeypatch.setenv("UA_CONVERGENCE_LLM_CONCURRENCY", "2")
+    monkeypatch.setenv("UA_CONVERGENCE_JUDGE_BATCH_SIZE", "2")  # 8 buckets -> 4 chunks
+    monkeypatch.setenv("UA_CONVERGENCE_REFINE_CACHE_ENABLED", "0")  # hermetic: no DB
 
     calls = {"n": 0}
 
-    async def one_plain_failure_refine(bucket, *, min_channels):
+    async def one_plain_failure_batched(chunk, *, min_channels):
         calls["n"] += 1
-        # First bucket fails with a generic (non-FUP) error; others succeed.
-        if bucket[0]["video_id"] == "v0a":
+        # The chunk carrying v0a fails with a generic (non-FUP) error; others succeed.
+        if any(b[0]["video_id"] == "v0a" for b in chunk):
             raise RuntimeError("transient parse error, not fair-usage")
-        return {"signatures": bucket, "thesis": "t", "signal_strength": 9.0}
+        return [{"signatures": b, "thesis": "t", "signal_strength": 9.0} for b in chunk]
 
-    monkeypatch.setattr(pc, "_refine_cluster_with_llm", one_plain_failure_refine)
+    monkeypatch.setattr(pc, "_refine_clusters_batched", one_plain_failure_batched)
 
     out = asyncio.run(
         pc._detect_clusters_llm_async(None, source_window_hours=72, min_channels=2)
     )
 
-    # Every bucket was attempted (no early abort) ...
-    assert calls["n"] == len(buckets)
-    # ... and the 7 non-failing buckets produced clusters.
-    assert len(out) == len(buckets) - 1
+    # Every chunk was attempted (no early abort): 8 buckets / batch_size 2 = 4 chunks.
+    assert calls["n"] == 4
+    # ... and the 3 non-failing chunks (6 buckets) produced clusters; the failed
+    # chunk's 2 buckets produced nothing.
+    assert len(out) == len(buckets) - 2
 
 
 def test_refine_cluster_reraises_only_on_fup():
