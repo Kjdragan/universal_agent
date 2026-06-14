@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 ZAI_MODEL_MAP = {
     "haiku": "glm-4.5-air",     # OPERATOR-LOCKED — never change (see note above).
     "sonnet": "glm-5-turbo",    # Z.AI standard model.
-    "opus": "glm-5.1",          # Z.AI flagship model (NOT glm-5-1 — dash breaks it).
+    "opus": "glm-5.2",          # Z.AI flagship (migrated 5.1→5.2 2026-06-13; NOT glm-5-2 — dash breaks it).
 }
 
 
@@ -68,7 +68,7 @@ def resolve_sonnet() -> str:
 
 
 def resolve_opus() -> str:
-    """Resolve the opus-tier (flagship) model — `glm-5.1`."""
+    """Resolve the opus-tier (flagship) model — `glm-5.2` (migrated from glm-5.1 2026-06-13)."""
     return resolve_model("opus")
 
 
