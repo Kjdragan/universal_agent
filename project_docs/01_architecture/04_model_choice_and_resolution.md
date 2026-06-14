@@ -59,7 +59,7 @@ lives in `model_resolution.py::ZAI_MODEL_MAP`:
 ZAI_MODEL_MAP = {
     "haiku": "glm-4.5-air",     # Operator-locked.
     "sonnet": "glm-5-turbo",    # Z.AI standard model.
-    "opus": "glm-5.1",          # Z.AI flagship model (NOT glm-5-1 — dash breaks it).
+    "opus": "glm-5.2",          # Z.AI flagship (migrated 5.1→5.2 2026-06-13; NOT glm-5-2 — dash breaks it).
 }
 ```
 
@@ -88,18 +88,18 @@ The thin wrappers express intent at call sites:
 |---|---|---|
 | `resolve_haiku()` | `glm-4.5-air` | `model_resolution.py::resolve_haiku` |
 | `resolve_sonnet()` | `glm-5-turbo` | `model_resolution.py::resolve_sonnet` |
-| `resolve_opus()` | `glm-5.1` | `model_resolution.py::resolve_opus` |
+| `resolve_opus()` | `glm-5.2` | `model_resolution.py::resolve_opus` (migrated from glm-5.1 2026-06-13) |
 | `resolve_goal_eval_model(cody_mode)` | `glm-5-turbo` on ZAI, `None` on anthropic | `model_resolution.py::resolve_goal_eval_model` |
 | `resolve_claude_code_model(default="sonnet")` | tier passthrough | the string passed to claude-agent-sdk |
 
 ### GLM-5.2 — validated opus-tier candidate (thinking semantics)
 
-ZAI's GLM-5.2 has been **validated as a drop-in opus-tier replacement** for `glm-5.1`
-on UA's existing Anthropic-compatible path (verified 2026-06-13 through the production
-limiter + observability via `scripts/glm52_probe.py`). The opus map is still `glm-5.1`;
-migration is a two-line flip — `ANTHROPIC_DEFAULT_OPUS_MODEL` (Infisical prod+dev) and
-the `ZAI_MODEL_MAP["opus"]` literal — with **no other code change required**. The thinking
-semantics differ from every prior ZAI model UA has run, so know them before using it:
+ZAI's GLM-5.2 is the **opus-tier model as of 2026-06-13** (migrated from `glm-5.1` — validated
+on UA's existing Anthropic-compatible path through the production limiter + observability via
+`scripts/glm52_probe.py`). It was a two-line flip — `ANTHROPIC_DEFAULT_OPUS_MODEL` (Infisical
+prod+dev) and the `ZAI_MODEL_MAP["opus"]` literal — with **no other code change required**
+(runbook below). The thinking semantics differ from every prior ZAI model UA has run, so know
+them before relying on it:
 
 - **Wire id is the bare string `glm-5.2`.** `glm-5.2[1m]` returns HTTP 400 "Unknown Model"
   on the `/v1/messages` endpoint — the `[1m]` suffix is a Claude-Code *settings.json*
@@ -135,11 +135,15 @@ panel visibility. Run it on the VPS: `python -m universal_agent.scripts.glm52_pr
 
 ### Migration runbook: switch the opus tier `glm-5.1` → `glm-5.2`
 
-**Status (2026-06-13):** GLM-5.2 is validated working on UA's real path (SDK + raw-httpx lanes,
-all `thinking` shapes return HTTP 200, UA's parser gets non-empty text, panel-visible) — see the
-section above. This runbook is the change procedure to make `glm-5.2` the opus-tier default. It is
-a **high-blast-radius** change: the opus tier is the default daemon model (Simone, Atlas, dispatch
-sweep) and Cody-on-ZAI, so every autonomous principal moves to 5.2 at once. Do it deliberately.
+**Status: EXECUTED 2026-06-13.** The opus tier was switched to `glm-5.2` (Infisical
+`ANTHROPIC_DEFAULT_OPUS_MODEL` prod+dev + `ZAI_MODEL_MAP["opus"]`). This runbook is retained as the
+procedure + rollback reference. It is a **high-blast-radius** change, but a *scoped* one: it swaps
+**only the opus-tier model** — every call that currently resolves to the opus tier (the default
+daemon tier for Simone, Atlas, dispatch sweep, plus Cody-on-ZAI) moves to 5.2 at once. It does
+**not** touch the sonnet or haiku tiers, so a mixed-tier agent only has its opus slice change — e.g.
+convergence keeps its sonnet judge (`glm-5-turbo`) and haiku triage/signatures (`glm-4.5-air`)
+unchanged, and only its opus-tier slice (ideation synthesis / un-overridden `resolve_opus()` calls)
+moves to 5.2.
 
 **What changes — and what explicitly does NOT:**
 
@@ -256,7 +260,7 @@ removed — **sonnet now means sonnet** (`glm-5-turbo`). If you see old docs cla
 
 `agent_setup.py` builds the daemon's `ClaudeAgentOptions` with
 `model=resolve_claude_code_model(default="opus")` — i.e. the in-process daemon
-(Simone, Atlas, dispatch sweep, etc.) runs on **opus / glm-5.1** by default. It also
+(Simone, Atlas, dispatch sweep, etc.) runs on **opus / glm-5.2** by default. It also
 forces the SDK's internal preflight model env vars into the subprocess env so the SDK
 picks up the central mappings regardless of external env:
 
@@ -316,7 +320,7 @@ in turn decides what a tier name resolves to in practice.
 | # | Profile | Endpoint / models | How `ANTHROPIC_*` is handled | Entry point |
 |---|---|---|---|---|
 | 1 | **Interactive coding** (Kevin's `claude` / Antigravity) | Anthropic Max via OAuth (real Opus/Sonnet/Haiku) | `ANTHROPIC_*` **excluded/stripped** so OAuth wins | `scripts/claude_with_mcp_env.sh` → `scripts/_claude_launcher.py` |
-| 2 | **UA autonomous in-process** (Simone heartbeats, Atlas, dispatch sweep, intel crons) | ZAI proxy / GLM (glm-5.1 opus, glm-5-turbo sonnet) | `ANTHROPIC_*` ZAI-routing vars **kept** on `os.environ` (loaded at service start) | `agent_setup.py` `ClaudeAgentOptions` |
+| 2 | **UA autonomous in-process** (Simone heartbeats, Atlas, dispatch sweep, intel crons) | ZAI proxy / GLM (glm-5.2 opus, glm-5-turbo sonnet) | `ANTHROPIC_*` ZAI-routing vars **kept** on `os.environ` (loaded at service start) | `agent_setup.py` `ClaudeAgentOptions` |
 | 3 | **Cody per-task CLI subprocess** | Anthropic Max by default (or ZAI when `cody_mode="zai"`) | `ANTHROPIC_*` scrubbed when `cody_mode=="anthropic"` | `vp/clients/claude_cli_client.py::_build_cli_env` |
 
 The governing principle: **any `ANTHROPIC_*` key on `os.environ` overrides OAuth.**
@@ -340,7 +344,7 @@ flowchart TD
 
     B -->|In-process daemon| D["agent_setup.py ClaudeAgentOptions"]
     D --> D1["ANTHROPIC_* ZAI-routing vars present on os.environ"]
-    D1 --> D2["SDK calls route to ZAI / GLM (opus=glm-5.1)"]
+    D1 --> D2["SDK calls route to ZAI / GLM (opus=glm-5.2)"]
 
     B -->|Cody CLI mission| E["vp_orchestration.vp_dispatch_mission"]
     E --> E1{resolve_cody_mode}
@@ -429,7 +433,7 @@ Everything else (~25 direct SDK clients across `services/`, `urw/`, `discord_int
 > `resolve_opus` import → `NameError`; sent the ZAI key to real Anthropic; sent a GLM
 > model string to real Anthropic). It is now rewired to route through
 > `base_url = os.getenv("ANTHROPIC_BASE_URL") or "https://api.z.ai/api/anthropic"`
-> with `model = resolve_opus()` (glm-5.1) — i.e. ZAI like the rest of the daemon. The
+> with `model = resolve_opus()` (glm-5.2) — i.e. ZAI like the rest of the daemon. The
 > code comment notes that pointing `ANTHROPIC_BASE_URL` at `api.anthropic.com` + a
 > console key + an explicit `claude-*` model is the (cost-bearing) opt-in for real
 > high-res Opus vision.
