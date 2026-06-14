@@ -26,15 +26,26 @@ or a tutorial_build_judge cache row — it only reads inputs and makes LLM calls
 it self-throttles (``--delay``) so the A/B does not itself trip the FUP storm it
 studies.
 
-Run on the VPS (needs the activity/csi DBs + Infisical-injected ZAI creds):
+Run on the VPS (needs the activity/csi DBs + Infisical-injected ZAI creds). The
+package is src-layout, so PYTHONPATH=src is required for the bare venv python:
 
-    UA_DEPLOYMENT_PROFILE=vps /opt/universal_agent/.venv/bin/python \
-        -m universal_agent.scripts.zai_batch_triage_ab \
-        --target both --limit 24 --batch-size 20 --delay 0.6
+    cd /opt/universal_agent && UA_DEPLOYMENT_PROFILE=vps PYTHONPATH=src \
+        .venv/bin/python -m universal_agent.scripts.zai_batch_triage_ab \
+        --target both --limit 16 --batch-size 20 --delay 0.6
+
+The buildability target reads the CSI ingester DB at CSI_DB_PATH (default
+/var/lib/universal-agent/csi/csi.db — the production path); override with
+UA_CSI_DB_PATH.
 
 Decision rule: adopt the batched default only when agreement is (near-)100% AND the
 call/token reduction is material. Where verdicts diverge, read the divergence table
 and eyeball which decision is right.
+
+First live run (2026-06-14, n=12 triage / n=10 buildability): both showed large
+call/token/latency wins (triage 12→1 calls, −78% tokens; buildability 10→1, −59%)
+but agreement BELOW the bar (triage 50%, buildability 80%) with systematic,
+opposite-direction divergence (batched triage stricter; batched buildability more
+lenient). ⇒ both defaults stay OFF pending prompt tuning + a calm-window re-run.
 """
 
 from __future__ import annotations
@@ -385,18 +396,30 @@ def main() -> int:
                 print("[triage] no un-finalized candidates in the DB — skipping")
 
         if args.target in ("buildability", "both"):
-            csi_path = os.environ.get("UA_CSI_DB_PATH", "/opt/universal_agent/AGENT_RUN_WORKSPACES/csi.db")
-            if Path(csi_path).exists():
-                with sqlite3.connect(csi_path) as csi_conn:
-                    csi_conn.row_factory = sqlite3.Row
-                    items = _load_buildability_items(csi_conn, conn, limit=args.limit)
-                if items:
-                    print(f"[buildability] {len(items)} uncached build-oriented videos")
-                    results.append(_ab_buildability(items, batch_size=args.batch_size, delay=args.delay, is_fup=is_fup))
+            # Match production: proactive_demo_build_sweep._csi_db_path reads
+            # CSI_DB_PATH (default /var/lib/universal-agent/csi/csi.db, the CSI
+            # ingester DB OUTSIDE /opt). UA_CSI_DB_PATH stays an explicit override.
+            csi_path = (
+                os.environ.get("UA_CSI_DB_PATH")
+                or os.environ.get("CSI_DB_PATH")
+                or "/var/lib/universal-agent/csi/csi.db"
+            )
+            # Isolate buildability so a wrong path / missing table / DB error can
+            # NEVER drop an already-collected triage result.
+            try:
+                if not Path(csi_path).exists():
+                    print(f"[buildability] csi.db not found at {csi_path} — skipping")
                 else:
-                    print("[buildability] no uncached build-oriented videos — skipping")
-            else:
-                print(f"[buildability] csi.db not found at {csi_path} — skipping")
+                    with sqlite3.connect(csi_path) as csi_conn:
+                        csi_conn.row_factory = sqlite3.Row
+                        items = _load_buildability_items(csi_conn, conn, limit=args.limit)
+                    if items:
+                        print(f"[buildability] {len(items)} uncached build-oriented videos")
+                        results.append(_ab_buildability(items, batch_size=args.batch_size, delay=args.delay, is_fup=is_fup))
+                    else:
+                        print("[buildability] no uncached build-oriented videos — skipping")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[buildability] skipped on error: {exc}")
 
     report = {
         "ok": True,
