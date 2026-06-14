@@ -15,7 +15,7 @@ code_paths:
   - deployment/systemd/universal-agent-oom-alert.service
   - deployment/systemd/universal-agent-oom-alert.timer
   - deployment/systemd/templates/universal-agent-gateway.service.template
-last_verified: 2026-06-04
+last_verified: 2026-06-14
 ---
 
 # VPS Recovery & Security
@@ -122,6 +122,7 @@ underscore) to form the filename.
 | `universal-agent-api` | `http://127.0.0.1:8001/api/health` | — | HTTP |
 | `universal-agent-webui` | `http://127.0.0.1:3000/` | — | HTTP |
 | `universal-agent-telegram` | — | `/var/lib/universal-agent/heartbeat/telegram.heartbeat` | **heartbeat** |
+| `universal-agent-mission-control-sweeper` | — | — | **active-state only** (no HTTP/heartbeat) |
 | `csi-ingester` | `http://127.0.0.1:8091/healthz` | — | HTTP |
 
 > **CSI Ingester health path is `/healthz`, not `/health`.** The CSI service

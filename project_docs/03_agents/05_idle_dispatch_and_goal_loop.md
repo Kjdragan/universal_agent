@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/services/vp_failure_rescue.py
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/durable/state.py
-last_verified: 2026-06-09
+last_verified: 2026-06-14
 ---
 
 # Idle Dispatch & Goal Loop
@@ -200,42 +200,34 @@ Returns `(True, None)` if a non-empty `COMPLETION.md` exists in any candidate.
 > demoted for a missing file it was never asked to write, this is the
 > regression to check.
 
-### ⚠️ The two-phase `/goal` subprocess is NOT wired up
+### The two-phase `/goal` runner (wired since PR #911)
 
-The PRD design (and several docstrings) describe a **two-phase** flow: a
-briefing turn produced by `build_self_briefing_prompt`, then the parent worker
-reads `goal_condition.txt` and invokes a *second* subprocess
-`claude -p "/goal <condition>"` to drive completion.
+The PRD design describes a **two-phase** flow, and as of PR #911 it is the live
+path for goal-eligible missions. `ClaudeCodeCLIClient.run_mission` computes
+`goal_eligible = is_goal_eligible_mission(mission)`; when eligible it calls
+`claude_cli_client.py::_run_goal_loop_mission` (the `/goal` loop **is** the retry
+mechanism — no outer retries). That runner:
 
-**As of 2026-05-29, that two-phase wiring does not exist in code.**
+1. **Briefing turn** — if `goal_condition.txt` doesn't already exist, runs a
+   briefing subprocess whose prompt comes from
+   `self_briefing.py::build_self_briefing_prompt` (invoke the skill, write
+   `BRIEF.md`/`ACCEPTANCE.md`/`goal_condition.txt`).
+2. **Work turn** — reads the condition via `self_briefing.py::read_goal_condition`
+   and runs a *second* subprocess `claude -p "/goal <condition>"`; the evaluator
+   loops until the condition (or its self-bounding ACCEPTANCE clause) is met. The
+   work turn is handed **only** the condition Cody authored.
 
-> **Correction (2026-06-11):** the real two-phase `/goal` runner now DOES exist —
-> `claude_cli_client.py::_run_goal_loop_mission` (shipped in PR #911) runs a briefing turn
-> then `claude -p "/goal <condition>"` as a separate work-turn subprocess. The authoritative,
-> current description lives in the demo-pipeline ADR
-> ([`04_intelligence/15_demo_tutorial_pipeline_adr.md`](../04_intelligence/15_demo_tutorial_pipeline_adr.md));
-> the `/goal` evaluator model is documented in
-> [`01_architecture/04_model_choice_and_resolution.md`](../01_architecture/04_model_choice_and_resolution.md).
-> The single-prompt narrative below is pre-#911 and pending a fuller reconciliation.
+A missing/invalid `goal_condition.txt` after briefing **degrades to the legacy
+single-pass prompt** (`_build_cli_prompt` with the self-briefing directive inlined,
+gated by `UA_VP_GOAL_ENABLED`) rather than failing — so both `build_self_briefing_prompt`
+and `read_goal_condition` are now live-called from `claude_cli_client.py`, not just
+referenced in a docstring. The worker-level `COMPLETION.md` guard remains the final
+hard enforcement.
 
-Verified facts:
-
-- `build_self_briefing_prompt` and `read_goal_condition` are **defined in
-  `self_briefing.py` but never called** anywhere outside that module (only
-  referenced in a docstring comment in `claude_cli_client.py`).
-- `ClaudeCodeCLIClient.run_mission` builds **one** prompt via `_build_cli_prompt`
-  and runs `_execute_cli_session` in a retry loop. When `UA_VP_GOAL_ENABLED`
-  is on, `_build_cli_prompt` *inlines* the self-briefing directive
-  (invoke the skill, write `BRIEF.md`/`ACCEPTANCE.md`/`goal_condition.txt`,
-  write `COMPLETION.md` before finishing) into that single prompt. There is no
-  separate `/goal` subprocess invocation.
-
-So the **live** behavior is: briefing + work + attestation happen in one (or
-retried) subprocess driven by inlined prompt directives, and the worker-level
-`COMPLETION.md` guard is the only hard enforcement. `goal_condition.txt` is
-written by the VP if it follows the prompt, but the parent never reads it to
-launch a `/goal` loop. Treat the "two-phase" language in `worker_loop.py` /
-`self_briefing.py` docstrings as aspirational design, not current reality.
+The authoritative end-to-end description lives in the demo-pipeline ADR
+([`04_intelligence/15_demo_tutorial_pipeline_adr.md`](../04_intelligence/15_demo_tutorial_pipeline_adr.md));
+the `/goal` evaluator model is documented in
+[`01_architecture/04_model_choice_and_resolution.md`](../01_architecture/04_model_choice_and_resolution.md).
 
 > [VERIFY: if a future PR wires `build_self_briefing_prompt` /
 > `read_goal_condition` into `worker_loop._execute_mission_logic` (a real
@@ -301,7 +293,7 @@ performs the DB `UPDATE`, then — for `status in {failed, cancelled}` with
 `failure_mode != "operator_cancel"` — best-effort calls
 `vp_failure_rescue.surface_failure_to_simone`. The hook never propagates
 exceptions; a rescue-plumbing failure must not block the status update.
-`transcript_tail` is truncated to **2 KB** before persistence.
+`transcript_tail` is truncated to **2000 bytes** (`_TRANSCRIPT_TAIL_MAX_BYTES`) before persistence.
 
 `surface_failure_to_simone` creates a Task Hub item:
 
@@ -312,7 +304,7 @@ exceptions; a rescue-plumbing failure must not block the status update.
 - metadata carries: `failure_mode`, `failure_count` (count of prior failures
   in the same `rescue_chain_id`), `rescue_chain_id` (reused across retries, or
   the mission_id for the first failure), `brief_path` (VP's `BRIEF.md`, may be
-  `None`), `transcript_tail` (last 2 KB), `workspace_path`, `original_objective`,
+  `None`), `transcript_tail` (last 2000 bytes), `workspace_path`, `original_objective`,
   and `original_task_id` / `cody_mode` when present.
 
 `operator_cancel` is intentionally **not** surfaced (deliberate human action).
@@ -412,8 +404,11 @@ sandbox blocks outbound HTTPS auth.
 - Mission demoted to failed for a "missing" file? Confirm it was actually
   goal-eligible (`is_goal_eligible_mission`) — Atlas and non-opted-in Cody
   missions should never hit the attestation guard.
-- `/goal` not actually looping? Correct — the two-phase subprocess is not
-  wired; only inlined prompt directives + the `COMPLETION.md` guard are live.
+- `/goal` not actually looping? For a **goal-eligible** mission it should — the
+  two-phase runner (`_run_goal_loop_mission`, PR #911) drives a `claude -p "/goal
+  <condition>"` work turn. If it ran single-pass, check `is_goal_eligible_mission`
+  and that `goal_condition.txt` was written by the briefing turn (a missing/invalid
+  one degrades to the legacy inlined-prompt single pass).
 - Failure not reaching Simone? `operator_cancel` is suppressed by design; all
   other failed/cancelled finalize calls surface a `vp_failure:<mission_id>`
   task.
