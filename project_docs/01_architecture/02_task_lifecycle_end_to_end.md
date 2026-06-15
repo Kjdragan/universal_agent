@@ -9,7 +9,7 @@ code_paths:
   - src/universal_agent/services/todo_dispatch_service.py
   - src/universal_agent/services/execution_run_service.py
   - src/universal_agent/durable/db.py
-last_verified: 2026-06-10
+last_verified: 2026-06-15
 ---
 
 # Task Lifecycle End-to-End
@@ -186,6 +186,14 @@ sweep.
 `dispatch_service` is the centralized layer that wraps `claim_next_dispatch_tasks`
 and enriches every claimed task with Simone-first routing metadata
 (`_enrich_with_routing` → `route_all_to_simone`). Four entry points:
+
+> **D3 (default-OFF, `UA_PRIORITY_DISPATCHER_ENABLED`):** when the Pythonic priority
+> dispatcher is enabled, `_enrich_with_routing` skips the Simone-first stamp and routing is
+> owned by `services/priority_dispatcher.py`. The **claim path is unchanged** — only post-claim
+> routing differs: VP-bound tasks are dispatched directly via `dispatch_vp_mission` and the
+> source row transitions `in_progress → delegated` (`task_hub.py::perform_task_action`,
+> `action="delegate"`) instead of riding Simone's heartbeat turn. See
+> [Simone-First Orchestration § D3](../03_agents/02_simone_first_orchestration.md).
 
 | Function | Trigger | Notes |
 |---|---|---|

@@ -19,7 +19,7 @@ code_paths:
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/api/server.py
   - src/universal_agent/api/gateway_bridge.py
-last_verified: 2026-06-11
+last_verified: 2026-06-15
 ---
 
 # System Architecture Overview
@@ -251,9 +251,13 @@ heartbeat dispatches them. The Simone-execution path:
 3. **Claim + route.** Dispatch is the `dispatch_sweep` pattern
    (`services/dispatch_service.py::dispatch_sweep`): a stale-release pass, then
    `task_hub.claim_next_dispatch_tasks(conn, limit=N, ...)` atomically claims the top tasks,
-   then `_enrich_with_routing`. **Routing is Simone-first:**
+   then `_enrich_with_routing`. **Routing is Simone-first by default:**
    `services/agent_router.py::route_all_to_simone` assigns *every* claimed task
    `agent_id="simone"`. The system does not pre-route to VPs — Simone decides delegation.
+   **D3 (default-OFF, `UA_PRIORITY_DISPATCHER_ENABLED`):** when enabled,
+   `services/priority_dispatcher.py` deterministically routes claimed tasks and dispatches
+   VP-bound work directly (no Simone turn), leaving only the Simone-bound residue for step 4.
+   See [Simone-First Orchestration § D3](../03_agents/02_simone_first_orchestration.md).
 4. **Execute (Simone).** `ToDoDispatchService` builds a To-Do prompt of the claimed items
    and feeds them to Simone's session via the gateway's `execution_callback`. Simone works
    each item with her full toolset/skills/sub-agents.

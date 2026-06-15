@@ -7,9 +7,11 @@ code_paths:
   - src/universal_agent/services/agent_router.py
   - src/universal_agent/services/dispatch_service.py
   - src/universal_agent/services/todo_dispatch_service.py
+  - src/universal_agent/services/priority_dispatcher.py
+  - src/universal_agent/services/vp_capacity.py
   - src/universal_agent/services/llm_classifier.py
   - src/universal_agent/gateway.py
-last_verified: 2026-06-11
+last_verified: 2026-06-15
 ---
 
 # Simone-First Orchestration
@@ -25,6 +27,51 @@ advisory routing hint that Simone may honor or override.
 
 This model replaced an older keyword-based `qualify_agent()` deterministic router.
 **`qualify_agent*` is fully decommissioned** — `grep qualify_agent src/` returns nothing.
+
+## D3 — the Pythonic priority dispatcher supersedes this when enabled
+
+> **Status:** shipped **default-OFF** behind `UA_PRIORITY_DISPATCHER_ENABLED`. When the
+> flag is off (current production default), everything below this section describes live
+> behavior. When it is on, routing is owned by `services/priority_dispatcher.py` and the
+> Simone-First stamp is skipped — Simone-First becomes the legacy/fallback path.
+
+The Simone-First model funnels **every** claimed task through Simone's heavy ~1.25M-token
+heartbeat turn *just to decide who does it*. That is the dominant token cost. Decision D3
+replaces routing with a **deterministic, no-LLM-in-the-hot-path priority dispatcher**:
+
+- `priority_dispatcher.py::classify_task` makes a deterministic `DispatchDecision` per task
+  (pure, no LLM, no I/O): explicit `target_agent` → that VP (P0); `chat_panel`/`simone_chat`
+  → Simone (P0); coding source_kind (the canonical `vp_orchestration.py::_CODER_LANE_SOURCE_KINDS`
+  = `tutorial_build`/`cody_demo_task`/`cody_scaffold_request`) or `workflow_kind=="code_change"`
+  → Cody (P0); pre-tagged `metadata.preferred_vp` → that VP (P2); genuinely ambiguous untagged
+  tail → the cheap sonnet/haiku classifier `llm_classifier.py::classify_agent_route` (the ONLY
+  LLM touch, and only for the untagged tail).
+- `priority_dispatcher.py::dispatch_claimed` composes the two capacity gates — the global
+  `capacity_governor.py::CapacityGovernor.can_dispatch` (api_down / 429-backoff) and the
+  per-agent caps (`vp_capacity.py::_vp_active_counts` vs `UA_MAX_CONCURRENT_VP_*`) — then
+  **dispatches VP-bound tasks directly from Python** via `tools/vp_orchestration.py::dispatch_vp_mission`
+  and marks the source task `delegated` via `task_hub.py::perform_task_action` (`action="delegate"`).
+- **Simone is removed from the dispatch decision.** Only the Simone-bound residue — chat,
+  explicit-Simone targets, the M1-gated general/research fallback, and any VP task with no free
+  slot this tick — flows into her prompt. When every claimed task is dispatched to a VP, Simone's
+  heavy turn is **skipped entirely** for that tick (the D3 win).
+- **prefer-ATLAS** (`UA_DISPATCHER_PREFER_ATLAS`, default OFF) is a second, independent toggle:
+  off → general/research falls back to Simone (no degradation); on → it prefers ATLAS.
+
+Awareness is preserved: completion is recorded passively (`services/proactive_work_recap.py`) and
+VP failures escalate via `services/vp_failure_rescue.py::surface_failure_to_simone`. Simone is
+removed only from *dispatch*, not from *awareness* or *failure rescue*.
+
+The slot-counting helpers (`_vp_active_counts`, `_available_agents_for_llm_routing`,
+`_env_positive_int`) were extracted to `services/vp_capacity.py` as a shared seam imported by the
+legacy todo path, `atlas_direct_dispatch.py`, and the priority dispatcher (they are re-exported from
+`todo_dispatch_service.py` for backward compatibility).
+
+> **Deferred-task policy (when a VP is at cap):** the decision is marked `deferred` and **left in
+> the Simone residue this tick** (handled now, exactly as today) — there is intentionally **no
+> release-on-defer**, because the only release verbs (`task_hub.py::finalize_assignments` /
+> `release_stale_assignments`) consume the ToDo retry budget and would churn a capacity-deferred
+> backlog into `needs_review`.
 
 ## The router itself is trivial
 
@@ -69,6 +116,13 @@ the sweep:
 def _enrich_with_routing(claimed):
     if not claimed:
         return claimed
+    # D3: when the priority dispatcher owns routing, skip the advisory stamp.
+    try:
+        from universal_agent.services.priority_dispatcher import priority_dispatcher_enabled
+        if priority_dispatcher_enabled():
+            return claimed
+    except Exception as exc:
+        log.debug("priority_dispatcher gate check failed (using legacy routing): %s", exc)
     try:
         from universal_agent.services.agent_router import route_all_to_simone
         route_all_to_simone(claimed)
@@ -91,7 +145,8 @@ result is written into the same `_routing` key but with `method="llm"` and a rea
 `should_delegate` boolean.
 
 Crucially, the LLM is only offered agents that currently have capacity. Concurrency caps
-are read from env (`todo_dispatch_service.py::_available_agents_for_llm_routing`):
+are read from env (`vp_capacity.py::_available_agents_for_llm_routing`, re-exported from
+`todo_dispatch_service.py` for backward compatibility):
 
 | Env var | Default | Meaning |
 |---|---|---|

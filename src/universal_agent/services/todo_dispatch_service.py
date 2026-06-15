@@ -16,6 +16,16 @@ from universal_agent.services.routing_markers import (
     RESEARCH_WORKFLOW_RE,
 )
 
+# Slot-accounting helpers were extracted to services/vp_capacity.py so the
+# priority dispatcher (D3) and atlas_direct_dispatch share one source of truth.
+# Re-imported here (and re-exported via this module's namespace) so existing
+# callers of todo_dispatch_service._vp_active_counts keep working unchanged.
+from universal_agent.services.vp_capacity import (  # noqa: F401  (re-export)
+    _available_agents_for_llm_routing,
+    _env_positive_int,
+    _vp_active_counts,
+)
+
 logger = logging.getLogger(__name__)
 
 TODO_DISPATCH_MAX_PER_SWEEP = max(
@@ -48,13 +58,6 @@ def _coerce_labels(value: Any) -> list[str]:
             return [str(item).strip() for item in parsed if str(item).strip()]
         return [part.strip() for part in raw.split(",") if part.strip()]
     return []
-
-
-def _env_positive_int(name: str, default: int) -> int:
-    try:
-        return max(0, int(os.getenv(name, str(default)) or default))
-    except Exception:
-        return default
 
 
 def _store_continuation_workspace_context(item: dict[str, Any], context: dict[str, Any]) -> None:
@@ -151,53 +154,6 @@ def _attach_continuation_workspace_reference(
 
     _store_continuation_workspace_context(item, context)
     return context
-
-
-def _vp_active_counts(active_assignments: list[dict[str, Any]] | None) -> tuple[int, int]:
-    """Count active VP coder and general assignments.
-
-    Uses the canonical ``agent_id`` field for classification.  Falls back
-    to substring matching *only* on ``agent_id`` (not on title or task_id)
-    to avoid false positives from words like "encoder" or "atlassian".
-
-    Known aliases:
-      - Coder:  "vp.coder.primary", "codie", "coder"
-      - General: "vp.general.primary", "atlas"
-    """
-    from universal_agent.services.agent_router import AGENT_CODER, AGENT_GENERAL
-
-    coder_patterns = {AGENT_CODER, "codie", "coder"}
-    general_patterns = {AGENT_GENERAL, "atlas"}
-
-    coder = 0
-    general = 0
-    for assignment in active_assignments or []:
-        agent_id = str(assignment.get("agent_id") or "").strip().lower()
-        if agent_id in coder_patterns:
-            coder += 1
-        elif agent_id in general_patterns:
-            general += 1
-    return coder, general
-
-
-def _available_agents_for_llm_routing(
-    active_assignments: list[dict[str, Any]] | None,
-) -> frozenset[str]:
-    from universal_agent.services.agent_router import (
-        AGENT_CODER,
-        AGENT_GENERAL,
-        AGENT_SIMONE,
-    )
-
-    active_coder, active_general = _vp_active_counts(active_assignments)
-    max_coder = _env_positive_int("UA_MAX_CONCURRENT_VP_CODER", 1)
-    max_general = _env_positive_int("UA_MAX_CONCURRENT_VP_GENERAL", 2)
-    available = {AGENT_SIMONE}
-    if active_coder < max_coder:
-        available.add(AGENT_CODER)
-    if active_general < max_general:
-        available.add(AGENT_GENERAL)
-    return frozenset(available)
 
 
 def _non_coder_workflow_kind(
@@ -826,14 +782,128 @@ class ToDoDispatchService:
                     "task_count": len(task_ids),
                 })
 
-            snapshot = capacity_snapshot()
+            from universal_agent.services.priority_dispatcher import (
+                dispatch_claimed,
+                priority_dispatcher_enabled,
+            )
+
+            _priority_dispatch_on = priority_dispatcher_enabled()
+            dispatched_task_ids: set[str] = set()
+            decisions: list = []
             with connect_runtime_db(activity_db_path) as conn:
                 activity = task_hub.get_agent_activity(conn)
-            active_assignments = activity.get("active_assignments") if isinstance(activity, dict) else []
-            await _enrich_with_llm_agent_routing(
-                task_hub_claimed,
-                active_assignments=active_assignments,
-            )
+                active_assignments = (
+                    activity.get("active_assignments") if isinstance(activity, dict) else []
+                )
+                if _priority_dispatch_on:
+                    # D3: deterministic Python routing. VP-bound tasks are
+                    # dispatched directly via dispatch_vp_mission (no Simone
+                    # turn) and the source row is marked `delegated`. Only the
+                    # Simone-bound residue — plus any VP task with no free slot
+                    # this tick — flows into the heartbeat prompt below.
+                    # connect_runtime_db is autocommit (isolation_level=None)
+                    # and perform_task_action self-commits, so no write lock is
+                    # held across the dispatch awaits inside dispatch_claimed.
+                    decisions = await dispatch_claimed(
+                        conn,
+                        task_hub_claimed,
+                        active_assignments=active_assignments,
+                    )
+                    dispatched_task_ids = {d.task_id for d in decisions if d.dispatched}
+
+            if _priority_dispatch_on and self.event_callback:
+                self.event_callback({
+                    "type": "priority_dispatch",
+                    "session_id": session.session_id,
+                    "timestamp": _event_timestamp(),
+                    "dispatched_task_ids": sorted(dispatched_task_ids),
+                    "decisions": [
+                        {
+                            "task_id": d.task_id,
+                            "agent_id": d.agent_id,
+                            "rule": d.rule,
+                            "priority": d.priority,
+                            "dispatched": d.dispatched,
+                            "deferred": d.deferred,
+                            "mission_id": d.mission_id,
+                        }
+                        for d in decisions
+                    ],
+                })
+
+            if dispatched_task_ids:
+                # Finalize the todo_execution run allocated for each delegated
+                # task: the VP runs the work in its OWN run/workspace, so this
+                # todo run is complete. Without this the stuck-run reaper would
+                # later flag it (status='running') as a timed-out run and page.
+                from universal_agent.services.execution_run_service import (
+                    finalize_execution_run,
+                )
+
+                for item in task_hub_claimed:
+                    if str(item.get("task_id") or "") not in dispatched_task_ids:
+                        continue
+                    _run_id = str(item.get("workflow_run_id") or "").strip()
+                    if not _run_id:
+                        continue
+                    try:
+                        finalize_execution_run(
+                            run_id=_run_id,
+                            attempt_id=f"{_run_id}:attempt:1",
+                            status="completed",
+                            terminal_reason="delegated_to_vp",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "priority_dispatcher: failed to finalize run %s for delegated task",
+                            _run_id,
+                        )
+
+                # Peel VP-dispatched tasks out of the residue — they are now
+                # delegated and must NOT also be rendered into Simone's prompt.
+                task_hub_claimed = [
+                    item
+                    for item in task_hub_claimed
+                    if str(item.get("task_id") or "") not in dispatched_task_ids
+                ]
+                # Recompute the lifecycle scope from the surviving residue so the
+                # downstream lifecycle enforcer, stuck-assignment sweep, and the
+                # error-rollback only cover tasks Simone actually owns this turn
+                # (the delegated tasks already produced their lifecycle mutation).
+                claimed_assignment_ids = [
+                    str(item.get("assignment_id") or "").strip()
+                    for item in task_hub_claimed
+                    if str(item.get("assignment_id") or "").strip()
+                ]
+                task_ids = sorted(
+                    {str(item.get("task_id") or "").strip() for item in task_hub_claimed}
+                )
+
+            if not _priority_dispatch_on:
+                await _enrich_with_llm_agent_routing(
+                    task_hub_claimed,
+                    active_assignments=active_assignments,
+                )
+
+            if not task_hub_claimed:
+                # Every claimed task was dispatched to a VP — Simone's heavy
+                # heartbeat turn is not spent this tick (the D3 win).
+                if self.event_callback:
+                    self.event_callback({
+                        "type": "todo_dispatch_all_delegated",
+                        "session_id": session.session_id,
+                        "timestamp": _event_timestamp(),
+                        "task_ids": sorted(dispatched_task_ids),
+                    })
+                logger.info(
+                    "priority_dispatcher: all %d claimed task(s) dispatched to VPs; "
+                    "Simone turn skipped for %s",
+                    len(dispatched_task_ids),
+                    session.session_id,
+                )
+                return
+
+            snapshot = capacity_snapshot()
             prompt = build_todo_execution_prompt(
                 claimed_items=task_hub_claimed,
                 capacity_snapshot_data=snapshot,

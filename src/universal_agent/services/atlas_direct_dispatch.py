@@ -167,13 +167,12 @@ def try_claim_atlas_direct(
 
 
 def count_active_general_slots(conn: sqlite3.Connection) -> int:
-    """Count active general-VP assignments via the canonical task_hub helper.
+    """Count active general-VP assignments via the canonical slot helper.
 
-    Mirrors ``todo_dispatch_service._vp_active_counts`` but keeps the
-    full call self-contained (the helper there takes a list; we pass
-    the list pulled fresh from ``get_agent_activity``).
+    Uses the shared ``vp_capacity._vp_active_counts`` (the helper takes a
+    list; we pass the list pulled fresh from ``get_agent_activity``).
     """
-    from universal_agent.services.todo_dispatch_service import _vp_active_counts
+    from universal_agent.services.vp_capacity import _vp_active_counts
 
     activity = task_hub.get_agent_activity(conn)
     active_assignments = (

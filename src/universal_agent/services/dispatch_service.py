@@ -129,9 +129,22 @@ def _enrich_with_routing(claimed: list[dict[str, Any]]) -> list[dict[str, Any]]:
       - should_delegate: False (Simone decides delegation herself)
 
     Safe to call unconditionally — gracefully no-ops on import failure.
+
+    When the Pythonic priority dispatcher (D3) is enabled
+    (``UA_PRIORITY_DISPATCHER_ENABLED``), routing is owned by
+    ``priority_dispatcher`` and the advisory Simone-first stamp is skipped
+    (the claim path is otherwise byte-for-byte identical).
     """
     if not claimed:
         return claimed
+    try:
+        from universal_agent.services.priority_dispatcher import (
+            priority_dispatcher_enabled,
+        )
+        if priority_dispatcher_enabled():
+            return claimed
+    except Exception as exc:
+        log.debug("priority_dispatcher gate check failed (using legacy routing): %s", exc)
     try:
         from universal_agent.services.agent_router import route_all_to_simone
         route_all_to_simone(claimed)

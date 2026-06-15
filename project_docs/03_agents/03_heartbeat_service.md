@@ -18,7 +18,7 @@ code_paths:
   - src/universal_agent/services/invariants/cron_staleness.py
   - src/universal_agent/services/invariants/cron_consecutive_failures.py
   - memory/HEARTBEAT.md
-last_verified: 2026-06-14
+last_verified: 2026-06-15
 ---
 
 # Heartbeat Service
@@ -282,6 +282,7 @@ Explicit wakes: `request_heartbeat_now` (run ASAP, can bypass a foreground lock)
 
 - **The legacy `UA_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE` default of 1 is stale.** The code default is 5 (`heartbeat_service.py` constant + `_heartbeat_guard_policy`).
 - **Task claiming is no longer in the heartbeat.** `task_hub_claimed` is hardcoded `[]`; dispatch is orchestrated by `dispatch_service.dispatch_sweep` (driven by `todo_dispatch_service`), which calls `agent_router.py::route_all_to_simone` and `task_hub.py::claim_next_dispatch_tasks` — those functions are defined in those modules, not in `dispatch_service`. Do not reason about heartbeat "claiming" tasks from this file's task-focused branches — they are not reached.
+- **D3 — routing is no longer Simone's heavy turn (default-OFF, `UA_PRIORITY_DISPATCHER_ENABLED`).** When enabled, `services/priority_dispatcher.py` deterministically routes claimed tasks and dispatches VP-bound work directly via `dispatch_vp_mission` (no Simone turn); Simone's prompt receives only the Simone-bound residue. Her ~1.25M-token turn is reserved for execution/judgment, not routing. See [Simone-First Orchestration § D3](02_simone_first_orchestration.md).
 - **Heartbeat does not own trusted-email execution.** That routes through the hook layer + ToDo runtime. (Confirmed in `02_GOTCHA_INVENTORY.md` and code path.)
 - **Simone's heartbeat runs in a real checkout and can act autonomously.** A bad branch deployed without review once introduced a mid-flight SyntaxError that crashed the CSI cron; recovery required stopping the gateway, parking the task with careful SQL (plain `cancel` gets resurrected by the orphan-reconciler), and resetting to `origin/main`. Autonomous remediation is bounded by the referral policy in the handoff message.
 - **Findings parse failures only alert when the artifact exists but is corrupt.** A *missing* artifact is normal for many run types and is intentionally silent (avoids notification noise).
