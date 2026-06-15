@@ -233,7 +233,7 @@ The active diagnostic is `scripts/check_heartbeat_liveness.py` (`run_check`), wh
 |---|---|---|
 | `UA_HEARTBEAT_INTERVAL` | 1800s (30 min) | Base interval; parsed by `_parse_duration_seconds` (accepts `s/m/h/d`). The deprecated `UA_HEARTBEAT_EVERY` alias was retired 2026-06-05 (S4) — only `UA_HEARTBEAT_INTERVAL` is honored. |
 | `UA_HEARTBEAT_MIN_INTERVAL_SECONDS` | 1800 | Floor for the resolved interval. |
-| `UA_HEARTBEAT_EXEC_TIMEOUT` | 1600 (floor `MIN_HEARTBEAT_EXEC_TIMEOUT` = 600) | Per-turn execution timeout. |
+| `UA_HEARTBEAT_EXEC_TIMEOUT` | derived: inner absolute backstop + 600s buffer (≈7800s with the 7200s default); floor `MIN_HEARTBEAT_EXEC_TIMEOUT` = 600 | Outer **last-resort** wall-clock ceiling on the agent run, NOT the primary control. The in-process `ProcessTurnAdapter` governs live turns with the idle/no-progress `LivenessWatchdog` (see [`02_execution_core/01_gateway_sessions_execution.md`](../02_execution_core/01_gateway_sessions_execution.md) § "Liveness / no-progress timeout"); this ceiling sits ABOVE the inner backstop so it never binds a live, progressing turn. Was a flat 1600s before 2026-06-14 — shorter than the inner backstop, so it could hard-kill a live Simone turn. |
 | `UA_HEARTBEAT_AUTONOMOUS_ENABLED` | prod default True (`should_run_loop("heartbeat_autonomous")`) | Master switch for autonomous action. |
 | `UA_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE` | **5** | Cap on proactive items per cycle. (Legacy doc said 1; code default is 5 — comment: "Simone-first: claim up to 5 for batch triage".) |
 | `UA_HEARTBEAT_MAX_ACTIONABLE` | 50 | Over this → `actionable_over_capacity` skip. |

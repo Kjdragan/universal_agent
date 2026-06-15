@@ -32,7 +32,7 @@ the CLI's `process_turn()`). That uniformity is the whole point of this layer:
 | Abstract protocol | `gateway.py::Gateway` | Interface: `create_session`, `resume_session`, `execute`, `run_query`, `list_sessions`, MCP controls |
 | In-process impl | `gateway.py::InProcessGateway` | Owns adapters, sessions, per-session locks, VP routing, session reaper, durable DB conns |
 | External client | `gateway.py::ExternalGateway` | Talks to a remote gateway over HTTP/WS (same protocol surface) |
-| Engine adapter | `execution_engine.py::ProcessTurnAdapter` | Wraps `process_turn()`, owns the persistent Claude SDK client, emits `AgentEvent`s, enforces the per-turn wall-clock cap |
+| Engine adapter | `execution_engine.py::ProcessTurnAdapter` | Wraps `process_turn()`, owns the persistent Claude SDK client, emits `AgentEvent`s, enforces the per-turn liveness / no-progress watchdog |
 | Engine config | `execution_engine.py::EngineConfig` | `workspace_dir`, `user_id`, `force_complex`, `max_iterations`, `run_id`, `extra_disallowed_tools` (no `model` field) |
 | HTTP/WS service | `gateway_server.py` | FastAPI app exposing `/api/v1/sessions*` REST + the `/stream` WebSocket; `get_gateway()` singleton; `ConnectionManager`; lifespan |
 | Dashboard API | `api/server.py` | The *Web-UI* FastAPI app. Proxies to the gateway via `UA_GATEWAY_URL` + `GatewayBridge` |
@@ -219,7 +219,7 @@ sequenceDiagram
   PTA->>PTA: _ensure_client() (persistent SDK client)
   PTA->>PT: run_engine() task + event_callback
   PT-->>PTA: AgentEvents via queue
-  PTA-->>GW: yield events (+ wall-clock cap watchdog)
+  PTA-->>GW: yield events (+ liveness / no-progress watchdog)
   GW-->>WS: yield events (+ VP mission bookkeeping)
 ```
 
@@ -285,35 +285,58 @@ constant — there's a comment in the code warning exactly about this.
   events, and finishes with an `ITERATION_END` carrying `duration_seconds`,
   `tool_calls`, `trace_id`, and `stop_reason`.
 
-### Per-turn wall-clock cap (timeout)
+### Liveness / no-progress timeout (NOT a hard wall-clock cap)
 
-`execute()` resolves a hard wall-clock cap with this **priority order**:
+**The canonical convention for ALL agent-execution lanes.** A turn is killed
+only when it is genuinely stuck — **never** at an arbitrary wall-clock cap. Long
+coding/build turns legitimately exceed 30 min, so an arbitrary cap kills live,
+productive work (it caused the ≈13 h Simone daemon stall on 2026-06-14, where a
+session pinned to `glm-5.1` fell through to a 180 s sonnet cap and every long
+work turn was killed). The policy lives in **`timeout_policy.py::LivenessWatchdog`**
+and is shared by all three lanes so the convention can't drift:
 
-1. Per-request `metadata["turn_timeout_seconds"]` (the right knob for
-   legitimately long, multi-step workflows — set it per cron job).
-2. Legacy env `UA_PROCESS_TURN_TIMEOUT_SECONDS` (`process_turn_timeout_seconds()`,
-   default `0` = no hard timeout).
-3. **Tier-aware default** keyed off the configured model via
-   `execution_engine.py::_tier_for_model` → `model_call_timeout_seconds`:
-   haiku=120 s, sonnet=180 s, opus=1800 s. Matching handles (a) any `glm-5.x`
-   dot-versioned flagship (`glm-5.1`, `glm-5.2`, …) as **opus** — `glm-5-turbo`
-   (dash) stays sonnet; (b) exact/prefix ZAI-mapped strings; (c) Anthropic ids
-   (`claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`) by the tier name
-   in the id. Unknown/empty → sonnet. **Why (a) exists:** after the glm-5.1→5.2
-   opus-map migration (2026-06-13), a daemon session still pinned to `glm-5.1` no
-   longer matched `ZAI_MODEL_MAP['opus']=='glm-5.2'` and fell through to the
-   sonnet 180 s default — killing every long Simone work turn at 180 s (≈13 h
-   with zero completed daemon turns, 2026-06-14). The `glm-5.x`-family rule makes
-   the cap robust to opus-flagship version bumps. Regression guard:
-   `tests/unit/test_execution_engine_tier_resolution.py`.
-4. No cap (`0`).
+- in-process `execution_engine.py::ProcessTurnAdapter.execute` (Simone heartbeat
+  / daemon + in-process VP coder),
+- the VP SDK consumer `vp/clients/base.py::consume_adapter_events_with_idle_timeout`,
+- the `claude --print` subprocess `vp/clients/claude_cli_client.py::_monitor_cli_output`.
 
-On timeout the engine task is cancelled and an `ERROR` event is yielded. The
-design rationale (preserved in the code): an unbounded turn is a UX disaster — a
-stuck inference can sit on the wire for minutes before erroring, blocking the
-dispatcher's natural retry cadence. A tier-aware cap lets the turn abort
-cleanly, the dispatcher's stuck-assignment sweep catches it, and the next tick
-re-runs in ~10 s.
+`LivenessWatchdog` kills a turn only when **one** of these holds:
+
+1. **No sign of life** (no event/output) for `idle_kill_seconds`
+   (`process_turn_idle_kill_seconds()`, env `UA_PROCESS_TURN_IDLE_KILL_SECONDS`,
+   default 600 s) **AND no tool is in flight**. A long build/test emits a
+   `tool_call` then nothing until its `tool_result` minutes later, so that gap
+   is **exempt** — the watchdog tracks `tools_in_flight` (+1 on
+   `EventType.TOOL_CALL`, −1 on `TOOL_RESULT`, floored at 0) and only the
+   inference-wait counts as idle. Tools carry their own timeouts.
+2. **Absolute backstop** exceeded (`process_turn_absolute_backstop_seconds()`,
+   env `UA_PROCESS_TURN_ABSOLUTE_BACKSTOP_SECONDS`, default 7200 s = 2 h) — a
+   last resort for a fully-wedged process where even tool timeouts fail.
+3. An **explicit caller hard cap** is exceeded: per-request
+   `metadata["turn_timeout_seconds"]` (a cron's per-job budget, plumbed by
+   `cron_service`), else legacy `UA_PROCESS_TURN_TIMEOUT_SECONDS`
+   (`process_turn_timeout_seconds()`, default `0` = none). This is opt-in and is
+   an *additional* ceiling on top of idle — never the implicit tier default that
+   used to kill Simone.
+
+The poll loop calls `watchdog.note_activity(...)` on every event and checks
+`watchdog.overdue()` (returns a kill reason or `None`); `seconds_until_due()`
+sizes a poll/readline timeout so the loop never oversleeps a deadline. On kill
+the engine task is cancelled and an `ERROR` event (`"Execution killed: <reason>"`)
+is yielded; the dispatcher's stuck-assignment sweep catches the freed task and
+the next tick re-runs in ~10 s. The token-capture `finally` in `run_engine`
+still records the (partial) turn on cancellation.
+
+`execution_engine.py::_tier_for_model` is retained (it maps any `glm-5.x`
+flagship → opus, robust to opus version bumps; guard
+`tests/unit/test_execution_engine_tier_resolution.py`) but is now only an
+informational label in the liveness log line — it no longer drives a kill.
+
+> **Rule for the next person who reaches for an agent-execution timeout:** use
+> `LivenessWatchdog` (idle / no-progress + backstop), **never** a bare
+> wall-clock cap. Guards: `tests/unit/test_liveness_watchdog.py` (DOES kill an
+> idle turn; does NOT kill one emitting events past the old cap; tool-in-flight
+> exemption) and `tests/unit/test_vp_sdk_idle_timeout.py`.
 
 ### Self-healing client resets
 
@@ -521,7 +544,9 @@ All centralized here so they're discoverable. Each is env-driven with a default:
 
 | Function | Env var | Default | Notes |
 |---|---|---|---|
-| `process_turn_timeout_seconds` | `UA_PROCESS_TURN_TIMEOUT_SECONDS` | `0` | 0 = no hard timeout (legacy override; tier default usually wins) |
+| `process_turn_idle_kill_seconds` | `UA_PROCESS_TURN_IDLE_KILL_SECONDS` | `600` | **Primary control.** Idle / no-progress kill (suspended while a tool is in flight). 0 disables. See `LivenessWatchdog`. |
+| `process_turn_absolute_backstop_seconds` | `UA_PROCESS_TURN_ABSOLUTE_BACKSTOP_SECONDS` | `7200` | Last-resort ceiling for a fully-wedged turn (2 h). 0 disables. |
+| `process_turn_timeout_seconds` | `UA_PROCESS_TURN_TIMEOUT_SECONDS` | `0` | Legacy explicit hard-cap escape hatch; 0 = none. The idle watchdog above is the default control. |
 | `gateway_http_timeout_seconds` | `UA_GATEWAY_HTTP_TIMEOUT_SECONDS` | `60` | httpx client timeout |
 | `gateway_owner_lookup_timeout_seconds` | `UA_API_GATEWAY_OWNER_TIMEOUT_SECONDS` | `20` | |
 | `gateway_ws_handshake_timeout_seconds` | `UA_GATEWAY_WS_HANDSHAKE_TIMEOUT_SECONDS` | `20` | wait for `connected` event |

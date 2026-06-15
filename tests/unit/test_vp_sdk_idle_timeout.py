@@ -93,3 +93,49 @@ def test_progress_resets_idle_window():
     final_text, error_text, trace_id = asyncio.run(_scenario())
     assert final_text == "step2"
     assert error_text is None
+
+
+def test_tool_in_flight_exempts_idle_kill():
+    """A long-running tool (build/test) emits TOOL_CALL then is silent for longer
+    than the idle window before its TOOL_RESULT — it must NOT be killed mid-tool.
+    Without the tool-in-flight exemption the silent gap would trip the idle kill
+    and the final text would be lost."""
+
+    async def _scenario():
+        class _BuildAdapter:
+            async def execute(self, prompt):  # noqa: ARG002
+                yield _Ev(EventType.TOOL_CALL, {"name": "Bash"})
+                # Silent build well past the idle window — exempt because a tool
+                # is in flight.
+                await asyncio.sleep(0.25)
+                yield _Ev(EventType.TOOL_RESULT, {"ok": True})
+                yield _Ev(EventType.TEXT, {"final": True, "text": "built"})
+
+        return await consume_adapter_events_with_idle_timeout(
+            _BuildAdapter(), "go", idle_timeout_seconds=0.1
+        )
+
+    final_text, error_text, trace_id = asyncio.run(_scenario())
+    assert final_text == "built", "tool-in-flight time must be exempt from idle kill"
+    assert error_text is None
+
+
+def test_idle_kill_arms_after_tool_completes():
+    """Once a tool returns, the idle window re-arms: if inference then stalls
+    with no tool in flight, the run is reaped."""
+
+    async def _scenario():
+        class _StallAfterToolAdapter:
+            async def execute(self, prompt):  # noqa: ARG002
+                yield _Ev(EventType.TOOL_CALL, {"name": "Bash"})
+                yield _Ev(EventType.TOOL_RESULT, {"ok": True})
+                # No tool in flight now; go silent past the idle window.
+                await asyncio.Event().wait()  # never completes
+
+        return await consume_adapter_events_with_idle_timeout(
+            _StallAfterToolAdapter(), "go", idle_timeout_seconds=0.05
+        )
+
+    final_text, error_text, trace_id = asyncio.run(_scenario())
+    assert error_text is not None
+    assert "no_progress_timeout" in error_text
