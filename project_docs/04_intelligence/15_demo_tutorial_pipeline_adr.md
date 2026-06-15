@@ -23,7 +23,7 @@ code_paths:
   - deployment/systemd/
   - web-ui/app/dashboard/tutorials/
   - web-ui/app/dashboard/claude-code-intel/
-last_verified: 2026-06-14
+last_verified: 2026-06-15
 ---
 
 # ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign
@@ -65,7 +65,11 @@ overlap on videos (double-processing confirmed: `Dk4MD6TNiWE`, `j6hnjNhx_MM` eac
    an **opt-in graded mode** (`UA_TUTORIAL_BUILD_THRESHOLD` → 0–100 score + cutoff, default unset = binary;
    set HIGH to suppress false positives) and a determinism knob (`UA_TUTORIAL_BUILD_TEMPERATURE` /
    `UA_LLM_JUDGE_TEMPERATURE=0`) — both inert by default. See §7.1.1 there. `todo_dispatch_service.py` routes `tutorial_build`
-   → Cody (`vp.coder.primary`), which builds the runnable demo in `/opt/ua_demos/<id>`. **This lane is driven
+   → Cody (`vp.coder.primary`), which builds the runnable demo in `/opt/ua_demos/<id>`. (When the D3 priority
+   dispatcher is enabled — `UA_PRIORITY_DISPATCHER_ENABLED`, default OFF — `tutorial_build`/`cody_demo_task`/
+   `cody_scaffold_request` route to Cody *directly* via `services/priority_dispatcher.py` instead of through
+   Simone's turn; see [Simone-First Orchestration § D3](../03_agents/02_simone_first_orchestration.md). The
+   build behavior described here is unchanged.) **This lane is driven
    solely by the dedicated systemd timer** `universal-agent-proactive-demo-build-sweep`
    (`scripts/proactive_demo_build_sweep.py`, 3×/day), which calls `sync_build_oriented_csi_videos` directly
    (P1). The original dashboard-only trigger — `proactive_signals.py::sync_generated_cards` (run by
