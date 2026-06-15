@@ -48,6 +48,13 @@ def limiter(tmp_path, monkeypatch):
     """Fresh singleton, fast knobs, isolated snapshot."""
     monkeypatch.setenv("UA_ZAI_INFERENCE_STATE_PATH", str(tmp_path / "zai_state.json"))
     monkeypatch.setenv("ZAI_MIN_INTERVAL", "0.0")
+    # Neutralize the production opus burst-pacing (ZAI_OPUS_MIN_INTERVAL, 8.0s in
+    # prod/dev shells via Infisical) so the suite is hermetic: otherwise a dev box
+    # that exports it makes the opus tier sleep ~8s under its cap-1 gate, and the
+    # sub-second-timeout admission tests (e.g. test_backoff_sleep_releases_the_slot)
+    # fail locally while passing on CI's clean env. Tests that exercise pacing set
+    # this env themselves in their own bodies (later setenv wins).
+    monkeypatch.setenv("ZAI_OPUS_MIN_INTERVAL", "0")
     monkeypatch.setenv("ZAI_INITIAL_BACKOFF", "0.01")
     monkeypatch.setenv("ZAI_MAX_BACKOFF", "0.05")
     monkeypatch.setenv("ZAI_TIER_INCREASE_STREAK", "3")
