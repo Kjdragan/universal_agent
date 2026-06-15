@@ -37,6 +37,18 @@ The default verb is **inspect**, never **change**. Sequence every investigation 
 
 Only after the read-only pass has localized the problem do you consider a mutation — and a mutation is a separate, operator-approved step outside this skill.
 
+## Interpreting what you find: liveness ≠ activity
+
+**A long-lived process — or an attached MCP server — is NOT evidence that work is happening.** A `claude` (agent SDK) session spawns **all** of its MCP servers (stdio subprocesses like `notebooklm-mcp`, `agentmail`, etc.) **once at session start** and holds them **idle** for the session's entire lifetime, invoking one only when a tool call actually fires. So a `notebooklm-mcp` process that's been up 2+ hours merely mirrors its parent session's uptime — it does **not** mean NotebookLM is "actively working," regenerating artifacts, or driving a rate-limit storm. Long-lived `daemon_simone_heartbeat` sessions each normally carry a dormant `notebooklm-mcp` (plus a dozen other idle MCP servers); that is the expected steady state, not an incident.
+
+Before you escalate "X is hammering the API / looping / storming," confirm it with real signals — never infer it from `ps`/process-uptime alone:
+
+1. **Accumulated CPU time**, not wall-clock uptime: `ps -o pid,etime,cputime,stat,args -p <pid>`. A genuinely idle stdio server stays near-zero CPU and in `S`/`Sl` (sleeping); a busy/looping one climbs and shows `R`/`Rl`.
+2. **Real API rate-limit signals** in the logs — `RESOURCE_EXHAUSTED`, `429`, `RPCDriftError`, or repeated `studio_create`/`research_start`/`research_status` calls — over a bounded window. The prod box logs in **UTC**, and Simone's heartbeat Bash echoes its own runbook text into the journal, so apply the echo-filter `grep -vE 'python\[<gateway-pid>\]'` (or `grep -vE 'python\['`) before counting, or you'll tally command echoes as incidents.
+3. **Downstream volume in the state DB** — e.g. `sqlite3 'file:.../vp_state.db?mode=ro' "SELECT status, COUNT(*) FROM vp_missions WHERE mission_type LIKE '%wiki%' AND created_at >= datetime('now','-48 hours') GROUP BY status;"`. Bounded counts = no storm.
+
+For NotebookLM specifically: the real quota lever is the **nightly-wiki rescue driver re-dispatching FAILED `proactive_wiki` missions** (each re-dispatch re-runs the whole NotebookLM pipeline), **not** idle attached `notebooklm-mcp` servers. Diagnose the mission re-dispatch chain, not the process tree.
+
 ## The catalog (copy-pasteable, all read-only)
 
 Each command below is a single SSH round-trip. Quote the remote command so the local shell doesn't expand it. Run the discovery command **first** and substitute a real `<unit>` (e.g. `universal-agent-local-gateway.service`) into the rest.
