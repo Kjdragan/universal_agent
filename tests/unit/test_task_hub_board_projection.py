@@ -21,7 +21,10 @@ from typing import Any
 
 import pytest
 
-from universal_agent.gateway_server import _task_hub_board_projection
+from universal_agent.gateway_server import (
+    _delegated_mission_is_running,
+    _task_hub_board_projection,
+)
 
 
 def _item(**overrides: Any) -> dict[str, Any]:
@@ -129,3 +132,90 @@ def test_projection_board_lane_unchanged_by_new_fields():
         active_assignment=_active_assignment(),
     )
     assert projection["board_lane"] == "in_progress"
+
+
+# ── M3 §4.4: running delegated mission renders in_progress (display-only) ──
+
+
+def _delegated_item() -> dict[str, Any]:
+    return _item(
+        status="delegated",
+        metadata={"delegation": {"delegate_target": "vp.general.primary"}},
+    )
+
+
+def test_delegated_running_mission_renders_in_progress():
+    """A delegated task whose VP mission is RUNNING shows in the in_progress
+    lane with the delegate (ATLAS) named — display-only, status stays delegated."""
+    projection = _task_hub_board_projection(
+        item=_delegated_item(), active_assignment=None, mission_running=True
+    )
+    assert projection["board_lane"] == "in_progress"
+    # The delegate target is still surfaced as the assignee on the card.
+    assert projection["assigned_agent_id"] == "vp.general.primary"
+    # assignment_state stays 'delegated' (no fake active-assignment promotion).
+    assert projection["assignment_state"] == "delegated"
+
+
+def test_delegated_queued_mission_stays_not_assigned():
+    """A delegated task whose mission has NOT been picked up (no live lease)
+    stays in not_assigned — the prior behaviour."""
+    projection = _task_hub_board_projection(
+        item=_delegated_item(), active_assignment=None, mission_running=False
+    )
+    assert projection["board_lane"] == "not_assigned"
+    assert projection["assigned_agent_id"] == "vp.general.primary"
+
+
+def test_delegated_mission_running_defaults_false():
+    """mission_running defaults False, so existing callers keep not_assigned."""
+    projection = _task_hub_board_projection(item=_delegated_item(), active_assignment=None)
+    assert projection["board_lane"] == "not_assigned"
+
+
+def test_pending_review_never_promoted_to_in_progress():
+    """pending_review (VP done, awaiting Simone) must stay needs_review even if
+    a (stale) running flag is passed — only status='delegated' is promoted."""
+    item = _item(status="pending_review", metadata={"delegation": {"delegate_target": "vp.general.primary"}})
+    projection = _task_hub_board_projection(item=item, active_assignment=None, mission_running=True)
+    assert projection["board_lane"] == "needs_review"
+
+
+def test_open_task_never_promoted_by_mission_running():
+    """A non-delegated open task is unaffected by mission_running."""
+    item = _item(status="open", metadata={})
+    projection = _task_hub_board_projection(item=item, active_assignment=None, mission_running=True)
+    assert projection["board_lane"] == "not_assigned"
+
+
+# ── _delegated_mission_is_running: mission-id fallback chain + gates ──
+
+
+def test_delegated_running_resolves_via_delegation_mission_id():
+    """Primary key — delegation.mission_id (same key the completion bridge uses)."""
+    item = _item(status="delegated", metadata={"delegation": {"mission_id": "vp-mission-A"}})
+    assert _delegated_mission_is_running(item, {"vp-mission-A"}) is True
+    assert _delegated_mission_is_running(item, {"vp-mission-OTHER"}) is False
+
+
+def test_delegated_running_falls_back_to_linked_then_dispatch_mission_id():
+    """Fallbacks: top-level linked_mission_id, then dispatch.vp_mission_id."""
+    linked = _item(status="delegated", metadata={"linked_mission_id": "vp-mission-B"})
+    assert _delegated_mission_is_running(linked, {"vp-mission-B"}) is True
+    dispatch = _item(status="delegated", metadata={"dispatch": {"vp_mission_id": "vp-mission-C"}})
+    assert _delegated_mission_is_running(dispatch, {"vp-mission-C"}) is True
+
+
+def test_delegated_no_resolvable_mission_id_is_false():
+    """Delegated card with no mission id anywhere → not running (stays not_assigned)."""
+    item = _item(status="delegated", metadata={"delegation": {"delegate_target": "vp.general.primary"}})
+    assert _delegated_mission_is_running(item, {"vp-mission-A"}) is False
+
+
+def test_delegated_mission_running_guards():
+    """None/empty live set → False; non-delegated status → False even if id is live."""
+    item = _item(status="delegated", metadata={"delegation": {"mission_id": "vp-mission-A"}})
+    assert _delegated_mission_is_running(item, None) is False
+    assert _delegated_mission_is_running(item, set()) is False
+    open_item = _item(status="open", metadata={"delegation": {"mission_id": "vp-mission-A"}})
+    assert _delegated_mission_is_running(open_item, {"vp-mission-A"}) is False

@@ -462,6 +462,14 @@ py-spy) — `_run_job` calls `await asyncio.to_thread(self._finalize_workflow_at
 > thread. The other seven `_finalize_workflow_attempt` call sites run on-loop
 > and were unaffected. Regression test:
 > `tests/unit/test_cron_retry_offloop_scheduling.py`.
+>
+> *M3 update (2026-06-15): `atlas_direct_dispatch` is **retired**. Its
+> ensure-function `gateway_server.py::_ensure_atlas_direct_dispatch_cron_job` now
+> DELETEs the persisted cron row (`_cron_service.delete_job`) rather than
+> registering a `*/1` job — the prefer-ATLAS lane is taken over by the M2
+> `services/priority_dispatcher.py` (`classify_task` / `dispatch_claimed`, still
+> flag-gated and default-OFF). The gotcha's general point stands for the other
+> lightweight crons (e.g. `hackernews_snapshot`).*
 
 > **Phantom-reap gotcha (fixed 2026-06-03).** In-process LLM crons run inside the
 > daemon and their Task Hub assignment carries **no `provider_session_id`** (the

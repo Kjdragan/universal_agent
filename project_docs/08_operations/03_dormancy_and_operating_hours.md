@@ -235,8 +235,31 @@ each with a row here:
 
 | Exception (interval, 24/7) | Why it runs 24/7 |
 |---|---|
-| `atlas_direct_dispatch` | every-60s dispatcher (Hermes Phase C); latency-sensitive — Atlas-eligible tasks must dispatch within ~60s, not wait for 6 AM. Default OFF via `UA_ATLAS_DIRECT_DISPATCH_ENABLED=0` |
 | `simone_chat_auto_complete` | every-60s SQLite-only housekeeping promoting idle `simone_chat` rows to completed; a chat started near 9 PM would otherwise stay `in_progress` overnight and pollute the dashboard |
+
+> **RETIRED (M3, 2026-06-15):** `atlas_direct_dispatch` (the every-60s Hermes
+> Phase C dispatcher) was previously a documented 24/7 exception here. M3 retired
+> the standalone cron — its registration helper
+> `gateway_server.py::_ensure_atlas_direct_dispatch_cron_job` no longer registers a
+> `*/1` schedule; it now **deletes** the persisted `cron_jobs.json` row via
+> `_cron_service.delete_job` (the plain `enabled=False` disable-on-flip did not
+> durably stop the live prod row). Because it no longer registers an interval
+> schedule, it is no longer parsed as an interval cron and needs no dormancy
+> exception — its entry was removed from `DOCUMENTED_EXCEPTIONS` in
+> `tests/unit/test_cron_dormancy_defaults.py` in the same PR. The dispatch path it
+> served is now owned by the M2 Pythonic priority dispatcher
+> (`services/priority_dispatcher.py::classify_task` + `::dispatch_claimed`,
+> prefer-ATLAS `metadata.preferred_vp = "vp.general.primary"` lane), which remains
+> **flag-gated and default-OFF in production** (`UA_PRIORITY_DISPATCHER_ENABLED`
+> master + `UA_DISPATCHER_PREFER_ATLAS` Stage-B lane — M3 prepared a staged
+> operator-gated enable but did **not** flip either flag). The service module
+> `services/atlas_direct_dispatch.py` is kept importable
+> (`heartbeat_service` still reads `list_recent_atlas_direct_dispatches` for
+> Simone's briefing). Retiring the cron also removed its per-fire
+> `request_heartbeat_next` coupling-wake
+> (`gateway_server.py::_maybe_wake_heartbeat_after_autonomous_cron`, ~60/hr); the
+> only remaining per-minute autonomous cron feeding that coupling is
+> `simone_chat_auto_complete` (still `*/1`).
 
 **(b) Fixed-time crons run as scheduled** — a cron pinned to one or a few
 discrete times (e.g. `nightly_wiki` at 3:15 AM, feeding the 6:30 AM briefing)
@@ -310,7 +333,7 @@ guard tests in `tests/unit/test_cron_dormancy_defaults.py` keep this honest.
 | `cron_artifact_reminders_sweep` | `*/30 6-21` | Windowed (also self-gates per reminder) | — |
 | `vp_mission_pr_reconciler` | `*/15 6-20` | Windowed (job-specific 6–20) | — |
 | `hackernews_snapshot` | `0,30 6-21` | Windowed (source currently parked) | — |
-| `atlas_direct_dispatch` | `*/1 * * * *` | **24/7** — documented exception (latency-sensitive); default OFF | always 24/7 |
+| ~~`atlas_direct_dispatch`~~ | — | **RETIRED (M3, 2026-06-15)** — no longer registers a `*/1` schedule; its ensure-function deletes the row, so it is no longer a dormancy-exception interval cron (see the retirement note above) | — |
 | `simone_chat_auto_complete` | `*/1 * * * *` | **24/7** — documented exception (operator-facing state) | always 24/7 |
 
 ### Fixed-time crons — run as scheduled (dormancy does not apply)

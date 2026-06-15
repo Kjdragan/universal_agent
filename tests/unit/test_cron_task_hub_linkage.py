@@ -603,15 +603,21 @@ def test_vp_coder_workspace_pruning_is_observed() -> None:
     )
 
 
-def test_atlas_direct_dispatch_is_observed() -> None:
-    """atlas_direct_dispatch uses ``_register_system_cron_job``;
-    Ship 4 removed the ``skip_task_hub_link=True`` kwarg."""
+def test_atlas_direct_dispatch_is_retired() -> None:
+    """atlas_direct_dispatch cron is RETIRED (M3): the ensure-function now
+    DELETEs the persisted cron row instead of registering a */1 cron. The M2
+    priority_dispatcher prefer-ATLAS lane owns this dispatch path now. The plain
+    enabled=False disable-on-flip did not durably stop the live prod row, so
+    retirement is a hard delete_job (see _ensure_atlas_direct_dispatch_cron_job)."""
     excerpt = _gateway_source_excerpt(
         "_ensure_atlas_direct_dispatch_cron_job", lines_after=40,
     )
-    assert "skip_task_hub_link=True" not in excerpt, (
-        "atlas_direct_dispatch must no longer pass "
-        "skip_task_hub_link=True post-Ship-4"
+    assert "delete_job" in excerpt, (
+        "atlas_direct_dispatch must be retired by DELETING its cron row "
+        "(delete_job), not just disabling it"
+    )
+    assert "_register_system_cron_job" not in excerpt, (
+        "atlas_direct_dispatch must no longer register a cron — it is retired"
     )
 
 
