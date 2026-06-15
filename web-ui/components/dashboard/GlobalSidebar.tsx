@@ -24,6 +24,7 @@ import {
   Newspaper,
   Sparkles,
   Bot,
+  BookOpen,
   GraduationCap,
   Clock,
   Cpu,
@@ -95,6 +96,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard/csi/rss", label: "CSI Watchlist · YT", icon: ListTodo },
       { href: "/dashboard/csi/discord", label: "CSI Watchlist · Discord", icon: MessageSquare },
       { href: "/dashboard/tutorials", label: "Tutorials", icon: GraduationCap },
+      { href: "/dashboard/wiki-vaults", label: "Wiki Vaults", icon: BookOpen },
     ],
   },
   {

@@ -16787,6 +16787,55 @@ async def factory_capabilities(request: Request):
     return result
 
 
+# ── Wiki Vault Explorer (Spec B) — read-only enumeration + graph + page reader ──
+
+
+@app.get("/api/v1/wiki/vaults")
+async def wiki_vaults_list(request: Request):
+    """List every LLM wiki vault (across memory/wiki and artifacts/nightly_wikis)."""
+    _require_ops_auth(request)
+    from universal_agent.wiki.explorer import list_vaults
+
+    try:
+        vaults = list_vaults()
+    except Exception as exc:
+        logger.exception("wiki vaults list failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"status": "ok", "vaults": vaults}
+
+
+@app.get("/api/v1/wiki/vaults/{slug}")
+async def wiki_vault_detail(request: Request, slug: str):
+    """Vault metadata + force-graph (nodes=pages, edges=wikilinks) + page index."""
+    _require_ops_auth(request)
+    from universal_agent.wiki.explorer import vault_detail
+
+    try:
+        detail = vault_detail(slug)
+    except Exception as exc:
+        logger.exception("wiki vault detail failed (slug=%s): %s", slug, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    if detail is None:
+        raise HTTPException(status_code=404, detail="vault not found")
+    return {"status": "ok", **detail}
+
+
+@app.get("/api/v1/wiki/vaults/{slug}/page")
+async def wiki_vault_page(request: Request, slug: str, path: str):
+    """One page's markdown + backlinks. `path` is sanitized against traversal."""
+    _require_ops_auth(request)
+    from universal_agent.wiki.explorer import read_vault_page
+
+    try:
+        page = read_vault_page(slug, path)
+    except Exception as exc:
+        logger.exception("wiki vault page failed (slug=%s path=%s): %s", slug, path, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    if page is None:
+        raise HTTPException(status_code=404, detail="page not found")
+    return {"status": "ok", "page": page}
+
+
 class LiveChromeSettingsRequest(BaseModel):
     enabled: bool
     cdp_url: str = ""
