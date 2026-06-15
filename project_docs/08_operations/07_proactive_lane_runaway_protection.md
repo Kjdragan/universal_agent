@@ -31,14 +31,19 @@ notebooks** (109 identically titled "Hierarchical Planning for Long Context Agen
 
 Two independent failures combined:
 
-1. **The runaway mechanism.** The single nightly `proactive_wiki` mission dispatched to ATLAS stalled with
-   `stale_claim_expired` (the agent's claim lapsed before the slow NotebookLM work finished — root cause a
-   persistent **ZAI 429 throttle**, not a transient blip). `wiki_rescue_policy.py::_is_transient` classifies
-   `stale_claim_expired` as transient, so `wiki_rescue_driver.py::maybe_rescue_failed_wiki_mission`
-   re-dispatched it. The re-dispatch path (`vp_orchestration.py::_vp_dispatch_mission_redispatch_fresh_impl`)
-   mints a **fresh `mission_id`** via a UUID-suffixed idempotency key, which resets the per-mission retry
-   budget (`wiki_rescue_policy.py::MAX_ATLAS_RETRIES`). With no aggregate ceiling, "max 2 retries" became
-   effectively unbounded, and each fresh ATLAS (ZAI) mission re-ran the NotebookLM pipeline.
+1. **The runaway mechanism — an *inner* per-mission loop, not unbounded re-dispatch.** The single nightly
+   `proactive_wiki` mission stalled with `stale_claim_expired` (the agent's claim lapsed before the slow
+   NotebookLM work finished — root cause a persistent **ZAI 429 throttle**). The rescue path retried it, but
+   the **rescue budget held**: production forensics for 2026-06-14 show only **4 `proactive_wiki` missions in
+   one rescue chain of 3** (failed → failed → completed). `vp_orchestration.py::_next_chain_id` preserves the
+   `rescue_chain_id` across re-dispatch and `vp_failure_rescue.py::_count_chain_failures` accumulates it, so
+   `wiki_rescue_policy.py::decide_wiki_rescue` escalates past `MAX_TOTAL_RESCUES`. (The UUID in the rescue
+   idempotency key is only there to permit a genuinely fresh workspace; it does **not** reset the chain
+   count.) The ~132 notebooks instead came from the **inner loop**: each flailing mission's ATLAS agent ran
+   `nlm notebook create` repeatedly — creating a *new* notebook on every retry of its research/studio steps
+   instead of reusing the one it made (~33 notebooks/mission). The wiki mission runs as a `claude --print`
+   subprocess (`vp/clients/claude_cli_client.py`), so it is outside the in-process `hooks.py` PreToolUse
+   path — a hook-level cap there would not fire for it.
 
 2. **The detection blind spot.** Every probe in `proactive_pipeline_invariants.py` was, until this change, a
    **freshness / silence** check — it fires when a lane goes *quiet*. `nightly_wiki_persistent_silence` only
@@ -100,28 +105,52 @@ Design choices:
 3. Clean up any duplicate external artifacts (e.g. `nlm notebook delete <id>` for NotebookLM).
 4. Re-enable the lane once the underlying stall (typically ZAI 429) has cleared.
 
+## What shipped: the inner-loop prevention (create-once + daily cap)
+
+Because production forensics localized the multiplier to the **inner per-mission loop** (not unbounded
+re-dispatch — the rescue budget already binds), the prevention is enforced in the one lane that creates wiki
+notebooks: `nightly_wiki_agent.py`.
+
+- **Project-wide daily hard cap** — `nightly_wiki_agent.py::_wiki_daily_hard_cap` (env
+  `UA_DAILY_PROACTIVE_WIKI_HARD_CAP`, default **3**). A deterministic dispatch-time pre-flight
+  (`_count_wiki_notebooks_today` → `_count_wikis_today_from_list`, which counts today's account notebooks via
+  `nlm notebook list --json`, excluding the `Paper to Podcast:` lane) **skips the dispatch entirely** once the
+  day's wiki notebooks reach the cap, and otherwise **clamps** this run's `wiki_count` to the remaining
+  budget. Fail-open: a transient `nlm` error counts 0 (never blocks the nightly), with the create-once
+  objective + the PR-A anomaly probes as backstops.
+- **Create-once objective hardening** — the dispatched mission objective now carries explicit HARD LIMITS:
+  create each topic's notebook **exactly once**, capture its `<id>`, **reuse** it for every later step, and
+  **never** run `nlm notebook create` again for a topic (retry with the same id or abandon after 3 failures).
+  This directly counters the retry-creates-new behavior that produced ~33 notebooks/mission. It is
+  instruction-level (the wiki agent is a `claude --print` subprocess outside the in-process hook path), backed
+  by the deterministic dispatch cap and PR-A detection.
+
+Net effect: the day's wiki-notebook creation is bounded at the cap by the deterministic pre-flight, and each
+mission is steered to a single notebook by the objective — converting the worst case from ~130/day to ≤ the
+cap. A truly machine-enforced *per-create* cap (a PreToolUse hook in the wiki subprocess's settings, or an
+`nlm` wrapper) remains the belt-and-suspenders follow-up.
+
 ## Deferred: the universal dispatch guardrail (PR B — DESIGN ONLY, NOT BUILT)
 
-> **Status: deferred by operator decision on 2026-06-14.** The detection backstop above is the chosen
-> near-term safety net. This section records the deeper *prevention* design so it can be built later without
-> re-deriving it. **None of the changes below are implemented.**
+> **Status: deferred by operator decision on 2026-06-14.** The detection backstop + the wiki-lane cap above
+> are the chosen near-term fix. This section records the deeper *generalized* prevention design so it can be
+> built later without re-deriving it. **None of the changes below are implemented.**
 
-The backstop *detects and alarms*; it does not *prevent* the storm. Prevention requires closing the
-mechanism at the shared VP-mission dispatch/rescue chokepoint, so it protects every lane at once.
+The wiki-lane cap fixes the lane that actually ran away; a *generalized* guardrail would protect every VP
+lane at the shared dispatch/rescue chokepoint. Note the rescue budget itself is **not** broken — it binds
+per chain today (verified in the incident forensics above).
 
-**Missing mechanisms (root):**
+**Missing mechanisms (root) for a generalized guardrail:**
 
-1. **No idempotent side-effects.** Each retry re-creates external state (a new NotebookLM notebook) instead of
-   resuming the prior one.
-2. **Re-dispatch resets the retry budget.** `vp_orchestration.py::_vp_dispatch_mission_redispatch_fresh_impl`
-   uses a UUID-suffixed idempotency key, so each rescue is a *new* `mission_id` with a fresh
-   `MAX_ATLAS_RETRIES`. The per-mission cap in `wiki_rescue_policy.py::decide_wiki_rescue` never accumulates
-   across the chain.
-3. **No aggregate ceiling** on (re)dispatches or side-effects per lane/topic/day that survives mission
-   re-creation.
-4. **Persistent throttle treated as transient.** `wiki_rescue_policy.py::_is_transient` retries
+1. **No idempotent side-effects at the tool boundary.** Side-effects (a NotebookLM notebook, an email) are
+   created by agent tool calls with no deterministic reuse-by-key / per-day cap a flailing agent cannot
+   bypass. The wiki-lane cap above is the lane-specific version of this.
+2. **No aggregate per-lane ceiling** on side-effects that is enforced for *every* lane (only the wiki lane has
+   one now), nor a generic per-lane/day dispatch ceiling that survives mission re-creation.
+3. **Persistent throttle treated as transient.** `wiki_rescue_policy.py::_is_transient` retries
    `stale_claim_expired` even when the cause is a sustained ZAI 429; the worker loop reports the 429 to the
-   capacity governor but does not back off or circuit-break before re-dispatching.
+   capacity governor but does not back off or circuit-break before re-dispatching. (Bounded by the rescue
+   budget today, but it still spends a few full ATLAS contexts retrying into a throttle.)
 
 **Fix sketch (surface level), all at the shared chokepoint:**
 
