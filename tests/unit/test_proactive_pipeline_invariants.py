@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import importlib
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -736,6 +737,10 @@ def test_all_ten_invariants_register_on_import() -> None:
         "paper_to_podcast_email_delivery",
         "vault_lint_contradictions_monthly",
         "proactive_brief_task_funnel",
+        # Runaway / fan-out anomaly probes (2026-06-14).
+        "nightly_wiki_artifact_volume_anomaly",
+        "proactive_mission_dispatch_storm",
+        "vp_rescue_chain_storm",
     }
     assert expected.issubset(ids)
 
@@ -834,3 +839,229 @@ def test_funnel_ignores_artifacts_outside_window() -> None:
 def test_funnel_quiet_when_no_activity_conn() -> None:
     findings = run_invariants({})
     assert _only(findings, "proactive_brief_task_funnel") == []
+
+
+# === Runaway / fan-out anomaly probes (2026-06-14) ===
+#
+# Inverse of the freshness/silence probes above: these fire when a proactive
+# lane goes LOUD (a stalled mission re-dispatched all day, each fresh ATLAS=ZAI
+# context re-running an expensive pipeline). Motivated by the nightly-wiki
+# runaway that minted ~130 NotebookLM notebooks from one intended wiki.
+
+
+def _seeded_vp_conn() -> sqlite3.Connection:
+    """In-memory activity DB with the task_hub_items columns the anomaly probes read."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE task_hub_items (
+            task_id TEXT PRIMARY KEY,
+            source_kind TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        """
+    )
+    conn.commit()
+    return conn
+
+
+def _seed_vp_missions(
+    conn: sqlite3.Connection, *, mission_type: str, n: int, hours_old: float = 1.0
+) -> None:
+    ts = (datetime.now(UTC) - timedelta(hours=hours_old)).isoformat()
+    for i in range(n):
+        conn.execute(
+            "INSERT INTO task_hub_items (task_id, source_kind, created_at, metadata_json) "
+            "VALUES (?, 'vp_mission', ?, ?)",
+            (f"vpm-{mission_type}-{i}-{hours_old}", ts, json.dumps({"mission_type": mission_type})),
+        )
+    conn.commit()
+
+
+def _seed_vp_failures(
+    conn: sqlite3.Connection,
+    *,
+    chain_id: str,
+    rows: int,
+    failure_count: int,
+    mode: str = "stale_claim_expired",
+    hours_old: float = 1.0,
+) -> None:
+    ts = (datetime.now(UTC) - timedelta(hours=hours_old)).isoformat()
+    for i in range(rows):
+        conn.execute(
+            "INSERT INTO task_hub_items (task_id, source_kind, created_at, metadata_json) "
+            "VALUES (?, 'vp_mission_failure', ?, ?)",
+            (
+                f"vpf-{chain_id}-{i}",
+                ts,
+                json.dumps(
+                    {
+                        "rescue_chain_id": chain_id,
+                        "failure_count": failure_count,
+                        "failure_mode": mode,
+                    }
+                ),
+            ),
+        )
+    conn.commit()
+
+
+def _make_wiki_files(base: Path, *, n: int, mtime_ts: float) -> None:
+    wiki = base / "nightly_wikis"
+    wiki.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        f = wiki / f"2026-06-14_wiki_report_TOPIC{i}.md"
+        f.write_text("# wiki")
+        os.utime(f, (mtime_ts, mtime_ts))
+
+
+# --- 11. nightly_wiki_artifact_volume_anomaly ---
+
+
+def test_wiki_volume_anomaly_fires_critical_on_flood(tmp_path: Path, monkeypatch) -> None:
+    """14 files in one day (the 2026-06-14 shape) > ceiling 6 → critical."""
+    now_dt = datetime(2026, 6, 14, 17, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now_dt)
+    base = tmp_path / "artifacts"
+    _make_wiki_files(base, n=14, mtime_ts=now_dt.timestamp() - 3600)
+    findings = run_invariants({"artifacts_dir": base})
+    matches = _only(findings, "nightly_wiki_artifact_volume_anomaly")
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    assert matches[0].observed_value["artifacts_today"] == 14
+    assert "looping" in (matches[0].recommendation or "").lower()
+
+
+def test_wiki_volume_anomaly_quiet_within_ceiling(tmp_path: Path, monkeypatch) -> None:
+    """One legit wiki (≈2-3 files) ≤ ceiling 6 → quiet."""
+    now_dt = datetime(2026, 6, 14, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now_dt)
+    base = tmp_path / "artifacts"
+    _make_wiki_files(base, n=2, mtime_ts=now_dt.timestamp() - 3600)
+    findings = run_invariants({"artifacts_dir": base})
+    assert _only(findings, "nightly_wiki_artifact_volume_anomaly") == []
+
+
+def test_wiki_volume_anomaly_only_counts_today(tmp_path: Path, monkeypatch) -> None:
+    """Yesterday's files don't count toward today's ceiling."""
+    now_dt = datetime(2026, 6, 14, 12, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now_dt)
+    base = tmp_path / "artifacts"
+    # 10 files but all dated yesterday → should NOT fire.
+    _make_wiki_files(base, n=10, mtime_ts=now_dt.timestamp() - 30 * 3600)
+    findings = run_invariants({"artifacts_dir": base})
+    assert _only(findings, "nightly_wiki_artifact_volume_anomaly") == []
+
+
+def test_wiki_volume_anomaly_env_override(tmp_path: Path, monkeypatch) -> None:
+    """Raising the ceiling via env suppresses a count that would otherwise fire."""
+    now_dt = datetime(2026, 6, 14, 17, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now_dt)
+    monkeypatch.setenv("UA_NIGHTLY_WIKI_VOLUME_CEILING", "20")
+    base = tmp_path / "artifacts"
+    _make_wiki_files(base, n=14, mtime_ts=now_dt.timestamp() - 3600)
+    findings = run_invariants({"artifacts_dir": base})
+    assert _only(findings, "nightly_wiki_artifact_volume_anomaly") == []
+
+
+def test_wiki_volume_anomaly_quiet_without_artifacts_dir() -> None:
+    findings = run_invariants({"artifacts_dir": None})
+    assert _only(findings, "nightly_wiki_artifact_volume_anomaly") == []
+
+
+# --- 12. proactive_mission_dispatch_storm ---
+
+
+def test_dispatch_storm_fires_on_wiki_overage() -> None:
+    """4 proactive_wiki missions in 24h > ceiling 3 → critical (the live shape)."""
+    conn = _seeded_vp_conn()
+    _seed_vp_missions(conn, mission_type="proactive_wiki", n=4)
+    findings = run_invariants({"activity_conn": conn})
+    matches = _only(findings, "proactive_mission_dispatch_storm")
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    assert matches[0].observed_value["worst"]["mission_type"] == "proactive_wiki"
+
+
+def test_dispatch_storm_quiet_within_ceiling() -> None:
+    """One nightly wiki mission ≤ ceiling 3 → quiet."""
+    conn = _seeded_vp_conn()
+    _seed_vp_missions(conn, mission_type="proactive_wiki", n=1)
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "proactive_mission_dispatch_storm") == []
+
+
+def test_dispatch_storm_ignores_high_baseline_types() -> None:
+    """High-volume Cody lanes (e.g. 'task') aren't in the ceilings dict → never fire."""
+    conn = _seeded_vp_conn()
+    _seed_vp_missions(conn, mission_type="task", n=50)
+    _seed_vp_missions(conn, mission_type="code_generation", n=30)
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "proactive_mission_dispatch_storm") == []
+
+
+def test_dispatch_storm_ignores_old_missions() -> None:
+    """Missions older than the 24h window don't count."""
+    conn = _seeded_vp_conn()
+    _seed_vp_missions(conn, mission_type="proactive_wiki", n=10, hours_old=30.0)
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "proactive_mission_dispatch_storm") == []
+
+
+def test_dispatch_storm_quiet_without_activity_conn() -> None:
+    findings = run_invariants({})
+    assert _only(findings, "proactive_mission_dispatch_storm") == []
+
+
+# --- 13. vp_rescue_chain_storm ---
+
+
+def test_rescue_chain_storm_fires_when_budget_blown() -> None:
+    """A chain whose failure_count reaches 4 (past MAX_TOTAL_RESCUES=3) → critical."""
+    conn = _seeded_vp_conn()
+    _seed_vp_failures(conn, chain_id="chainA", rows=1, failure_count=4)
+    findings = run_invariants({"activity_conn": conn})
+    matches = _only(findings, "vp_rescue_chain_storm")
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    assert matches[0].observed_value["worst"]["rescue_chain_id"] == "chainA"
+
+
+def test_rescue_chain_storm_fires_on_row_count() -> None:
+    """4 failure ROWS for one chain (even if embedded failure_count is low) → critical."""
+    conn = _seeded_vp_conn()
+    _seed_vp_failures(conn, chain_id="chainB", rows=4, failure_count=1)
+    findings = run_invariants({"activity_conn": conn})
+    matches = _only(findings, "vp_rescue_chain_storm")
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+
+
+def test_rescue_chain_storm_quiet_within_bounded_budget() -> None:
+    """failure_count 3 == the bounded escalation budget → clean exhaustion, no fire."""
+    conn = _seeded_vp_conn()
+    _seed_vp_failures(conn, chain_id="chainC", rows=1, failure_count=3)
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "vp_rescue_chain_storm") == []
+
+
+def test_rescue_chain_storm_env_override() -> None:
+    """Lowering the ceiling via env makes a bounded chain fire (tunable sensitivity)."""
+    conn = _seeded_vp_conn()
+    _seed_vp_failures(conn, chain_id="chainD", rows=1, failure_count=3)
+    import os as _os
+
+    _os.environ["UA_VP_RESCUE_CHAIN_FAILURE_CEILING"] = "3"
+    try:
+        findings = run_invariants({"activity_conn": conn})
+        assert len(_only(findings, "vp_rescue_chain_storm")) == 1
+    finally:
+        _os.environ.pop("UA_VP_RESCUE_CHAIN_FAILURE_CEILING", None)
+
+
+def test_rescue_chain_storm_quiet_without_activity_conn() -> None:
+    findings = run_invariants({})
+    assert _only(findings, "vp_rescue_chain_storm") == []
