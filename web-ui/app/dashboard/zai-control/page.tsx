@@ -200,34 +200,69 @@ type TokenProcess = {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  total_cost_usd?: number;
   retry_input_tokens: number;
   retry_multiplier: number | null;
   dormant_tokens: number;
   stages: TokenStage[];
   catalog?: StageCatalog;
+  source?: string;
 };
+
+type TokenTotals = {
+  requests: number;
+  r429: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  retry_input_tokens: number;
+  dormant_tokens: number;
+};
+
+type TokenCatalog = {
+  version?: number;
+  generated_at?: string;
+  coverage?: { described_count?: number; undescribed_count?: number; undescribed?: string[] };
+};
+
+type TokenSource = {
+  source: string;
+  label?: string;
+  available?: boolean;
+  token_events_seen?: number;
+  totals: TokenTotals;
+  processes: TokenProcess[];
+  catalog?: TokenCatalog;
+};
+
+type TrendSeries = { key: string; tokens: number[]; runs: number[] };
+type TokenTrend = { buckets: string[]; series: TrendSeries[] };
 
 type TokenUsagePayload = {
   available?: boolean;
   generated_at?: number;
   token_events_seen?: number;
-  totals?: {
-    requests: number;
-    r429: number;
-    input_tokens: number;
-    output_tokens: number;
-    total_tokens: number;
-    retry_input_tokens: number;
-    dormant_tokens: number;
-  };
+  totals?: TokenTotals;
   processes?: TokenProcess[];
-  catalog?: {
-    version?: number;
-    generated_at?: string;
-    coverage?: { described_count?: number; undescribed_count?: number; undescribed?: string[] };
-  };
+  catalog?: TokenCatalog;
+  sources?: TokenSource[];
+  consolidated?: { totals: TokenTotals; processes: TokenProcess[]; token_events_seen?: number };
+  trend?: TokenTrend;
   error?: string;
 };
+
+// Source tabs (rendered left→right). "consolidated" = all lanes summed.
+const TOKEN_SOURCES: { key: string; label: string }[] = [
+  { key: "consolidated", label: "All lanes" },
+  { key: "cli-in-process", label: "in-proc SDK" },
+  { key: "httpx-zai", label: "httpx" },
+  { key: "cli-subprocess", label: "subprocess" },
+  { key: "csi-ingester", label: "CSI" },
+];
 
 function fmtTok(n?: number | null): string {
   const v = Number(n || 0);
@@ -255,6 +290,7 @@ function verdictBadge(verdict?: string): { text: string; cls: string } | null {
 function TokenPanel() {
   const [data, setData] = useState<TokenUsagePayload | null>(null);
   const [hours, setHours] = useState<number>(24);
+  const [source, setSource] = useState<string>("consolidated");
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -275,9 +311,24 @@ function TokenPanel() {
     load(hours);
   }, [hours, load]);
 
-  const t = data?.totals;
-  const cov = data?.catalog?.coverage;
+  // Active view = the selected source (or the consolidated rollup across all lanes).
+  // Falls back to the legacy top-level keys when the backend predates sources[].
+  const activeSrc =
+    source === "consolidated"
+      ? null
+      : (data?.sources || []).find((s) => s.source === source) || null;
+  const t: TokenTotals | undefined =
+    source === "consolidated"
+      ? data?.consolidated?.totals ?? data?.totals
+      : activeSrc?.totals ?? data?.totals;
+  const procs: TokenProcess[] =
+    source === "consolidated"
+      ? data?.consolidated?.processes ?? data?.processes ?? []
+      : activeSrc?.processes ?? [];
+  const cov = (source === "consolidated" ? data?.catalog : activeSrc?.catalog)?.coverage;
   const noTokens = data && data.available && (data.token_events_seen ?? 0) === 0;
+  // Available source keys present in the payload (so we only show tabs with data).
+  const presentSources = new Set((data?.sources || []).map((s) => s.source));
 
   return (
     <section className="rounded-md border border-border bg-card p-4">
@@ -313,14 +364,73 @@ function TokenPanel() {
 
       {data?.error ? <p className="text-xs text-red-500">token usage unavailable: {data.error}</p> : null}
 
+      {/* Source tabs — which capture lane to view. "All lanes" = consolidated. */}
+      {(data?.sources?.length || 0) > 0 ? (
+        <div className="mb-2 flex flex-wrap items-center gap-1">
+          {TOKEN_SOURCES.filter(
+            (s) => s.key === "consolidated" || presentSources.has(s.key),
+          ).map((s) => {
+            const srcObj = (data?.sources || []).find((x) => x.source === s.key);
+            const unavailable = s.key !== "consolidated" && srcObj && srcObj.available === false;
+            return (
+              <button
+                key={s.key}
+                onClick={() => setSource(s.key)}
+                title={srcObj?.label || (s.key === "consolidated" ? "all lanes summed (cache-inclusive)" : s.key)}
+                className={`rounded px-2 py-0.5 text-[11px] ${
+                  source === s.key
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted/40 text-muted-foreground hover:bg-muted"
+                } ${unavailable ? "opacity-40" : ""}`}
+              >
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
       {t ? (
         <p className="mb-2 text-xs text-muted-foreground">
           window total: <span className="text-foreground">{t.requests}</span> calls ·{" "}
           <span className="text-foreground">{fmtTok(t.input_tokens)}</span> in /{" "}
           <span className="text-foreground">{fmtTok(t.output_tokens)}</span> out /{" "}
-          <span className="text-foreground">{fmtTok(t.total_tokens)}</span> total · {t.r429} × 429 · retry-waste{" "}
+          <span className="font-medium text-foreground">{fmtTok(t.total_tokens)}</span> total{" "}
+          <span className="text-[10px]">(incl cache)</span> · cache-read{" "}
+          <span className="text-foreground">{fmtTok(t.cache_read_input_tokens)}</span> · {t.r429} × 429 · retry-waste{" "}
           <span className="text-amber-500">{fmtTok(t.retry_input_tokens)}</span> in · dormant {fmtTok(t.dormant_tokens)}
         </p>
+      ) : null}
+
+      {/* Per-day token trend (cache-inclusive) — spot trajectories & runaway spikes. */}
+      {(data?.trend?.series?.length || 0) > 0 ? (
+        <div className="mb-3 rounded border border-border/50 bg-muted/10 p-2">
+          <p className="mb-1 text-[11px] text-muted-foreground">
+            Per-day token trend (cache-incl) — top principals over {data?.trend?.buckets.length}d
+          </p>
+          <div className="space-y-0.5">
+            {(data?.trend?.series || []).map((s) => {
+              const max = Math.max(1, ...s.tokens);
+              const sum = s.tokens.reduce((a, b) => a + b, 0);
+              return (
+                <div key={s.key} className="flex items-center gap-2">
+                  <span className="w-32 shrink-0 truncate text-[11px]" title={s.key}>{s.key}</span>
+                  <div className="flex h-6 flex-1 items-end gap-0.5">
+                    {s.tokens.map((v, i) => (
+                      <div
+                        key={i}
+                        title={`${data?.trend?.buckets[i]}: ${fmtTok(v)} · ${s.runs[i]} runs`}
+                        className="min-w-[6px] flex-1 bg-primary/60 hover:bg-primary"
+                        style={{ height: `${Math.max(2, Math.round((v / max) * 24))}px` }}
+                      />
+                    ))}
+                  </div>
+                  <span className="w-14 shrink-0 text-right text-[10px] text-muted-foreground">{fmtTok(sum)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       ) : null}
 
       {noTokens ? (
@@ -346,18 +456,22 @@ function TokenPanel() {
             </tr>
           </thead>
           <tbody>
-            {(data?.processes || []).map((p) => {
+            {procs.map((p) => {
               const vb = verdictBadge(p.catalog?.tier_verdict);
-              const isOpen = !!expanded[p.caller];
+              const rowKey = `${p.source || source}:${p.caller}`;
+              const isOpen = !!expanded[rowKey];
               return (
-                <Fragment key={p.caller}>
+                <Fragment key={rowKey}>
                   <tr
                     className="cursor-pointer border-b border-border/50 hover:bg-muted/30"
-                    onClick={() => setExpanded((e) => ({ ...e, [p.caller]: !e[p.caller] }))}
+                    onClick={() => setExpanded((e) => ({ ...e, [rowKey]: !e[rowKey] }))}
                   >
                     <td className="py-1 pr-2">
                       <span className="text-muted-foreground">{isOpen ? "▾" : "▸"}</span>{" "}
                       <span className="font-medium">{p.catalog?.label || shortCaller(p.caller)}</span>
+                      {source === "consolidated" && p.source ? (
+                        <span className="ml-1 rounded bg-sky-500/15 px-1 text-[10px] text-sky-400">{p.source}</span>
+                      ) : null}
                       {vb ? <span className={`ml-1 rounded px-1 text-[10px] ${vb.cls}`}>{vb.text}</span> : null}
                       {p.catalog?.stale ? (
                         <span

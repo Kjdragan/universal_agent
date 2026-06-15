@@ -17094,7 +17094,8 @@ async def ops_zai_token_usage(request: Request):
     except Exception as exc:  # noqa: BLE001 — must degrade, not crash
         logger.warning("ops_zai_token_usage: aggregator raised", exc_info=True)
         return {"error": f"token_usage_unavailable: {type(exc).__name__}",
-                "processes": [], "totals": {}, "catalog": {}}
+                "processes": [], "totals": {}, "catalog": {},
+                "sources": [], "consolidated": {}, "trend": {"buckets": [], "series": []}}
 
 
 class ZaiControlRequest(BaseModel):

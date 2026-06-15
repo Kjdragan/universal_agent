@@ -302,15 +302,10 @@ def analyze_token_usage(now: float, window_seconds: int, top_n: int = 25) -> dic
     return out
 
 
-def build_token_usage(window_seconds: int, top_n: int = 25) -> dict[str, Any]:
-    """`analyze_token_usage` + the pre-built function catalog joined onto every
-    stage — the payload the ZAI-Control token panel consumes. Read-only,
-    fail-soft, PURE PYTHON (the catalog is a committed JSON lookup; NO runtime
-    LLM). Annotates each process's stages with `{label, description, role,
-    tier_current, tier_verdict, stale}` from `zai_function_catalog`, lifts a
-    process-level catalog entry from the heaviest described stage, and reports
-    catalog `coverage` (observed stages with no description yet)."""
-    report = analyze_token_usage(time.time(), window_seconds, top_n=top_n)
+def _annotate_httpx_catalog(report: dict[str, Any]) -> None:
+    """Join the committed function catalog onto the httpx source's stages (no
+    LLM). Catalog coverage is scoped to httpx-zai — the other lanes are
+    mission/principal granularity and have no per-function catalog entry."""
     try:
         from universal_agent.services import zai_function_catalog as cat
 
@@ -334,7 +329,6 @@ def build_token_usage(window_seconds: int, top_n: int = 25) -> dict[str, Any]:
                         "notes": entry.get("notes"),
                         "stale": entry.get("stale", False),
                     }
-                    # process-level entry = the heaviest stage that is described
                     if proc_entry is None:
                         proc_entry = stage["catalog"]
                 else:
@@ -349,7 +343,83 @@ def build_token_usage(window_seconds: int, top_n: int = 25) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — catalog is optional enrichment
         logger.debug("zai_status token catalog join failed: %s", exc)
         report["catalog"] = {"version": 0, "coverage": {}, "error": type(exc).__name__}
-    return report
+
+
+def _make_cache_inclusive(report: dict[str, Any]) -> None:
+    """Recompute the httpx lane's ``total_tokens`` as cache-INCLUSIVE so it
+    matches the other sources (cache_read dominates real spend; the httpx JSONL
+    tracks cache_read but not cache_creation). Mutates in place."""
+    from universal_agent.services.token_consolidation import total_incl_cache
+
+    tt = report.get("totals") or {}
+    tt["total_tokens"] = total_incl_cache(tt)
+    for p in report.get("processes", []):
+        p["total_tokens"] = total_incl_cache(p)
+    report["processes"].sort(
+        key=lambda d: (-int(d.get("total_tokens") or 0), -int(d.get("requests") or 0))
+    )
+
+
+def build_token_usage(window_seconds: int, top_n: int = 25) -> dict[str, Any]:
+    """Consolidated, multi-lane ZAI token usage for the ZAI-Control panel.
+
+    PURE READ, fail-soft, NO LLM. Fans out across EVERY capture lane so the panel
+    shows where the **majority** of ZAI tokens actually go — not just the httpx
+    slice that the old panel saw (which structurally missed the in-process SDK
+    principals = the ~259M/day gap):
+
+      - ``httpx-zai``      — JSONL (``analyze_token_usage``) + catalog join
+      - ``cli-in-process`` — ``token_usage_events`` (Simone / VP / ATLAS)
+      - ``cli-subprocess`` — ``cody_token_usage`` (claude --print)
+      - ``csi-ingester``   — ``csi.db`` (read-only)
+
+    ``total_tokens`` is cache-INCLUSIVE everywhere (cache_read dominates). Returns
+    ``sources[]`` + ``consolidated`` + a per-day ``trend``, plus legacy top-level
+    aliases (``totals``/``processes``/``catalog``/``token_events_seen`` =
+    consolidated) so an un-upgraded UI keeps rendering. See ``token_consolidation``.
+    """
+    from universal_agent.services import token_consolidation as tc
+
+    now = time.time()
+
+    # Lane A — httpx JSONL + catalog join + cache-inclusive totals.
+    httpx_src = analyze_token_usage(now, window_seconds, top_n=top_n)
+    _annotate_httpx_catalog(httpx_src)
+    httpx_src["source"] = "httpx-zai"
+    httpx_src["label"] = tc.SOURCE_LABELS["httpx-zai"]
+    _make_cache_inclusive(httpx_src)
+
+    sources = [httpx_src]
+    for reader in (
+        tc.analyze_sink_token_usage,
+        tc.analyze_cody_token_usage,
+        tc.read_csi_token_usage,
+    ):
+        try:
+            sources.append(reader(now, window_seconds, top_n=top_n))
+        except Exception as exc:  # noqa: BLE001 — one lane must never break the panel
+            logger.debug("token source reader %s failed: %s", reader.__name__, exc)
+
+    consolidated = tc.consolidate(sources, top_n=top_n)
+    try:
+        trend = tc.build_trend(now, window_seconds)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("token trend build failed: %s", exc)
+        trend = {"buckets": [], "series": []}
+
+    return {
+        "available": True,
+        "generated_at": now,
+        "window_seconds": int(window_seconds),
+        "sources": sources,
+        "consolidated": consolidated,
+        "trend": trend,
+        # Legacy top-level aliases = consolidated (keep the old UI rendering).
+        "totals": consolidated["totals"],
+        "processes": consolidated["processes"],
+        "token_events_seen": consolidated["token_events_seen"],
+        "catalog": httpx_src.get("catalog", {"version": 0, "coverage": {}}),
+    }
 
 
 def _read_snapshot() -> dict[str, Any]:
