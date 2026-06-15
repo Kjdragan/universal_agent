@@ -84,6 +84,49 @@ BRIEF_TASK_FUNNEL_MIN_ARTIFACTS = 5  # below this it's plausibly just slow CSI i
 # builds) still produces artifacts+tasks in the artifact→task shape this guards.
 BRIEF_TASK_FUNNEL_SOURCE_KINDS = ("tutorial_build",)
 
+# ---------------------------------------------------------------------------
+# Runaway / fan-out anomaly thresholds (added 2026-06-14).
+#
+# Every probe above is a FRESHNESS / SILENCE check — it fires when a lane goes
+# QUIET (no briefing, no digest email, no wiki for 7 days). They are
+# structurally blind to the inverse: a lane going LOUD. On 2026-06-14 the
+# nightly-wiki lane did exactly that — one intended wiki ballooned into ~130
+# NotebookLM notebooks because a stalled mission (`stale_claim_expired` under
+# ZAI 429) was re-dispatched all day, each fresh ATLAS (ZAI) mission re-running
+# the NotebookLM pipeline. `nightly_wiki_persistent_silence` saw a busy day and
+# stayed green. The three probes below close that blind spot. Full context +
+# the deferred PR-B universal-guardrail design:
+# project_docs/08_operations/07_proactive_lane_runaway_protection.md
+NIGHTLY_WIKI_DAILY_VOLUME_CEILING = 6  # 1 wiki/night ≈ 2-3 files; >6 in a day = looping
+RUNAWAY_ANOMALY_WINDOW_HOURS = 24
+# Per-mission-type daily VP-dispatch ceilings for the LOW-FREQUENCY proactive
+# lanes. High-baseline Cody/convergence types (task, code_generation, analysis,
+# intel_brief) are intentionally omitted — their normal daily volume is high and
+# a flat ceiling would false-fire. A lane exceeding its ceiling is in a
+# re-dispatch storm (each mission is a full ATLAS=ZAI context window).
+PROACTIVE_MISSION_DISPATCH_CEILINGS = {
+    "proactive_wiki": 3,  # 1 nightly + a couple of bounded retries
+    "briefing": 4,        # morning + evening + a retry each
+    "freelance_scout": 5,
+}
+# A single rescue_chain whose failure_count (or failure-row count) reaches this
+# in 24h has blown past the bounded rescue budget (wiki_rescue_policy
+# MAX_TOTAL_RESCUES=3) — it is trapped in a retry storm rather than failing
+# cleanly. Lane-agnostic: catches the same shape in ANY mission_type.
+VP_RESCUE_CHAIN_FAILURE_CEILING = 4
+
+
+def _int_env(name: str, default: int) -> int:
+    """Read a non-negative int from env, falling back to ``default`` on any error."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
+
 
 def _paper_to_podcast_job_id() -> str:
     return (
@@ -950,5 +993,267 @@ def proactive_brief_task_funnel(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
         ),
         "threshold_text": (
             f"if artifacts_48h ≥ {BRIEF_TASK_FUNNEL_MIN_ARTIFACTS} then task_hub_items_48h > 0"
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 11. nightly_wiki artifact-VOLUME anomaly (runaway detection)
+# ---------------------------------------------------------------------------
+
+
+@invariant(
+    id="nightly_wiki_artifact_volume_anomaly",
+    title="Nightly wiki produced an abnormal number of artifacts today",
+    description=(
+        "Cron `nightly_wiki` is designed to produce ONE wiki per night "
+        "(UA_DAILY_PROACTIVE_WIKI_COUNT default 1 → a report + an infographic, "
+        "≈2-3 files). If more than NIGHTLY_WIKI_DAILY_VOLUME_CEILING artifact "
+        "files appear under artifacts/nightly_wikis/ in a single calendar day, "
+        "the mission is LOOPING — the rescue driver re-dispatching failed "
+        "missions (each fresh ATLAS=ZAI mission re-runs the NotebookLM pipeline) "
+        "or a bad wiki_count config. This is the runaway early-warning the "
+        "freshness/silence probe (`nightly_wiki_persistent_silence`) structurally "
+        "cannot catch — it only fires when the lane goes QUIET. Motivated by the "
+        "2026-06-14 incident: one intended wiki ballooned into ~130 NotebookLM "
+        "notebooks via an all-day re-dispatch storm."
+    ),
+    severity="critical",
+    runbook_command=(
+        "find /opt/universal_agent/artifacts/nightly_wikis/ -type f "
+        "-newermt \"$(TZ=America/Chicago date +%Y-%m-%d) 00:00\" | wc -l; "
+        "ls -lt /opt/universal_agent/artifacts/nightly_wikis/ | head -20"
+    ),
+    metadata={
+        "pipeline": "nightly_wiki",
+        "anomaly": "artifact_volume",
+        "incident": "2026-06-14 nightly-wiki rescue storm",
+    },
+)
+def nightly_wiki_artifact_volume_anomaly(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when nightly_wiki has written too many artifact files today.
+
+    Counts files matching ``*_wiki_*`` under ``nightly_wikis/`` whose mtime falls
+    in the current Houston calendar day; more than
+    ``UA_NIGHTLY_WIKI_VOLUME_CEILING`` (default ``NIGHTLY_WIKI_DAILY_VOLUME_CEILING``)
+    means the lane is looping. Read-only, fails open when the dir is absent.
+    """
+    artifacts_dir = ctx.get("artifacts_dir")
+    if artifacts_dir is None:
+        return None
+    base = Path(artifacts_dir) / "nightly_wikis"
+    if not base.exists():
+        return None
+    ceiling = _int_env("UA_NIGHTLY_WIKI_VOLUME_CEILING", NIGHTLY_WIKI_DAILY_VOLUME_CEILING)
+    today_start = _now_houston().replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff = today_start.timestamp()
+    today_files = [
+        p for p in base.glob("*_wiki_*")
+        if p.is_file() and p.stat().st_mtime >= cutoff
+    ]
+    count = len(today_files)
+    if count > ceiling:
+        return {
+            "observed_value": {
+                "artifacts_today": count,
+                "ceiling": ceiling,
+                "today": _today_houston(),
+                "samples": sorted(p.name for p in today_files)[:10],
+            },
+            "message": (
+                f"nightly_wiki produced {count} artifact files today "
+                f"(ceiling {ceiling}; ~2-3 expected for one wiki). The lane is "
+                "looping — almost certainly the wiki rescue driver re-dispatching "
+                "failed missions, each re-running the NotebookLM pipeline and "
+                "burning ZAI + Gemini quota. Pause the lane "
+                "(`systemctl disable --now universal-agent-nightly-wiki.timer`) "
+                "and inspect the rescue chain."
+            ),
+            "threshold_text": f"≤ {ceiling} nightly_wiki artifact files per calendar day",
+        }
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 12. proactive low-frequency lane DISPATCH storm (runaway detection)
+# ---------------------------------------------------------------------------
+
+
+@invariant(
+    id="proactive_mission_dispatch_storm",
+    title="A low-frequency proactive lane dispatched far more VP missions than its daily design",
+    description=(
+        "Low-frequency proactive lanes (nightly wiki, briefings, freelance scout) "
+        "dispatch a known small number of VP missions per day. "
+        "PROACTIVE_MISSION_DISPATCH_CEILINGS caps each. If a mission_type exceeds "
+        "its ceiling in the last 24h, the lane is in a dispatch storm — typically "
+        "the rescue/re-dispatch loop minting fresh missions, each a full ATLAS=ZAI "
+        "context. High-baseline Cody/convergence types are intentionally omitted. "
+        "Reads vp_mission rows in task_hub_items, grouping by metadata mission_type."
+    ),
+    severity="critical",
+    runbook_command=(
+        "sqlite3 \"$UA_ACTIVITY_DB_PATH\" \""
+        "SELECT json_extract(metadata_json,'$.mission_type') mt, COUNT(*) n "
+        "FROM task_hub_items WHERE source_kind='vp_mission' "
+        "AND created_at >= datetime('now','-24 hours') GROUP BY mt ORDER BY n DESC;\""
+    ),
+    metadata={
+        "anomaly": "dispatch_storm",
+        "tables": ["task_hub_items"],
+        "incident": "2026-06-14 nightly-wiki rescue storm",
+    },
+)
+def proactive_mission_dispatch_storm(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when a low-frequency proactive mission_type exceeds its daily dispatch ceiling.
+
+    Groups ``vp_mission`` rows in ``task_hub_items`` by metadata ``mission_type``
+    over the last ``RUNAWAY_ANOMALY_WINDOW_HOURS`` and flags any type in
+    ``PROACTIVE_MISSION_DISPATCH_CEILINGS`` whose count exceeds its ceiling.
+    Fails open on a missing connection or query error.
+    """
+    conn = ctx.get("activity_conn")
+    if conn is None:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT json_extract(metadata_json, '$.mission_type') AS mt, "
+            "COUNT(*) AS n FROM task_hub_items "
+            "WHERE source_kind = 'vp_mission' "
+            "AND created_at >= datetime('now', ?) GROUP BY mt",
+            (f"-{RUNAWAY_ANOMALY_WINDOW_HOURS} hours",),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        logger.debug("proactive_mission_dispatch_storm: query failed (%s)", exc)
+        return None
+    offenders: list[dict[str, Any]] = []
+    for mt_raw, n in (rows or []):
+        mt = str(mt_raw or "")
+        ceiling = PROACTIVE_MISSION_DISPATCH_CEILINGS.get(mt)
+        if ceiling is None:
+            continue
+        count = int(n or 0)
+        if count > ceiling:
+            offenders.append({"mission_type": mt, "count_24h": count, "ceiling": ceiling})
+    if not offenders:
+        return None
+    offenders.sort(key=lambda o: o["count_24h"] - o["ceiling"], reverse=True)
+    worst = offenders[0]
+    return {
+        "observed_value": {
+            "offenders": offenders,
+            "worst": worst,
+            "window_hours": RUNAWAY_ANOMALY_WINDOW_HOURS,
+        },
+        "message": (
+            f"Proactive lane '{worst['mission_type']}' dispatched "
+            f"{worst['count_24h']} VP missions in {RUNAWAY_ANOMALY_WINDOW_HOURS}h "
+            f"(ceiling {worst['ceiling']}). This is the rescue/re-dispatch storm "
+            "shape — each mission is a full ATLAS (ZAI) context. Pause the lane and "
+            "inspect its vp_mission_failure rescue chains."
+        ),
+        "threshold_text": "per low-frequency mission_type: daily VP-dispatch count within ceiling",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 13. VP rescue-chain failure storm (lane-agnostic runaway detection)
+# ---------------------------------------------------------------------------
+
+
+@invariant(
+    id="vp_rescue_chain_storm",
+    title="A VP mission rescue chain failed/re-dispatched abnormally often in 24h",
+    description=(
+        "When a VP mission fails (e.g. stale_claim_expired under ZAI 429) the "
+        "rescue path surfaces a vp_mission_failure row and may re-dispatch. A "
+        "single rescue_chain_id whose failure_count (or failure-row count) reaches "
+        "VP_RESCUE_CHAIN_FAILURE_CEILING in 24h has blown past the bounded rescue "
+        "budget — it is trapped in a retry storm rather than failing cleanly, the "
+        "exact mechanism behind the 2026-06-14 nightly-wiki runaway. Lane-agnostic: "
+        "catches the same shape in ANY mission_type (briefings, reports, atlas "
+        "dispatch). Reads vp_mission_failure rows in task_hub_items, grouping by "
+        "metadata rescue_chain_id."
+    ),
+    severity="critical",
+    runbook_command=(
+        "sqlite3 \"$UA_ACTIVITY_DB_PATH\" \""
+        "SELECT json_extract(metadata_json,'$.rescue_chain_id') chain, COUNT(*) rows, "
+        "MAX(CAST(json_extract(metadata_json,'$.failure_count') AS INTEGER)) max_fc "
+        "FROM task_hub_items WHERE source_kind='vp_mission_failure' "
+        "AND created_at >= datetime('now','-24 hours') GROUP BY chain "
+        "HAVING max_fc >= 4 OR rows >= 4 ORDER BY max_fc DESC;\""
+    ),
+    metadata={
+        "anomaly": "rescue_storm",
+        "tables": ["task_hub_items"],
+        "incident": "2026-06-14 nightly-wiki rescue storm",
+    },
+)
+def vp_rescue_chain_storm(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when any rescue chain blows past the bounded rescue budget in 24h.
+
+    Groups ``vp_mission_failure`` rows in ``task_hub_items`` by metadata
+    ``rescue_chain_id`` over the last ``RUNAWAY_ANOMALY_WINDOW_HOURS`` and flags
+    any chain whose failure-row count or embedded ``failure_count`` reaches
+    ``VP_RESCUE_CHAIN_FAILURE_CEILING`` (env ``UA_VP_RESCUE_CHAIN_FAILURE_CEILING``).
+    Fails open on a missing connection or query error.
+    """
+    conn = ctx.get("activity_conn")
+    if conn is None:
+        return None
+    ceiling = _int_env(
+        "UA_VP_RESCUE_CHAIN_FAILURE_CEILING", VP_RESCUE_CHAIN_FAILURE_CEILING
+    )
+    try:
+        rows = conn.execute(
+            "SELECT json_extract(metadata_json, '$.rescue_chain_id') AS chain, "
+            "COUNT(*) AS failures, "
+            "MAX(CAST(json_extract(metadata_json, '$.failure_count') AS INTEGER)) AS max_fc, "
+            "MAX(json_extract(metadata_json, '$.failure_mode')) AS mode "
+            "FROM task_hub_items WHERE source_kind = 'vp_mission_failure' "
+            "AND created_at >= datetime('now', ?) GROUP BY chain",
+            (f"-{RUNAWAY_ANOMALY_WINDOW_HOURS} hours",),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        logger.debug("vp_rescue_chain_storm: query failed (%s)", exc)
+        return None
+    storms: list[dict[str, Any]] = []
+    for chain, failures, max_fc, mode in (rows or []):
+        if chain is None:
+            continue
+        effective = max(int(failures or 0), int(max_fc or 0))
+        if effective >= ceiling:
+            storms.append({
+                "rescue_chain_id": str(chain),
+                "failure_rows": int(failures or 0),
+                "max_failure_count": int(max_fc or 0),
+                "failure_mode": str(mode or ""),
+            })
+    if not storms:
+        return None
+    storms.sort(
+        key=lambda s: max(s["failure_rows"], s["max_failure_count"]), reverse=True
+    )
+    worst = storms[0]
+    worst_n = max(worst["failure_rows"], worst["max_failure_count"])
+    return {
+        "observed_value": {
+            "storming_chains": storms[:8],
+            "chain_count": len(storms),
+            "worst": worst,
+            "ceiling": ceiling,
+            "window_hours": RUNAWAY_ANOMALY_WINDOW_HOURS,
+        },
+        "message": (
+            f"{len(storms)} VP rescue chain(s) blew past the rescue budget in "
+            f"{RUNAWAY_ANOMALY_WINDOW_HOURS}h (worst: chain "
+            f"{worst['rescue_chain_id']} at {worst_n} failures, mode "
+            f"'{worst['failure_mode']}'). A mission is trapped in a re-dispatch "
+            "storm instead of failing cleanly — each retry is a full ATLAS (ZAI) "
+            "context. This is the 2026-06-14 nightly-wiki runaway shape."
+        ),
+        "threshold_text": (
+            f"< {ceiling} failures per rescue_chain per {RUNAWAY_ANOMALY_WINDOW_HOURS}h"
         ),
     }

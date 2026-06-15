@@ -116,6 +116,7 @@ _Operating playbook, verification rules, dormancy, VPS recovery, incident patter
 - **[VPS Recovery & Security](08_operations/04_vps_recovery_and_security.md)** — Watchdog/timers, service recovery, host hardening, daily ops. _(verified 2026-06-14)_
 - **[Incident Response Patterns](08_operations/05_incident_response_patterns.md)** — Recurring incident classes + recovery: rogue autonomous branch, .venv corruption, gateway wedge, event-loop starvation. _(verified 2026-06-13)_
 - **[Self-Improving CLAUDE.md Stop Hook](08_operations/06_self_improving_claude_md_hook.md)** — Desktop-local Stop hook that reflects on each session and drafts CLAUDE.md improvement proposals for review. _(verified 2026-06-12)_
+- **[Proactive-Lane Runaway Protection](08_operations/07_proactive_lane_runaway_protection.md)** — Fan-out/volume/rescue-storm anomaly invariants that catch a proactive lane going LOUD (the 2026-06-14 nightly-wiki runaway), plus the deferred universal-dispatch-guardrail design. _(verified 2026-06-14)_
 
 ---
 
