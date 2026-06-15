@@ -27,8 +27,8 @@ import sys
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.services import proactive_artifacts as _pa
-from universal_agent.services.dormancy import should_run
 from universal_agent.services.agentmail_service import AgentMailService
+from universal_agent.services.dormancy import should_run
 from universal_agent.services.email_tags import ActionTag, KindTag
 from universal_agent.services.hourly_intel_digest import (
     compose_send_payload,

@@ -14,8 +14,8 @@ here (e.g. csi.target).
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
+import re
 
 DEV_DIR = Path(__file__).resolve().parents[2]
 SYSTEMD_DIR = DEV_DIR / "deployment" / "systemd"

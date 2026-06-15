@@ -18,6 +18,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
+from _csi_pace import pace_sleep, resolve_enrich_pace_seconds  # noqa: E402
 from csi_ingester.analytics.categories import (
     classify_and_update_category,
     normalize_existing_analysis_categories,
@@ -25,8 +26,6 @@ from csi_ingester.analytics.categories import (
 from csi_ingester.llm_auth import resolve_csi_llm_auth
 from csi_ingester.store import token_usage as token_usage_store
 from csi_ingester.store.sqlite import connect, ensure_schema
-
-from _csi_pace import pace_sleep, resolve_enrich_pace_seconds  # noqa: E402
 
 THREADS_SOURCES = ("threads_owned", "threads_trends_seeded", "threads_trends_broad")
 
