@@ -103,3 +103,12 @@ src/universal_agent/scripts/deslop_remediation_dispatch.py
 # the worker-exit/PID protocol does not apply. Mirrors the factory local-service-control
 # pattern. (ZAI activity controls, 2026-06-11)
 src/universal_agent/services/zai_activity_control.py
+
+# nightly_wiki_agent.py [rationale (a) — not a task unit]: its ONLY subprocess use is a
+# single ephemeral read-only `nlm notebook list --json` at dispatch time, to count today's
+# wiki notebooks for the project-wide daily hard cap (the 2026-06-14 runaway fix). No
+# long-running PID to classify and no task_hub_items row — it is a pre-flight count, not a
+# tracked unit of work — so the worker-exit/PID protocol does not apply. The actual wiki work
+# runs in the dispatched VP mission (already protocol-wired), not in this script.
+# (proactive-lane runaway protection, 2026-06-14)
+src/universal_agent/scripts/nightly_wiki_agent.py
