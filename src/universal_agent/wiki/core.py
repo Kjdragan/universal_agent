@@ -724,6 +724,7 @@ def wiki_ingest_external_source(
     root_override: str | None = None,
     facets: dict[str, Any] | None = None,
     defer_index: bool = False,
+    materialize_graph: bool | None = None,
 ) -> dict[str, Any]:
     """Ingest external content, enriching it via LLM semantic extraction.
 
@@ -738,6 +739,15 @@ def wiki_ingest_external_source(
     refreshes on each call, so this skips the *additional* per-source rebuild).
     Deferring is behavior-equivalent because the index/overview are derived purely
     from files on disk; the driver's final rebuild includes the last page written.
+
+    ``materialize_graph`` turns the extracted entities/concepts (which would
+    otherwise live only as frontmatter *tags* on the source page) into real
+    ``entities/<slug>.md`` / ``concepts/<slug>.md`` pages with within-vault
+    wikilinks — so the vault is a navigable knowledge graph, not a one-page seed.
+    Deterministic (no extra LLM calls by default — stub bodies are templated; set
+    ``UA_WIKI_MATERIALIZE_DESCRIPTIONS=1`` for one batched gloss call). ``None``
+    (the default) resolves from ``UA_WIKI_MATERIALIZE_GRAPH`` (default ON); pass
+    ``False`` to force a seed-only ingest. See ``_materialize_graph``.
     """
     context = ensure_vault("external", vault_slug, root_override=root_override)
 
@@ -765,17 +775,52 @@ def wiki_ingest_external_source(
     dest = context.path / "sources" / f"{slug}.md"
     _write_page(dest, meta, source_content)
 
+    if materialize_graph is None:
+        materialize_graph = _env_flag("UA_WIKI_MATERIALIZE_GRAPH", default=True)
+    graph_stats: dict[str, Any] | None = None
+    if materialize_graph:
+        descriptions: dict[str, str] | None = None
+        if _env_flag("UA_WIKI_MATERIALIZE_DESCRIPTIONS", default=False):
+            try:
+                from universal_agent.wiki.llm import describe_terms_batch
+
+                descriptions = describe_terms_batch(
+                    [*entities, *concepts],
+                    source_title=source_title,
+                    context_text=source_content,
+                )
+            except Exception as exc:  # pragma: no cover - optional enrichment
+                logger.warning("wiki_materialize_descriptions failed: %s", exc)
+                descriptions = None
+        try:
+            graph_stats = _materialize_graph(
+                context.path,
+                source_rel_path=_relative(dest, context.path),
+                source_title=source_title,
+                source_id=source_id,
+                entities=entities,
+                concepts=concepts,
+                descriptions=descriptions,
+            )
+        except Exception as exc:
+            # Materialization is additive; a failure must never lose the source.
+            logger.warning("wiki_materialize_graph failed (vault=%s): %s", vault_slug, exc)
+            graph_stats = {"error": str(exc)}
+
     if not defer_index:
         update_index(context.path)
         refresh_overview(context.path)
 
-    return {
+    result: dict[str, Any] = {
         "status": "success",
         "path": _relative(dest, context.path),
         "entities": entities,
         "concepts": concepts,
-        "summary": summary
+        "summary": summary,
     }
+    if graph_stats is not None:
+        result["graph"] = graph_stats
+    return result
 
 
 # ── Memex update primitives (PR 2 of v2 plan) ────────────────────────────────
@@ -1078,6 +1123,161 @@ def memex_apply_action(
         "page_rel_path": rel,
         "snapshot_path": str(snapshot_path) if snapshot_path else None,
         "reason": reason or section_label or source_title or "",
+    }
+
+
+# ── Graph materialization (turn extracted tags into linked entity/concept pages) ──
+#
+# `wiki_ingest_external_source` extracts entities/concepts but historically wrote
+# them ONLY as frontmatter tags on the single source page, leaving entities/ and
+# concepts/ empty — every vault was a one-page seed with no edges. `_materialize_graph`
+# closes that gap deterministically (no LLM by default): one page per entity/concept,
+# a `## Sources` backlink on each, and `## Entities` / `## Concepts` wikilink sections
+# on the source page. Per-topic vaults only — no cross-vault linking (operator
+# decision 2026-06-15). The whole pass runs inside the ingest code path (not the
+# VP objective prompt) so it can never loop the way prompt-driven creation did.
+
+DEFAULT_MAX_MATERIALIZED_ENTITIES = 25
+DEFAULT_MAX_MATERIALIZED_CONCEPTS = 15
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _max_materialized(env_name: str, default: int) -> int:
+    raw = str(os.getenv(env_name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
+
+
+def _dedupe_by_slug(names: list[str], cap: int, *, label: str) -> list[str]:
+    """Drop blanks, dedupe by slug (so 'GLM-5'/'GLM 5' collapse), cap with a log."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in names:
+        name = str(raw or "").strip()
+        if not name:
+            continue
+        slug = _slugify(name, fallback="")
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        out.append(name)
+    if cap >= 0 and len(out) > cap:
+        logger.info("wiki_materialize_truncate kind=%s cap=%d total=%d", label, cap, len(out))
+        out = out[:cap]
+    return out
+
+
+def _append_link_sections(page_path: Path, sections: list[tuple[str, list[str]]]) -> None:
+    """Append `## <title>` wikilink sections to a page body in ONE rewrite.
+
+    Idempotent per link line: a link already present in the body is never
+    duplicated (covers a same-source re-ingest, though the source page is normally
+    rewritten fresh before this runs).
+    """
+    if not page_path.exists():
+        return
+    meta, body = _frontmatter_and_body(page_path)
+    body = body.rstrip()
+    changed = False
+    for title, links in sections:
+        fresh = [ln for ln in links if ln.strip() and ln not in body]
+        if not fresh:
+            continue
+        header = f"## {title}"
+        if header not in body:
+            body += f"\n\n{header}\n"
+        body += "\n" + "\n".join(fresh) + "\n"
+        changed = True
+    if changed:
+        _write_page(page_path, meta, body)
+
+
+def _materialize_graph(
+    vault_path: Path,
+    *,
+    source_rel_path: str,
+    source_title: str,
+    source_id: str,
+    entities: list[str],
+    concepts: list[str],
+    descriptions: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Materialize entity/concept pages + within-vault wikilinks for one source.
+
+    For each (capped, deduped) entity/concept: CREATE a stub page, or — if it
+    already exists from an earlier ingest — EXTEND it with a backlink to this
+    source. Then append `## Entities` / `## Concepts` wikilink sections to the
+    source page. Every page carries a deterministic ``summary`` so the index/
+    overview rescans never trigger the per-page ``generate_summary`` LLM call.
+    Returns counts for the ingest payload.
+    """
+    descriptions = descriptions or {}
+    ent_names = _dedupe_by_slug(
+        list(entities or []),
+        _max_materialized("UA_WIKI_MAX_MATERIALIZED_ENTITIES", DEFAULT_MAX_MATERIALIZED_ENTITIES),
+        label="entity",
+    )
+    con_names = _dedupe_by_slug(
+        list(concepts or []),
+        _max_materialized("UA_WIKI_MAX_MATERIALIZED_CONCEPTS", DEFAULT_MAX_MATERIALIZED_CONCEPTS),
+        label="concept",
+    )
+
+    source_backlink = f"- [[{source_rel_path}|{source_title}]]"
+    created = 0
+    extended = 0
+    ent_links: list[str] = []
+    con_links: list[str] = []
+
+    for kind, names, links in (("entity", ent_names, ent_links), ("concept", con_names, con_links)):
+        directory = MEMEX_KIND_TO_DIR[kind]
+        for name in names:
+            slug = _slugify(name, fallback="page")
+            rel = f"{directory}/{slug}.md"
+            gloss = str(descriptions.get(name) or "").strip()
+            if memex_page_exists(vault_path, kind, name):
+                _ensure_section_link(vault_path / rel, "Sources", source_backlink)
+                extended += 1
+            else:
+                stub_body = (
+                    f"# {name}\n\n"
+                    + (f"{gloss}\n\n" if gloss else "")
+                    + "## Sources\n\n"
+                    + f"{source_backlink}\n"
+                )
+                memex_create_page(
+                    vault_path,
+                    kind,
+                    name,
+                    stub_body,
+                    source_id=source_id,
+                    # source_title -> page `summary` frontmatter (keeps index
+                    # rescans LLM-free); use the gloss when we have one.
+                    source_title=gloss or f"{name} — referenced in {source_title}",
+                    tags=[kind, "auto-materialized"],
+                )
+                created += 1
+            links.append(f"- [[{rel}|{name}]]")
+
+    _append_link_sections(
+        vault_path / source_rel_path,
+        [("Entities", ent_links), ("Concepts", con_links)],
+    )
+    return {
+        "entities_materialized": len(ent_names),
+        "concepts_materialized": len(con_names),
+        "pages_created": created,
+        "pages_extended": extended,
     }
 
 

@@ -119,7 +119,10 @@ async def wiki_lint_wrapper(args: dict[str, Any]) -> dict[str, Any]:
         "`external` wiki vault, enriching it with LLM-extracted entities, concepts, and a "
         "summary and writing it under sources/. This is 'step 6' of the Create-Wiki flow — "
         "the verb that persists the NLM report into the knowledge vault. Pass the report body "
-        "as `source_content` and a human title as `source_title`."
+        "as `source_content` and a human title as `source_title`. By default it also "
+        "MATERIALIZES the knowledge graph: one entities/<slug>.md and concepts/<slug>.md page "
+        "per extracted term, wikilinked from the source page (so the vault is navigable, not a "
+        "one-page seed). Pass materialize_graph=false to write a seed-only source page."
     ),
     input_schema={
         "vault_slug": str,
@@ -127,6 +130,7 @@ async def wiki_lint_wrapper(args: dict[str, Any]) -> dict[str, Any]:
         "source_content": str,
         "source_id": str,
         "root_override": str,
+        "materialize_graph": bool,
     },
 )
 async def wiki_ingest_external_source_wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -139,6 +143,10 @@ async def wiki_ingest_external_source_wrapper(args: dict[str, Any]) -> dict[str,
         return _err("source_title is required")
     if not source_content.strip():
         return _err("source_content is required")
+    # Absent key -> None -> resolve from UA_WIKI_MATERIALIZE_GRAPH (default ON).
+    materialize_graph = args.get("materialize_graph")
+    if materialize_graph is not None:
+        materialize_graph = bool(materialize_graph)
     try:
         result = wiki_ingest_external_source(
             vault_slug=vault_slug,
@@ -146,6 +154,7 @@ async def wiki_ingest_external_source_wrapper(args: dict[str, Any]) -> dict[str,
             source_content=source_content,
             source_id=str(args.get("source_id") or "").strip() or None,
             root_override=str(args.get("root_override") or "").strip() or None,
+            materialize_graph=materialize_graph,
         )
     except Exception as exc:
         return _err(str(exc))
