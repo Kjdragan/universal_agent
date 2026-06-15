@@ -1,13 +1,21 @@
 """Universal CSI source liveness invariant.
 
 One probe that watches every active CSI adapter (youtube_channel_rss,
-threads_owned, threads_trends_seeded, threads_trends_broad, hackernews,
-csi_analytics) by checking `max(occurred_at)` per source in csi.db's
-`events` table against a per-source expected-max-silence threshold.
+threads_owned, threads_trends_seeded, threads_trends_broad, hackernews) by
+checking `max(occurred_at)` per source in csi.db's `events` table against a
+per-source expected-max-silence threshold.
 
 `youtube_playlist` was dropped from monitoring 2026-06-03: the
 youtube_playlist_watcher was retired in PR #438 (daily digest is the
 canonical trigger), so it is intentionally silent and must not alert.
+
+`csi_analytics` was dropped from monitoring 2026-06-15: the three trend-report
+timers (csi-rss-trend-report, csi-global-trend-brief, csi-threads-trend-report)
+that emitted `csi_analytics` events were retired in PR #990 (their output
+duplicated the convergence pipeline), so the source is intentionally dormant
+and must not alert. The only other scripts that can emit `csi_analytics`
+(csi_validate_live_flow.py, csi_nightly_validation.py) are manual smoke/nightly
+runners with no scheduled timer, so no active producer remains.
 
 Why one invariant instead of six: the framework emits at most one finding
 per invariant. Splitting into six would create six emails per dead CSI
@@ -63,8 +71,8 @@ def effective_source_thresholds() -> Dict[str, float]:
     real outages:
       - Threads lanes while UA_CSI_THREADS_LANES_ENABLED is off (experimental,
         creds unprovisioned).
-    A retired adapter (e.g. youtube_playlist, #438) is removed from the table
-    outright; a *disabled-but-resumable* source is parked behind its flag here.
+    A retired adapter (e.g. youtube_playlist #438, csi_analytics #990) is removed
+    from the table outright; a *disabled-but-resumable* source is parked behind its flag here.
 
     hackernews is intentionally NOT parked. PR #757 (M3) parked it behind
     UA_HACKERNEWS_SNAPSHOT_ENABLED on the premise "snapshot cron disabled ⟹ HN
@@ -92,7 +100,6 @@ def effective_source_thresholds() -> Dict[str, float]:
 # given an unreachable threshold).
 SOURCE_THRESHOLDS_HOURS: Dict[str, float] = {
     "hackernews": 120.0,                 # bursty: overnight convergence /refresh pulls (the */30 snapshot cron is disabled, #734). 30d live data (2026-06-10): a legitimate-but-quiet 94h gap occurred (06-06→06-09) while HN stayed alive; the next-largest gap was 27.6h. The old 36h false-flagged that 94h bursty spell (driving the proactive_health digest to flap critical/clear). 120h clears the observed 94h max with margin while still catching a real ≥5-day HN outage.
-    "csi_analytics": 12.0,               # downstream aggregator — depends on upstream cadence
     "youtube_channel_rss": 12.0,         # 444-channel watchlist, hourly-ish per channel
     "threads_owned": 12.0,               # owned-handle polling
     "threads_trends_seeded": 24.0,       # broad seeded queries, lower cadence
@@ -173,7 +180,7 @@ def _per_source_last_seen(
             "live bursty source. 2026-06-10: widened 36h->120h — 30d live data "
             "showed a legitimate 94h bursty gap (max; next-largest 27.6h) that "
             "36h false-flagged, which also drove the proactive_health digest to "
-            "re-spam on every critical/clear flip."
+            "re-spam on every critical/clear flip. 2026-06-15: csi_analytics removed (retired #990 — the three trend-report timers that emitted it were retired; no active producer remains, the validation scripts that can still emit it are unscheduled manual runners)."
         ),
     },
 )

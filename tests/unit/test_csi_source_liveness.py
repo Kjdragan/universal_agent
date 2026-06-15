@@ -284,11 +284,11 @@ def test_completely_missing_source_emits_finding(tmp_path: Path) -> None:
         SOURCE_THRESHOLDS_HOURS,
     )
     db = tmp_path / "csi.db"
-    # All sources fresh EXCEPT csi_analytics (never seeded)
+    # All sources fresh EXCEPT youtube_channel_rss (never seeded)
     rows = [
         (source, _hours_ago(0.5))
         for source in SOURCE_THRESHOLDS_HOURS
-        if source != "csi_analytics"
+        if source != "youtube_channel_rss"
     ]
     _seed_events(db, rows)
     findings = run_invariants({"csi_db_path": db})
@@ -296,9 +296,32 @@ def test_completely_missing_source_emits_finding(tmp_path: Path) -> None:
     assert len(matches) == 1
     obs = matches[0].observed_value or {}
     stale_list = obs.get("stale_sources") or []
-    missing = [s for s in stale_list if s["source"] == "csi_analytics"]
+    missing = [s for s in stale_list if s["source"] == "youtube_channel_rss"]
     assert len(missing) == 1
     assert missing[0]["state"] == "never_seen"
+
+
+def test_csi_analytics_retired_not_monitored(tmp_path: Path) -> None:
+    """csi_analytics was retired in PR #990 (the three trend-report timers that
+    emitted it were removed). It must NOT appear in the monitored set, and a
+    stale csi_analytics row in the DB must NOT produce a finding — mirroring
+    the youtube_playlist/#438 precedent."""
+    from universal_agent.services.invariants.csi_source_liveness import (
+        SOURCE_THRESHOLDS_HOURS,
+        effective_source_thresholds,
+    )
+    assert "csi_analytics" not in SOURCE_THRESHOLDS_HOURS
+    assert "csi_analytics" not in effective_source_thresholds()
+
+    db = tmp_path / "csi.db"
+    # Every still-monitored source is fresh; a stale csi_analytics row is
+    # present but must be ignored (retired sources are not evaluated).
+    rows = [(s, _hours_ago(0.5)) for s in effective_source_thresholds()]
+    rows.append(("csi_analytics", _hours_ago(200)))  # would be stale if monitored
+    _seed_events(db, rows)
+    findings = run_invariants({"csi_db_path": db})
+    matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
+    assert matches == []
 
 
 def test_missing_csi_db_path_is_silent(tmp_path: Path) -> None:

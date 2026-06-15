@@ -510,7 +510,9 @@ hadn't written. Two heartbeat invariants now guard it
 `csi_source_liveness` separately checks `max(occurred_at)` freshness per source
 in `csi.db`. The monitored set comes from `csi_source_liveness.effective_source_thresholds`,
 which applies parking flags to the base `SOURCE_THRESHOLDS_HOURS` table: `youtube_playlist`
-was dropped (retired in PR #438; intentionally silent), and the experimental Threads lanes
+was dropped (retired in PR #438; intentionally silent), `csi_analytics` was dropped
+(retired in PR #990 — the three trend-report timers that emitted it were removed;
+no active producer remains), and the experimental Threads lanes
 (`threads_owned`, `threads_trends_seeded`, `threads_trends_broad`) are excluded unless
 `UA_CSI_THREADS_LANES_ENABLED=1` — their adapters are also `enabled: false` in the CSI
 ingester config while parked, so they neither run nor alert until re-enabled with creds.
