@@ -161,7 +161,10 @@ class TestRunBatchCycle:
         config.batch_interval_seconds = 7200
 
         with patch("csi_ingester.batch_brief._call_zai", new_callable=AsyncMock) as mock_zai:
-            mock_zai.return_value = "# AI Trends Digest\n\nThree new signals detected."
+            mock_zai.return_value = (
+                "# AI Trends Digest\n\nThree new signals detected.",
+                {"input_tokens": 1000, "output_tokens": 200, "cache_read_input_tokens": 4000},
+            )
             result = await run_batch_cycle(conn=conn, config=config, emitter=None)
 
         assert result["status"] == "generated"
@@ -171,6 +174,55 @@ class TestRunBatchCycle:
         # Check model was passed
         call_kwargs = mock_zai.call_args
         assert call_kwargs.kwargs["model"] == "glm-4.5-air"
+
+    @pytest.mark.asyncio
+    async def test_records_token_usage_when_llm_used(self, conn: sqlite3.Connection) -> None:
+        """Closes the batch_brief_claude gap: a successful LLM call records a
+        token_usage row with cache-INCLUSIVE prompt tokens."""
+        for i in range(3):
+            _insert_event(conn, f"e{i}", title=f"V{i}")
+        config = MagicMock()
+        config.batch_min_events = 3
+        config.zai_api_key = "fake-key"
+        config.zai_model = "glm-4.5-air"
+        config.batch_interval_seconds = 7200
+
+        with patch("csi_ingester.batch_brief._call_zai", new_callable=AsyncMock) as mock_zai:
+            mock_zai.return_value = (
+                "# Brief\n\nbody.",
+                {"input_tokens": 1000, "output_tokens": 200, "cache_read_input_tokens": 4000},
+            )
+            await run_batch_cycle(conn=conn, config=config, emitter=None)
+
+        row = conn.execute(
+            "SELECT process_name, model_name, prompt_tokens, completion_tokens, total_tokens "
+            "FROM token_usage WHERE process_name = 'batch_brief_claude'"
+        ).fetchone()
+        assert row is not None, "batch_brief must record a token_usage row when the LLM runs"
+        assert row["model_name"] == "glm-4.5-air"
+        assert row["prompt_tokens"] == 5000  # 1000 input + 4000 cache_read (cache-inclusive)
+        assert row["completion_tokens"] == 200
+        assert row["total_tokens"] == 5200
+
+    @pytest.mark.asyncio
+    async def test_no_token_usage_on_fallback(self, conn: sqlite3.Connection) -> None:
+        """No API key → fallback brief → NO token_usage row (don't write zeros)."""
+        for i in range(3):
+            _insert_event(conn, f"e{i}", title=f"V{i}")
+        config = MagicMock()
+        config.batch_min_events = 3
+        config.zai_api_key = ""
+        config.zai_model = "glm-4.5-air"
+        config.batch_interval_seconds = 7200
+
+        with patch("csi_ingester.batch_brief.resolve_csi_llm_auth", return_value=None):
+            result = await run_batch_cycle(conn=conn, config=config, emitter=None)
+
+        assert result["llm_used"] is False
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM token_usage WHERE process_name = 'batch_brief_claude'"
+        ).fetchone()
+        assert row["n"] == 0
 
     @pytest.mark.asyncio
     async def test_fallback_on_llm_failure(self, conn: sqlite3.Connection) -> None:
@@ -223,7 +275,7 @@ class TestRunBatchCycle:
         config.batch_interval_seconds = 7200
 
         with patch("csi_ingester.batch_brief._call_zai", new_callable=AsyncMock) as mock_zai:
-            mock_zai.return_value = "# Alt Brief\n\nQuick summary."
+            mock_zai.return_value = ("# Alt Brief\n\nQuick summary.", {})
             result = await run_batch_cycle(conn=conn, config=config, emitter=None)
 
         call_kwargs = mock_zai.call_args
@@ -249,7 +301,7 @@ class TestRunBatchCycle:
         config.batch_interval_seconds = 7200
 
         with patch("csi_ingester.batch_brief._call_zai", new_callable=AsyncMock) as mock_zai:
-            mock_zai.return_value = "# Resolver Brief\n\nGenerated via shared auth."
+            mock_zai.return_value = ("# Resolver Brief\n\nGenerated via shared auth.", {})
             result = await run_batch_cycle(conn=conn, config=config, emitter=None)
 
         assert result["llm_used"] is True

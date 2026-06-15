@@ -17,6 +17,7 @@ from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.emitter.ua_client import UAEmitter
 from csi_ingester.llm_auth import resolve_csi_llm_auth
 from csi_ingester.store import events as event_store
+from csi_ingester.store import token_usage as token_usage_store
 
 logger = logging.getLogger(__name__)
 
@@ -62,14 +63,19 @@ async def _call_zai(
     model: str = _DEFAULT_MODEL,
     base_url: str = _ZAI_BASE,
     timeout: int = 60,
-) -> str:
-    """Call an Anthropic-compatible ``/v1/messages`` chat API and return the text.
+) -> tuple[str, dict[str, Any]]:
+    """Call an Anthropic-compatible ``/v1/messages`` chat API; return ``(text,
+    usage)``.
 
     Works for both Z.AI's Anthropic-compatible endpoint (``_ZAI_BASE``) and the
     real Anthropic API (``https://api.anthropic.com``) — the request shape is
     identical; only ``base_url`` + ``model`` differ. Network calls to any remote
     chat API can stall, so the timeout is bounded and the caller falls back to
     ``_fallback_brief`` on any failure to keep brief delivery resilient.
+
+    Returns the response ``usage`` dict (input/output/cache token counts) so the
+    caller can record token spend — previously this lane discarded it, leaving
+    CSI batch-brief LLM spend untracked (the ``batch_brief_claude`` gap).
     """
     headers = {
         "x-api-key": api_key,
@@ -89,6 +95,7 @@ async def _call_zai(
         resp = await client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
         body = resp.json()
+    usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
     content_blocks = body.get("content") or []
     if not content_blocks:
         raise ValueError("Z.AI returned no content blocks")
@@ -100,7 +107,7 @@ async def _call_zai(
     text = "".join(text_parts).strip()
     if not text:
         raise ValueError("Z.AI returned empty text")
-    return text
+    return text, usage
 
 
 def _fallback_brief(rows: list[dict[str, Any]]) -> str:
@@ -193,6 +200,7 @@ async def run_batch_cycle(
     prompt = _build_prompt(rows)
     brief_md: str
     llm_used = False
+    llm_usage: dict[str, Any] = {}
 
     api_key = config.zai_api_key
     base_url = _ZAI_BASE
@@ -214,7 +222,7 @@ async def run_batch_cycle(
 
     if api_key:
         try:
-            brief_md = await _call_zai(api_key, prompt, model=model, base_url=base_url)
+            brief_md, llm_usage = await _call_zai(api_key, prompt, model=model, base_url=base_url)
             llm_used = True
         except Exception as exc:
             logger.warning("CSI batch brief LLM call failed, using fallback: %s", exc)
@@ -222,6 +230,33 @@ async def run_batch_cycle(
     else:
         logger.info("No CSI LLM API key resolved; using plain-text batch brief")
         brief_md = _fallback_brief(rows)
+
+    # Record batch-brief LLM token spend — ONLY when the LLM actually ran (skip
+    # the fallback / no-key paths so we don't write empty rows). This closes the
+    # batch_brief_claude gap: _call_zai previously discarded body["usage"], so
+    # CSI's batch-brief spend was the one CSI lane missing from csi.db. Prompt
+    # tokens are cache-INCLUSIVE (input + cache_creation + cache_read), matching
+    # the other CSI recorders. Fail-soft: telemetry must never break delivery.
+    if llm_used:
+        try:
+            u = llm_usage or {}
+            input_tokens = int(u.get("input_tokens") or 0)
+            cache_create = int(u.get("cache_creation_input_tokens") or 0)
+            cache_read = int(u.get("cache_read_input_tokens") or 0)
+            prompt_tokens = max(0, input_tokens + cache_create + cache_read)
+            completion_tokens = max(0, int(u.get("output_tokens") or 0))
+            total_tokens = int(u.get("total_tokens") or 0) or (prompt_tokens + completion_tokens)
+            token_usage_store.insert_usage(
+                conn,
+                process_name="batch_brief_claude",
+                model_name=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                metadata={"event_count": len(rows)},
+            )
+        except Exception as exc:  # noqa: BLE001 — fail-soft telemetry
+            logger.debug("batch_brief token usage record skipped: %s", exc)
 
     # Extract headline from brief — find first heading with real content
     headline = "CSI Batch Brief"
