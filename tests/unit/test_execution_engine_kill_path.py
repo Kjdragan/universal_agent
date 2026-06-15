@@ -23,7 +23,10 @@ import pytest
 pytest.importorskip("claude_agent_sdk", reason="SDK not installed")
 
 from universal_agent.agent_core import AgentEvent, EventType  # noqa: E402
-from universal_agent.execution_engine import EngineConfig, ProcessTurnAdapter  # noqa: E402
+from universal_agent.execution_engine import (  # noqa: E402
+    EngineConfig,
+    ProcessTurnAdapter,
+)
 
 
 @pytest.fixture
@@ -37,9 +40,9 @@ def _temp_dbs(tmp_path, monkeypatch):
     # the watchdog (correctly) counts as idle — a cold-start artifact, not the
     # steady-state behavior under test. Warming the conn here makes the test
     # measure the steady state.
-    import universal_agent.main as main_module
     from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
     from universal_agent.durable.migrations import ensure_schema
+    import universal_agent.main as main_module
 
     conn = connect_runtime_db(get_runtime_db_path())
     ensure_schema(conn)

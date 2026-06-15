@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
+import tempfile
 from typing import Any
 
-import pytest
-
 from csi_ingester.store.sqlite import connect, ensure_schema
+import pytest
 
 
 def _extract_transcript_error_class(transcript_result: dict[str, Any]) -> str | None:

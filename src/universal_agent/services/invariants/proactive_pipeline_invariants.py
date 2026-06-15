@@ -17,7 +17,7 @@ If either key is missing, the affected probes return None.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 from pathlib import Path
@@ -1115,13 +1115,22 @@ def proactive_mission_dispatch_storm(ctx: Dict[str, Any]) -> Optional[Dict[str, 
     conn = ctx.get("activity_conn")
     if conn is None:
         return None
+    # task_hub_items.created_at is written as datetime.now(timezone.utc).isoformat()
+    # (ISO 8601, 'T' separator, '+00:00' offset). Compare against a cutoff in that
+    # same format rather than sqlite's datetime('now', ...) — which uses a space
+    # separator. A lexicographic cross-format compare mis-orders rows when the
+    # window straddles a calendar-date boundary ('T' 0x54 > ' ' 0x20), letting
+    # old missions bleed into the window and cause false storms.
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=RUNAWAY_ANOMALY_WINDOW_HOURS)
+    ).isoformat()
     try:
         rows = conn.execute(
             "SELECT json_extract(metadata_json, '$.mission_type') AS mt, "
             "COUNT(*) AS n FROM task_hub_items "
             "WHERE source_kind = 'vp_mission' "
-            "AND created_at >= datetime('now', ?) GROUP BY mt",
-            (f"-{RUNAWAY_ANOMALY_WINDOW_HOURS} hours",),
+            "AND created_at >= ? GROUP BY mt",
+            (cutoff,),
         ).fetchall()
     except sqlite3.Error as exc:
         logger.debug("proactive_mission_dispatch_storm: query failed (%s)", exc)

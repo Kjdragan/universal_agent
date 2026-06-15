@@ -16,8 +16,7 @@ from csi_ingester.config import CSIConfig
 from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.emitter.ua_client import UAEmitter
 from csi_ingester.llm_auth import resolve_csi_llm_auth
-from csi_ingester.store import events as event_store
-from csi_ingester.store import token_usage as token_usage_store
+from csi_ingester.store import events as event_store, token_usage as token_usage_store
 
 logger = logging.getLogger(__name__)
 
