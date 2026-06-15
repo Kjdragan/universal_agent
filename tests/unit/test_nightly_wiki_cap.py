@@ -83,3 +83,38 @@ def test_hard_cap_invalid_env_falls_back(monkeypatch) -> None:
     assert nwa._wiki_daily_hard_cap() == 3
     monkeypatch.setenv("UA_DAILY_PROACTIVE_WIKI_HARD_CAP", "-2")
     assert nwa._wiki_daily_hard_cap() == 3
+
+
+# --- _resolve_nlm_cli: the systemd unit's PATH excludes ~/.local/bin, so the
+#     cap counter must resolve nlm to an absolute path or it silently no-ops. ---
+
+
+def test_resolve_nlm_cli_prefers_configured_abspath(monkeypatch, tmp_path) -> None:
+    fake = tmp_path / "nlm"
+    fake.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("UA_NOTEBOOKLM_CLI_COMMAND", str(fake))
+    assert nwa._resolve_nlm_cli() == str(fake)
+
+
+def test_resolve_nlm_cli_uses_path(monkeypatch) -> None:
+    monkeypatch.delenv("UA_NOTEBOOKLM_CLI_COMMAND", raising=False)
+    monkeypatch.setattr(nwa.shutil, "which", lambda c: "/usr/local/bin/nlm" if c == "nlm" else None)
+    assert nwa._resolve_nlm_cli() == "/usr/local/bin/nlm"
+
+
+def test_resolve_nlm_cli_falls_back_to_local_bin(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("UA_NOTEBOOKLM_CLI_COMMAND", raising=False)
+    monkeypatch.setattr(nwa.shutil, "which", lambda c: None)
+    fake = tmp_path / "nlm"
+    fake.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(
+        nwa.os.path, "expanduser", lambda p: str(fake) if p == "~/.local/bin/nlm" else p
+    )
+    assert nwa._resolve_nlm_cli() == str(fake)
+
+
+def test_resolve_nlm_cli_none_when_absent(monkeypatch) -> None:
+    monkeypatch.delenv("UA_NOTEBOOKLM_CLI_COMMAND", raising=False)
+    monkeypatch.setattr(nwa.shutil, "which", lambda c: None)
+    monkeypatch.setattr(nwa.os.path, "expanduser", lambda p: "/nonexistent/path/nlm")
+    assert nwa._resolve_nlm_cli() is None
