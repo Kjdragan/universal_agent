@@ -34,6 +34,24 @@ This model replaced an older keyword-based `qualify_agent()` deterministic route
 > flag is off (current production default), everything below this section describes live
 > behavior. When it is on, routing is owned by `services/priority_dispatcher.py` and the
 > Simone-First stamp is skipped — Simone-First becomes the legacy/fallback path.
+>
+> **M3 (2026-06-15) — redundant cron retired; staged enable prepared (flags NOT flipped).**
+> The standalone `atlas_direct_dispatch` cron is **retired**: its registration function
+> `gateway_server.py::_ensure_atlas_direct_dispatch_cron_job` no longer registers a `*/1`
+> cron — it now **DELETEs** the persisted cron row via `_cron_service.delete_job` (a plain
+> `enabled=False` disable-on-flip did not durably stop the live prod row). The
+> `metadata.preferred_vp = "vp.general.primary"` (prefer-ATLAS) lane it used to own now
+> lives in `priority_dispatcher.py::classify_task` + `::dispatch_claimed`. M3 only retires
+> the redundant cron and **prepares** a staged, operator-gated enable; it does **not** flip
+> any flag. The current production default is still **OFF** for both flags:
+> - **Stage A** — `UA_PRIORITY_DISPATCHER_ENABLED=1` with prefer-ATLAS still OFF: the
+>   dispatcher owns routing, but `metadata.preferred_vp=vp.general.primary` general/research
+>   tasks **fall back to Simone** (no degradation; decision `preferred_vp_general_simone_fallback`).
+> - **Stage B** — additionally `UA_DISPATCHER_PREFER_ATLAS=1`: `preferred_vp=vp.general.primary`
+>   now routes to **ATLAS** (decision `preferred_vp_general`).
+>
+> The service module `services/atlas_direct_dispatch.py` is **kept importable** — `heartbeat_service.py`
+> still reads `atlas_direct_dispatch.py::list_recent_atlas_direct_dispatches` for Simone's briefing.
 
 The Simone-First model funnels **every** claimed task through Simone's heavy ~1.25M-token
 heartbeat turn *just to decide who does it*. That is the dominant token cost. Decision D3
@@ -57,15 +75,35 @@ replaces routing with a **deterministic, no-LLM-in-the-hot-path priority dispatc
   heavy turn is **skipped entirely** for that tick (the D3 win).
 - **prefer-ATLAS** (`UA_DISPATCHER_PREFER_ATLAS`, default OFF) is a second, independent toggle:
   off → general/research falls back to Simone (no degradation); on → it prefers ATLAS.
+- **Coupling-wake reduction (M3 side-effect).** Each `atlas_direct_dispatch` cron fire used to emit a
+  `request_heartbeat_next` coupling-wake (`gateway_server.py::_maybe_wake_heartbeat_after_autonomous_cron`),
+  ~60/hr. Retiring the cron removes that wake source; after M3 the remaining per-minute autonomous cron
+  feeding the coupling is `simone_chat_auto_complete` (still `*/1`).
 
 Awareness is preserved: completion is recorded passively (`services/proactive_work_recap.py`) and
 VP failures escalate via `services/vp_failure_rescue.py::surface_failure_to_simone`. Simone is
 removed only from *dispatch*, not from *awareness* or *failure rescue*.
 
 The slot-counting helpers (`_vp_active_counts`, `_available_agents_for_llm_routing`,
-`_env_positive_int`) were extracted to `services/vp_capacity.py` as a shared seam imported by the
-legacy todo path, `atlas_direct_dispatch.py`, and the priority dispatcher (they are re-exported from
-`todo_dispatch_service.py` for backward compatibility).
+`_env_positive_int`) live in `services/vp_capacity.py` as a shared seam imported by the legacy todo
+path and the priority dispatcher (they are re-exported from `todo_dispatch_service.py` for backward
+compatibility). The dependency direction is one-way: `atlas_direct_dispatch.py` imports `_vp_active_counts`
+from `vp_capacity.py`, **not** the reverse — `vp_capacity.py` does not import `atlas_direct_dispatch.py`.
+With the `atlas_direct_dispatch` cron retired (M3, above), `atlas_direct_dispatch.py` is no longer a live
+dispatcher; it remains importable only for `list_recent_atlas_direct_dispatches` (Simone's briefing).
+
+### Slot decision — per-sweep cap kept; the real bound is the VP worker
+
+The dispatcher's per-agent cap (`vp_capacity.py::_vp_active_counts` vs `UA_MAX_CONCURRENT_VP_GENERAL`,
+default 2) is **per-sweep only**: a delegated task holds no active VP assignment across ticks, so this
+cap does **not** bound the number of ATLAS missions actually running. The real execution-concurrency
+bound on running ATLAS missions is the **VP worker** — `vp/worker_loop.py::VpWorkerLoop.__init__` sets
+`max_concurrent_missions` from `feature_flags.py::vp_max_concurrent_missions` (env
+`UA_VP_MAX_CONCURRENT_MISSIONS`, default 1, minimum 1). M3 **deliberately did NOT add a cross-tick
+dispatcher cap**: routing the per-sweep overflow back to Simone would re-add her heavy-turn token cost
+for no concurrency benefit (the worker is already the gate). Do **not** cite
+`vp_capacity.py::_available_agents_for_llm_routing` as THE concurrency bound — it reads the per-sweep
+caps, not the worker bound.
 
 > **Deferred-task policy (when a VP is at cap):** the decision is marked `deferred` and **left in
 > the Simone residue this tick** (handled now, exactly as today) — there is intentionally **no
@@ -212,6 +250,12 @@ When Simone delegates, she:
 > per-task `needs_review` pause for routine VP successes. See the in-code reference to
 > `docs/01_Architecture/12_VP_Goal_Integration_And_Failure_Rescue_PRD.md` § 2. Simone
 > still owns *failure* rescue, but routine success no longer round-trips through her.
+
+> **Board optics (M3 §4.4).** A delegated task whose VP mission is actively **running** now renders in
+> the dashboard `in_progress` lane (`gateway_server.py::_task_hub_board_projection` via the new
+> `mission_running` arg, set from `_serialize_task_hub_queue_item` + `_live_vp_mission_ids`). This is
+> **display-only** — the source task's status stays `delegated`, so the completion bridge
+> `task_hub.py::transition_to_pending_review` still fires.
 
 When manifests reconcile (`todo_dispatch_service.py::_reconcile_manifest_with_llm_route`):
 if the LLM route picks `AGENT_CODER`, the workflow manifest is rewritten to

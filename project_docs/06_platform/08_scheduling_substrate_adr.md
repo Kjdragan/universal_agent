@@ -77,6 +77,18 @@ universal-agent-gateway …`). The consequences:
    the deploy health-check (the 2026-05-16 incident). **"Just turn backfill on" is
    not the fix.**
 
+   > **RETIRED (M3, 2026-06-15).** The `atlas_direct_dispatch` cron is gone — its
+   > registration function `gateway_server.py::_ensure_atlas_direct_dispatch_cron_job`
+   > now **DELETEs** the persisted cron row (via `cron_service.py` `delete_job`)
+   > instead of registering the `*/1` job; the prefer-ATLAS lane is superseded by
+   > `services/priority_dispatcher.py::classify_task` + `::dispatch_claimed`
+   > (flag-gated, default-OFF in prod). The "49 % lost on `atlas_direct_dispatch`"
+   > backfill-loss figure above is historical and no longer a live concern. The
+   > service module `services/atlas_direct_dispatch.py` is **kept importable** —
+   > `heartbeat_service.py` still reads its `list_recent_atlas_direct_dispatches`
+   > for Simone's briefing. The remaining per-minute autonomous cron is
+   > `simone_chat_auto_complete` (still `*/1`).
+
 2. **Health findings reach no one on a skipped heartbeat.** The System-2 health
    invariants and the proactive-health email are coupled to Simone's heartbeat
    tick (`heartbeat_service.py::HeartbeatService._run_heartbeat`), which is itself
@@ -194,7 +206,7 @@ Legend — **Substrate**: `systemd` = `OnCalendar`+`Persistent` timer (migrate);
 | b4caa05aba | cron_artifact_reminders_sweep | `*/30 6-21` | det | 30-min | **systemd ✅ migrated (2026-06-08)** | was `in-proc?` (self-healing, optional); migrated to `universal-agent-artifact-reminders-sweep.timer` alongside its sibling `proactive_artifact_digest` when the desktop-duplicate timer was retired. ExecStart module now self-bootstraps secrets (it had inherited the gateway env in-process) |
 | 95a651abc5 | vp_mission_pr_reconciler | `*/15 6-20` | det | 15-min | **in-proc?** | self-healing reconcile; next sweep covers |
 | 2e2e40373e | simone_chat_auto_complete | `*/1` UTC | det | minute | **in-proc?** | 17 % lost but benign; control-plane (operator call) |
-| 8d0f1af6ee | atlas_direct_dispatch | `*/1` UTC | det | minute | **in-proc?** | 49 % lost but benign; control-plane dispatch (operator call) |
+| 8d0f1af6ee | atlas_direct_dispatch | `*/1` UTC | det | minute | **RETIRED (M3, 2026-06-15)** | cron row now DELETEd by `gateway_server.py::_ensure_atlas_direct_dispatch_cron_job`; superseded by `services/priority_dispatcher.py` prefer-ATLAS lane (flag-gated, default-OFF). No longer a migration candidate; the 49 % backfill-loss figure is historical |
 | 2afe05ab96 | paper_to_podcast_daily | `0 21` | **prompt** | daily | **in-proc** | needs `paper-to-podcast-tf` skill + arXiv MCP + `nlm` CLI; **cannot** be a pure timer → Decision 5 catch-up target |
 | 6df69e8e9e | — ("24 Hour Update") | `0 7` | **prompt** | daily | **drop** | overlaps `morning_briefing` (Decision 4) |
 | a652c8dce5 | — ("CODIE cleanup #1") | `30 1` | **prompt** | daily | **drop** | exact-slot duplicate of 6321bde1a9 (S4 removing) |
@@ -730,9 +742,12 @@ complementary independent of it:
    `OnCalendar`+`Persistent`; live-agent prompts + slot-benign sub-hourly loops →
    stay in-process?
 2. **Phase-A job set (Decision 1).** Approve migrating the 19 listed jobs to
-   systemd timers? Specifically: do the minute-cadence **control-plane** loops
-   (`atlas_direct_dispatch`, `simone_chat_auto_complete`) migrate too (making
-   dispatch deploy-independent), or stay in-process?
+   systemd timers? Specifically: does the minute-cadence **control-plane** loop
+   `simone_chat_auto_complete` migrate too (making dispatch deploy-independent),
+   or stay in-process? (`atlas_direct_dispatch` is **RETIRED as of M3,
+   2026-06-15** — `gateway_server.py::_ensure_atlas_direct_dispatch_cron_job`
+   now deletes its cron row, superseded by `services/priority_dispatcher.py`'s
+   prefer-ATLAS lane — so it is no longer a migration candidate.)
 3. **Mission Control extraction (Decision 2).** Approve moving `run_sweeper_loop`
    to its own `universal-agent-mission-control-sweeper.service`, excluded from the
    deploy restart list?

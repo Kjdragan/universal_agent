@@ -20517,50 +20517,44 @@ def _ensure_hackernews_snapshot_cron_job() -> Optional[dict[str, Any]]:
 
 
 def _ensure_atlas_direct_dispatch_cron_job() -> Optional[dict[str, Any]]:
-    """Hermes Phase C — independent Atlas dispatcher.
+    """RETIRED (M3, 2026-06-15) — was the Hermes Phase C independent Atlas dispatcher.
 
-    Runs every 60s to dispatch tasks tagged `metadata.preferred_vp =
-    "vp.general.primary"` directly, bypassing Simone's heartbeat throttle.
-    Default OFF: operator opts in via `UA_ATLAS_DIRECT_DISPATCH_ENABLED=1`
-    after dry-run testing. The script itself also gates on that env var so
-    accidentally-enabled crons are still a no-op.
+    Superseded by the M2 Pythonic priority dispatcher
+    (``services/priority_dispatcher.py::dispatch_claimed``), which now owns the
+    ``metadata.preferred_vp = "vp.general.primary"`` lane (prefer-ATLAS, gated by
+    ``UA_DISPATCHER_PREFER_ATLAS``). This standalone ``*/1`` cron dispatched 0
+    tasks ever, yet every fire emitted a ``request_heartbeat_next`` coupling-wake
+    (``_maybe_wake_heartbeat_after_autonomous_cron``) — so retiring it removes
+    ~60 redundant Simone heartbeat-wake couplings/hour (a north-star rate-limit
+    win; see project_docs/03_agents/02_simone_first_orchestration.md).
 
-    See `docs/reports/hermes-adaptation-phased-plan-2026-05-10.md` § Phase C.
+    Retirement mechanism — DELETE, not disable. The plain ``enabled=False``
+    disable-on-flip did NOT durably stop the live prod row (it kept firing
+    through every boot — verified 2026-06-15). So instead of re-registering a
+    disabled row we DELETE the persisted ``cron_jobs.json`` row outright via
+    ``_cron_service.delete_job``, which removes it from the scheduler, cancels
+    any in-flight retries, and persists the removal. Idempotent: a no-op once
+    the row is gone (``_find_cron_job_by_system_job`` returns ``None``). The
+    function + its boot call site are kept so this cleanup runs on every gateway
+    start until the row is gone everywhere — and so the
+    ``test_atlas_direct_dispatch_is_retired`` source-anchor survives.
+    ``services/atlas_direct_dispatch.py`` is intentionally kept importable:
+    ``heartbeat_service`` still reads ``list_recent_atlas_direct_dispatches``
+    for Simone's briefing.
     """
-    return _register_system_cron_job(
-        system_job="atlas_direct_dispatch",
-        default_cron="*/1 * * * *",
-        default_timezone="UTC",
-        command="!script universal_agent.scripts.atlas_direct_dispatch",
-        description=(
-            "Independent Atlas dispatcher for preferred_vp-tagged tasks; "
-            "bypasses Simone-heartbeat throttle (Hermes Phase C)."
-        ),
-        timeout_seconds=60,
-        # default="0" so an UNSET flag disables the cron, matching the
-        # script's own `_is_enabled()` gate (which also defaults OFF).
-        # Previously this defaulted to "1": with the flag unset in prod the
-        # cron fired every 60s (1,440 spawns/day) while the script no-opped
-        # every tick — wasted `create_subprocess_exec` calls that also fed
-        # the 6 AM event-loop spawn-pressure (EAGAIN) failures. Re-registering
-        # disabled trips the #539 disable-on-flip path and stops the row.
-        enabled=_proactive_cron_enabled(
-            "UA_ATLAS_DIRECT_DISPATCH_ENABLED", default="0"
-        ),
-        cron_env_var="UA_ATLAS_DIRECT_DISPATCH_CRON",
-        timezone_env_var="UA_ATLAS_DIRECT_DISPATCH_TIMEZONE",
-        # Ship 4 (Task Hub Observability Protocol): opted IN. The tasks
-        # this cron dispatches still carry their own task_hub linkage —
-        # this row tracks the dispatcher's own liveness, separately.
-        # Lightweight: the script is pure-SQL + asyncio.run on
-        # `dispatch_atlas_candidates_once`. It never calls Composio tools
-        # or instantiates an agent session, so the heavyweight bootstrap
-        # is wasted work. Worse, the bootstrap creates a fresh Composio
-        # tool-router session each minute — on 2026-05-23 that triggered
-        # a Vercel-edge 429 rate-limit (48 retry rows, 5 alert emails).
-        # Same shape as simone_chat_auto_complete (already lightweight).
-        lightweight=True,
+    if not _cron_service:
+        return None
+    existing = _find_cron_job_by_system_job("atlas_direct_dispatch")
+    if existing is None:
+        return None
+    existing_id = str(getattr(existing, "job_id", ""))
+    _cron_service.delete_job(existing_id)
+    logger.info(
+        "🗑️ Retired atlas_direct_dispatch cron (deleted row %s); the M2 "
+        "priority_dispatcher prefer-ATLAS lane owns this dispatch path now.",
+        existing_id,
     )
+    return {"job_id": existing_id, "deleted": True, "retired": "atlas_direct_dispatch"}
 
 
 def _ensure_simone_chat_autocomplete_cron_job() -> Optional[dict[str, Any]]:
@@ -25340,6 +25334,12 @@ async def dashboard_todolist_agent_queue(
     bounded_offset = max(0, int(offset))
     status_filter = str(status).strip().lower() if status else "all"
 
+    # M3 §4.4: one runtime-DB read per render — the set of VP missions with a
+    # live lease — so a RUNNING delegated mission's source card renders in the
+    # in_progress lane (display-only). Computed outside the activity lock since
+    # it opens its own runtime_state.db connection.
+    live_mission_ids = _live_vp_mission_ids()
+
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
@@ -25409,7 +25409,7 @@ async def dashboard_todolist_agent_queue(
                         "source_kind": hydrated.get("source_kind") or None,
                         "metadata": hydrated.get("metadata") or {},
                         "seizure_state": hydrated.get("seizure_state") or "",
-                    }))
+                    }, live_mission_ids=live_mission_ids))
 
                 return {
                     "status": "ok",
@@ -25435,7 +25435,7 @@ async def dashboard_todolist_agent_queue(
                 include_not_ready=True,
             )
             serialized_queue = [
-                _serialize_task_hub_queue_item(conn, dict(item))
+                _serialize_task_hub_queue_item(conn, dict(item), live_mission_ids=live_mission_ids)
                 for item in (queue.get("items") if isinstance(queue, dict) else [])
                 if isinstance(item, dict)
             ]
@@ -26708,6 +26708,7 @@ def _task_hub_board_projection(
     *,
     item: dict[str, Any],
     active_assignment: Optional[dict[str, Any]] = None,
+    mission_running: bool = False,
 ) -> dict[str, Any]:
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
     dispatch_meta = metadata.get("dispatch") if isinstance(metadata.get("dispatch"), dict) else {}
@@ -26779,9 +26780,21 @@ def _task_hub_board_projection(
     elif has_active_assignment:
         # Truly hands-on right now.
         board_lane = "in_progress"
+    elif status == task_hub.TASK_STATUS_DELEGATED and mission_running:
+        # M3 §4.4 (operator-approved): a delegated task whose VP mission is
+        # ACTIVELY RUNNING (live vp_missions lease) renders in_progress so the
+        # operator sees ATLAS/CODIE is deployed, not sitting in an
+        # unassigned-looking lane. DISPLAY-ONLY: the persisted status stays
+        # 'delegated' (the caller never mutates it) — the completion bridge
+        # task_hub.transition_to_pending_review fires only on status='delegated',
+        # so flipping the real status here would strand the task. assigned_agent_id
+        # already carries the delegate_target (set above), so the card names the VP.
+        # A delegated-but-not-yet-running mission stays in not_assigned (below)
+        # with its "→ delegate_target" tag, until the worker picks it up.
+        board_lane = "in_progress"
     else:
-        # Includes status='open' (untriaged) AND status='delegated' without an
-        # active assignment (Simone has triaged but the VP is still backlogged).
+        # Includes status='open' (untriaged) AND status='delegated' without a
+        # running mission (Simone has triaged but the VP hasn't picked it up).
         board_lane = "not_assigned"
 
     return {
@@ -26951,11 +26964,87 @@ def _merge_completed_dashboard_cards(
     return combined[: max(1, int(limit))]
 
 
-def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
+def _live_vp_mission_ids() -> set[str]:
+    """Mission IDs whose ``vp_missions`` lease is live (status='running' + a
+    future ``claim_expires_at`` the worker heartbeats).
+
+    Computed ONCE per board render and passed down so the in_progress promotion
+    for running delegated missions (M3 §4.4) is O(1) per card — no per-card DB
+    work on the hot dashboard path. ``vp_missions`` lives in ``runtime_state.db``
+    (NOT the ``activity_state.db`` Task Hub store the board reads), so this opens
+    a dedicated short-lived runtime connection. Mirrors the lease semantics of
+    ``task_hub._vp_mission_lease_live``. Returns an empty set on any error or
+    when the table is absent (legacy/test DBs) — callers then leave delegated
+    cards in ``not_assigned`` (the prior behaviour), never crashing the board.
+    """
+    live: set[str] = set()
+    try:
+        now_dt = datetime.now(timezone.utc)
+        conn = connect_runtime_db(get_runtime_db_path())
+        try:
+            has_tbl = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='vp_missions' LIMIT 1"
+            ).fetchone()
+            if not has_tbl:
+                return live
+            rows = conn.execute(
+                "SELECT mission_id, claim_expires_at FROM vp_missions WHERE LOWER(status)='running'"
+            ).fetchall()
+        finally:
+            conn.close()
+        for row in rows:
+            mid = str((row["mission_id"] if hasattr(row, "keys") else row[0]) or "").strip()
+            expires = task_hub._parse_iso(
+                str((row["claim_expires_at"] if hasattr(row, "keys") else row[1]) or "")
+            )
+            if mid and expires is not None and expires > now_dt:
+                live.add(mid)
+    except Exception:
+        return set()
+    return live
+
+
+def _delegated_mission_is_running(
+    item: dict[str, Any], live_mission_ids: Optional[set[str]]
+) -> bool:
+    """True when ``item`` is a status='delegated' task whose linked VP mission
+    has a live lease (its mission_id is in ``live_mission_ids``).
+
+    Display-only signal for the board's in_progress promotion (M3 §4.4). The
+    mission id on a delegated SOURCE task lives under ``metadata.delegation.mission_id``
+    (set by ``task_hub.perform_task_action`` delegate path / ``priority_dispatcher._mark_delegated``);
+    fall back to ``metadata.linked_mission_id`` (stamped by the completion bridge)
+    and ``metadata.dispatch.vp_mission_id``. Returns False when no live set was
+    provided, the task isn't delegated, or no mission id resolves — leaving the
+    prior ``not_assigned`` rendering untouched.
+    """
+    if not live_mission_ids:
+        return False
+    if str(item.get("status") or "").strip().lower() != task_hub.TASK_STATUS_DELEGATED:
+        return False
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    delegation = metadata.get("delegation") if isinstance(metadata.get("delegation"), dict) else {}
+    dispatch_meta = metadata.get("dispatch") if isinstance(metadata.get("dispatch"), dict) else {}
+    mission_id = (
+        str(delegation.get("mission_id") or "").strip()
+        or str(metadata.get("linked_mission_id") or "").strip()
+        or str(dispatch_meta.get("vp_mission_id") or "").strip()
+    )
+    return bool(mission_id) and mission_id in live_mission_ids
+
+
+def _serialize_task_hub_queue_item(
+    conn: sqlite3.Connection,
+    item: dict[str, Any],
+    live_mission_ids: Optional[set[str]] = None,
+) -> dict[str, Any]:
     task_id = str(item.get("task_id") or "").strip()
     active_assignment = _task_hub_active_assignment_for_task(conn, task_id) if task_id else None
     latest_assignment = _task_hub_latest_assignment_for_task(conn, task_id) if task_id and not active_assignment else active_assignment
-    projection = _task_hub_board_projection(item=item, active_assignment=active_assignment)
+    mission_running = _delegated_mission_is_running(item, live_mission_ids)
+    projection = _task_hub_board_projection(
+        item=item, active_assignment=active_assignment, mission_running=mission_running
+    )
     flags = _task_hub_reconciliation_flags(item=item, active_assignment=active_assignment)
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
     session_profile = _execution_profile_for_session(
@@ -27535,7 +27624,11 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
             email_mapping = _task_hub_email_mapping_for_task(conn, str(task_id or "").strip())
             task_item = history.get("task") if isinstance(history.get("task"), dict) else {}
             active_assignment = _task_hub_active_assignment_for_task(conn, str(task_item.get("task_id") or task_id or "").strip())
-            history["task"] = _serialize_task_hub_queue_item(conn, dict(task_item)) if task_item else {}
+            # Pass the live-mission set so a RUNNING delegated task renders the
+            # same in_progress lane here as on the board (M3 §4.4 cross-surface parity).
+            history["task"] = _serialize_task_hub_queue_item(
+                conn, dict(task_item), live_mission_ids=_live_vp_mission_ids()
+            ) if task_item else {}
             history["email_mapping"] = email_mapping
             history["reconciliation"] = _task_hub_reconciliation_flags(
                 item=dict(task_item) if task_item else {},

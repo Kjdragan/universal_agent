@@ -212,7 +212,9 @@ single rebuild a **~14s synchronous block** on the asyncio event loop (measured:
 2. `gateway_server._task_hub_has_dispatch_eligible_items` ran a **full rebuild just
    to return a boolean**, and it fires on every autonomous-cron success
    (`_maybe_wake_heartbeat_after_autonomous_cron`). With `*/1` autonomous crons
-   (`atlas_direct_dispatch`, `simone_chat_auto_complete`) that was a 14s event-loop
+   (at the time `atlas_direct_dispatch` and `simone_chat_auto_complete`; after M3
+   retired the `atlas_direct_dispatch` cron, `simone_chat_auto_complete` is the
+   remaining `*/1` autonomous coupling-wake cron) that was a 14s event-loop
    block per minute, which wedged the `daemon_simone_todo` dispatch loop and halted
    intel-brief authoring for ~20h. It now does a cheap indexed existence check over
    the persisted `score` column instead of rebuilding.

@@ -34,12 +34,11 @@ CI_FAILURE_ISSUE = Path(".github/workflows/ci-failure-issue.yml")
 # soft-warn test, not by this list). Adding an interval here also needs a row in
 # the canonical doc (project_docs/08_operations/03_dormancy_and_operating_hours.md).
 DOCUMENTED_EXCEPTIONS = {
-    # Hermes Phase C (PR #221): every-60s dispatcher for tasks tagged
-    # metadata.preferred_vp = "vp.general.primary". Default OFF via
-    # UA_ATLAS_DIRECT_DISPATCH_ENABLED=0. Exception #3 (latency-sensitive):
-    # Atlas-eligible tasks must dispatch within ~60s of being queued, not
-    # wait until 6 AM. See operating_hours_dormancy.md exceptions table.
-    "atlas_direct_dispatch",
+    # NOTE: atlas_direct_dispatch (Hermes Phase C) was RETIRED in M3
+    # (2026-06-15). Its ensure-function no longer registers a */1 cron — it
+    # deletes the stale row — so it is no longer parsed as an interval
+    # registration here and needs no dormancy exception. The M2
+    # priority_dispatcher prefer-ATLAS lane owns that dispatch path now.
     # Simone-chat mission control (PR #255): every-60s SQLite-only
     # housekeeping that promotes simone_chat Task Hub rows from
     # status="in_progress" to status="completed" once Simone has proposed
