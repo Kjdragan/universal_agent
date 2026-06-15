@@ -11,6 +11,7 @@ code_paths:
   - src/universal_agent/services/zai_observability.py
   - src/universal_agent/services/zai_control.py
   - src/universal_agent/services/zai_status.py
+  - src/universal_agent/services/token_consolidation.py
   - src/universal_agent/services/zai_function_catalog.py
   - src/universal_agent/scripts/zai_token_report.py
   - src/universal_agent/services/zai_activity_control.py
@@ -451,15 +452,48 @@ extraction/evaluation stage that a cheaper tier would serve). Regenerate the JSO
 editing descriptions so `source_sha` stays current (guarded by
 `test_zai_function_catalog.py::test_committed_catalog_not_stale`).
 
-`zai_status.py::build_token_usage` joins the catalog onto the aggregation, and the
-gateway serves it at **`GET /api/v1/ops/zai/token-usage?hours=N`** (`gateway_server.py::
-ops_zai_token_usage`, `asyncio.to_thread`-offloaded, on-demand — NOT the 5s status
-poll). The dashboard renders a sixth section on the ZAI-Control tab
-(`web-ui/app/dashboard/zai-control/page.tsx::TokenPanel`): a window selector
-(1h/6h/24h/3d/6d), a **Refresh** button (no live polling — operator-driven), and a
-per-process table (calls, reject %, in/out/total tokens, retry-multiplier, dormancy
-spend) whose rows expand to the per-stage breakdown with each stage's catalog
-description, role, tier, and `review`/`stale`/`undescribed` badges.
+### 5.5 Consolidated multi-lane federation (`build_token_usage` + `token_consolidation`)
+
+`analyze_token_usage` only sees the **httpx** lane — direct `api.z.ai` calls made
+*in the gateway process*. That structurally **misses** the bulk of spend: the
+in-process Claude Agent SDK principals (Simone heartbeat/daemon, in-process VP
+coder, ATLAS) run the model in a spawned `claude` subprocess and return usage via
+the SDK `ResultMessage` (never over the patched httpx client), and CSI is a
+separate process. This is the ~259M/day gap that made the internal chart (~22M)
+diverge from z.ai's bill (~281M) — and the reason a runaway like the 2026-06-14
+ATLAS nightly-wiki re-dispatch storm was invisible to the old panel.
+
+`zai_status.py::build_token_usage` is now a **pure-read, fail-soft, no-LLM
+fan-out** across every capture lane (`services/token_consolidation.py`):
+
+| `source` | Store (reader) |
+|---|---|
+| `httpx-zai` | `zai_inference_events.jsonl` (`analyze_token_usage`) + catalog join |
+| `cli-in-process` | `activity_state.db::token_usage_events` (`analyze_sink_token_usage`) — grouped by `principal` (simone / vp / interactive), per-model stages |
+| `cli-subprocess` | `activity_state.db::cody_token_usage` (`analyze_cody_token_usage`) — claude --print missions |
+| `csi-ingester` | `csi.db::token_usage` (`read_csi_token_usage`) — read-only `file:?mode=ro` federation, fail-soft |
+
+It returns `sources[]` + a `consolidated` rollup + a per-day `trend` (token +
+run counts per principal, so trajectories and runaway spikes stand out), plus
+legacy top-level aliases (`totals`/`processes`/`catalog`/`token_events_seen` =
+consolidated) so an un-upgraded UI keeps rendering. **Canonical cache semantics:**
+`total_tokens` is **cache-INCLUSIVE** (`input + output + cache_creation +
+cache_read`) — cache_read dominates real spend (a Simone turn ≈ 2M tokens, ~90%
+cache_read), so a cache-exclusive total would understate the in-process lane ~10×
+and hide exactly what the panel exists to surface; this also reconciles the
+consolidated total to z.ai's ~281M order of magnitude. Each lane reads exactly
+one store (no double-count); catalog coverage is scoped to `httpx-zai`.
+
+The gateway serves it at **`GET /api/v1/ops/zai/token-usage?hours=N`**
+(`gateway_server.py::ops_zai_token_usage`, `asyncio.to_thread`-offloaded,
+on-demand — NOT the 5s status poll). The dashboard
+(`web-ui/app/dashboard/zai-control/page.tsx::TokenPanel`) renders a window
+selector (1h/6h/24h/3d/6d), **source tabs** (`All lanes | in-proc SDK | httpx |
+subprocess | CSI`), a **Refresh** button (no live polling), a per-day **trend**
+strip, and a per-process table (calls, reject %, in/out/total-incl-cache tokens,
+cache-read, retry-multiplier, dormancy spend) whose rows expand to the per-stage
+breakdown with each stage's catalog description, role, tier, and
+`review`/`stale`/`undescribed` badges. Guard: `test_token_consolidation.py`.
 
 ### 5.2 The watchdog (`zai_inference_health.py`)
 
