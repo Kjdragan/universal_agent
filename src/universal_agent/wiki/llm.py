@@ -328,3 +328,65 @@ def extract_facets_batched(sources: list[dict[str, Any]]) -> dict[str, dict[str,
             if str(s.get("source_id") or "")
         }
     return asyncio.run(_extract_facets_batched_async(sources))
+
+
+# --- Optional gloss generation for materialized entity/concept pages ---
+
+_DESCRIBE_TERMS_SYSTEM = """\
+You are a knowledge-base assistant. You are given a JSON object with a "terms" array
+(named entities and abstract concepts) and the "text" of the source they were drawn
+from. For EACH term, write a SHORT one-sentence factual gloss grounded in the source
+text (no fluff, no "this term refers to").
+Return ONLY JSON of the form {"glosses":[{"term":"...","text":"..."}]} with one entry
+per input term.
+"""
+
+
+def describe_terms_batch(
+    terms: list[str],
+    *,
+    source_title: str = "",
+    context_text: str = "",
+) -> dict[str, str]:
+    """One batched LLM call returning a ``{term: one-sentence gloss}`` map.
+
+    Used only when ``UA_WIKI_MATERIALIZE_DESCRIPTIONS=1`` to enrich the otherwise
+    deterministic entity/concept stub pages. ONE call for all terms (extract-tier
+    / sonnet by default), so it adds at most a single call per ingest. Any failure
+    returns ``{}`` and the caller falls back to template stubs — never fatal.
+    """
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for raw in terms:
+        term = str(raw or "").strip()
+        if term and term.lower() not in seen:
+            seen.add(term.lower())
+            uniq.append(term)
+    if not uniq:
+        return {}
+    payload = json.dumps(
+        {"terms": uniq, "source": source_title, "text": (context_text or "")[:4000]},
+        ensure_ascii=True,
+    )
+    try:
+        raw = _call_llm(system=_DESCRIBE_TERMS_SYSTEM, user=payload, model=_extract_model())
+    except Exception as exc:
+        logger.warning("describe_terms_batch failed: %s", exc)
+        return {}
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = "\n".join(ln for ln in cleaned.split("\n") if not ln.strip().startswith("```")).strip()
+    try:
+        parsed = json.loads(cleaned)
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    glosses = parsed.get("glosses") if isinstance(parsed, dict) else None
+    for item in glosses or []:
+        if not isinstance(item, dict):
+            continue
+        term = str(item.get("term") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if term and text:
+            out[term] = text
+    return out
