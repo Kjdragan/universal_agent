@@ -15,7 +15,7 @@ code_paths:
   - "discord_intelligence/inventory/discord_inventory.py"
   - "deployment/systemd/templates/ua-discord-*.service.template"
   - "src/universal_agent/api/routers/csi_discord_watchlist.py"
-last_verified: 2026-06-10
+last_verified: 2026-06-15
 ---
 
 # Discord Operations

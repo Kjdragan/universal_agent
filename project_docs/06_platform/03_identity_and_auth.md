@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/main.py
   - src/universal_agent/signals_ingest.py
   - web-ui/lib/dashboardAuth.ts
-last_verified: 2026-06-09
+last_verified: 2026-06-15
 ---
 
 # Identity & Auth

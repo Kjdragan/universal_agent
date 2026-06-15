@@ -16,7 +16,7 @@ code_paths:
   - src/universal_agent/proactive_signals.py
   - src/universal_agent/services/scratch_publish.py
   - src/universal_agent/services/proactive_tutorial_builds.py
-last_verified: 2026-06-10
+last_verified: 2026-06-15
 ---
 
 # YouTube CSI Flow

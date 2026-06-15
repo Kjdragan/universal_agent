@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/durable/db.py
   - src/universal_agent/durable/tool_policies.yaml
   - src/universal_agent/durable/worker_pool.py
-last_verified: 2026-06-10
+last_verified: 2026-06-15
 ---
 
 # Durable Execution
