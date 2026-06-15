@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -58,6 +59,32 @@ def _count_wikis_today_from_list(notebooks, today: str) -> int:
     return count
 
 
+def _resolve_nlm_cli():
+    """Resolve the ``nlm`` CLI to an absolute path the systemd unit can exec.
+
+    The nightly-wiki systemd unit runs ``python`` directly with a minimal PATH
+    that EXCLUDES ``~/.local/bin`` (where the uv-tool ``nlm`` lives), so a bare
+    ``nlm`` lookup fails and the cap would silently no-op. Try the configured
+    command, then PATH, then the canonical uv-tool install location. Returns an
+    absolute path or None.
+    """
+    candidates = []
+    configured = (os.getenv("UA_NOTEBOOKLM_CLI_COMMAND") or "").strip()
+    if configured:
+        candidates.append(configured)
+    candidates.append("nlm")
+    for cand in candidates:
+        if os.path.sep in cand:
+            if os.path.exists(cand):
+                return cand
+            continue
+        found = shutil.which(cand)
+        if found:
+            return found
+    fallback = os.path.expanduser("~/.local/bin/nlm")
+    return fallback if os.path.exists(fallback) else None
+
+
 def _count_wiki_notebooks_today(today: str) -> int:
     """Best-effort count of wiki notebooks created today via the ``nlm`` CLI.
 
@@ -65,7 +92,10 @@ def _count_wiki_notebooks_today(today: str) -> int:
     the nightly — the create-once objective hardening + the PR-A anomaly
     invariants remain as backstops.
     """
-    cli = (os.getenv("UA_NOTEBOOKLM_CLI_COMMAND") or "nlm").strip() or "nlm"
+    cli = _resolve_nlm_cli()
+    if not cli:
+        logger.warning("wiki cap pre-flight: nlm CLI not found on PATH or ~/.local/bin — failing open")
+        return 0
     try:
         proc = subprocess.run(
             [cli, "notebook", "list", "--json"],
