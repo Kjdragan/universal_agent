@@ -17,7 +17,7 @@ code_paths:
   - src/universal_agent/durable/db.py
   - scripts/deploy/remote_deploy.sh
   - deployment/systemd/
-last_verified: 2026-06-10
+last_verified: 2026-06-16
 ---
 
 # ADR: Scheduling Substrate Redesign

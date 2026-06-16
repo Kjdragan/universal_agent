@@ -13,7 +13,7 @@ code_paths:
   - src/universal_agent/services/cody_mode.py
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/backlog_triage.py
-last_verified: 2026-06-10
+last_verified: 2026-06-16
 ---
 
 # ADR: Autonomous doc-drift issue triage & fix — three delivery options

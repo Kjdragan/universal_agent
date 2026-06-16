@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/loop_control.py
   - src/universal_agent/feature_flags.py
   - justfile
-last_verified: 2026-06-10
+last_verified: 2026-06-16
 ---
 
 # Execution Environments
