@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/timeout_policy.py
   - src/universal_agent/api/server.py
   - src/universal_agent/api/gateway_bridge.py
-last_verified: 2026-06-14
+last_verified: 2026-06-16
 ---
 
 # Gateway, Sessions & Execution
@@ -337,6 +337,24 @@ informational label in the liveness log line — it no longer drives a kill.
 > wall-clock cap. Guards: `tests/unit/test_liveness_watchdog.py` (DOES kill an
 > idle turn; does NOT kill one emitting events past the old cap; tool-in-flight
 > exemption) and `tests/unit/test_vp_sdk_idle_timeout.py`.
+
+**The daemon SESSION reaper now honors the same convention (2026-06-16).** A
+second, session-level reaper — `heartbeat_service.py::_check_session_idle` —
+unregisters a stuck **daemon** session (`UA_DAEMON_IDLE_TIMEOUT`, 1800 s),
+bypassing the `active_runs > 0` guard for daemons to clear zombies. It decided
+"idle" from `runtime.last_activity_at`, which was stamped only at turn
+*boundaries* — so during a ZAI 529 storm it reaped `daemon_simone_heartbeat`
+because the *backend* was throttling (an effective wall-clock cap, exactly what
+this policy forbids), and a reaped daemon then stayed dead until the next gateway
+restart (an observed **8-hour Simone outage**). Fixed by making `last_activity_at`
+**event-driven** (`heartbeat_service.py::_touch_runtime_activity`, refreshed on
+every heartbeat turn event + at turn-attempt — purely additive) so a working /
+retrying daemon is a sign of life, plus an async respawn supervisor
+(`daemon_sessions.py::DaemonSessionManager.respawn_missing_heartbeat_sessions`,
+wired onto `_scheduler_loop`) that revives a reaped daemon within one tick —
+tearing down the stale adapter via `close_session` (fresh adapter next turn),
+clearing the stale `busy`/`wake` sets, with backoff + a respawn circuit-breaker.
+Guard: `tests/unit/test_daemon_session_respawn.py`.
 
 ### Self-healing client resets
 

@@ -2,6 +2,7 @@
 import asyncio
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+import inspect
 import json
 import logging
 import os
@@ -891,6 +892,25 @@ def _parse_iso_to_unix(value: object) -> Optional[float]:
     return parsed.timestamp()
 
 
+def _touch_runtime_activity(session: Any) -> None:
+    """Record a sign of life on the session's runtime metadata NOW.
+
+    Aligns the daemon idle reaper (``_check_session_idle``, which reads
+    ``runtime.last_activity_at``) with the ``timeout_policy.LivenessWatchdog``
+    convention: any event from a running turn — or a turn attempt that errors on
+    an overloaded backend (ZAI 529) — is a sign of life, so a working/retrying
+    daemon is never reaped on a wall-clock-ish idle threshold. Purely additive
+    (it only ADDS refreshes, never removes one), so it cannot make the reaper
+    fire sooner. Fail-soft + cheap — safe on the heartbeat event hot path.
+    """
+    try:
+        runtime = session.metadata.setdefault("runtime", {})
+        if isinstance(runtime, dict):
+            runtime["last_activity_at"] = datetime.now(timezone.utc).isoformat()
+    except Exception:  # noqa: BLE001 — liveness refresh must never raise
+        pass
+
+
 def _within_active_hours(cfg: HeartbeatScheduleConfig, now_ts: float) -> bool:
     start_min = _parse_hhmm(cfg.active_start, allow_24=False)
     end_min = _parse_hhmm(cfg.active_end, allow_24=True)
@@ -1273,6 +1293,11 @@ class HeartbeatService:
         # when the scheduler loop is idle/sleeping. Exposed so shutdown can drain
         # it gracefully instead of SIGTERM-cancelling it (ADR §C2 / harm H2).
         self._inflight_iteration: Optional[asyncio.Task] = None
+        # Optional daemon respawn supervisor, wired by the gateway at startup.
+        # Called (and awaited if it returns a coroutine) once per scheduler tick
+        # to revive any reaped daemon session so a kill self-heals within a tick
+        # instead of waiting for a restart. A no-op when unset; fail-soft.
+        self._daemon_supervisor_hook: Optional[Callable[[], Any]] = None
         # Last time we emitted a `heartbeat_tick` row to the activity DB.
         # Rate-limited so we don't flood activity_events at scheduler-tick cadence
         # (loop ticks every 1-30s; we emit at most once per UA_HEARTBEAT_TICK_EMIT_INTERVAL_S,
@@ -1740,6 +1765,21 @@ class HeartbeatService:
             try:
                 # We use a simple 10s tick for the MVP; production would use a heap
                 start_time = time.time()
+
+                # Daemon respawn supervisor: revive any reaped daemon BEFORE
+                # processing sessions, so a kill self-heals within this tick. The
+                # hook does its own per-session backoff + circuit-breaker; the
+                # per-tick cost when nothing is reaped is a cheap set-difference.
+                # Async so the gateway adapter teardown is awaited cleanly;
+                # fail-soft, no-op when unset.
+                hook = self._daemon_supervisor_hook
+                if hook is not None:
+                    try:
+                        res = hook()
+                        if inspect.isawaitable(res):
+                            await res
+                    except Exception as exc:  # noqa: BLE001 — never crash the loop
+                        logger.warning("daemon respawn supervisor hook failed: %s", exc)
 
                 count = len(self.active_sessions)
                 if count > 0:
@@ -2841,6 +2881,11 @@ class HeartbeatService:
                     nonlocal full_response
                     nonlocal saw_streaming_text, final_text
                     async for event in self.gateway.execute(session, request):
+                        # Every event is a sign of life — refresh runtime
+                        # liveness so the idle reaper never kills a working turn
+                        # (LivenessWatchdog convention; the watchdog itself still
+                        # owns killing a genuinely no-progress turn at 600s).
+                        _touch_runtime_activity(session)
                         if timed_out:
                             return
                         # Broadcast agent events into the session stream so connected UIs
@@ -2895,6 +2940,12 @@ class HeartbeatService:
                             elif isinstance(event.data, str):
                                 full_response += event.data
 
+                # A daemon that is ATTEMPTING a turn is alive — refresh liveness
+                # up front so an overloaded backend (ZAI 529 that fails before any
+                # event) can't make the reaper mistake "backend down" for "daemon
+                # dead" and kill Simone during the very rate-limit pressure the
+                # system is trying to relieve.
+                _touch_runtime_activity(session)
                 collect_task = asyncio.create_task(_collect_events())
                 try:
                     await asyncio.wait_for(collect_task, timeout=self.execution_timeout_seconds)

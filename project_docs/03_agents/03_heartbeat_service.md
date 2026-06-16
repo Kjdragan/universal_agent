@@ -18,7 +18,7 @@ code_paths:
   - src/universal_agent/services/invariants/cron_staleness.py
   - src/universal_agent/services/invariants/cron_consecutive_failures.py
   - memory/HEARTBEAT.md
-last_verified: 2026-06-15
+last_verified: 2026-06-16
 ---
 
 # Heartbeat Service
@@ -243,7 +243,9 @@ The active diagnostic is `scripts/check_heartbeat_liveness.py` (`run_check`), wh
 | `UA_HEARTBEAT_CONTINUATION_DELAY_SECONDS` | 1 | Short re-check after actionable success. |
 | `UA_HEARTBEAT_FOREGROUND_COOLDOWN_SECONDS` | 1800 | Cooldown after user activity. |
 | `UA_HEARTBEAT_IDLE_TIMEOUT` | 600 | Idle-unregister threshold for user sessions. |
-| `UA_DAEMON_IDLE_TIMEOUT` | 1800 | Stuck-daemon termination threshold. |
+| `UA_DAEMON_IDLE_TIMEOUT` | 1800 | Stuck-daemon termination threshold, now measured against **event-driven** `last_activity_at` (refreshed every turn event), so it fires only on genuine no-progress. |
+| `UA_DAEMON_RESPAWN_MIN_INTERVAL_SECONDS` | 120 | Per-session backoff for the daemon respawn supervisor (revive a reaped daemon, no hot-loop). |
+| `UA_DAEMON_MAX_RESPAWNS_PER_HOUR` | 6 | Circuit-breaker: after this many respawns in a trailing hour the daemon is disabled + escalated instead of respawned forever. 0 disables the breaker. |
 | `UA_HEARTBEAT_UNREGISTER_IDLE` | True | Toggle idle cleanup entirely. |
 | `UA_HEARTBEAT_TICK_EMIT_INTERVAL_S` | 60 | Liveness `heartbeat_tick` emit cadence. |
 | `UA_HEARTBEAT_ACTIVE_START` / `_END` / `_ACTIVE_HOURS` | None | Active-hours window (TZ via `UA_HEARTBEAT_TIMEZONE` / `USER_TIMEZONE`, default `America/Chicago`). |
@@ -293,3 +295,6 @@ Explicit wakes: `request_heartbeat_now` (run ASAP, can bypass a foreground lock)
 - **Synthetic findings always say "ok"/"200 OK" for a successful run that didn't write the file** — so a clean bill of health is the fallback, not a false alarm.
 - **Two stacked cooldowns** (classification 120 min, signature 60 min) govern auto-triage dispatch; a flood of identical findings will not repeatedly wake Simone.
 - **Stuck daemon sessions are killed, not just unregistered** — `_check_session_idle` writes a crash report and notifies, bypassing the `active_runs > 0` guard for daemons specifically to clear zombie retry loops.
+- **Daemon liveness is event-driven + self-healing (2026-06-16 fix).** Two halves of one contract bring the daemon reaper into line with the `timeout_policy.py::LivenessWatchdog` "never kill a working turn on a wall-clock cap" rule and bound any daemon death:
+  - `_check_session_idle` decides "idle" from `runtime.last_activity_at`, which is now refreshed on **every** heartbeat turn event **and** at turn-attempt (`heartbeat_service.py::_touch_runtime_activity`, called in `_run_heartbeat`'s `_collect_events`). A working — or actively-retrying-through-a-ZAI-529 — daemon is therefore a "sign of life" and is **not** reaped; only a genuinely no-progress one is. (Before this, a 529 storm reaped the daemon because the *backend* was down, not the daemon — and `last_activity_at` was stamped only at turn boundaries.) Purely additive: it only adds refreshes, so it can never make the reaper fire sooner.
+  - When a daemon **is** reaped, `daemon_sessions.py::DaemonSessionManager.respawn_missing_heartbeat_sessions` (an **async** supervisor hook on `_scheduler_loop`, wired by the gateway at startup) revives it within one scheduler tick instead of leaving it dead until the next gateway restart — the root cause of the observed **8-hour Simone outage** on 2026-06-16. The revive: (a) tears down the **stale SDK adapter** the cancelled reap left behind via `gateway.close_session`, so the next turn builds a fresh adapter (the old persistent client is unusable after a mid-turn cancel); (b) clears the `session_id`-keyed scheduler sets (`busy_sessions`/`wake_sessions`/`wake_next_sessions`) the reap left behind, so a stale `busy` marker can't lock the revived daemon out of its first turn; (c) resets the **authoritative** run state in the gateway (`_session_runtime` → `_sync_runtime_metadata`): `active_runs`/`active_foreground_runs` → 0, `lifecycle_state` → idle. This is load-bearing — a leaked `active_runs` (the very case the reaper bypass exists for) would otherwise make `_session_heartbeat_lock_reason` return `run_active` and lock the revived daemon out of every heartbeat until restart. Two guards: per-session backoff (`UA_DAEMON_RESPAWN_MIN_INTERVAL_SECONDS`, default 120s) prevents a hot-loop, and a circuit-breaker (`UA_DAEMON_MAX_RESPAWNS_PER_HOUR`, default 6) **disables** a persistently-dying daemon and escalates (loud ERROR) rather than respawning it forever. Guard: `tests/unit/test_daemon_session_respawn.py`.

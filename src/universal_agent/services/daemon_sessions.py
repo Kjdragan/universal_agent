@@ -13,12 +13,13 @@ Each daemon session:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import inspect
 import logging
 import os
 from pathlib import Path
 import shutil
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,14 @@ class DaemonSessionManager:
         self.agent_names = agent_names or configured_daemon_agents()
         self._sessions: dict[str, Any] = {}
         self._session_ids: dict[tuple[str, str], str] = {}
+        # Per-session monotonic-ish timestamp of the last respawn, for the
+        # respawn-supervisor backoff (avoids a hot-loop if a daemon keeps dying).
+        self._last_respawn_at: dict[str, float] = {}
+        # Respawn timestamps in a trailing window + the circuit-breaker trip set:
+        # a daemon that keeps dying is DISABLED (not respawned forever) and
+        # escalated to the operator instead.
+        self._respawn_history: dict[str, list[float]] = {}
+        self._respawn_disabled: set[str] = set()
         # Archive dir for recycled workspaces
         self._archive_dir = self.workspaces_dir / "_daemon_archives"
 
@@ -225,6 +234,130 @@ class DaemonSessionManager:
                 ", ".join(created),
             )
         return created
+
+    async def respawn_missing_heartbeat_sessions(
+        self, *, revive_in_gateway: Optional[Callable[[Any], Any]] = None
+    ) -> list[str]:
+        """Revive any heartbeat daemon this manager owns that has fallen out of
+        the heartbeat scheduler's ``active_sessions`` (i.e. was idle-timeout
+        reaped by ``heartbeat_service._check_session_idle``).
+
+        Recovery half of the liveness contract: a reaped daemon used to stay dead
+        until the next gateway restart (observed: an 8h Simone outage during a ZAI
+        529 storm on 2026-06-16). A reap self-heals within one scheduler tick.
+        Only ``heartbeat``-role sessions are scheduler-driven, so ``todo``-role is
+        skipped. The SAME session object + workspace are reused (the heartbeat
+        re-reads ``HEARTBEAT.md`` each turn), but the revive restores a fully
+        clean run state:
+
+        - ``revive_in_gateway`` (gateway-side) tears down the **stale SDK
+          adapter** the cancelled reap left behind (via ``close_session``) and
+          re-registers the session, so the next turn builds a FRESH adapter — the
+          old persistent client is unusable after a mid-turn cancel.
+        - the heartbeat-scheduler sets keyed by ``session_id``
+          (``busy_sessions`` / ``wake_sessions`` / ``wake_next_sessions``) are
+          cleared — the reap only removed the session from ``active_sessions``, so
+          a stale ``busy`` marker would otherwise lock the respawned daemon out of
+          its first turn.
+        - terminal/idle runtime metadata is reset and liveness refreshed.
+
+        Guards against pathology: per-session backoff
+        (``UA_DAEMON_RESPAWN_MIN_INTERVAL_SECONDS``, default 120s) prevents a
+        hot-loop, and a circuit-breaker (``UA_DAEMON_MAX_RESPAWNS_PER_HOUR``,
+        default 6) **disables** a daemon that keeps dying and escalates to the
+        operator (a loud ERROR) instead of respawning it forever. Fail-soft;
+        async so the gateway adapter teardown is awaited cleanly. The per-tick
+        cost when nothing is reaped is a cheap set-difference (no I/O). Returns
+        the respawned session IDs.
+        """
+        respawned: list[str] = []
+        hb = self.heartbeat_service
+        if hb is None or not hasattr(hb, "active_sessions"):
+            return respawned
+        try:
+            try:
+                min_interval = float(
+                    os.getenv("UA_DAEMON_RESPAWN_MIN_INTERVAL_SECONDS", "120") or "120"
+                )
+            except (TypeError, ValueError):
+                min_interval = 120.0
+            try:
+                max_per_hour = int(os.getenv("UA_DAEMON_MAX_RESPAWNS_PER_HOUR", "6") or "6")
+            except (TypeError, ValueError):
+                max_per_hour = 6
+            now = time.time()
+            active = getattr(hb, "active_sessions", {}) or {}
+            for (_agent, role), session_id in list(self._session_ids.items()):
+                # Only heartbeat-role sessions are scheduled; todo-role lives in
+                # the gateway store and is not driven by the heartbeat loop.
+                if role != DAEMON_ROLE_HEARTBEAT:
+                    continue
+                if session_id in active:
+                    continue  # still alive in the scheduler
+                if session_id in self._respawn_disabled:
+                    continue  # circuit-breaker tripped — operator must intervene
+                session = self._sessions.get(session_id)
+                if session is None:
+                    continue
+                last = self._last_respawn_at.get(session_id, 0.0)
+                if min_interval > 0 and (now - last) < min_interval:
+                    continue  # backoff — do not hot-loop respawning
+                window = [t for t in self._respawn_history.get(session_id, []) if now - t < 3600.0]
+                if max_per_hour > 0 and len(window) >= max_per_hour:
+                    self._respawn_disabled.add(session_id)
+                    logger.error(
+                        "🚨 Daemon %s respawned %d×/hour — DISABLING auto-respawn and "
+                        "escalating: a persistently-dying daemon needs operator attention "
+                        "(it stays down until the next gateway restart). "
+                        "Set UA_DAEMON_MAX_RESPAWNS_PER_HOUR=0 to disable the breaker.",
+                        session_id, len(window),
+                    )
+                    continue
+                try:
+                    # Clean heartbeat-scheduler state keyed by session_id — the
+                    # reap only removed it from active_sessions; a lingering busy
+                    # marker would lock the respawned daemon out of its first turn.
+                    hb.busy_sessions.discard(session_id)
+                    hb.wake_sessions.discard(session_id)
+                    hb.wake_next_sessions.discard(session_id)
+                    # Reset terminal/idle metadata + clear any leaked run counters
+                    # + refresh liveness. NOTE: the AUTHORITATIVE counters live in
+                    # the gateway's _session_runtime; ``revive_in_gateway`` resets
+                    # those (and re-syncs) so a leaked active_runs can't lock the
+                    # revived daemon ("run_active"). This cached reset is the
+                    # fallback for the no-gateway path (e.g. tests / revive=None).
+                    ts = datetime.now(timezone.utc).isoformat()
+                    session.metadata["last_activity_at"] = ts
+                    runtime = session.metadata.get("runtime")
+                    if isinstance(runtime, dict):
+                        runtime["last_activity_at"] = ts
+                        runtime["lifecycle_state"] = "idle"
+                        runtime["terminal_reason"] = None
+                        runtime["active_runs"] = 0
+                        runtime["active_foreground_runs"] = 0
+                    # Tear down the stale adapter + re-register into the gateway
+                    # BEFORE re-arming the scheduler, so the next tick's turn finds
+                    # a clean session and builds a fresh adapter.
+                    if revive_in_gateway is not None:
+                        res = revive_in_gateway(session)
+                        if inspect.isawaitable(res):
+                            await res
+                    hb.register_session(session)
+                    self._last_respawn_at[session_id] = now
+                    self._respawn_history[session_id] = window + [now]
+                    respawned.append(session_id)
+                    logger.warning(
+                        "♻️ Respawned reaped daemon session %s (recovered without a "
+                        "gateway restart; fresh adapter on next turn).",
+                        session_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 — one failure can't block others
+                    logger.warning(
+                        "Failed to respawn daemon session %s: %s", session_id, exc
+                    )
+        except Exception as exc:  # noqa: BLE001 — supervisor must never crash the loop
+            logger.warning("respawn_missing_heartbeat_sessions failed: %s", exc)
+        return respawned
 
     def _create_workspace(self, agent_name: str, role: str) -> Path:
         """Create a fresh timestamped workspace for an agent."""
