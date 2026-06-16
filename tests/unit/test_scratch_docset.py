@@ -225,6 +225,10 @@ def test_review_toolbar_baked_into_rendered_page():
     assert 'data-act="comment"' in p  # explicit "+ Comment" (anchored) action
     assert ".sr-mark{" in p and "applyMarks" in p  # in-page highlight of commented text
     assert "sr-hint" in p  # the save/submit clarity hint
+    # Submit archives + clears; "Past" opens the full history; "Clear" discards a round.
+    assert 'data-act="history"' in p and "scratchReviewHistory:" in p
+    assert 'data-act="clear"' in p
+    assert "persistHistory" in p
     # light mode stays mandatory and no dark block sneaks in via the toolbar
     assert '<meta name="color-scheme" content="light">' in p
     assert "@media (prefers-color-scheme: dark)" not in p
