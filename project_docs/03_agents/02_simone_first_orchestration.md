@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/services/vp_capacity.py
   - src/universal_agent/services/llm_classifier.py
   - src/universal_agent/gateway.py
-last_verified: 2026-06-15
+last_verified: 2026-06-16
 ---
 
 # Simone-First Orchestration
@@ -30,10 +30,16 @@ This model replaced an older keyword-based `qualify_agent()` deterministic route
 
 ## D3 — the Pythonic priority dispatcher supersedes this when enabled
 
-> **Status:** shipped **default-OFF** behind `UA_PRIORITY_DISPATCHER_ENABLED`. When the
-> flag is off (current production default), everything below this section describes live
-> behavior. When it is on, routing is owned by `services/priority_dispatcher.py` and the
-> Simone-First stamp is skipped — Simone-First becomes the legacy/fallback path.
+> **Status (2026-06-16): the priority dispatcher is now DEFAULT-ON (Stage A live).**
+> `priority_dispatcher.py::priority_dispatcher_enabled` defaults to **ON** when
+> `UA_PRIORITY_DISPATCHER_ENABLED` is unset (tri-state: explicit `0`/`false`/`no`/`off`
+> is the kill switch → falls back to legacy Simone-First; explicit truthy → on). The flag
+> is also set to `1` in Infisical prod (belt-and-suspenders / survives any reset). So
+> **routing is owned by `services/priority_dispatcher.py`** and the Simone-First stamp is
+> skipped — the Simone-First behavior described below this section is now the **legacy /
+> kill-switch fallback path**. The flip followed a clean 30-min live health probe + a
+> controlled end-to-end smoke dispatch (task → Cody, Simone turn skipped, clean
+> `delegated`→`completed`). **prefer-ATLAS is still OFF** (Stage A, not Stage B).
 >
 > **M3 (2026-06-15) — redundant cron retired; staged enable prepared (flags NOT flipped).**
 > The standalone `atlas_direct_dispatch` cron is **retired**: its registration function
@@ -42,13 +48,12 @@ This model replaced an older keyword-based `qualify_agent()` deterministic route
 > `enabled=False` disable-on-flip did not durably stop the live prod row). The
 > `metadata.preferred_vp = "vp.general.primary"` (prefer-ATLAS) lane it used to own now
 > lives in `priority_dispatcher.py::classify_task` + `::dispatch_claimed`. M3 only retires
-> the redundant cron and **prepares** a staged, operator-gated enable; it does **not** flip
-> any flag. The current production default is still **OFF** for both flags:
-> - **Stage A** — `UA_PRIORITY_DISPATCHER_ENABLED=1` with prefer-ATLAS still OFF: the
+> the redundant cron and **prepared** a staged, operator-gated enable. The stages:
+> - **Stage A (LIVE as of 2026-06-16)** — dispatcher ON, prefer-ATLAS still OFF: the
 >   dispatcher owns routing, but `metadata.preferred_vp=vp.general.primary` general/research
 >   tasks **fall back to Simone** (no degradation; decision `preferred_vp_general_simone_fallback`).
-> - **Stage B** — additionally `UA_DISPATCHER_PREFER_ATLAS=1`: `preferred_vp=vp.general.primary`
->   now routes to **ATLAS** (decision `preferred_vp_general`).
+> - **Stage B (not yet flipped)** — additionally `UA_DISPATCHER_PREFER_ATLAS=1`:
+>   `preferred_vp=vp.general.primary` now routes to **ATLAS** (decision `preferred_vp_general`).
 >
 > The service module `services/atlas_direct_dispatch.py` is **kept importable** — `heartbeat_service.py`
 > still reads `atlas_direct_dispatch.py::list_recent_atlas_direct_dispatches` for Simone's briefing.
