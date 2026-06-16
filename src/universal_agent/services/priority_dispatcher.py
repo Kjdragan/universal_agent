@@ -8,11 +8,13 @@ genuinely ambiguous, untagged tail. VP-bound tasks are dispatched directly via
 ~1.25M-token heartbeat turn is NO LONGER the router — it is reserved for genuine
 execution and judgment (chat, escalations she chooses to act on).
 
-The whole path is gated behind ``UA_PRIORITY_DISPATCHER_ENABLED`` (default OFF):
-when off, the legacy "Simone-First" routing runs unchanged. ``prefer-ATLAS`` for
-research/general work is a second, independent toggle
-(``UA_DISPATCHER_PREFER_ATLAS``, default OFF) — when off, general/research falls
-back to Simone (no degradation).
+The whole path is gated behind ``UA_PRIORITY_DISPATCHER_ENABLED`` (**default ON**
+as of 2026-06-16, after the D3 path was proven live in prod — PR #1034/#1038 +
+controlled smoke dispatch). Set the flag to ``0``/``false``/``no``/``off`` to
+disable (the kill switch — falls back to legacy "Simone-First" routing
+unchanged). ``prefer-ATLAS`` for research/general work is a second, independent
+toggle (``UA_DISPATCHER_PREFER_ATLAS``, **default OFF**) — when off,
+general/research falls back to Simone (no degradation; Stage A).
 
 Awareness is preserved: completion is recorded passively via
 ``proactive_work_recap`` and escalation on VP failure flows through
@@ -35,7 +37,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from universal_agent.feature_flags import _is_truthy
+from universal_agent.feature_flags import _is_truthy, _read_env_bool
 from universal_agent.services.agent_router import (
     AGENT_CODER,
     AGENT_GENERAL,
@@ -98,8 +100,15 @@ class DispatchDecision:
 
 
 def priority_dispatcher_enabled() -> bool:
-    """Master kill switch. Default OFF until the live probe is clean."""
-    return _is_truthy(os.getenv("UA_PRIORITY_DISPATCHER_ENABLED"))
+    """Master switch — **DEFAULT ON** (D3 proven live in prod 2026-06-16).
+
+    Tri-state: unset/unrecognized -> ON (the new default); an explicit
+    ``0``/``false``/``no``/``off`` -> OFF (the kill switch, falls back to legacy
+    Simone-First routing); an explicit truthy value -> ON. Roll back instantly by
+    setting ``UA_PRIORITY_DISPATCHER_ENABLED=0`` in Infisical prod (no redeploy).
+    """
+    val = _read_env_bool("UA_PRIORITY_DISPATCHER_ENABLED")
+    return True if val is None else val
 
 
 def _prefer_atlas_for_general() -> bool:
