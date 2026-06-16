@@ -82,7 +82,7 @@ dependencies = [
     # blocks a clean 3.13 source build; 2.3.6 also regressed (lost cp312
     # manylinux x86_64). httpx already covers the full universal-auth +
     # /api/v3/secrets/raw surface we use.
-    "pyjwt>=2.12.1",
+    "pyjwt>=2.13.0",
     "langsmith[claude-agent-sdk,otel]>=0.7.22",
     "crawl4ai-cloud-sdk",
     "bgutil-ytdlp-pot-provider>=1.3.1",
