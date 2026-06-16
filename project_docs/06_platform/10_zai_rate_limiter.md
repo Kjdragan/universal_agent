@@ -21,7 +21,7 @@ code_paths:
   - src/universal_agent/infisical_loader.py
   - src/universal_agent/services/batched_judge.py
   - web-ui/app/dashboard/zai-control/page.tsx
-last_verified: 2026-06-14
+last_verified: 2026-06-16
 ---
 
 # ZAI Rate Limiter & Inference Governance
@@ -488,12 +488,18 @@ The gateway serves it at **`GET /api/v1/ops/zai/token-usage?hours=N`**
 (`gateway_server.py::ops_zai_token_usage`, `asyncio.to_thread`-offloaded,
 on-demand — NOT the 5s status poll). The dashboard
 (`web-ui/app/dashboard/zai-control/page.tsx::TokenPanel`) renders a window
-selector (1h/6h/24h/3d/6d), **source tabs** (`All lanes | in-proc SDK | httpx |
-subprocess | CSI`), a **Refresh** button (no live polling), a per-day **trend**
-strip, and a per-process table (calls, reject %, in/out/total-incl-cache tokens,
-cache-read, retry-multiplier, dormancy spend) whose rows expand to the per-stage
-breakdown with each stage's catalog description, role, tier, and
-`review`/`stale`/`undescribed` badges. Guard: `test_token_consolidation.py`.
+selector (1h/6h/24h/3d/6d, **default 24h**), a glance-able **`<window> rolling
+total`** headline that echoes the active window (e.g. "24h rolling total") so the
+captured 24h number is unambiguous, **source tabs** (`All lanes | in-proc SDK |
+httpx | subprocess | CSI`), a **Refresh** button (no live polling), a per-day
+**trend** strip, and a per-process table (calls, reject %, in/out/total-incl-cache
+tokens, cache-read, retry-multiplier, dormancy spend) whose rows expand to the
+per-stage breakdown with each stage's catalog description, role, tier, and
+`review`/`stale`/`undescribed` badges. Every number is **captured** per-turn usage
+(`token_usage_events` + the other lane stores, cache-inclusive), never an estimate
+— verified by cross-checking the in-process lane's window total against a direct
+`SELECT SUM(input+output+cache_creation+cache_read) FROM token_usage_events` (exact
+match). Guard: `test_token_consolidation.py`.
 
 ### 5.2 The watchdog (`zai_inference_health.py`)
 
@@ -803,7 +809,13 @@ over L5 for the dashboard. The TTL on the pause is the self-heal so a forgotten 
 - **GET `/api/v1/ops/zai/status`** (`gateway_server.py::ops_zai_status` →
   `services/zai_status.py::build_status`) — per-tier 429 rejection RATES over 1m/10m/60m,
   FUP/1313 counts, effective caps, outcome counters, per-caller breakdown, control state.
-  All reads fail soft.
+  All reads fail soft (the error envelope still carries the counter). The handler also folds in
+  `coupling_suppressed_wakes` (`gateway_server.py::_coupling_suppressed_wakes_snapshot`) — the
+  rolling 1h/24h count of **autonomous-cron completions the M4 selective gate DENIED**. This is a
+  *mechanism* metric (gate denials), **not** a claim that each would have woken Simone: pre-M4 (with
+  the legacy `UA_CRON_WAKE_HEARTBEAT_ON_AUTONOMOUS_RUN` on) this population produced the measured
+  ~124/hr coupling wakes, so it tracks the gate that drove coupling to 0; today the legacy flag is
+  also off. In-memory, resets on restart — made ongoing rather than a one-off journal grep.
 - **POST `/api/v1/ops/zai/control`** (`gateway_server.py::ops_zai_control`) — actions
   `set_level` / `set_global_pause` / `set_tier_caps` / `set_tier_pause` / `clear`. Auth via
   `_require_ops_auth`; validates tiers ∈ `TIERS`, caps ≥ 1.
@@ -811,7 +823,9 @@ over L5 for the dashboard. The TTL on the pause is the self-heal so a forgotten 
   — polls status every 5s. Renders: the L0–L4 ladder + reset/global-pause buttons; one **per-tier
   card** per tier (opus/sonnet/mid/haiku) showing the effective cap (with ± steppers, override
   badge, pause), and **429 + FUP for each of the 1m / 10m / 60m windows**; the rolling rejection-rate
-  block (1m/10m/60m totals + the **Top 429 callers** list, which names the real consumer — see §5.1);
+  block (1m/10m/60m totals + the **Top 429 callers** list, which names the real consumer — see §5.1)
+  with the **autonomous-cron wakes denied by the M4 gate (1h/24h)** stat beneath it (gate denials —
+  the mechanism that drove coupling wakes 124/hr→0);
   and (polled every 10s) the **Proactive activity controls** panel (§9.4), whose timer/service rows
   render in a responsive **two-column** grid. All reads fail soft; the page renders even with zero
   ZAI traffic or a missing source.
@@ -864,7 +878,24 @@ so the watchdog-guarded sweeper's mask workaround lives in data, not in compound
 backend stays one validated verb per call. The dashboard panel renders grouped rows (Timers /
 Continuous services) with a HEAVY badge, running/enabled/masked state, last/next run, an On/Off
 toggle that dispatches the unit's action list, a "Stop all proactive" convenience button, and the
-in-process loops (heartbeat/cron) **read-only** with their Infisical-flag state.
+in-process loops **read-only** with their Infisical-flag state.
+
+`zai_activity_control.py::_inprocess_loops` surfaces five read-only rows: the two original loops
+(`heartbeat` / `cron`) plus the **M1–M4 dispatch-redesign control surface** so the operator can SEE
+the live routing state (each is an Infisical flag read at gateway start — a change needs a restart,
+same model as heartbeat/cron):
+
+- **Priority dispatcher** (`UA_PRIORITY_DISPATCHER_ENABLED`, default ON) —
+  `priority_dispatcher.py::priority_dispatcher_enabled`. The Pythonic routing that replaced
+  Simone-First; routes claimed work to a free agent slot without a Simone turn.
+- **Prefer-ATLAS** (`UA_DISPATCHER_PREFER_ATLAS`, default OFF / Stage A) —
+  `priority_dispatcher.py::prefer_atlas_enabled`. OFF ⇒ `preferred_vp=vp.general.primary` work
+  falls back to Simone; flip to route it to the ATLAS Python lane (Stage B).
+- **Cron→heartbeat coupling gate** (`UA_CRON_HEARTBEAT_WAKE_SELECTIVE`, default ON) —
+  `cron_service.py::coupling_wake_selective_enabled`. The row's note carries the live allowlist
+  (`cron_service.py::coupling_wake_allowed_jobs`; empty ⇒ "no cron wakes Simone") and the debounce
+  interval (`cron_service.py::coupling_wake_min_interval_seconds` — the canonical reader the gateway
+  hot-path `_cron_wake_min_interval_seconds` delegates to, so the displayed value can't drift).
 
 > Toggling is **live but not deploy-durable**: a deploy re-arms the timers (`systemctl enable
 > --now`), so for durable suppression across a deploy use the L4 pause (control file survives

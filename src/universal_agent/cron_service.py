@@ -130,6 +130,21 @@ def coupling_wake_allowed_jobs() -> frozenset[str]:
     return frozenset(j.strip() for j in raw.split(",") if j.strip())
 
 
+def coupling_wake_min_interval_seconds() -> int:
+    """Debounce: minimum seconds between cron-coupled heartbeat wakes (default
+    300; 0 disables).
+
+    Canonical reader of ``UA_CRON_HEARTBEAT_WAKE_MIN_INTERVAL_SECONDS`` — shared by
+    the gateway hot-path debounce (``_cron_wake_min_interval_seconds`` delegates
+    here) and the ZAI Control read-out, so the live value and the displayed value
+    can never drift.
+    """
+    try:
+        return int(str(os.getenv("UA_CRON_HEARTBEAT_WAKE_MIN_INTERVAL_SECONDS", "300")).strip())
+    except (TypeError, ValueError):
+        return 300
+
+
 def _parse_script_command_argv(raw_command: str) -> list[str]:
     """Split a ``!script <module> [args...]`` cron command into argv.
 

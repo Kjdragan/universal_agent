@@ -228,6 +228,42 @@ def test_list_activities_shape(monkeypatch):
     assert {"heartbeat", "cron"} <= inproc_keys
 
 
+def test_inprocess_loops_surfaces_dispatch_state(monkeypatch):
+    """M5 §2a — the in-process read-out includes the dispatch-redesign control
+    surface (priority dispatcher / prefer-ATLAS / coupling gate), read-only, with
+    the operator-facing env-var labels and the default Stage-A state."""
+    from universal_agent.services import zai_activity_control as zac
+
+    for var in (
+        "UA_PRIORITY_DISPATCHER_ENABLED",
+        "UA_DISPATCHER_PREFER_ATLAS",
+        "UA_CRON_HEARTBEAT_WAKE_SELECTIVE",
+        "UA_CRON_HEARTBEAT_WAKE_ALLOWLIST",
+        "UA_CRON_HEARTBEAT_WAKE_MIN_INTERVAL_SECONDS",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    rows = {r["key"]: r for r in zac._inprocess_loops()}
+    assert {
+        "heartbeat",
+        "cron",
+        "priority_dispatcher",
+        "prefer_atlas",
+        "cron_heartbeat_coupling_gate",
+    } <= set(rows)
+    assert rows["priority_dispatcher"]["env_var"] == "UA_PRIORITY_DISPATCHER_ENABLED"
+    assert rows["prefer_atlas"]["env_var"] == "UA_DISPATCHER_PREFER_ATLAS"
+    assert rows["cron_heartbeat_coupling_gate"]["env_var"] == "UA_CRON_HEARTBEAT_WAKE_SELECTIVE"
+    # Default state: dispatcher ON, prefer-ATLAS OFF (Stage A), selective gate ON.
+    assert rows["priority_dispatcher"]["enabled"] is True
+    assert rows["prefer_atlas"]["enabled"] is False
+    assert rows["cron_heartbeat_coupling_gate"]["enabled"] is True
+    # The coupling row's note reflects the empty allowlist + default debounce.
+    note = rows["cron_heartbeat_coupling_gate"]["note"]
+    assert "empty (no cron wakes Simone)" in note
+    assert "Debounce: 300s" in note
+
+
 # ── Gateway endpoints ───────────────────────────────────────────────────────
 
 

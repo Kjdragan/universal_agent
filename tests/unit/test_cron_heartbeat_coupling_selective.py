@@ -347,3 +347,92 @@ def test_coupling_wake_selective_enabled_parsing(monkeypatch, raw, expected):
 def test_coupling_wake_selective_default_on(monkeypatch):
     monkeypatch.delenv("UA_CRON_HEARTBEAT_WAKE_SELECTIVE", raising=False)
     assert coupling_wake_selective_enabled() is True
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# M5 §2b — suppressed-wakes counter (the 62/hr→0 relief made visible/ongoing)
+# ──────────────────────────────────────────────────────────────────────────
+@pytest.fixture
+def fresh_suppressed_counter(monkeypatch):
+    """Reset the in-memory suppressed-wakes counter so each test starts clean
+    (module globals otherwise persist across tests)."""
+    from collections import deque
+
+    monkeypatch.setattr(gateway_server, "_coupling_suppressed_wakes_total", 0)
+    monkeypatch.setattr(gateway_server, "_coupling_suppressed_wake_ts", deque(maxlen=50000))
+    return gateway_server
+
+
+def test_default_deny_increments_suppressed_counter(wakeable, fresh_suppressed_counter):
+    # A housekeeping cron (empty allowlist) is default-denied AND counted.
+    _wake("simone_chat_auto_complete")
+    wakeable.request_heartbeat_next.assert_not_called()
+    snap = gateway_server._coupling_suppressed_wakes_snapshot()
+    assert snap["last_1h"] == 1
+    assert snap["last_24h"] == 1
+    assert snap["total_since_start"] == 1
+
+
+def test_allowlisted_wake_does_not_increment_suppressed(wakeable, fresh_suppressed_counter, monkeypatch):
+    monkeypatch.setenv("UA_CRON_HEARTBEAT_WAKE_ALLOWLIST", "needs_simone_cron")
+    _wake("needs_simone_cron")
+    wakeable.request_heartbeat_next.assert_called_once()
+    assert gateway_server._coupling_suppressed_wakes_snapshot()["total_since_start"] == 0
+
+
+def test_selective_off_does_not_increment_suppressed(wakeable, fresh_suppressed_counter, monkeypatch):
+    # Kill switch on: no selective gate engages, so there is no suppression to count.
+    monkeypatch.setenv("UA_CRON_HEARTBEAT_WAKE_SELECTIVE", "0")
+    _wake("simone_chat_auto_complete")
+    wakeable.request_heartbeat_next.assert_called_once()
+    assert gateway_server._coupling_suppressed_wakes_snapshot()["total_since_start"] == 0
+
+
+def test_suppressed_counter_windows_exclude_old_entries(wakeable, fresh_suppressed_counter):
+    # An entry older than the 1h window counts for 24h but not 1h.
+    import time as _t
+
+    gateway_server._coupling_suppressed_wake_ts.append(_t.monotonic() - 7200.0)  # 2h ago
+    _wake("housekeeping_cron")  # fresh deny → within 1h
+    snap = gateway_server._coupling_suppressed_wakes_snapshot()
+    assert snap["last_1h"] == 1
+    assert snap["last_24h"] == 2
+
+
+def test_deny_returns_before_admission_still_counts(wakeable, fresh_suppressed_counter, monkeypatch):
+    # The increment happens on the cheap early-return path, before admission I/O.
+    adm = MagicMock()
+    monkeypatch.setattr(gateway_server, "_workflow_admission_service", lambda: adm)
+    _wake("not_allowlisted_cron")
+    adm.admit.assert_not_called()
+    assert gateway_server._coupling_suppressed_wakes_snapshot()["total_since_start"] == 1
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# M5 — canonical debounce-interval reader + gateway delegation (single source)
+# ──────────────────────────────────────────────────────────────────────────
+def test_coupling_wake_min_interval_default(monkeypatch):
+    from universal_agent.cron_service import coupling_wake_min_interval_seconds
+
+    monkeypatch.delenv("UA_CRON_HEARTBEAT_WAKE_MIN_INTERVAL_SECONDS", raising=False)
+    assert coupling_wake_min_interval_seconds() == 300
+
+
+def test_coupling_wake_min_interval_override(monkeypatch):
+    from universal_agent.cron_service import coupling_wake_min_interval_seconds
+
+    monkeypatch.setenv("UA_CRON_HEARTBEAT_WAKE_MIN_INTERVAL_SECONDS", "45")
+    assert coupling_wake_min_interval_seconds() == 45
+
+
+def test_coupling_wake_min_interval_garbage_falls_back(monkeypatch):
+    from universal_agent.cron_service import coupling_wake_min_interval_seconds
+
+    monkeypatch.setenv("UA_CRON_HEARTBEAT_WAKE_MIN_INTERVAL_SECONDS", "not-a-number")
+    assert coupling_wake_min_interval_seconds() == 300
+
+
+def test_gateway_debounce_reader_delegates_to_cron_service(monkeypatch):
+    # The hot-path reader must read the SAME value as the panel surfaces.
+    monkeypatch.setenv("UA_CRON_HEARTBEAT_WAKE_MIN_INTERVAL_SECONDS", "77")
+    assert gateway_server._cron_wake_min_interval_seconds() == 77

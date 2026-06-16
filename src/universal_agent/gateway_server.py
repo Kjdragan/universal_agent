@@ -77,6 +77,7 @@ from universal_agent.cron_service import (
     CronJob,
     CronService,
     coupling_wake_allowed_jobs,
+    coupling_wake_min_interval_seconds,
     coupling_wake_selective_enabled,
     parse_run_at,
 )
@@ -8730,10 +8731,48 @@ def _autonomous_cron_to_heartbeat_enabled() -> bool:
 # in that same copy (no split-brain today). Don't move them into different modules.
 _last_cron_coupled_wake_at: float = 0.0
 
+# M5 §2b — make the M4 selective gate visible + ongoing on the ZAI Control panel,
+# instead of a one-off `journalctl` grep. This counts, precisely, **autonomous-cron
+# completions the M4 selective gate DENIED** (the gate engaging) — a mechanism
+# metric, NOT a claim that each one would have woken Simone. Pre-M4 (legacy flag
+# `UA_CRON_WAKE_HEARTBEAT_ON_AUTONOMOUS_RUN` on) this same population produced the
+# measured ~124/hr coupling wakes, so it tracks the gate that drove coupling to 0;
+# today the legacy flag is also off, so a denial here is not by itself a "prevented
+# wake". The increment sits at the gate's early return — before the legacy-flag and
+# (DB-touching) eligible-items checks — so it must stay cheap. Pure in-memory
+# (GIL-safe int + deque append on the event loop, no I/O), fail-soft, resets on
+# restart. `maxlen` bounds memory even if the allowlist is later widened (50k ≈ 16+
+# days at the ~124/hr peak — well past the 24h window). Co-located with the wake fn
+# in the `__main__` module copy — see the split-brain note above
+# `_last_cron_coupled_wake_at`.
+_coupling_suppressed_wake_ts: "deque[float]" = deque(maxlen=50000)
+_coupling_suppressed_wakes_total: int = 0
+
 
 def _cron_wake_min_interval_seconds() -> int:
-    """Minimum seconds between cron-coupled heartbeat wakes (debounce). 0 disables."""
-    return _env_int("UA_CRON_HEARTBEAT_WAKE_MIN_INTERVAL_SECONDS", 300)
+    """Minimum seconds between cron-coupled heartbeat wakes (debounce). 0 disables.
+
+    Delegates to the canonical reader in ``cron_service`` so the gateway hot-path
+    debounce and the ZAI Control read-out never drift on the default.
+    """
+    return coupling_wake_min_interval_seconds()
+
+
+def _coupling_suppressed_wakes_snapshot() -> dict[str, int]:
+    """Rolling 1h/24h + cumulative count of autonomous-cron completions the M4
+    selective gate DENIED (a mechanism metric — gate denials, not proven prevented
+    wakes; see the module comment above the counter). Pure read of the in-memory
+    deque (no I/O); never raises so the status endpoint always renders."""
+    try:
+        now = time.monotonic()
+        ts = list(_coupling_suppressed_wake_ts)
+        return {
+            "last_1h": sum(1 for t in ts if now - t <= 3600.0),
+            "last_24h": sum(1 for t in ts if now - t <= 86400.0),
+            "total_since_start": int(_coupling_suppressed_wakes_total),
+        }
+    except Exception:  # noqa: BLE001 — a metric must never crash the status endpoint
+        return {"last_1h": 0, "last_24h": 0, "total_since_start": 0}
 
 
 def _task_hub_has_dispatch_eligible_items() -> bool:
@@ -8793,6 +8832,13 @@ def _maybe_wake_heartbeat_after_autonomous_cron(
     if _selective and (
         str(system_job or "").strip() not in coupling_wake_allowed_jobs()
     ):
+        # M5 §2b — record this selective-gate DENIAL (the M4 gate engaging). O(1)
+        # int add + deque append; safe on the event loop (no I/O). Counts gate
+        # denials of autonomous-cron wake attempts — the mechanism that drove
+        # coupling 124/hr → 0 — not a claim that each would have woken Simone.
+        global _coupling_suppressed_wakes_total
+        _coupling_suppressed_wakes_total += 1
+        _coupling_suppressed_wake_ts.append(time.monotonic())
         return
     if not _autonomous_cron_to_heartbeat_enabled():
         return
@@ -17164,10 +17210,23 @@ async def ops_zai_status(request: Request):
         # during an incident) — offload off the event loop so the 5s dashboard
         # poll can't starve the gateway (the 2026-05-26 event-loop-starvation
         # class). Fail-soft envelope still wraps it.
-        return await asyncio.to_thread(build_status)
+        status = await asyncio.to_thread(build_status)
+        # M5 §2b — fold in the cron-coupling suppressed-wakes counter (in-memory,
+        # gateway-local; no thread offload needed). Surfaced on the ZAI Control
+        # panel alongside the rejection-rate block.
+        if isinstance(status, dict):
+            status["coupling_suppressed_wakes"] = _coupling_suppressed_wakes_snapshot()
+        return status
     except Exception as exc:  # noqa: BLE001 — status must degrade, not crash
         logger.warning("ops_zai_status: aggregator raised", exc_info=True)
-        return {"error": f"status_unavailable: {type(exc).__name__}", "events": {}, "control": {}}
+        # Keep the in-memory coupling counter available even when the events
+        # aggregator degrades — _coupling_suppressed_wakes_snapshot never raises.
+        return {
+            "error": f"status_unavailable: {type(exc).__name__}",
+            "events": {},
+            "control": {},
+            "coupling_suppressed_wakes": _coupling_suppressed_wakes_snapshot(),
+        }
 
 
 @app.get("/api/v1/ops/zai/token-usage")
