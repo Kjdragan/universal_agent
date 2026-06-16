@@ -73,7 +73,13 @@ from universal_agent.codebase_policy import (
     build_codebase_access,
     validate_codebase_root,
 )
-from universal_agent.cron_service import CronJob, CronService, parse_run_at
+from universal_agent.cron_service import (
+    CronJob,
+    CronService,
+    coupling_wake_allowed_jobs,
+    coupling_wake_selective_enabled,
+    parse_run_at,
+)
 from universal_agent.delegation.factory_registry import (
     FactoryRegistry,
     connect_registry_db,
@@ -8125,6 +8131,7 @@ def _emit_cron_event(payload: dict) -> None:
             run_status=run_status,
             is_autonomous=is_autonomous,
             reason=f"cron_autonomous_run:{run_id or job_id or 'unknown'}",
+            system_job=system_job,
         )
     event = {
         "type": event_type,
@@ -8711,6 +8718,24 @@ def _autonomous_cron_to_heartbeat_enabled() -> bool:
     }
 
 
+# M4 debounce backstop for the autonomous cron→heartbeat coupling. Monotonic
+# timestamp of the last cron-coupled wake; a pure in-process time gate (no I/O)
+# so it is safe on the gateway event loop. With the default-deny allowlist empty
+# this never engages (nothing reaches the debounce); it exists so a future
+# allowlisted cron still cannot wake Simone more than once per interval.
+# NOTE: must stay co-located with _maybe_wake_heartbeat_after_autonomous_cron and
+# the startup-captured _emit_cron_event sink. The gateway runs as
+# `python -m universal_agent.gateway_server`, so the live code executes in the
+# sys.modules["__main__"] copy; this global's read+write and the wake fn resolve
+# in that same copy (no split-brain today). Don't move them into different modules.
+_last_cron_coupled_wake_at: float = 0.0
+
+
+def _cron_wake_min_interval_seconds() -> int:
+    """Minimum seconds between cron-coupled heartbeat wakes (debounce). 0 disables."""
+    return _env_int("UA_CRON_HEARTBEAT_WAKE_MIN_INTERVAL_SECONDS", 300)
+
+
 def _task_hub_has_dispatch_eligible_items() -> bool:
     if not _task_hub_enabled():
         return False
@@ -8745,16 +8770,44 @@ def _task_hub_has_dispatch_eligible_items() -> bool:
             conn.close()
 
 
-def _maybe_wake_heartbeat_after_autonomous_cron(*, run_status: str, is_autonomous: bool, reason: str) -> None:
+def _maybe_wake_heartbeat_after_autonomous_cron(
+    *, run_status: str, is_autonomous: bool, reason: str, system_job: str = ""
+) -> None:
     if not _heartbeat_service:
         return
     if not is_autonomous:
         return
     if str(run_status or "").strip().lower() != "success":
         return
+    # M4 selective gate (default-deny). When selective coupling is enabled
+    # (default ON), a cron's completion only wakes Simone if its system_job is
+    # explicitly allowlisted as needing her to ACT. The default allowlist is
+    # EMPTY, so no autonomous cron wakes her for dispatch — the live Python
+    # dispatcher + idle_dispatch_loop already cover that, and urgent work wakes
+    # her via request_heartbeat_now (a different path). Placed early so a deny is
+    # cheap (returns before any admission I/O). Flipping
+    # UA_CRON_HEARTBEAT_WAKE_SELECTIVE off (+ restart) bypasses BOTH this gate and
+    # the debounce below, so it is a true full revert to the pre-M4
+    # wake-on-every-cron behavior (escape hatch for this hot-path change).
+    _selective = coupling_wake_selective_enabled()
+    if _selective and (
+        str(system_job or "").strip() not in coupling_wake_allowed_jobs()
+    ):
+        return
     if not _autonomous_cron_to_heartbeat_enabled():
         return
     if not _task_hub_has_dispatch_eligible_items():
+        return
+
+    # M4 debounce backstop — even an allowlisted cron must not storm the
+    # heartbeat. Pure timestamp gate (no I/O) on the single-threaded event loop,
+    # and only under selective coupling (so selective-OFF fully reverts). Only the
+    # READ happens here; the window is COMMITTED after a wake genuinely fires
+    # (below), so a deduped/deferred/no-target admission never burns the interval
+    # and strands a later legitimate wake.
+    global _last_cron_coupled_wake_at
+    _min_interval = _cron_wake_min_interval_seconds() if _selective else 0
+    if _min_interval > 0 and (time.monotonic() - _last_cron_coupled_wake_at) < _min_interval:
         return
 
     admission = _workflow_admission_service().admit(
@@ -8781,6 +8834,8 @@ def _maybe_wake_heartbeat_after_autonomous_cron(*, run_status: str, is_autonomou
     for session_id in sorted(target_sessions):
         _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
     if target_sessions:
+        if _min_interval > 0:
+            _last_cron_coupled_wake_at = time.monotonic()  # commit debounce on a real wake
         _workflow_admission_service().mark_completed(
             admission.run_id or "",
             attempt_id=admission.attempt_id,

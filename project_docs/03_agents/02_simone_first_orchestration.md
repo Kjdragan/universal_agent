@@ -77,8 +77,16 @@ replaces routing with a **deterministic, no-LLM-in-the-hot-path priority dispatc
   off → general/research falls back to Simone (no degradation); on → it prefers ATLAS.
 - **Coupling-wake reduction (M3 side-effect).** Each `atlas_direct_dispatch` cron fire used to emit a
   `request_heartbeat_next` coupling-wake (`gateway_server.py::_maybe_wake_heartbeat_after_autonomous_cron`),
-  ~60/hr. Retiring the cron removes that wake source; after M3 the remaining per-minute autonomous cron
-  feeding the coupling is `simone_chat_auto_complete` (still `*/1`).
+  ~60/hr. Retiring the cron removed that wake source; after M3 the remaining per-minute autonomous cron
+  still feeding the coupling was `simone_chat_auto_complete` (`*/1`), ~62/hr.
+- **Selective coupling (M4).** `_maybe_wake_heartbeat_after_autonomous_cron` is no longer non-selective. It
+  now consults a **default-deny allowlist** (`cron_service.py::coupling_wake_allowed_jobs`, **empty** by
+  default): a cron success couples to the heartbeat only if its `system_job` is explicitly allowlisted, so
+  the remaining `*/1` `simone_chat_auto_complete` (and every other autonomous cron) no longer wakes Simone.
+  Allowlisted wakes are **debounced** (~300s). The dispatch that the coupling used to chase is covered by
+  this priority dispatcher (Python, no Simone turn) + `idle_dispatch_loop`; urgent work still wakes
+  immediately via `request_heartbeat_now`. Net: the ~62/hr coupling-wake stream drops toward zero. The same
+  allowlist closes the session-bound back door (`cron_service.py::_maybe_wake_heartbeat`).
 
 Awareness is preserved: completion is recorded passively (`services/proactive_work_recap.py`) and
 VP failures escalate via `services/vp_failure_rescue.py::surface_failure_to_simone`. Simone is

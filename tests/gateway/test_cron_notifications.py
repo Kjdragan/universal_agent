@@ -750,6 +750,10 @@ def test_operator_email_heartbeat_wake_dedupes_via_workflow_admission(monkeypatc
 def test_autonomous_cron_heartbeat_wake_dedupes_via_workflow_admission(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
     monkeypatch.setenv("UA_CRON_WAKE_HEARTBEAT_ON_AUTONOMOUS_RUN", "1")
+    # Isolate this test's intent (workflow-admission dedup) from the M4 selective
+    # layer: flip the escape hatch off so the default-deny allowlist + debounce are
+    # fully bypassed and the dedup is genuinely exercised by the admission service.
+    monkeypatch.setenv("UA_CRON_HEARTBEAT_WAKE_SELECTIVE", "0")
 
     class _HeartbeatStub:
         def __init__(self) -> None:
@@ -817,6 +821,10 @@ def test_autonomous_cron_wake_ignores_cron_role_sessions(monkeypatch, tmp_path: 
     monkeypatch.setattr(gateway_server, "_workflow_admission_service", lambda: _AdmissionStub())
     monkeypatch.setattr(gateway_server, "_task_hub_has_dispatch_eligible_items", lambda: True)
     monkeypatch.setenv("UA_CRON_WAKE_HEARTBEAT_ON_AUTONOMOUS_RUN", "1")
+    # Isolate this test's intent (cron-role session filtering) from the M4 selective
+    # layer: flip the escape hatch off so the default-deny allowlist + debounce are
+    # fully bypassed and the wake reaches _collect_live_heartbeat_targets unchanged.
+    monkeypatch.setenv("UA_CRON_HEARTBEAT_WAKE_SELECTIVE", "0")
     monkeypatch.setattr(
         gateway_server,
         "_sessions",
