@@ -583,6 +583,14 @@ class AgentMailService:
             1.0,
             max(0.0, float(os.getenv("UA_AGENTMAIL_INBOX_RETRY_JITTER_RATIO", "0.30") or 0.30)),
         )
+        # Hard ceiling on inbound-queue retries. A poison item (e.g. triage
+        # perpetually "not ready", or a permanently "busy" dispatch) used to
+        # retry forever, inflating attempt_count without bound until
+        # ``10.0 * 2 ** (attempts - 1)`` raised OverflowError. Past this ceiling
+        # the item is failed-terminal instead of retried.
+        self._trusted_queue_retry_max_attempts = max(
+            1, int(os.getenv("UA_AGENTMAIL_INBOX_RETRY_MAX_ATTEMPTS", "12") or 12)
+        )
         self._trusted_queue_poll_seconds = max(
             1.0, float(os.getenv("UA_AGENTMAIL_INBOX_POLL_SECONDS", "5") or 5)
         )
@@ -2806,8 +2814,25 @@ class AgentMailService:
             )
 
     def _retry_queue_item(self, queue_id: str, *, error: str, attempts: int) -> None:
+        # Give up (fail-terminal) once the retry budget is exhausted, so a poison
+        # item can't retry forever and inflate attempt_count without bound. This
+        # also retires any pre-existing item whose attempt_count is already huge.
+        if attempts >= self._trusted_queue_retry_max_attempts:
+            logger.warning(
+                "📧 Trusted inbox queue item %s exhausted retries (%d/%d) — failing: %s",
+                queue_id, attempts, self._trusted_queue_retry_max_attempts, error,
+            )
+            self._fail_queue_item(
+                queue_id, error=f"retry_exhausted({attempts}): {error}", attempts=attempts
+            )
+            return
         now_ts = time.time()
-        base_delay = self._trusted_queue_retry_base_seconds * (2 ** max(0, attempts - 1))
+        # Cap the exponent BEFORE the power: a large attempt count would make
+        # ``2 ** (attempts - 1)`` a giant int, and ``float * giant_int`` raises
+        # OverflowError. The delay is min()-capped below anyway, so a small
+        # exponent fully saturates the cap.
+        exponent = min(max(0, attempts - 1), 16)
+        base_delay = self._trusted_queue_retry_base_seconds * (2 ** exponent)
         capped_delay = min(self._trusted_queue_retry_max_seconds, base_delay)
         jitter = random.uniform(0.0, capped_delay * self._trusted_queue_retry_jitter_ratio)
         next_attempt = datetime.fromtimestamp(now_ts + capped_delay + jitter, tz=timezone.utc)

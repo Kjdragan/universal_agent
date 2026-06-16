@@ -9,7 +9,7 @@ code_paths:
   - src/universal_agent/services/email_task_bridge.py
   - src/universal_agent/services/email_tags.py
   - src/universal_agent/services/vp_email_directive.py
-last_verified: 2026-06-12
+last_verified: 2026-06-16
 ---
 
 # Email / AgentMail
@@ -239,6 +239,14 @@ and calls the admission dispatch fn. The decision drives routing:
 - `busy` / `duplicate_in_progress` → retry with backoff (`_retry_queue_item`).
 - `skipped` with no triage output → retry (triage not ready yet).
 - anything else → fail (`_fail_queue_item`).
+
+`_retry_queue_item` is **bounded**: past `UA_AGENTMAIL_INBOX_RETRY_MAX_ATTEMPTS`
+(default 12) it fails the item terminal (`retry_exhausted`) instead of retrying,
+and it caps the backoff exponent before the power. This closes a defect where a
+poison item (e.g. triage perpetually "not ready") retried forever — `attempt_count`
+grew unbounded until `base_seconds * 2 ** (attempts - 1)` raised
+`OverflowError: int too large to convert to float`. The bound also retires any
+pre-existing huge-`attempt_count` rows on next processing.
 
 Queue lifecycle statuses (`_QUEUE_STATUS_*`): `queued`, `dispatching`,
 `busy_retry`, `triaged`, `dispatched_to_todo`, `review_required`, `quarantined`,
@@ -475,6 +483,7 @@ each getting its own `virtual_thread_id`/`virtual_message_id` and session key.
 | `UA_AGENTMAIL_INBOX_RETRY_BASE_SECONDS` | `10` | Trusted queue retry base |
 | `UA_AGENTMAIL_INBOX_RETRY_MAX_SECONDS` | `900` | Trusted queue retry max |
 | `UA_AGENTMAIL_INBOX_RETRY_JITTER_RATIO` | `0.30` | Trusted queue retry jitter |
+| `UA_AGENTMAIL_INBOX_RETRY_MAX_ATTEMPTS` | `12` | Trusted queue retry ceiling (fail-terminal past this) |
 | `UA_AGENTMAIL_INBOX_POLL_SECONDS` | `5` | Trusted queue idle poll |
 
 ## Database tables
