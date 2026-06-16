@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/task_hub.py
   - src/universal_agent/durable/state.py
   - src/universal_agent/services/proactive_health_notifier.py
-last_verified: 2026-06-10
+last_verified: 2026-06-16
 ---
 
 # Agent Operating Playbook
