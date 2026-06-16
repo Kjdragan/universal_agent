@@ -1,20 +1,15 @@
-"""Prune stale tailnet-scratchpad artifacts.
+"""Prune (optionally) tailnet-scratchpad artifacts, and refresh the artifact index.
 
-The scratchpad (`/home/ua/ua_scratch/<slug>/`) is a **delivery surface, not a
-system of record**. The durable copy of any report lives elsewhere (e.g. the
-YouTube digest markdown under `AGENT_RUN_WORKSPACES/daily_digests/`); the scratch
-HTML is just the rendered copy we email as a link. Once a report is old enough
-that nobody will click the email link, the slug-dir is pure clutter — and left
-unbounded the scratch root would accumulate thousands of dead dirs over a year.
+The scratchpad (`/home/ua/ua_scratch/<slug>/`) is the operator's persistent artifact
+store, surfaced by the browsable index. **Retention is unlimited by default** — nothing
+is deleted, so the store keeps every artifact. Pruning is opt-in: set
+``UA_SCRATCH_RETENTION_DAYS`` to a positive integer and this sweep deletes slug-dirs whose
+newest content is older than that many days (a value ``<= 0`` or unset means unlimited).
 
-This sweep deletes scratch slug-dirs whose newest content is older than
-``UA_SCRATCH_RETENTION_DAYS`` (default 90) — about a quarter of artifact history
-for the browsable index, still bounded so the store can't grow without limit.
-Anything older can be regenerated from the durable source if ever needed.
-
-Filesystem GC, then a best-effort rebuild of the artifact index so it never lists a
-just-pruned dir. It runs on the VPS where the scratch dir is local (registered as a
-daily system cron — see ``gateway_server._ensure_scratch_pruning_cron_job``).
+Either way it then does a best-effort rebuild of the artifact index, so even when nothing
+is pruned the daily run keeps the index fresh. It runs on the VPS where the scratch dir
+is local (registered as a daily system cron — see
+``gateway_server._ensure_scratch_pruning_cron_job``).
 """
 
 from __future__ import annotations
@@ -30,16 +25,20 @@ import time
 logger = logging.getLogger(__name__)
 
 DEFAULT_ROOT = "/home/ua/ua_scratch"
-DEFAULT_RETENTION_DAYS = 90
+# 0 = unlimited retention (keep every artifact; never prune). Set a positive
+# UA_SCRATCH_RETENTION_DAYS to opt into a deletion window.
+DEFAULT_RETENTION_DAYS = 0
 
 
 def _retention_days() -> int:
+    """Retention window in days; ``<= 0`` means unlimited (never prune)."""
     raw = (os.getenv("UA_SCRATCH_RETENTION_DAYS") or "").strip()
+    if not raw:
+        return DEFAULT_RETENTION_DAYS
     try:
-        days = int(raw) if raw else DEFAULT_RETENTION_DAYS
+        return int(raw)
     except ValueError:
-        days = DEFAULT_RETENTION_DAYS
-    return max(1, days)
+        return DEFAULT_RETENTION_DAYS
 
 
 def _scratch_root() -> Path:
@@ -54,8 +53,10 @@ def prune_scratch(
 ) -> dict:
     """Remove scratch slug-dirs whose newest content is older than the retention.
 
-    Returns a summary dict: ``{root, retention_days, removed, kept, errors}``.
-    Best-effort: per-dir failures are counted and logged, never raised.
+    With ``retention_days <= 0`` (the default) retention is unlimited: nothing is
+    deleted and every slug-dir is kept. Returns a summary dict:
+    ``{root, retention_days, removed, kept, errors}``. Best-effort: per-dir failures are
+    counted and logged, never raised.
     """
     root = Path(root) if root is not None else _scratch_root()
     days = retention_days if retention_days is not None else _retention_days()
@@ -64,6 +65,14 @@ def prune_scratch(
 
     if not root.is_dir():
         logger.info("scratch prune: root %s does not exist; nothing to do", root)
+        return result
+
+    if days <= 0:
+        result["kept"] = sum(1 for child in root.iterdir() if child.is_dir())
+        logger.info(
+            "scratch prune: unlimited retention (UA_SCRATCH_RETENTION_DAYS<=0) — kept all %d slug-dir(s)",
+            result["kept"],
+        )
         return result
 
     cutoff = now - days * 86400

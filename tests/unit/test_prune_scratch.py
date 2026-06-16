@@ -81,3 +81,21 @@ def test_retention_days_from_env(monkeypatch):
     assert prune_scratch._retention_days() == prune_scratch.DEFAULT_RETENTION_DAYS
     monkeypatch.delenv("UA_SCRATCH_RETENTION_DAYS", raising=False)
     assert prune_scratch._retention_days() == prune_scratch.DEFAULT_RETENTION_DAYS
+
+
+def test_default_retention_is_unlimited():
+    # Unlimited by default — the store keeps every artifact unless a window is set.
+    assert prune_scratch.DEFAULT_RETENTION_DAYS == 0
+
+
+@pytest.mark.parametrize("days", [0, -1])
+def test_unlimited_retention_keeps_everything(scratch_root, days):
+    now = time.time()
+    ancient = _make_slug(scratch_root, "ancient-1", age_days=999, now=now)
+    recent = _make_slug(scratch_root, "recent-1", age_days=1, now=now)
+
+    result = prune_scratch.prune_scratch(root=scratch_root, retention_days=days, now=now)
+
+    assert ancient.exists() and recent.exists(), "unlimited retention must delete nothing"
+    assert result["removed"] == 0
+    assert result["kept"] == 2
