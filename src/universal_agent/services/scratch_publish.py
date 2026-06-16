@@ -69,6 +69,25 @@ _RAW_EXTS = {
     ".pdf", ".html", ".htm",
 }
 
+# The scratchpad is always served under this path (``tailscale serve --set-path
+# /scratch``) and the browsable artifact index lives at its root. An absolute href
+# lets a "back to index" link resolve from any artifact depth — ``/scratch/<slug>/
+# <file>`` or a nested docset page alike.
+SCRATCH_INDEX_HREF = "/scratch/"
+
+
+def scratch_back_link_html(label: str = "Scratchpad index") -> str:
+    """A small 'back to the artifact index' link for any scratchpad-served page.
+
+    Renders ``<div class="scratch-back">…</div>``; each page styles ``.scratch-back``
+    in its own CSS. Centralised so every producer — the markdown/docset pages here and
+    the YouTube digest renderer — agrees on the index target and wording.
+    """
+    return (
+        f'<div class="scratch-back"><a href="{SCRATCH_INDEX_HREF}">'
+        f"← {_html.escape(label)}</a></div>"
+    )
+
 
 def _publish_script() -> Path:
     """Absolute path to the canonical publish script for this checkout."""
@@ -380,6 +399,9 @@ nav.docset a:hover{background:var(--accent-soft)}
 nav.docset a.current{background:var(--fg);color:#fff;font-weight:600}
 nav.docset .sep{width:1px;height:1.1rem;background:var(--border);margin:0 .2rem}
 nav.docset a.file{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem}
+.scratch-back{padding:.5rem 1rem;font-size:.82rem;background:var(--soft);border-bottom:1px solid var(--border)}
+.scratch-back a{color:var(--accent);text-decoration:none}
+.scratch-back a:hover{text-decoration:underline}
 main{max-width:880px;margin:0 auto;padding:2.2rem 1.3rem 5rem}
 h1,h2,h3,h4{line-height:1.25;margin-top:1.8em;margin-bottom:.6em;font-weight:650}
 h1{font-size:1.9rem;border-bottom:1px solid var(--border);padding-bottom:.3em;margin-top:.2em}
@@ -420,7 +442,7 @@ def _html_page(title: str, body_html: str, *, nav_html: str = "") -> str:
         f"<title>{_html.escape(title)}</title>\n"
         f"<style>{_DOCSET_CSS}</style>\n"
         "</head>\n"
-        f"<body>{nav_html}<main>{body_html}</main>\n"
+        f"<body>{scratch_back_link_html()}{nav_html}<main>{body_html}</main>\n"
         "<footer>Rendered on the tailnet HTML scratchpad · private to your devices.</footer>\n"
         "</body></html>\n"
     )
