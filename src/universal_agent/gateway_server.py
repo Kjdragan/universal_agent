@@ -19896,6 +19896,28 @@ def _paper_to_podcast_enabled() -> bool:
     return os.getenv("UA_PAPER_TO_PODCAST_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _paper_to_podcast_max_turns(default: int = 30) -> int:
+    """Resolve the per-job agentic-loop turn cap for paper_to_podcast_daily.
+
+    The full pipeline -- ArXiv search + ingest + NotebookLM notebook + 3x
+    studio_create -- then needs several more turns to wait out a slow
+    deep_dive audio poll, download the .m4a, and email it. The engine
+    default of 20 turns (EngineConfig.max_iterations) ends the session
+    mid-poll on slow-audio days, orphaning the download; 30 leaves
+    headroom for the poll + download + email without risking runaway.
+    Override per-environment without a code change via the env var.
+    See RCA_paper_to_podcast.md (turn-budget exhaustion, 2026-06-16).
+    """
+    raw = (os.getenv("UA_PAPER_TO_PODCAST_MAX_TURNS") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= 1 else default
+
+
 def _paper_to_podcast_command() -> str:
     from datetime import datetime as _dt
     day_index = _dt.now().timetuple().tm_yday % len(PAPER_TO_PODCAST_TOPICS)
@@ -19908,7 +19930,7 @@ def _paper_to_podcast_command() -> str:
             "- An audio overview podcast (deep dive format) via `nlm audio create <nb> --format deep_dive --confirm` — this is the headline deliverable; never skip it.",
             "- A quiz (10 questions) via `nlm quiz create <nb> --count 10 --difficulty 3 --confirm`",
             "- Flashcards (best-effort only — skip cleanly if NotebookLM cannot produce them)",
-            "Poll `nlm studio status <nb> --json` until the audio is completed, then download all artifacts to work_products/paper_to_podcast/ via `nlm download audio|quiz|flashcards <nb> -o <path>` (the audio MUST be a real .m4a).",
+            "POLL THE AUDIO WITH A LONG WINDOW. The `deep_dive` audio routinely takes 30-40 minutes to finish, so the poll must be patient: run a single background bash loop that calls `nlm studio status <nb> --json` and `sleep 30` between checks, for UP TO 40 MINUTES. Keep polling until the audio artifact's status is `completed` (or `failed`). DO NOT cap the poll under 30 minutes. DO NOT end the run while audio is still `in_progress` — if a background poll reaches its loop end with audio still `in_progress`, start another poll loop rather than terminating. Only once audio is `completed`, download all artifacts to work_products/paper_to_podcast/ via `nlm download audio|quiz|flashcards <nb> -o <path>` (the audio MUST be a real .m4a).",
             "If `nlm login --check` fails, the credentials are genuinely expired — STOP and report that desktop re-auth is needed. NEVER fabricate the audio podcast or write a text 'podcast transcript' as a substitute.",
             "Write a manifest.json listing all outputs (note any skipped flashcards as a gap; a missing audio podcast is a failure).",
             "Then compose a summary email with:",
@@ -19949,6 +19971,11 @@ def _ensure_paper_to_podcast_cron_job() -> Optional[dict[str, Any]]:
         # surfaces a structured `cron_run_failed` notification before
         # the run starts, naming the missing key.
         "required_secrets": ["NOTEBOOKLM_AUTH_COOKIE_HEADER"],
+        # Job-scoped agentic-loop turn cap. Resolved into the cron's
+        # request metadata at run time (cron_service._run_job) and honored
+        # by gateway._resolve_max_turns_override. Without this the engine
+        # default of 20 turns ends the run mid-poll on slow-audio days.
+        "max_turns": _paper_to_podcast_max_turns(),
     }
     updates = {
         "user_id": "cron_system",

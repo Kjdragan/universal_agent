@@ -132,6 +132,34 @@ def _metadata_bool(value: Any, *, default: bool = False) -> bool:
     return default
 
 
+def _resolve_max_turns_override(metadata: dict[str, Any]) -> Optional[int]:
+    """Resolve a request-scoped agentic-loop turn-cap override.
+
+    Honors a ``max_turns`` key in request metadata (set job-scoped by cron
+    registration -- e.g. ``UA_PAPER_TO_PODCAST_MAX_TURNS`` stamped onto
+    ``paper_to_podcast_daily``). Returns ``None`` when absent/invalid so the
+    engine default (``EngineConfig.max_iterations``) is preserved.
+
+    Why this exists: ``paper_to_podcast_daily`` routinely spends ~20
+    agentic turns on ArXiv search + ingest + NotebookLM notebook + 3x
+    ``studio_create`` and then needs several more to wait out a slow
+    ``deep_dive`` audio poll, download the ``.m4a``, and email it. The
+    engine default of 20 turns ends the session mid-poll on slow-audio
+    days, orphaning the download -- see RCA ``RCA_paper_to_podcast.md``
+    (turn-budget exhaustion, 2026-06-16).
+    """
+    raw = metadata.get("max_turns")
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if value < 1:
+        return None
+    return value
+
+
 def _infer_explicit_vp_target(user_input: str) -> tuple[Optional[str], Optional[str]]:
     text = str(user_input or "").strip()
     if not text:
@@ -667,6 +695,9 @@ class InProcessGateway(Gateway):
         adapter.config.__dict__["_run_source"] = run_source
         adapter.config.__dict__["_request_metadata"] = dict(metadata)
         adapter.config.extra_disallowed_tools = _extra_disallowed_tools_for_request(metadata)
+        max_turns_override = _resolve_max_turns_override(metadata)
+        if max_turns_override is not None:
+            adapter.config.max_iterations = max_turns_override
 
         memory_policy = metadata.get("memory_policy", {})
         if isinstance(memory_policy, dict):

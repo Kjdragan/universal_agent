@@ -1989,6 +1989,22 @@ class CronService:
                             if _job_timeout is not None and _job_timeout > 0:
                                 request_metadata["turn_timeout_seconds"] = int(_job_timeout)
 
+                            # Plumb a per-job agentic-loop turn cap
+                            # (max_turns) down to the execution engine.
+                            # Set on a cron job's metadata -- e.g.
+                            # paper_to_podcast_daily resolves
+                            # UA_PAPER_TO_PODCAST_MAX_TURNS into this key --
+                            # so jobs that need more than the engine default
+                            # (20) turns can survive a long final phase
+                            # (audio poll + download + email) instead of
+                            # ending mid-run. Honored by
+                            # gateway._resolve_max_turns_override. See
+                            # RCA_paper_to_podcast.md (turn-budget
+                            # exhaustion, 2026-06-16).
+                            _job_max_turns = (job.metadata or {}).get("max_turns")
+                            if _job_max_turns is not None:
+                                request_metadata["max_turns"] = _job_max_turns
+
                             raw_command = job.command.strip()
                             if raw_command.startswith("!script "):
                                 script_path = raw_command.replace("!script ", "", 1).strip()
