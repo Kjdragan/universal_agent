@@ -38,7 +38,10 @@
 #   Detection is automatic — you don't pass a flag.
 set -euo pipefail
 
-SCRATCH_ROOT="/home/ua/ua_scratch"
+# UA_SCRATCH_ROOT override (defaults to the live store). Lets tests/CI redirect publishes
+# to a throwaway dir so a test can never write into the real tailnet store. Mirrors
+# prune_scratch.py and build_scratch_index.py, which already honor the same var.
+SCRATCH_ROOT="${UA_SCRATCH_ROOT:-/home/ua/ua_scratch}"
 VPS_HOST="ua@uaonvps"
 TS_HOST="uaonvps.taildcc090.ts.net"
 # Stdlib-only index builder (no venv needed). Resolved next to this script when run on

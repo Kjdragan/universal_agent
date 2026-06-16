@@ -32,6 +32,28 @@ def _reset_workspace_context():
     _WORKSPACE_CONTEXT_VAR.reset(token)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_scratch_root(tmp_path_factory):
+    """Never let a test publish into the real tailnet scratchpad.
+
+    publish_scratch.sh honors UA_SCRATCH_ROOT, so pointing it at a throwaway dir means a
+    test that reaches the real publish path (e.g. a digest test calling
+    process_daily_digest with email_to set) writes there instead of /home/ua/ua_scratch.
+    This is the systemic backstop behind per-test mocking — it closes the leak that put
+    "Fake Digest" stubs into the live store when the suite ran on the VPS.
+    """
+    root = tmp_path_factory.mktemp("ua_scratch_isolated")
+    prev = os.environ.get("UA_SCRATCH_ROOT")
+    os.environ["UA_SCRATCH_ROOT"] = str(root)
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("UA_SCRATCH_ROOT", None)
+        else:
+            os.environ["UA_SCRATCH_ROOT"] = prev
+
+
 @pytest.fixture
 def temp_workspace(tmp_path):
     """Create temporary workspace directory for tests."""
