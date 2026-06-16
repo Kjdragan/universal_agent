@@ -11,7 +11,7 @@ code_paths:
   - deployment/systemd/
   - scripts/install_vps_phase_a_batch1_timers.sh
   - scripts/install_vps_phase_a_batch2_timers.sh
-last_verified: 2026-06-10
+last_verified: 2026-06-15
 ---
 
 # Cron & Scheduling
@@ -506,7 +506,14 @@ py-spy) — `_run_job` calls `await asyncio.to_thread(self._finalize_workflow_at
 - On success, a session rollover is captured to shared memory (if memory is
   enabled).
 - `_maybe_wake_heartbeat` wakes a target session's heartbeat (`now`/`next`)
-  when `metadata.wake_heartbeat` and a session id are present.
+  when `metadata.wake_heartbeat` and a session id are present. Since M4 the
+  selective cron→heartbeat coupling closes the back door here: an **autonomous**
+  system cron's `next`-mode wake is gated by the same default-deny allowlist
+  (`coupling_wake_allowed_jobs` / `coupling_wake_selective_enabled`) used by
+  `gateway_server.py::_maybe_wake_heartbeat_after_autonomous_cron`. Non-autonomous
+  (user/email-scheduled) session wakes and explicit `wake_mode="now"` urgent wakes
+  are unaffected. (The autonomous-cron coupling lane itself lives in
+  `gateway_server` — see `03_heartbeat_service.md`.)
 - `_emit_cron_success_intelligence` surfaces successful runs as Mission Control
   cards unless `metadata.mission_control_silent` is true.
 - Email-scheduler crons (`metadata.source == "email_task_scheduler"`) mark

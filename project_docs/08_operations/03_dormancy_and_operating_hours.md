@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - tests/unit/test_cron_dormancy_defaults.py
   - tests/unit/test_dormancy_schedule_consistency.py
-last_verified: 2026-06-10
+last_verified: 2026-06-15
 ---
 
 # Dormancy & Operating Hours
@@ -255,11 +255,17 @@ each with a row here:
 > operator-gated enable but did **not** flip either flag). The service module
 > `services/atlas_direct_dispatch.py` is kept importable
 > (`heartbeat_service` still reads `list_recent_atlas_direct_dispatches` for
-> Simone's briefing). Retiring the cron also removed its per-fire
+> Simone's briefing). Retiring the cron removed its per-fire
 > `request_heartbeat_next` coupling-wake
-> (`gateway_server.py::_maybe_wake_heartbeat_after_autonomous_cron`, ~60/hr); the
-> only remaining per-minute autonomous cron feeding that coupling is
-> `simone_chat_auto_complete` (still `*/1`).
+> (`gateway_server.py::_maybe_wake_heartbeat_after_autonomous_cron`, ~60/hr),
+> leaving `simone_chat_auto_complete` (`*/1`) as the last autonomous cron feeding
+> the coupling at ~62/hr. **M4 then made the coupling selective (default-deny
+> allowlist) + ~300s-debounced**: an autonomous cron success now wakes the
+> heartbeat only if its `system_job` is explicitly allowlisted
+> (`cron_service.py::coupling_wake_allowed_jobs`, **empty by default**), so
+> `simone_chat_auto_complete`'s `*/1` fires **no longer feed the coupling** —
+> routine dispatch is handled out-of-band by the Python priority dispatcher +
+> `idle_dispatch_loop`, and urgent work still wakes via `request_heartbeat_now`.
 
 **(b) Fixed-time crons run as scheduled** — a cron pinned to one or a few
 discrete times (e.g. `nightly_wiki` at 3:15 AM, feeding the 6:30 AM briefing)
@@ -334,7 +340,7 @@ guard tests in `tests/unit/test_cron_dormancy_defaults.py` keep this honest.
 | `vp_mission_pr_reconciler` | `*/15 6-20` | Windowed (job-specific 6–20) | — |
 | `hackernews_snapshot` | `0,30 6-21` | Windowed (source currently parked) | — |
 | ~~`atlas_direct_dispatch`~~ | — | **RETIRED (M3, 2026-06-15)** — no longer registers a `*/1` schedule; its ensure-function deletes the row, so it is no longer a dormancy-exception interval cron (see the retirement note above) | — |
-| `simone_chat_auto_complete` | `*/1 * * * *` | **24/7** — documented exception (operator-facing state) | always 24/7 |
+| `simone_chat_auto_complete` | `*/1 * * * *` | **24/7** — documented exception (operator-facing state). Since M4 its `*/1` fires are **no longer a heartbeat-coupling source** (excluded by the default-deny allowlist), so its high rate no longer drives Simone wakes | always 24/7 |
 
 ### Fixed-time crons — run as scheduled (dormancy does not apply)
 

@@ -85,6 +85,51 @@ def _process_start_time() -> float:
     return _PROCESS_START_TIME
 
 
+# ── M4: selective cron→heartbeat coupling policy (shared) ──────────────────
+# The cron→heartbeat coupling historically woke Simone's heartbeat on EVERY
+# autonomous-cron success. That wake is now redundant with the live Python
+# priority dispatcher + idle_dispatch_loop, which pick up dispatch-eligible
+# work without a Simone turn. So the coupling is SELECTIVE (default-deny
+# allowlist). These two helpers are the single source of truth for the policy
+# and are consumed by BOTH coupling lanes:
+#   - gateway_server.py::_maybe_wake_heartbeat_after_autonomous_cron (the
+#     autonomous-cron coupling, the measured ~62/hr driver), and
+#   - cron_service.py::CronService._maybe_wake_heartbeat (the session-bound
+#     metadata.wake_heartbeat back door).
+# They live here (the lower module) because gateway_server already imports
+# cron_service at module level, whereas cron_service imports gateway_server only
+# lazily — defining them here avoids both a circular import and policy drift.
+def coupling_wake_selective_enabled() -> bool:
+    """Master flag for the M4 selective coupling gate (default ON).
+
+    Flip ``UA_CRON_HEARTBEAT_WAKE_SELECTIVE`` OFF (+ gateway restart) to revert
+    to the pre-M4 "wake on every autonomous cron" behavior — the escape hatch
+    for this hot-path change.
+    """
+    return str(os.getenv("UA_CRON_HEARTBEAT_WAKE_SELECTIVE", "1")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def coupling_wake_allowed_jobs() -> frozenset[str]:
+    """``system_job`` names whose completion legitimately needs a Simone
+    heartbeat to ACT.
+
+    Default EMPTY: dispatch is handled by the live Python dispatcher +
+    idle_dispatch_loop; urgent work wakes Simone via ``request_heartbeat_now``
+    (a different path). So no autonomous cron needs to wake her on completion
+    today (audited 2026-06-15). The comma-separated env override
+    ``UA_CRON_HEARTBEAT_WAKE_ALLOWLIST`` lets a future cron opt in WITHOUT a code
+    change — but it then needs a gateway restart to load (Infisical → process
+    env at start).
+    """
+    raw = (os.getenv("UA_CRON_HEARTBEAT_WAKE_ALLOWLIST") or "").strip()
+    return frozenset(j.strip() for j in raw.split(",") if j.strip())
+
+
 def _parse_script_command_argv(raw_command: str) -> list[str]:
     """Split a ``!script <module> [args...]`` cron command into argv.
 
@@ -3406,6 +3451,22 @@ class CronService:
         mode = mode.strip().lower()
         if mode not in {"now", "next"}:
             mode = "next"
+        # M4 selective coupling — close the session-bound back door. An
+        # AUTONOMOUS system cron's "next"-mode wake is the same redundant
+        # cron→heartbeat coupling that the gateway path
+        # (_maybe_wake_heartbeat_after_autonomous_cron) now default-denies, so
+        # apply the identical default-deny allowlist here. Non-autonomous
+        # (user/email-scheduled) session wakes and explicit wake_mode="now"
+        # urgent wakes are deliberately left intact — those are the "different
+        # path" the north-star keeps responsive.
+        if (
+            mode == "next"
+            and bool(metadata.get("autonomous"))
+            and coupling_wake_selective_enabled()
+            and str(metadata.get("system_job") or "").strip()
+            not in coupling_wake_allowed_jobs()
+        ):
+            return
         try:
             self.wake_callback(session_id, mode, f"cron:{job.job_id}:{reason}")
         except Exception as exc:
