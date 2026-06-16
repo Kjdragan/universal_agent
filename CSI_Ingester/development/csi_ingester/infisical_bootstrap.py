@@ -46,11 +46,29 @@ def _env_flag(name: str, default: bool) -> bool:
     return default
 
 
-def _inject(values: dict[str, str]) -> int:
+def _allowlist_keys() -> set[str] | None:
+    """Return the ``CSI_INFISICAL_KEYS`` allowlist, or ``None`` for inject-all mode.
+
+    When set (comma-separated), only the named keys are injected from the vault.
+    This is the guard against the #820/#824 + 2026-06-16 regression: the vault
+    contains proxy-routing vars (``CSI_RSS_PROXY_URL``, ``HTTP_PROXY``, ...) that,
+    if injected into ``os.environ``, route the youtube RSS httpx client through a
+    proxy that rejects the embedded creds with ``407 NO_USER``. Proxy routing is
+    an explicit operator opt-in via the systemd env file only — never the vault.
+    """
+    raw = (os.getenv("CSI_INFISICAL_KEYS") or "").strip()
+    if not raw:
+        return None
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _inject(values: dict[str, str], allowlist: set[str] | None = None) -> int:
     count = 0
     for k, v in values.items():
         k = k.strip()
         if not k:
+            continue
+        if allowlist is not None and k not in allowlist:
             continue
         if k not in os.environ:
             os.environ[k] = str(v or "")
@@ -150,8 +168,15 @@ def bootstrap_csi_secrets() -> CSIBootstrapResult:
 
     try:
         values = _fetch_secrets()
-        count = _inject(values)
-        logger.info("CSI Infisical bootstrap loaded %d secrets", count)
+        allowlist = _allowlist_keys()
+        count = _inject(values, allowlist=allowlist)
+        if allowlist is not None:
+            logger.info(
+                "CSI Infisical bootstrap loaded %d secrets (allowlist: %d keys, vault fetched %d)",
+                count, len(allowlist), len(values),
+            )
+        else:
+            logger.info("CSI Infisical bootstrap loaded %d secrets", count)
         return CSIBootstrapResult(ok=True, source="infisical", loaded_count=count)
     except Exception as exc:
         logger.warning("CSI Infisical bootstrap failed: %s", exc)
