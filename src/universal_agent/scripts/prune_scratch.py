@@ -8,9 +8,9 @@ that nobody will click the email link, the slug-dir is pure clutter — and left
 unbounded the scratch root would accumulate thousands of dead dirs over a year.
 
 This sweep deletes scratch slug-dirs whose newest content is older than
-``UA_SCRATCH_RETENTION_DAYS`` (default 30) — long enough to revisit a recent
-email, short enough to keep the root tidy. Anything older can be regenerated from
-the durable source if ever needed.
+``UA_SCRATCH_RETENTION_DAYS`` (default 90) — about a quarter of artifact history
+for the browsable index, still bounded so the store can't grow without limit.
+Anything older can be regenerated from the durable source if ever needed.
 
 Filesystem GC, then a best-effort rebuild of the artifact index so it never lists a
 just-pruned dir. It runs on the VPS where the scratch dir is local (registered as a
@@ -30,7 +30,7 @@ import time
 logger = logging.getLogger(__name__)
 
 DEFAULT_ROOT = "/home/ua/ua_scratch"
-DEFAULT_RETENTION_DAYS = 30
+DEFAULT_RETENTION_DAYS = 90
 
 
 def _retention_days() -> int:

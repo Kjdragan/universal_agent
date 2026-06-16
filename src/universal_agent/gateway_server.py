@@ -19784,10 +19784,10 @@ def _ensure_scratch_pruning_cron_job() -> Optional[dict[str, Any]]:
     Published scratchpad reports (`/home/ua/ua_scratch/<slug>/`) are a delivery
     surface, not a system of record — the durable copy of each report lives
     elsewhere (e.g. digest markdown under AGENT_RUN_WORKSPACES/daily_digests/).
-    Once a report is older than UA_SCRATCH_RETENTION_DAYS (default 30) nobody
-    will click the email link, so the slug-dir is just clutter and, left
-    unbounded, the scratch root grows without limit. Runs daily 07:00 CT (active
-    hours, dormancy-compliant). Pure-filesystem GC sweep → skip_task_hub_link.
+    Once a slug-dir is older than UA_SCRATCH_RETENTION_DAYS (default 90) it ages
+    out of the browsable artifact index, so pruning keeps the store bounded
+    rather than growing without limit. Runs daily 07:00 CT (active hours,
+    dormancy-compliant). Filesystem GC sweep + index rebuild → skip_task_hub_link.
     """
     return _register_system_cron_job(
         system_job="scratch_pruning",
@@ -19796,7 +19796,7 @@ def _ensure_scratch_pruning_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.prune_scratch",
         description=(
             "Daily pruning of tailnet-scratchpad artifacts older than "
-            "UA_SCRATCH_RETENTION_DAYS (default 30 days)."
+            "UA_SCRATCH_RETENTION_DAYS (default 90 days)."
         ),
         timeout_seconds=300,
         # S5 Phase A batch 1: migrated to systemd timer — force in-process
