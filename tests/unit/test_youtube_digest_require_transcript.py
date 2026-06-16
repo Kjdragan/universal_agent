@@ -91,6 +91,12 @@ def digest_module(monkeypatch, tmp_path):
         async def send_email(self, **kw): return {"message_id": "m1"}
 
     monkeypatch.setattr(ydd, "AgentMailService", _Mail)
+
+    # Never let the test reach the real operator-facing side effects: publishing to the
+    # tailnet scratchpad (which on the VPS wrote a "Fake Digest" stub into the live store)
+    # or firing the "digest delivered" Telegram/dashboard reminder.
+    monkeypatch.setattr(ydd, "publish_html_to_scratch", lambda *a, **kw: None)
+    monkeypatch.setattr(ydd, "send_digest_delivery_reminder", lambda *a, **kw: None)
     return ydd, tmp_path
 
 
