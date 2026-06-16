@@ -49,6 +49,10 @@ export default function WikiForceGraph({
 }) {
   const [view, setView] = useState({ k: 1, x: 0, y: 0 });
   const [hover, setHover] = useState<string | null>(null);
+  // Labels on for every node by default (consistent regardless of node count);
+  // toggle off for dense graphs. Previously labels auto-showed only when
+  // node-count <= 30, so big vaults looked unlabeled and small ones labeled.
+  const [showLabels, setShowLabels] = useState(true);
   const panRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
 
   // Static layout computed once per data change — deterministic given (nodes,
@@ -97,9 +101,18 @@ export default function WikiForceGraph({
   }
 
   return (
-    <svg
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className="h-full w-full cursor-grab touch-none rounded-lg bg-slate-950/40"
+    <div className="relative h-full w-full">
+      <button
+        type="button"
+        onClick={() => setShowLabels((s) => !s)}
+        className="absolute right-2 top-2 z-10 rounded-md border border-slate-700 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-800"
+        title="Toggle node labels"
+      >
+        Labels: {showLabels ? "On" : "Off"}
+      </button>
+      <svg
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+        className="h-full w-full cursor-grab touch-none rounded-lg bg-slate-950/40"
       onWheel={(e) => {
         const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
         setView((v) => ({ ...v, k: Math.min(3, Math.max(0.35, v.k * factor)) }));
@@ -159,7 +172,7 @@ export default function WikiForceGraph({
                 strokeWidth={selected ? 2.5 : 1.5}
                 opacity={hover && hover !== n.id && !selected ? 0.55 : 1}
               />
-              {(hover === n.id || selected || positions.length <= 30) && (
+              {(showLabels || hover === n.id || selected) && (
                 <text
                   x={r + 4}
                   y={4}
@@ -174,6 +187,7 @@ export default function WikiForceGraph({
           );
         })}
       </g>
-    </svg>
+      </svg>
+    </div>
   );
 }
