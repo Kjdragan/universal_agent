@@ -69,6 +69,16 @@ src/universal_agent/scripts/ci_failure_grace_recheck.py
 # (scratchpad delivery, 2026-06-02)
 src/universal_agent/services/scratch_publish.py
 
+# prune_scratch.py [rationale (a) — not a task unit]: the daily scratchpad GC sweep
+# (filesystem GC + best-effort index rebuild). Its ONLY subprocess use is a single
+# short-lived, synchronous `subprocess.run([sys.executable, build_scratch_index.py, …])`
+# (regenerate the browsable artifact index after a prune, capture_output, check=False,
+# timeout=60, best-effort). There is no long-running PID to classify and no
+# task_hub_items row — it is a filesystem-GC/index-rebuild shell-out, not a tracked
+# unit of work — so the worker-exit/PID protocol does not apply. Mirrors its sibling
+# scratch_publish.py. (scratchpad docset-viewer, 2026-06-16)
+src/universal_agent/scripts/prune_scratch.py
+
 # skill_gap_finder.py [rationale (a) — not a task unit]: a DESKTOP-only weekly cron
 # (user systemd timer, not a gateway/VPS worker). Its only subprocess use is ephemeral
 # read-only `gh` CLI (issue dedup `gh issue list` + `gh issue create` for the weekly

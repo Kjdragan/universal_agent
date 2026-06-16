@@ -51,7 +51,15 @@ def wakeable(monkeypatch):
     )
     monkeypatch.setattr(gateway_server, "_workflow_admission_service", lambda: adm)
     # Reset the debounce baseline so the first eligible call is never throttled.
-    monkeypatch.setattr(gateway_server, "_last_cron_coupled_wake_at", 0.0)
+    # A fixed far-in-the-past sentinel, NOT 0.0: the debounce gate is
+    # (time.monotonic() - baseline) < interval, and on a freshly-provisioned CI
+    # runner time.monotonic() (CLOCK_MONOTONIC since VM boot) is only seconds old,
+    # so a 0.0 baseline makes (monotonic() - 0.0) < 300 true and wrongly throttles
+    # the first wake - exactly the PR #1049 CI failure (run 27595042466). -10_000
+    # is always more than one debounce window in the past for any non-negative
+    # monotonic clock, and (unlike time.monotonic() - N) it does not snapshot "now",
+    # so it stays correct when a test later pins time.monotonic() to a small value.
+    monkeypatch.setattr(gateway_server, "_last_cron_coupled_wake_at", -10_000.0)
     return hb
 
 
@@ -84,6 +92,22 @@ def test_allowlisted_job_wakes(wakeable, monkeypatch):
     )
     # Invariant #1: the coupling never touches the urgent now-path.
     wakeable.request_heartbeat_now.assert_not_called()
+
+
+
+def test_allowlisted_job_wakes_on_fresh_monotonic_clock(wakeable, monkeypatch):
+    # Regression guard for the PR #1049 CI failure (run 27595042466): on a
+    # freshly-provisioned host time.monotonic() (CLOCK_MONOTONIC since VM boot)
+    # is smaller than the 300s debounce window. The fixture baseline must still
+    # let the first eligible wake fire - a 0.0 baseline reproduces the failure
+    # because time.monotonic() - 0.0 < 300 throttles the wake and
+    # request_heartbeat_next is never called.
+    monkeypatch.setenv("UA_CRON_HEARTBEAT_WAKE_ALLOWLIST", "needs_simone_cron")
+    monkeypatch.setattr(gateway_server.time, "monotonic", lambda: 50.0)
+    _wake("needs_simone_cron")
+    wakeable.request_heartbeat_next.assert_called_once_with(
+        "daemon_simone_heartbeat", reason="cron_autonomous_run:run1"
+    )
 
 
 def test_allowlist_whitespace_is_tolerated(wakeable, monkeypatch):

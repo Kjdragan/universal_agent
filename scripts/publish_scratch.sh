@@ -10,13 +10,20 @@
 # This is how a terminal-only operator gets a real, clickable, fully-rendered HTML
 # report (styled, with diagrams) instead of a markdown file or a link-stripped email/PDF.
 #
-# Canonical reference: docs/03_Operations/87_Tailscale_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md § 6
-# Mirror (project_docs tree): project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md § 1.6
+# Canonical reference: project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md § 1.6
 #
 # USAGE
-#   scripts/publish_scratch.sh <html-file> [slug]
-#       Publish <html-file>. Optional readable [slug] names the subdir
-#       (default: a random unguessable hex slug). Prints the tailnet URL.
+#   scripts/publish_scratch.sh <file> [slug]
+#       Publish a single <file> (HTML, image, PDF, CSV, …). Optional readable [slug]
+#       names the subdir (default: a random unguessable hex slug). Prints the tailnet URL.
+#
+#   scripts/publish_scratch.sh --dir <local-dir> [slug]
+#       Publish a whole directory tree under one slug (subdirs preserved). Used to ship a
+#       rendered, cross-linked doc set. Prints the base URL (.../scratch/<slug>/).
+#
+#   scripts/publish_scratch.sh --reindex
+#       Rebuild the browsable artifact index (/scratch/index.html). Run by a daily timer;
+#       also auto-run after every publish.
 #
 #   scripts/publish_scratch.sh --init
 #       One-time (idempotent) setup of the /scratch serve mapping on the VPS.
@@ -34,6 +41,10 @@ set -euo pipefail
 SCRATCH_ROOT="/home/ua/ua_scratch"
 VPS_HOST="ua@uaonvps"
 TS_HOST="uaonvps.taildcc090.ts.net"
+# Stdlib-only index builder (no venv needed). Resolved next to this script when run on
+# the VPS; the deployed copy lives under /opt/universal_agent for the remote path.
+INDEX_BUILDER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/build_scratch_index.py"
+REMOTE_INDEX_BUILDER="/opt/universal_agent/scripts/build_scratch_index.py"
 
 err() { printf '%s\n' "$*" >&2; }
 die() { err "ERROR: $*"; exit 1; }
@@ -91,19 +102,67 @@ cmd_publish() {
     run_remote "chmod 0644 '$dest_dir/$fname'"
   fi
 
+  reindex_quiet
   local url="https://$TS_HOST/scratch/$slug/$fname"
   err "Published (tailnet-only, private to your devices):"
   # The URL goes to stdout alone so callers can capture it: URL=$(publish_scratch.sh f.html)
   printf '%s\n' "$url"
 }
 
+cmd_publish_dir() {
+  local src="$1"
+  local slug="${2:-}"
+  [[ -d "$src" ]] || die "no such directory: $src"
+
+  if [[ -z "$slug" ]]; then
+    slug="$(openssl rand -hex 6 2>/dev/null || head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  fi
+  [[ "$slug" =~ ^[A-Za-z0-9._-]+$ ]] || die "slug must be [A-Za-z0-9._-]+ (got: $slug)"
+
+  local dest_dir="$SCRATCH_ROOT/$slug"
+  if on_vps; then
+    mkdir -p "$dest_dir"
+    cp -a "$src"/. "$dest_dir"/
+    find "$dest_dir" -type d -exec chmod 0755 {} +
+    find "$dest_dir" -type f -exec chmod 0644 {} +
+  else
+    # One round trip: stream the tree as a tarball and unpack it on the VPS.
+    tar -C "$src" -czf - . | run_remote "mkdir -p '$dest_dir' && tar -C '$dest_dir' -xzf - && find '$dest_dir' -type d -exec chmod 0755 {} + && find '$dest_dir' -type f -exec chmod 0644 {} +"
+  fi
+
+  reindex_quiet
+  local url="https://$TS_HOST/scratch/$slug/"
+  err "Published directory (tailnet-only, private to your devices):"
+  printf '%s\n' "$url"
+}
+
+# Rebuild the artifact index. Quiet + best-effort: a failure must never fail a publish
+# (the artifact is already on the VPS). Stdout is suppressed so it can't pollute the URL.
+reindex_quiet() {
+  if on_vps; then
+    python3 "$INDEX_BUILDER" >/dev/null 2>&1 || err "warning: artifact index rebuild failed (artifact still published)"
+  else
+    run_remote "python3 '$REMOTE_INDEX_BUILDER'" >/dev/null 2>&1 || err "warning: remote index rebuild skipped (builder not deployed yet?)"
+  fi
+}
+
+cmd_reindex() {
+  if on_vps; then
+    python3 "$INDEX_BUILDER"
+  else
+    run_remote "python3 '$REMOTE_INDEX_BUILDER'"
+  fi
+}
+
 main() {
   case "${1:-}" in
-    --init)    cmd_init ;;
-    --status)  cmd_status ;;
-    -h|--help|"") sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//' ;;
-    --*)       die "unknown flag: $1" ;;
-    *)         cmd_publish "$@" ;;
+    --init)     cmd_init ;;
+    --status)   cmd_status ;;
+    --reindex)  cmd_reindex ;;
+    --dir)      shift; [[ $# -ge 1 ]] || die "--dir needs a directory"; cmd_publish_dir "$@" ;;
+    -h|--help|"") sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//' ;;
+    --*)        die "unknown flag: $1" ;;
+    *)          cmd_publish "$@" ;;
   esac
 }
 
