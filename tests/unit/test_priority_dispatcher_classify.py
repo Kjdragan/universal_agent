@@ -179,3 +179,18 @@ def test_coder_lane_source_kinds_match_canonical_enum():
     from universal_agent.tools.vp_orchestration import _CODER_LANE_SOURCE_KINDS
 
     assert pd.CODER_LANE_SOURCE_KINDS == _CODER_LANE_SOURCE_KINDS
+
+
+# --- M5 §2a: public prefer-ATLAS accessor (for the ZAI Control read-out) --------
+
+
+def test_prefer_atlas_enabled_default_off():
+    # Stage A: default OFF (the autouse fixture clears the env var).
+    assert pd.prefer_atlas_enabled() is False
+
+
+def test_prefer_atlas_enabled_reflects_flag(monkeypatch):
+    monkeypatch.setenv("UA_DISPATCHER_PREFER_ATLAS", "1")
+    assert pd.prefer_atlas_enabled() is True
+    # Mirrors the private dispatch-path reader exactly (single source of truth).
+    assert pd.prefer_atlas_enabled() == pd._prefer_atlas_for_general()

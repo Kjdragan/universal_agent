@@ -121,6 +121,17 @@ def _prefer_atlas_for_general() -> bool:
     return _is_truthy(os.getenv("UA_DISPATCHER_PREFER_ATLAS"))
 
 
+def prefer_atlas_enabled() -> bool:
+    """Public read-only accessor for the prefer-ATLAS toggle (default OFF).
+
+    Mirrors :func:`_prefer_atlas_for_general` (the dispatch-path reader) so status
+    surfaces — the ZAI Control cockpit — can show the live flag state without
+    reaching into a private symbol. Stage A = OFF (general/research falls back to
+    Simone); flip ``UA_DISPATCHER_PREFER_ATLAS`` to route it to ATLAS (Stage B).
+    """
+    return _prefer_atlas_for_general()
+
+
 # ---------------------------------------------------------------------------
 # Task-shape readers (pure)
 # ---------------------------------------------------------------------------

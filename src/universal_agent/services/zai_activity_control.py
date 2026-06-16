@@ -394,6 +394,67 @@ def _inprocess_loops() -> list[dict[str, Any]]:
         )
     except Exception as exc:  # noqa: BLE001 — fail soft
         logger.debug("zai_activity_control: inprocess loop read failed: %s", exc)
+
+    # M5 §2a — surface the M1–M4 dispatch-redesign control surface read-only, so
+    # the operator can SEE the live state alongside heartbeat/cron. Same shape +
+    # same "Infisical flag read at gateway start; change needs a restart" model.
+    # Independent try/except so a missing dispatcher import can't drop the
+    # heartbeat/cron rows above.
+    try:
+        from universal_agent.cron_service import (
+            coupling_wake_allowed_jobs,
+            coupling_wake_min_interval_seconds,
+            coupling_wake_selective_enabled,
+        )
+        from universal_agent.services.priority_dispatcher import (
+            prefer_atlas_enabled,
+            priority_dispatcher_enabled,
+        )
+
+        items.append(
+            {
+                "key": "priority_dispatcher",
+                "label": "Priority dispatcher (Pythonic routing — replaces Simone-First)",
+                "env_var": "UA_PRIORITY_DISPATCHER_ENABLED",
+                "enabled": bool(priority_dispatcher_enabled()),
+                "note": (
+                    "Default ON. Routes claimed Task-Hub work to a free agent slot "
+                    "without a Simone turn. Kill switch UA_PRIORITY_DISPATCHER_ENABLED=0 "
+                    "+ gateway restart."
+                ),
+            }
+        )
+        items.append(
+            {
+                "key": "prefer_atlas",
+                "label": "Prefer-ATLAS for research/general (Stage-A rollout toggle)",
+                "env_var": "UA_DISPATCHER_PREFER_ATLAS",
+                "enabled": bool(prefer_atlas_enabled()),
+                "note": (
+                    "Default OFF (Stage A): preferred_vp=vp.general.primary work falls "
+                    "back to Simone. Flip UA_DISPATCHER_PREFER_ATLAS=1 + gateway restart "
+                    "to route it to the ATLAS Python lane (Stage B)."
+                ),
+            }
+        )
+        _allowed = sorted(coupling_wake_allowed_jobs())
+        _debounce = coupling_wake_min_interval_seconds()
+        items.append(
+            {
+                "key": "cron_heartbeat_coupling_gate",
+                "label": "Cron→heartbeat coupling gate (M4 selective default-deny)",
+                "env_var": "UA_CRON_HEARTBEAT_WAKE_SELECTIVE",
+                "enabled": bool(coupling_wake_selective_enabled()),
+                "note": (
+                    "ON = autonomous crons do NOT wake Simone unless allowlisted. "
+                    f"Allowlist: {', '.join(_allowed) if _allowed else 'empty (no cron wakes Simone)'}. "
+                    f"Debounce: {_debounce}s. Tune via UA_CRON_HEARTBEAT_WAKE_ALLOWLIST / "
+                    "UA_CRON_HEARTBEAT_WAKE_MIN_INTERVAL_SECONDS (+ gateway restart)."
+                ),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 — fail soft (keep heartbeat/cron rows)
+        logger.debug("zai_activity_control: dispatch-state read failed: %s", exc)
     return items
 
 

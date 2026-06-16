@@ -41,6 +41,12 @@ type StatusPayload = {
     tier_overrides?: Record<string, { cap?: number; max?: number }>;
     updated_by?: string;
   };
+  // M5 §2b — cron→heartbeat coupling wakes the M4 selective gate suppressed.
+  coupling_suppressed_wakes?: {
+    last_1h?: number | null;
+    last_24h?: number | null;
+    total_since_start?: number | null;
+  };
   error?: string;
 };
 
@@ -329,6 +335,9 @@ function TokenPanel() {
   const noTokens = data && data.available && (data.token_events_seen ?? 0) === 0;
   // Available source keys present in the payload (so we only show tabs with data).
   const presentSources = new Set((data?.sources || []).map((s) => s.source));
+  // M5 §2d — label the rolling-total headline with the active window (e.g. "24h
+  // total"), so the captured 24h number is glance-able and unambiguous.
+  const winLabel = TOKEN_WINDOWS.find((w) => w.hours === hours)?.label ?? `${hours}h`;
 
   return (
     <section className="rounded-md border border-border bg-card p-4">
@@ -392,7 +401,8 @@ function TokenPanel() {
 
       {t ? (
         <p className="mb-2 text-xs text-muted-foreground">
-          window total: <span className="text-foreground">{t.requests}</span> calls ·{" "}
+          <span className="font-medium text-foreground">{winLabel} rolling total</span> ({source === "consolidated" ? "all lanes" : source}):{" "}
+          <span className="text-foreground">{t.requests}</span> calls ·{" "}
           <span className="text-foreground">{fmtTok(t.input_tokens)}</span> in /{" "}
           <span className="text-foreground">{fmtTok(t.output_tokens)}</span> out /{" "}
           <span className="font-medium text-foreground">{fmtTok(t.total_tokens)}</span> total{" "}
@@ -864,6 +874,18 @@ export default function ZaiControlPage() {
           <Stat label="FUP events" value={snap?.total_fup_events} warn />
           <Stat label="cross-loop" value={snap?.cross_loop_conflicts} warn />
         </div>
+        {status?.coupling_suppressed_wakes ? (
+          <div className="mt-3 rounded border border-border bg-muted/30 p-2 text-sm">
+            <span className="text-muted-foreground">Autonomous-cron wakes denied by the M4 selective gate:</span>{" "}
+            <span className="font-medium text-emerald-500">{status.coupling_suppressed_wakes.last_1h ?? 0}</span>
+            <span className="text-muted-foreground"> last 1h · </span>
+            <span className="font-medium text-emerald-500">{status.coupling_suppressed_wakes.last_24h ?? 0}</span>
+            <span className="text-muted-foreground"> last 24h</span>
+            <span className="ml-1 text-xs text-muted-foreground">
+              (gate denials — the mechanism that drove coupling wakes 124/hr→0; not per-se prevented Simone wakes; resets on restart)
+            </span>
+          </div>
+        ) : null}
         {status?.events?.callers_429_60m?.length ? (
           <div className="mt-3">
             <div className="mb-1 text-xs text-muted-foreground">Top 429 callers (60m)</div>
