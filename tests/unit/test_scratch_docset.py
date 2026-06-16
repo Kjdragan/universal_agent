@@ -178,3 +178,55 @@ def test_publish_docset_empty_dir_returns_none(tmp_path, monkeypatch):
     empty = tmp_path / "empty"
     empty.mkdir()
     assert sp.publish_docset_to_scratch(empty) is None
+
+
+# --------------------------- stable id (replace-in-place) ---------------------------
+
+
+def test_resolve_slug_stable_vs_random():
+    # artifact_id -> exact, sanitized, no random suffix (overwrites the same URL).
+    assert sp._resolve_slug(None, "qloop-handoff") == "qloop-handoff"
+    assert sp._resolve_slug("ignored", "My Doc!!") == "My-Doc"
+    # no artifact_id -> random suffix, never colliding.
+    a, b = sp._resolve_slug("x", None), sp._resolve_slug("x", None)
+    assert a != b and a.startswith("x-")
+
+
+def test_artifact_id_stable_slug_markdown(tmp_path, monkeypatch):
+    monkeypatch.setattr(sp, "_publish_script", lambda: _write_fake_script(tmp_path))
+    url = sp.publish_markdown_to_scratch("# Hi\n\nx", artifact_id="qloop-handoff", filename="report.html")
+    assert url == "https://uaonvps.taildcc090.ts.net/scratch/qloop-handoff/report.html"
+
+
+def test_artifact_id_stable_slug_html_single_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(sp, "_publish_script", lambda: _write_fake_script(tmp_path))
+    url = sp.publish_html_to_scratch("<p>x</p>", artifact_id="living-doc", filename="r.html")
+    assert url == "https://uaonvps.taildcc090.ts.net/scratch/living-doc/r.html"
+
+
+def test_artifact_id_stable_slug_docset(tmp_path, monkeypatch):
+    monkeypatch.setattr(sp, "_publish_script", lambda: _write_fake_script(tmp_path))
+    src = tmp_path / "docs"
+    src.mkdir()
+    (src / "DESIGN.md").write_text("# Design\n")
+    url = sp.publish_docset_to_scratch(src, artifact_id="vr-design")
+    assert url == "https://uaonvps.taildcc090.ts.net/scratch/vr-design/DESIGN.html"
+
+
+# --------------------------- two-way review toolbar ---------------------------
+
+
+def test_review_toolbar_baked_into_rendered_page():
+    p = sp._html_page("Demo", "<p>hi</p>")
+    assert ".sr-fab{" in p  # toolbar CSS
+    assert "[scratch-review " in p  # the paste-prompt header it builds
+    assert "scratch-comments-" in p  # the downloaded JSON name
+    assert "navigator.clipboard" in p  # copy-to-clipboard path
+    # light mode stays mandatory and no dark block sneaks in via the toolbar
+    assert '<meta name="color-scheme" content="light">' in p
+    assert "@media (prefers-color-scheme: dark)" not in p
+
+
+def test_review_toolbar_can_be_disabled():
+    off = sp._html_page("Demo", "<p>hi</p>", review=False)
+    assert ".sr-fab{" not in off and "navigator.clipboard" not in off
