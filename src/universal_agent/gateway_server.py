@@ -14910,9 +14910,68 @@ async def lifespan(app: FastAPI):
                     heartbeat_service=_heartbeat_service,
                 )
                 _daemon_ids = _daemon_session_manager.ensure_daemon_sessions()
-                for daemon_session in _daemon_session_manager.sessions.values():
+
+                def _wire_daemon_into_gateway(daemon_session: Any) -> None:
+                    """Restore a daemon session into the gateway's stores exactly
+                    as startup does — used by both initial wiring and respawn."""
                     get_gateway().register_existing_session(daemon_session)
                     store_session(daemon_session)
+
+                for daemon_session in _daemon_session_manager.sessions.values():
+                    _wire_daemon_into_gateway(daemon_session)
+
+                async def _revive_daemon_in_gateway(daemon_session: Any) -> None:
+                    """Respawn-time wiring. Three steps, in order:
+                    1. ``close_session`` tears down the stale SDK adapter the
+                       cancelled reap left behind (it pops ``_adapters`` so the
+                       next turn builds a FRESH adapter via ``_resume_session_new``).
+                    2. re-register the session into the gateway stores.
+                    3. reset the **authoritative** run state. ``_session_runtime``
+                       is the source of truth (``_sync_runtime_metadata`` pushes it
+                       into ``session.metadata['runtime']``, which the heartbeat
+                       lock-reason + idle reaper read). Without this, a leaked
+                       ``active_runs`` — the very case the daemon-reaper bypass
+                       exists for — would lock the revived daemon out of EVERY
+                       heartbeat (``run_active``) until the next restart, and a
+                       later sync would clobber any cached-only reset."""
+                    sid = daemon_session.session_id
+                    gw = get_gateway()
+                    try:
+                        await gw.close_session(sid)
+                    except Exception as exc:  # noqa: BLE001 — best-effort teardown
+                        logger.warning("revive daemon %s: close_session failed: %s", sid, exc)
+                        # close_session pops the adapter before any await, but be
+                        # defensive so the next turn still gets a fresh adapter.
+                        try:
+                            gw._adapters.pop(sid, None)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    _wire_daemon_into_gateway(daemon_session)
+                    try:
+                        runtime = _session_runtime_snapshot(sid)
+                        runtime["active_runs"] = 0
+                        runtime["active_foreground_runs"] = 0
+                        runtime["lifecycle_state"] = SESSION_STATE_IDLE
+                        runtime["terminal_reason"] = None
+                        runtime["last_activity_at"] = _now_iso()
+                        runtime["last_foreground_run_finished_at"] = None
+                        _sync_runtime_metadata(sid)
+                    except Exception as exc:  # noqa: BLE001 — reset must not block respawn
+                        logger.warning("revive daemon %s: runtime reset failed: %s", sid, exc)
+
+                # Respawn supervisor: if the heartbeat idle reaper kills a daemon
+                # mid-storm, revive it within a tick instead of leaving it dead
+                # until the next gateway restart (the 2026-06-16 8h Simone outage).
+                # Async hook on the scheduler loop; fail-soft.
+                async def _daemon_respawn_supervisor() -> None:
+                    mgr = _daemon_session_manager
+                    if mgr is None:
+                        return
+                    await mgr.respawn_missing_heartbeat_sessions(
+                        revive_in_gateway=_revive_daemon_in_gateway
+                    )
+
+                _heartbeat_service._daemon_supervisor_hook = _daemon_respawn_supervisor
                 # Clean up old archived daemon workspaces (>48h)
                 _daemon_session_manager.cleanup_old_archives(max_age_hours=48)
             else:
