@@ -222,6 +222,9 @@ def test_review_toolbar_baked_into_rendered_page():
     assert "[scratch-review " in p  # the paste-prompt header it builds
     assert "scratch-comments-" in p  # the downloaded JSON name
     assert "navigator.clipboard" in p  # copy-to-clipboard path
+    assert 'data-act="comment"' in p  # explicit "+ Comment" (anchored) action
+    assert ".sr-mark{" in p and "applyMarks" in p  # in-page highlight of commented text
+    assert "sr-hint" in p  # the save/submit clarity hint
     # light mode stays mandatory and no dark block sneaks in via the toolbar
     assert '<meta name="color-scheme" content="light">' in p
     assert "@media (prefers-color-scheme: dark)" not in p

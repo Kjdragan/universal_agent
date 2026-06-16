@@ -467,6 +467,7 @@ _REVIEW_TOOLBAR_CSS = """
 .sr-panel.sr-open{display:flex}
 .sr-head{display:flex;justify-content:space-between;align-items:center;padding:.6rem .8rem;border-bottom:1px solid #eaecef}
 .sr-x,.sr-del{background:none;border:none;color:#656d76;cursor:pointer;font-size:13px}
+.sr-hint{font-size:.74rem;line-height:1.45;color:#57606a;padding:.5rem .8rem;border-bottom:1px solid #eaecef;background:#f6f8fa}
 .sr-list{overflow:auto;padding:.5rem .8rem;flex:1}
 .sr-empty{color:#656d76;font-size:.85rem;padding:.5rem 0}
 .sr-item{border:1px solid #eaecef;border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem}
@@ -478,6 +479,8 @@ _REVIEW_TOOLBAR_CSS = """
 .sr-submit{flex:1;background:#1f883d;color:#fff;border:none;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:600 13px/1 inherit}
 .sr-submit:hover{background:#1a7332}
 .sr-chip{position:absolute;z-index:2147483001;background:#1f2328;color:#fff;border:none;border-radius:6px;padding:.25rem .5rem;font:600 12px/1 sans-serif;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sr-mark{background:#fff3c4;box-shadow:inset 0 -2px 0 #e3b341;border-radius:2px;cursor:pointer}
+.sr-mark:hover{background:#ffe98a}
 .sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
 @media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast{display:none!important}}
 """
@@ -490,9 +493,26 @@ _REVIEW_TOOLBAR_JS = r"""
   var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
   var KEY = 'scratchReview:' + slug;
   var comments = [];
+  var lastSel = null;  // most recent text selection inside <main>, kept so "+ Comment" works after the click clears it
   try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
   function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
-  function save(){ persist(); render(); }
+  function save(){ persist(); render(); applyMarks(); }
+
+  // In-page indicators: highlight the commented text so you can see what you've marked.
+  function clearMarks(){
+    var main=document.querySelector('main'); if(!main) return;
+    main.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+  }
+  function wrapQuote(quote, cid){
+    if(!quote) return; var main=document.querySelector('main'); if(!main) return;
+    var w=document.createTreeWalker(main, NodeFilter.SHOW_TEXT, null), n;
+    while((n=w.nextNode())){
+      if(n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark')) continue;
+      var idx=n.nodeValue.indexOf(quote);
+      if(idx>=0){ var r=document.createRange(); r.setStart(n,idx); r.setEnd(n,idx+quote.length); var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view'; try{ r.surroundContents(mk); }catch(e){} return; }
+    }
+  }
+  function applyMarks(){ clearMarks(); comments.forEach(function(c){ if(c.quote) wrapQuote(c.quote, c.id); }); }
   function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
 
   function headingFor(node){
@@ -507,8 +527,10 @@ _REVIEW_TOOLBAR_JS = r"""
   var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
   var panel=document.createElement('div'); panel.className='sr-panel';
   panel.innerHTML='<div class="sr-head"><b>Review</b><button type="button" class="sr-x" data-act="close">✕</button></div>'
+    +'<div class="sr-hint">Highlight text then <b>+ Comment</b>, or <b>+ Note</b> for a general remark. Comments save as you type — add as many as you want. <b>Only “Submit → copy prompt” exports anything</b>, so do that once when you are done.</div>'
     +'<div class="sr-list"></div>'
-    +'<div class="sr-actions"><button type="button" class="sr-note" data-act="note">+ Note</button>'
+    +'<div class="sr-actions"><button type="button" class="sr-note" data-act="comment">+ Comment</button>'
+    +'<button type="button" class="sr-note" data-act="note">+ Note</button>'
     +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button></div>';
   var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
   var toast=document.createElement('div'); toast.className='sr-toast'; toast.style.display='none';
@@ -520,7 +542,7 @@ _REVIEW_TOOLBAR_JS = r"""
   function render(){
     btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
     var list=panel.querySelector('.sr-list');
-    if(!comments.length){ list.innerHTML='<div class="sr-empty">Select text on the page to comment, or add a note.</div>'; return; }
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, or <b>+ Note</b>.</div>'; return; }
     list.innerHTML='';
     comments.forEach(function(c,i){
       var row=document.createElement('div'); row.className='sr-item';
@@ -543,8 +565,9 @@ _REVIEW_TOOLBAR_JS = r"""
       if(txt && txt.length>1 && sel.rangeCount && main && main.contains(sel.anchorNode)){
         var r=sel.getRangeAt(0).getBoundingClientRect();
         chip.style.top=(window.scrollY+r.bottom+6)+'px'; chip.style.left=(window.scrollX+r.left)+'px';
-        chip.dataset.quote=txt.slice(0,280);
-        var h=headingFor(sel.anchorNode); chip.dataset.heading=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
+        var h=headingFor(sel.anchorNode); var hd=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
+        chip.dataset.quote=txt.slice(0,280); chip.dataset.heading=hd;
+        lastSel={quote:txt.slice(0,280), heading:hd};
         chip.style.display='block';
       } else { chip.style.display='none'; }
     },10);
@@ -554,6 +577,7 @@ _REVIEW_TOOLBAR_JS = r"""
   panel.addEventListener('click', function(e){
     var act=e.target.getAttribute('data-act');
     if(act==='close') openPanel(false);
+    else if(act==='comment'){ if(lastSel && lastSel.quote){ addComment(lastSel.quote, lastSel.heading); lastSel=null; } else { showToast('Highlight some text on the page first, then “+ Comment”. (Use “+ Note” for a general remark.)'); } }
     else if(act==='note') addComment('','');
     else if(act==='submit') submit();
     else if(e.target.classList.contains('sr-del')){ comments.splice(+e.target.getAttribute('data-i'),1); save(); }
@@ -591,7 +615,15 @@ _REVIEW_TOOLBAR_JS = r"""
                   .catch(function(){ showToast('JSON downloaded to ~/Downloads. Clipboard blocked — copy from the file.'); });
   }
 
-  render();
+  // Click a highlighted span on the page → open the panel and focus that comment.
+  var mainEl=document.querySelector('main');
+  if(mainEl) mainEl.addEventListener('click', function(e){
+    var mk=e.target.closest?e.target.closest('.sr-mark'):null; if(!mk) return;
+    openPanel(true); var idx=-1; comments.forEach(function(c,j){ if(c.id===mk.dataset.cid) idx=j; });
+    if(idx>=0){ var ta=panel.querySelectorAll('.sr-body')[idx]; if(ta){ ta.scrollIntoView({block:'center'}); ta.focus(); } }
+  });
+
+  render(); applyMarks();
 })();
 """
 
