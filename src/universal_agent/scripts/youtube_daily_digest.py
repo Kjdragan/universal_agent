@@ -55,7 +55,10 @@ from universal_agent.services.digest_delivery_reminder import (
     send_digest_delivery_reminder,
 )
 from universal_agent.services.email_tags import ActionTag, KindTag
-from universal_agent.services.scratch_publish import publish_html_to_scratch
+from universal_agent.services.scratch_publish import (
+    publish_html_to_scratch,
+    scratch_back_link_html,
+)
 from universal_agent.services.youtube_playlist_manager import (
     YouTubeAPIError,
     YouTubeOAuthError,
@@ -1437,6 +1440,9 @@ _DIGEST_HTML_HEAD_CSS = """
   pre code { background: transparent; padding: 0; }
   hr { border: none; border-top: 1px solid #d8dee4; margin: 28px 0; }
   a { color: #0969da; }
+  .scratch-back { font-size: 13px; margin: 0 0 18px; }
+  .scratch-back a { color: #0969da; text-decoration: none; }
+  .scratch-back a:hover { text-decoration: underline; }
   table { border-collapse: collapse; margin: 12px 0; }
   th, td { border: 1px solid #d0d7de; padding: 6px 10px; }
   th { background: #f6f8fa; }
@@ -3081,8 +3087,15 @@ def process_daily_digest(
             f"<em>{day_name.title()}</em> playlist"
         )
 
+        # The "← Scratchpad index" back-link belongs ONLY on the scratchpad-served
+        # page (it points at the tailnet artifact index). Inject it into a copy so the
+        # PDF/HTML email-attachment fallback below — used only when publishing fails,
+        # i.e. when there is no index page to return to — stays free of a dead link.
+        scratch_html = attachment_html.replace(
+            "<body>", f"<body>{scratch_back_link_html()}", 1,
+        )
         scratch_url = publish_html_to_scratch(
-            attachment_html,
+            scratch_html,
             slug=f"yt-digest-{date_str}",
             filename=f"youtube-digest-{date_str}-{day_name.lower()}.html",
         )

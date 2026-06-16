@@ -40,6 +40,25 @@ def test_html_page_pins_light_mode_and_no_dark_block():
     assert "Hi &amp; &lt;there&gt;" in page  # title is escaped
 
 
+def test_html_page_has_back_to_index_link_and_style():
+    page = sp._html_page("Doc", "<p>body</p>")
+    # Every scratchpad-rendered page links back to the artifact index, and the styling
+    # for that link is present in the page's CSS.
+    assert f'href="{sp.SCRATCH_INDEX_HREF}"' in page
+    assert sp.SCRATCH_INDEX_HREF == "/scratch/"
+    assert 'class="scratch-back"' in page
+    assert ".scratch-back" in page  # CSS rule shipped inline
+    # The back-link comes before the page body so it reads as a header.
+    assert page.index("scratch-back") < page.index("<main>")
+
+
+def test_scratch_back_link_html_default_and_custom_label():
+    default = sp.scratch_back_link_html()
+    assert 'href="/scratch/"' in default and "← Scratchpad index" in default
+    # Labels are HTML-escaped.
+    assert "A &amp; B" in sp.scratch_back_link_html("A & B")
+
+
 def test_render_markdown_tables_and_headers():
     html = sp._render_markdown("# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")
     assert "<h1" in html and "<table>" in html and "<td>1</td>" in html
