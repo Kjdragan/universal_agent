@@ -133,6 +133,25 @@ with the raw shell command). Hand the operator the index URL when they want to *
 artifact rather than open a specific one; hand a direct `/scratch/<slug>/…` URL for a
 specific report.
 
+## Two-way review (mark up → respond) — you ↔ Claude Code
+
+Markdown/doc-set pages (anything rendered through `scratch_publish.py::_html_page`) carry a
+**review toolbar**: the operator selects text or adds notes, then clicks **Submit**, which
+(1) downloads the comments to `~/Downloads/scratch-comments-<slug>.json` and (2) copies a
+ready-to-paste prompt to the clipboard. There is **no backend and no project routing** —
+the responder is *this Claude Code assistant*, not the task hub / VP / project Telegram.
+
+**When you (Claude Code) see a pasted message starting with `[scratch-review <slug>]`:**
+read the operator's comments and respond, continuing the conversation. The paste itself is
+self-contained (it inlines the comments), but for full fidelity read
+`~/Downloads/scratch-comments-<slug>.json` (and, once a tailnet write-back exists, the
+`_comments.jsonl` beside the artifact), re-read the artifact, then address each comment.
+
+**Refine in place:** publish iterative exhibits with a stable `artifact_id=` so re-publishing
+**overwrites the same URL** (one living exhibit you keep refining) instead of minting a new
+random slug — `publish_markdown_to_scratch(md, artifact_id="qloop-handoff")`. One-off reports
+omit it and get the random unguessable slug as before.
+
 ## Generating the HTML itself
 
 This skill publishes HTML — it doesn't author it. To produce a polished page, use the

@@ -106,6 +106,20 @@ def _build_slug(slug: str | None) -> str:
     return f"{_sanitize_slug(slug)}-{suffix}" if slug else suffix
 
 
+def _resolve_slug(slug: str | None, artifact_id: str | None) -> str:
+    """Pick the URL subdir name.
+
+    ``artifact_id`` → a STABLE slug (exactly that id, no random suffix): re-publishing
+    overwrites the same dir and serves at the same URL, so it's one living exhibit you
+    keep refining instead of a pile of one-off artifacts. Any comment sidecars already in
+    that dir survive (they aren't in the freshly rendered tree). ``artifact_id=None`` keeps
+    the random-suffixed one-off slug.
+    """
+    if artifact_id:
+        return _sanitize_slug(artifact_id)
+    return _build_slug(slug)
+
+
 def _run_publish_script(args: list[str], timeout: float) -> str | None:
     """Run ``publish_scratch.sh`` with ``args``; return the printed ``https://`` URL or ``None``.
 
@@ -171,6 +185,7 @@ def _publish_one(
     timeout: float,
     content: str | None = None,
     src_path: Path | None = None,
+    artifact_id: str | None = None,
 ) -> str | None:
     """Publish a single artifact (string content or a source file).
 
@@ -190,7 +205,7 @@ def _publish_one(
                 tmp_file.write_text(content, encoding="utf-8")
             else:
                 shutil.copy2(src_path, tmp_file)  # type: ignore[arg-type]
-            return _run_publish_script([str(tmp_file), _build_slug(slug)], timeout)
+            return _run_publish_script([str(tmp_file), _resolve_slug(slug, artifact_id)], timeout)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -202,7 +217,7 @@ def _publish_one(
         else:
             shutil.copy2(src_path, dst)  # type: ignore[arg-type]
         _write_sidecar(tmp_dir, title=title or safe_name, description=description or "", kind=kind, entry=safe_name)
-        base = _publish_dir(tmp_dir, slug=slug, timeout=timeout)
+        base = _publish_dir(tmp_dir, slug=slug, timeout=timeout, artifact_id=artifact_id)
         return (base + safe_name) if base else None
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -215,6 +230,7 @@ def publish_html_to_scratch(
     filename: str = "report.html",
     title: str | None = None,
     description: str | None = None,
+    artifact_id: str | None = None,
     timeout: float = 90.0,
 ) -> str | None:
     """Publish an HTML string to the tailnet scratchpad; return its URL or ``None``.
@@ -228,6 +244,8 @@ def publish_html_to_scratch(
         title: Optional artifact title for the browsable index. When ``title`` or
             ``description`` is given, a metadata sidecar is published alongside.
         description: Optional one-line description for the index.
+        artifact_id: Optional STABLE id. When set, re-publishing overwrites the same URL
+            (one living exhibit you keep refining) instead of minting a new random slug.
         timeout: Seconds to wait for the publish (covers the ``ssh``/``scp`` path when
             run off the VPS).
 
@@ -242,6 +260,7 @@ def publish_html_to_scratch(
         description=description,
         kind="html",
         timeout=timeout,
+        artifact_id=artifact_id,
     )
 
 
@@ -251,13 +270,15 @@ def publish_file_to_scratch(
     slug: str | None = None,
     title: str | None = None,
     description: str | None = None,
+    artifact_id: str | None = None,
     timeout: float = 90.0,
 ) -> str | None:
     """Publish any single file as-is (image, PDF, CSV, …); return its URL or ``None``.
 
     The file is served by its extension's MIME type, so the operator can view a diagram,
     screenshot, or data file in the browser without opening an IDE. Pass ``title`` /
-    ``description`` to surface it richly in the artifact index. For rendered markdown use
+    ``description`` to surface it richly in the artifact index, or ``artifact_id`` for a
+    stable URL that re-publishing overwrites. For rendered markdown use
     :func:`publish_markdown_to_scratch`; for a whole folder use
     :func:`publish_docset_to_scratch`.
     """
@@ -273,6 +294,7 @@ def publish_file_to_scratch(
         description=description,
         kind="file",
         timeout=timeout,
+        artifact_id=artifact_id,
     )
 
 
@@ -282,6 +304,7 @@ def publish_markdown_to_scratch(
     slug: str | None = None,
     title: str | None = None,
     description: str | None = None,
+    artifact_id: str | None = None,
     filename: str = "report.html",
     timeout: float = 90.0,
 ) -> str | None:
@@ -289,7 +312,8 @@ def publish_markdown_to_scratch(
 
     Returns the published URL or ``None``. Use this for a single document; for a
     cross-linked set of docs use :func:`publish_docset_to_scratch`. The title defaults to
-    the doc's first ``# H1`` and is recorded in the artifact index.
+    the doc's first ``# H1`` and is recorded in the artifact index. Pass ``artifact_id``
+    for a stable URL that re-publishing refines in place.
     """
     page_title = title or _markdown_title(markdown_text, "Report")
     body = _render_markdown(markdown_text)
@@ -302,6 +326,7 @@ def publish_markdown_to_scratch(
         description=description,
         kind="markdown",
         timeout=timeout,
+        artifact_id=artifact_id,
     )
 
 
@@ -312,6 +337,7 @@ def publish_docset_to_scratch(
     hub: str | None = None,
     title: str | None = None,
     description: str | None = None,
+    artifact_id: str | None = None,
     timeout: float = 180.0,
 ) -> str | None:
     """Render a folder of markdown + files into a cross-linked HTML site and publish it.
@@ -330,6 +356,8 @@ def publish_docset_to_scratch(
             markdown file. The returned URL points at the hub.
         title: Optional title for the artifact index (defaults to the hub page's title).
         description: Optional one-line description for the index.
+        artifact_id: Optional STABLE id — re-publishing overwrites the same URL (refine the
+            same doc set in place) instead of minting a new random slug.
         timeout: Seconds to wait (the tree publish copies more than a single file).
 
     Returns:
@@ -358,7 +386,7 @@ def publish_docset_to_scratch(
             kind="docset",
             entry=hub_out or "",
         )
-        base = _publish_dir(out_dir, slug=slug, timeout=timeout)
+        base = _publish_dir(out_dir, slug=slug, timeout=timeout, artifact_id=artifact_id)
     finally:
         shutil.rmtree(out_dir, ignore_errors=True)
 
@@ -367,9 +395,9 @@ def publish_docset_to_scratch(
     return base + hub_out
 
 
-def _publish_dir(out_dir: Path, *, slug: str | None, timeout: float) -> str | None:
+def _publish_dir(out_dir: Path, *, slug: str | None, timeout: float, artifact_id: str | None = None) -> str | None:
     """Publish a whole local directory tree under one slug; return the base URL (ends with ``/``)."""
-    url = _run_publish_script(["--dir", str(out_dir), _build_slug(slug)], timeout)
+    url = _run_publish_script(["--dir", str(out_dir), _resolve_slug(slug, artifact_id)], timeout)
     if url and not url.endswith("/"):
         url += "/"
     return url
@@ -423,6 +451,151 @@ footer{max-width:880px;margin:0 auto;padding:1.5rem 1.3rem;color:var(--muted);fo
 """
 
 
+# --------------------------------------------------------------------------------------
+# Two-way review toolbar (Phase 1: no backend). Baked into every rendered page so the
+# operator can mark it up, then click one button that (a) downloads the comments JSON to
+# ~/Downloads and (b) copies a ready-to-paste ``[scratch-review <slug>]`` prompt to the
+# clipboard. Pasting that prompt into Claude Code is the whole continuation — no server,
+# no project task hub. The toolbar derives the artifact slug from the URL at runtime, so
+# it needs nothing from publish time. Plain (non-f) strings: the braces are literal.
+# --------------------------------------------------------------------------------------
+
+_REVIEW_TOOLBAR_CSS = """
+.sr-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#0969da;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer}
+.sr-fab:hover{background:#0a5fd0}
+.sr-panel{position:fixed;right:16px;bottom:64px;z-index:2147483000;width:340px;max-width:92vw;max-height:70vh;background:#fff;color:#1f2328;border:1px solid #d0d7de;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);display:none;flex-direction:column;overflow:hidden;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.sr-panel.sr-open{display:flex}
+.sr-head{display:flex;justify-content:space-between;align-items:center;padding:.6rem .8rem;border-bottom:1px solid #eaecef}
+.sr-x,.sr-del{background:none;border:none;color:#656d76;cursor:pointer;font-size:13px}
+.sr-list{overflow:auto;padding:.5rem .8rem;flex:1}
+.sr-empty{color:#656d76;font-size:.85rem;padding:.5rem 0}
+.sr-item{border:1px solid #eaecef;border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem}
+.sr-loc{display:flex;justify-content:space-between;font-size:.72rem;color:#656d76;font-family:ui-monospace,Menlo,monospace;margin-bottom:.25rem}
+.sr-quote{font-size:.8rem;color:#3b4148;background:#f6f8fa;border-left:3px solid #d0d7de;padding:.2rem .5rem;margin-bottom:.3rem}
+.sr-body{width:100%;border:1px solid #d0d7de;border-radius:6px;padding:.35rem .45rem;font:inherit;resize:vertical}
+.sr-actions{display:flex;gap:.4rem;padding:.6rem .8rem;border-top:1px solid #eaecef}
+.sr-note{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:inherit}
+.sr-submit{flex:1;background:#1f883d;color:#fff;border:none;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:600 13px/1 inherit}
+.sr-submit:hover{background:#1a7332}
+.sr-chip{position:absolute;z-index:2147483001;background:#1f2328;color:#fff;border:none;border-radius:6px;padding:.25rem .5rem;font:600 12px/1 sans-serif;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast{display:none!important}}
+"""
+
+_REVIEW_TOOLBAR_JS = r"""
+(function(){
+  "use strict";
+  var m = location.pathname.match(/\/scratch\/([^\/]+)\//);
+  var parts = location.pathname.split('/').filter(Boolean);
+  var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
+  var KEY = 'scratchReview:' + slug;
+  var comments = [];
+  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
+  function save(){ persist(); render(); }
+  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+
+  function headingFor(node){
+    var hs = document.querySelectorAll('main h1[id],main h2[id],main h3[id],main h4[id]');
+    var best=null;
+    for(var i=0;i<hs.length;i++){
+      if(hs[i]===node || (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING)) best=hs[i];
+    }
+    return best;
+  }
+
+  var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
+  var panel=document.createElement('div'); panel.className='sr-panel';
+  panel.innerHTML='<div class="sr-head"><b>Review</b><button type="button" class="sr-x" data-act="close">✕</button></div>'
+    +'<div class="sr-list"></div>'
+    +'<div class="sr-actions"><button type="button" class="sr-note" data-act="note">+ Note</button>'
+    +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button></div>';
+  var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
+  var toast=document.createElement('div'); toast.className='sr-toast'; toast.style.display='none';
+  document.body.appendChild(btn); document.body.appendChild(panel); document.body.appendChild(chip); document.body.appendChild(toast);
+
+  function showToast(t){ toast.textContent=t; toast.style.display='block'; setTimeout(function(){toast.style.display='none';},4500); }
+  function openPanel(o){ panel.classList.toggle('sr-open', o!==false); }
+
+  function render(){
+    btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
+    var list=panel.querySelector('.sr-list');
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">Select text on the page to comment, or add a note.</div>'; return; }
+    list.innerHTML='';
+    comments.forEach(function(c,i){
+      var row=document.createElement('div'); row.className='sr-item';
+      row.innerHTML='<div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
+        +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+        +'<textarea class="sr-body" data-i="'+i+'" rows="2" placeholder="Your comment…">'+esc(c.body||'')+'</textarea>';
+      list.appendChild(row);
+    });
+  }
+
+  function addComment(quote, heading){
+    comments.push({id:Date.now()+'-'+comments.length, quote:quote||'', heading:heading||'', body:''});
+    save(); openPanel(true);
+    var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus();
+  }
+
+  document.addEventListener('mouseup', function(){
+    setTimeout(function(){
+      var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var main=document.querySelector('main');
+      if(txt && txt.length>1 && sel.rangeCount && main && main.contains(sel.anchorNode)){
+        var r=sel.getRangeAt(0).getBoundingClientRect();
+        chip.style.top=(window.scrollY+r.bottom+6)+'px'; chip.style.left=(window.scrollX+r.left)+'px';
+        chip.dataset.quote=txt.slice(0,280);
+        var h=headingFor(sel.anchorNode); chip.dataset.heading=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
+        chip.style.display='block';
+      } else { chip.style.display='none'; }
+    },10);
+  });
+  chip.addEventListener('mousedown', function(e){ e.preventDefault(); addComment(chip.dataset.quote, chip.dataset.heading); chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); });
+  btn.addEventListener('click', function(){ openPanel(!panel.classList.contains('sr-open')); render(); });
+  panel.addEventListener('click', function(e){
+    var act=e.target.getAttribute('data-act');
+    if(act==='close') openPanel(false);
+    else if(act==='note') addComment('','');
+    else if(act==='submit') submit();
+    else if(e.target.classList.contains('sr-del')){ comments.splice(+e.target.getAttribute('data-i'),1); save(); }
+  });
+  panel.addEventListener('input', function(e){
+    if(e.target.classList.contains('sr-body')){ comments[+e.target.getAttribute('data-i')].body=e.target.value; persist(); btn.textContent='💬 Review ('+comments.length+')'; }
+  });
+
+  function buildPrompt(){
+    var title=document.title||slug; var L=[];
+    L.push('[scratch-review '+slug+']');
+    L.push('Review of "'+title+'"'); L.push(location.href);
+    L.push('I left '+comments.length+' comment(s); full JSON downloaded to ~/Downloads/scratch-comments-'+slug+'.json'); L.push('');
+    comments.forEach(function(c,i){
+      L.push((i+1)+'. ['+(c.heading?'§ '+c.heading:'note')+'] '+(c.body||'(no text)'));
+      if(c.quote) L.push('   ↳ re: "'+c.quote+'"');
+    });
+    L.push(''); L.push('Re-read the artifact and address each comment, then reply in our chat.');
+    return L.join('\n');
+  }
+  function downloadJSON(){
+    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='scratch-comments-'+slug+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},120);
+  }
+  function copyText(text){
+    if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function(res,rej){ try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res(); }catch(err){ rej(err); } });
+  }
+  function submit(){
+    if(!comments.length){ showToast('No comments yet — select text or add a note first.'); return; }
+    var text=buildPrompt(); downloadJSON();
+    copyText(text).then(function(){ showToast('Copied — paste into Claude Code. JSON saved to ~/Downloads.'); })
+                  .catch(function(){ showToast('JSON downloaded to ~/Downloads. Clipboard blocked — copy from the file.'); });
+  }
+
+  render();
+})();
+"""
+
+
 def _render_markdown(markdown_text: str) -> str:
     """Markdown → HTML fragment. Lazy import keeps the HTML/file paths import-light."""
     import markdown  # noqa: PLC0415 — intentional lazy import
@@ -431,8 +604,15 @@ def _render_markdown(markdown_text: str) -> str:
     return md.convert(markdown_text)
 
 
-def _html_page(title: str, body_html: str, *, nav_html: str = "") -> str:
-    """Wrap a body fragment in a complete, light-mode-pinned HTML document."""
+def _html_page(title: str, body_html: str, *, nav_html: str = "", review: bool = True) -> str:
+    """Wrap a body fragment in a complete, light-mode-pinned HTML document.
+
+    ``review=True`` (default) bakes in the two-way review toolbar so the operator can mark
+    the page up and copy a paste-ready ``[scratch-review <slug>]`` prompt. CSS/JS are
+    concatenated (not f-string-interpolated) so their literal braces are safe.
+    """
+    review_css = _REVIEW_TOOLBAR_CSS if review else ""
+    review_js = ("<script>" + _REVIEW_TOOLBAR_JS + "</script>\n") if review else ""
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en"><head>\n'
@@ -440,11 +620,12 @@ def _html_page(title: str, body_html: str, *, nav_html: str = "") -> str:
         '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
         '<meta name="color-scheme" content="light">\n'
         f"<title>{_html.escape(title)}</title>\n"
-        f"<style>{_DOCSET_CSS}</style>\n"
+        "<style>" + _DOCSET_CSS + review_css + "</style>\n"
         "</head>\n"
         f"<body>{scratch_back_link_html()}{nav_html}<main>{body_html}</main>\n"
         "<footer>Rendered on the tailnet HTML scratchpad · private to your devices.</footer>\n"
-        "</body></html>\n"
+        + review_js
+        + "</body></html>\n"
     )
 
 
