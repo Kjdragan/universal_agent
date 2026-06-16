@@ -15,9 +15,12 @@ description: >
   "show me the digest", "publish this analysis", "where can I view the rendered version",
   "send me something I can click through", or any moment you're about to hand over a
   report all mean: use this skill. Also reach for it proactively when you've just built
-  an HTML page (e.g. via the visual-explainer skill) and need to surface it. Do NOT use
-  it for artifacts going to EXTERNAL recipients — the scratchpad is tailnet-only and the
-  link is dead off-tailnet (attach a file or use a public host for those).
+  an HTML page (e.g. via the visual-explainer skill) and need to surface it. It also
+  renders markdown files/folders to styled HTML, publishes any single file (image, PDF,
+  CSV, screenshot) for the operator to view without an IDE, and keeps a browsable,
+  searchable artifact index of everything published. Do NOT use it for artifacts going
+  to EXTERNAL recipients — the scratchpad is tailnet-only and the link is dead
+  off-tailnet (attach a file or use a public host for those).
 ---
 
 # Publish to the Tailnet HTML Scratchpad
@@ -50,12 +53,19 @@ running on the VPS (writes directly to `/home/ua/ua_scratch`) or elsewhere on th
 (copies over `ssh ua@uaonvps`) — you never pass a flag for that.
 
 ```bash
-# Publish an HTML file. Prints ONLY the URL to stdout (status messages go to stderr),
-# so you can capture it directly.
+# Publish a single file (HTML, image, PDF, CSV, …). Prints ONLY the URL to stdout
+# (status messages go to stderr), so you can capture it directly.
 URL=$(scripts/publish_scratch.sh report.html)
 
 # Optional readable slug names the subdir -> /scratch/<slug>/report.html
 URL=$(scripts/publish_scratch.sh report.html my-analysis)
+
+# Publish a whole directory tree under ONE slug (subdirs preserved). Use this for a
+# rendered, cross-linked doc set — prints the base URL .../scratch/<slug>/.
+BASE=$(scripts/publish_scratch.sh --dir ./rendered_site my-docs)
+
+# Rebuild the browsable artifact index (also auto-runs after every publish + on a timer).
+scripts/publish_scratch.sh --reindex
 
 # One-time/idempotent setup of the /scratch mapping (rarely needed; already configured).
 scripts/publish_scratch.sh --init
@@ -75,29 +85,53 @@ use the random default for one-off reports.
 ## From Python pipelines (cron scripts, services)
 
 A deterministic Python pipeline (a cron digest, a service) can't "invoke a skill" — it
-runs without an LLM in the loop. For those callers, use the thin helper that wraps the
-**same** `publish_scratch.sh`, so there's one mechanism and no drift:
+runs without an LLM in the loop. For those callers, use the helpers that wrap the
+**same** `publish_scratch.sh`, so there's one mechanism and no drift. Four front doors,
+all in `src/universal_agent/services/scratch_publish.py`:
 
 ```python
-from universal_agent.services.scratch_publish import publish_html_to_scratch
-
-url = publish_html_to_scratch(
-    html_str,                      # the rendered HTML as a string
-    slug="yt-digest-2026-06-02",   # optional; a random suffix is appended for uniqueness
-    filename="digest.html",        # optional; the file name within the slug dir
+from universal_agent.services.scratch_publish import (
+    publish_html_to_scratch,      # a rendered HTML string (the original)
+    publish_markdown_to_scratch,  # a markdown string → styled, light-mode HTML page
+    publish_file_to_scratch,      # any single file as-is (image, PDF, CSV, screenshot…)
+    publish_docset_to_scratch,    # a folder of markdown + files → cross-linked HTML site
 )
-if url:
-    # lead the email/notification with `url`
-    ...
-else:
-    # publish failed — fall back to attaching the artifact so delivery is never dropped
-    ...
+
+# Render markdown to a proper page (no need to hand-write HTML / force light mode yourself):
+url = publish_markdown_to_scratch(md_text, slug="design", title="Design", description="…")
+
+# Hand over a diagram/screenshot/data file the operator can open without an IDE:
+url = publish_file_to_scratch("/path/chart.png", title="Latency chart", description="p95 over 24h")
+
+# Publish a whole doc folder; links between docs are rewritten, a nav bar is added, and
+# the returned URL points at the hub page (DESIGN.md/README.md, else the first markdown):
+url = publish_docset_to_scratch("/path/to/docs", title="Receptionist design", description="…")
+
+# The original HTML path (unchanged contract; used by the YouTube digest):
+url = publish_html_to_scratch(html_str, slug="yt-digest-2026-06-02", filename="digest.html")
 ```
 
-`publish_html_to_scratch` returns the URL string on success or `None` on failure (it
-never raises for an ordinary publish error), so callers can degrade gracefully — a
-raw-but-delivered fallback always beats a dropped report. See
-`src/universal_agent/services/scratch_publish.py`.
+Every helper returns the URL string on success or `None` on failure (none raise for an
+ordinary publish error), so callers can degrade gracefully — a raw-but-delivered fallback
+always beats a dropped report. Pass `title`/`description` whenever you can: they populate
+the artifact index (below) so the operator can find the artifact later by browsing rather
+than digging up the link.
+
+## The artifact index (browse everything)
+
+Every published artifact lands in one collated, persistent store
+(`/home/ua/ua_scratch/`, which survives deploys) and is listed on a single browsable,
+**date-sorted, searchable** index page:
+
+**`https://uaonvps.taildcc090.ts.net/scratch/`**
+
+The index shows title · date · description per artifact and links straight to each one.
+It is regenerated automatically after every publish and on the daily prune timer, built
+by the stdlib-only `scripts/build_scratch_index.py` from the `_artifact.json` sidecar each
+Python helper writes (falling back to the page `<title>` + mtime for artifacts published
+with the raw shell command). Hand the operator the index URL when they want to *find* an
+artifact rather than open a specific one; hand a direct `/scratch/<slug>/…` URL for a
+specific report.
 
 ## Generating the HTML itself
 

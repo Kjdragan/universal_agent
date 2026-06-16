@@ -12,9 +12,9 @@ This sweep deletes scratch slug-dirs whose newest content is older than
 email, short enough to keep the root tidy. Anything older can be regenerated from
 the durable source if ever needed.
 
-Pure-filesystem GC: no subprocess, no network. It runs on the VPS where the
-scratch dir is local (registered as a daily system cron — see
-``gateway_server._ensure_scratch_pruning_cron_job``).
+Filesystem GC, then a best-effort rebuild of the artifact index so it never lists a
+just-pruned dir. It runs on the VPS where the scratch dir is local (registered as a
+daily system cron — see ``gateway_server._ensure_scratch_pruning_cron_job``).
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import time
 
@@ -105,9 +106,32 @@ def prune_scratch(
     return result
 
 
+def _rebuild_index_best_effort(root: Path) -> None:
+    """Regenerate the browsable artifact index after a prune. Never fails the sweep.
+
+    The publish path rebuilds the index on every publish; this keeps it accurate in the
+    gap after a prune deletes dirs (otherwise a removed artifact lingers as a dead row).
+    Uses the stdlib-only ``scripts/build_scratch_index.py``.
+    """
+    builder = Path(__file__).resolve().parents[3] / "scripts" / "build_scratch_index.py"
+    if not builder.is_file():
+        logger.info("scratch prune: index builder %s not found; skipping reindex", builder)
+        return
+    try:
+        subprocess.run(
+            [sys.executable, str(builder), "--root", str(root)],
+            check=False,
+            capture_output=True,
+            timeout=60,
+        )
+    except Exception:  # noqa: BLE001 — reindex is best-effort; never break the prune
+        logger.warning("scratch prune: index rebuild failed", exc_info=True)
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     result = prune_scratch()
+    _rebuild_index_best_effort(_scratch_root())
     # Non-zero only on real removal errors, so a clean sweep is a green cron tick
     # and a permissions/IO problem surfaces in /dashboard/cron-jobs.
     return 1 if result["errors"] else 0
