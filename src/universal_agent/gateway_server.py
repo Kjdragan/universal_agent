@@ -19779,15 +19779,14 @@ def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
 
 
 def _ensure_scratch_pruning_cron_job() -> Optional[dict[str, Any]]:
-    """Daily pruning of stale tailnet-scratchpad artifacts.
+    """Daily scratchpad index refresh (+ optional pruning).
 
-    Published scratchpad reports (`/home/ua/ua_scratch/<slug>/`) are a delivery
-    surface, not a system of record — the durable copy of each report lives
-    elsewhere (e.g. digest markdown under AGENT_RUN_WORKSPACES/daily_digests/).
-    Once a slug-dir is older than UA_SCRATCH_RETENTION_DAYS (default 90) it ages
-    out of the browsable artifact index, so pruning keeps the store bounded
-    rather than growing without limit. Runs daily 07:00 CT (active hours,
-    dormancy-compliant). Filesystem GC sweep + index rebuild → skip_task_hub_link.
+    The scratchpad (`/home/ua/ua_scratch/<slug>/`) is the operator's persistent
+    artifact store. **Retention is unlimited by default** — this daily run keeps the
+    browsable index fresh and deletes nothing. Pruning is opt-in: set
+    UA_SCRATCH_RETENTION_DAYS to a positive integer to also delete slug-dirs older than
+    that many days. Runs daily 07:00 CT (active hours, dormancy-compliant). Index rebuild
+    (+ optional GC sweep) → skip_task_hub_link.
     """
     return _register_system_cron_job(
         system_job="scratch_pruning",
@@ -19795,8 +19794,8 @@ def _ensure_scratch_pruning_cron_job() -> Optional[dict[str, Any]]:
         default_timezone="America/Chicago",
         command="!script universal_agent.scripts.prune_scratch",
         description=(
-            "Daily pruning of tailnet-scratchpad artifacts older than "
-            "UA_SCRATCH_RETENTION_DAYS (default 90 days)."
+            "Daily scratchpad artifact-index refresh; prunes artifacts older than "
+            "UA_SCRATCH_RETENTION_DAYS only when set (default: unlimited / keep all)."
         ),
         timeout_seconds=300,
         # S5 Phase A batch 1: migrated to systemd timer — force in-process
