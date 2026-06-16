@@ -1630,10 +1630,24 @@ class InProcessGateway(Gateway):
     async def close_session(self, session_id: str) -> None:
         """Tear down a session and release all associated resources.
 
-        Safe to call for sessions that are not in memory (no-op).
-        If the session's execution lock is currently held this logs a warning
-        but proceeds with cleanup — the adapter and session dicts are cleared
-        so the next allocate will be fresh.
+        Safe to call for sessions not in memory (no-op). If the session's
+        execution lock is held this warns but proceeds — the adapter is popped so
+        the next allocate is fresh.
+
+        Lockless by design: no caller holds the global ``_timed_execution_lock``
+        when calling this (the session reaper, the ``/sessions`` delete +
+        auto-close endpoints, ``OpsService.delete_session``, the daemon-respawn
+        revive, and the hook ``finally`` all call it outside any lock), and
+        acquiring the GLOBAL lock here would needlessly serialize every close
+        against all create/resume. The pops are atomic on the single-threaded
+        event loop; the adapter ``close()`` is awaited after, off any lock.
+
+        Consolidated 2026-06-16 from a duplicate definition: the earlier
+        (shadowed, dead) variant acquired the global lock, called a non-existent
+        ``adapter.teardown()`` (``ProcessTurnAdapter`` only has ``close()`` — so
+        it tore nothing down), and the live variant leaked ``_session_exec_locks``.
+        This keeps the live lockless ``adapter.close()`` behavior and additionally
+        pops the per-session exec lock so it can't accumulate.
         """
         session_lock = self._session_exec_locks.get(session_id)
         if session_lock and session_lock.locked():
@@ -1643,20 +1657,15 @@ class InProcessGateway(Gateway):
                 session_id,
             )
 
-        async with self._timed_execution_lock("close_session"):
-            adapter = self._adapters.pop(session_id, None)
-            self._sessions.pop(session_id, None)
-            self._session_exec_locks.pop(session_id, None)
+        adapter = self._adapters.pop(session_id, None)
+        self._sessions.pop(session_id, None)
+        self._session_exec_locks.pop(session_id, None)
 
         if adapter is not None:
-            teardown = getattr(adapter, "teardown", None)
-            if callable(teardown):
-                try:
-                    result = teardown()
-                    if inspect.isawaitable(result):
-                        await result
-                except Exception as exc:
-                    logger.warning("Adapter teardown error for session %s: %s", session_id, exc)
+            try:
+                await adapter.close()
+            except Exception as exc:  # noqa: BLE001 — teardown must not propagate
+                logger.warning("Adapter close error for session %s: %s", session_id, exc)
 
         logger.info("Session closed and resources released: %s", session_id)
 
@@ -2013,16 +2022,6 @@ class InProcessGateway(Gateway):
         if adapter is None:
             raise ValueError("Session is not active")
         return await adapter.remove_mcp_server(server_name)
-
-    async def close_session(self, session_id: str) -> None:
-        """Close and clean up a single session's adapter and state."""
-        adapter = self._adapters.pop(session_id, None)
-        if adapter:
-            try:
-                await adapter.close()
-            except Exception:
-                pass
-        self._sessions.pop(session_id, None)
 
     async def close(self) -> None:
         """Clean up all active adapters and sessions."""
