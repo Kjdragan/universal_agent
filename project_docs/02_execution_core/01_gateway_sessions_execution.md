@@ -118,13 +118,15 @@ participate in execution, listing, and adapter lifecycle.
 
 ### Close
 
-> [VERIFY: real code bug] `InProcessGateway` defines `close_session` **twice**.
-> The first definition (the detailed one with lock-held warnings, timed lock,
-> adapter `teardown()`) is **shadowed** by a second, simpler definition later in
-> the class body that only pops the adapter and calls `adapter.close()`. In
-> Python the later definition wins, so the detailed close path is dead code. The
-> session reaper and ops endpoints therefore use the *simpler* `close_session`
-> (pop adapter → `adapter.close()` → pop session). Worth consolidating.
+`InProcessGateway.close_session` is now a **single** definition (consolidated
+2026-06-16; it was previously defined twice, the detailed first one shadowed by a
+simpler second). It warns if the per-session exec lock is held, then pops
+`_adapters` + `_sessions` + `_session_exec_locks` and `await adapter.close()` —
+**lockless** (no caller holds the global `_timed_execution_lock`, and acquiring it
+here would serialize every close against all create/resume). The removed dead
+variant called a non-existent `adapter.teardown()` (`ProcessTurnAdapter` only has
+`close()`) and leaked `_session_exec_locks`; the consolidation keeps the live
+`adapter.close()` behavior and additionally pops the per-session exec lock.
 
 `InProcessGateway.close()` (whole-gateway teardown) releases the CODER VP lease,
 closes the VP adapter, closes all session adapters, closes the legacy bridge,
@@ -579,8 +581,9 @@ defensive against the recurring `additional_headers`/`extra_headers` API churn.
 
 ## Gotchas (verified)
 
-- **Two `close_session` definitions** in `InProcessGateway` — the later, simpler
-  one shadows the detailed one. See [VERIFY] above.
+- **`close_session` is a single, lockless definition** (consolidated 2026-06-16;
+  see the Close section). It was previously defined twice — the dead variant
+  called a non-existent `adapter.teardown()` and leaked `_session_exec_locks`.
 - **Two FastAPI apps.** `gateway_server.py` executes; `api/server.py` proxies.
   Pointing the dashboard at the wrong port (or forgetting `UA_GATEWAY_URL`) is a
   classic "nothing runs" footgun.
