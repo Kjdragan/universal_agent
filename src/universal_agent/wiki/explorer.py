@@ -99,6 +99,27 @@ def _read_manifest(vault_path: Path) -> dict[str, Any]:
         return {}
 
 
+# `ensure_vault` defaults the manifest title to a generic "External Vault" /
+# "Internal Vault" (the nightly ingest never passes a topic title), so the vault
+# list rendered every vault identically. Derive a meaningful display title instead.
+_GENERIC_TITLES = {"", "external vault", "internal vault", "vault"}
+
+
+def _display_title(manifest: dict[str, Any], vault_path: Path, recs: list[dict[str, Any]]) -> str:
+    """A meaningful vault title for the list: the manifest title when it's real,
+    else the topic — the (longest, most descriptive) source page title, else a
+    titleized slug."""
+    raw = str(manifest.get("title") or "").strip()
+    if raw.lower() not in _GENERIC_TITLES:
+        return raw
+    src_titles = [str(r.get("title") or "").strip() for r in recs if r.get("kind") == "source"]
+    src_titles = [t for t in src_titles if t]
+    if src_titles:
+        return max(src_titles, key=len)
+    slug = str(manifest.get("vault_slug") or vault_path.name)
+    return slug.replace("-", " ").replace("_", " ").strip().title() or slug
+
+
 def _vault_meta(vault_path: Path, *, records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     manifest = _read_manifest(vault_path)
     recs = records if records is not None else _light_records(vault_path)
@@ -107,7 +128,7 @@ def _vault_meta(vault_path: Path, *, records: list[dict[str, Any]] | None = None
         counts[r["kind"]] = counts.get(r["kind"], 0) + 1
     return {
         "slug": str(manifest.get("vault_slug") or vault_path.name),
-        "title": str(manifest.get("title") or vault_path.name),
+        "title": _display_title(manifest, vault_path, recs),
         "kind": str(manifest.get("vault_kind") or "external"),
         # parent dir name distinguishes nightly_wikis vs memory/wiki at a glance.
         "root": vault_path.parent.name,

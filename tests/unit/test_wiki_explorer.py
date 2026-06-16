@@ -75,3 +75,42 @@ def test_unknown_vault_and_path_traversal(tmp_path, monkeypatch):
     assert explorer.vault_detail("nope") is None
     assert explorer.read_vault_page("demo", "../../etc/passwd") is None
     assert explorer.read_vault_page("demo", "does/not/exist.md") is None
+
+
+def test_display_title_derives_topic_when_manifest_is_generic(tmp_path, monkeypatch):
+    """A vault whose manifest title is the generic 'External Vault' (the
+    ensure_vault default) should show the source page's topic title in the list,
+    not 'External Vault'."""
+    root = tmp_path / "wiki"
+    vault = root / "glm-topic"
+    _write(
+        vault / "vault_manifest.json",
+        json.dumps({"vault_kind": "external", "vault_slug": "glm-topic", "title": "External Vault",
+                    "created_at": "2026-06-15T00:00:00+00:00", "updated_at": "2026-06-15T08:00:00+00:00"}),
+    )
+    _write(
+        vault / "sources" / "report.md",
+        "---\ntitle: GLM-5 vs Kimi K2.7 Showdown\nkind: source\nsummary: x\ntags: []\n"
+        "source_ids: [s1]\nprovenance_kind: external_ingest\nprovenance_refs: []\n"
+        "confidence: medium\nstatus: active\n---\n\nBody.\n",
+    )
+    monkeypatch.setattr(explorer, "_vault_roots", lambda: [root])
+
+    v = explorer.list_vaults()[0]
+    assert v["title"] == "GLM-5 vs Kimi K2.7 Showdown"
+    assert v["slug"] == "glm-topic"
+
+
+def test_display_title_falls_back_to_titleized_slug(tmp_path, monkeypatch):
+    """No real manifest title and no source page -> titleized slug, never 'External Vault'."""
+    root = tmp_path / "wiki"
+    vault = root / "some-topic-name"
+    _write(
+        vault / "vault_manifest.json",
+        json.dumps({"vault_kind": "external", "vault_slug": "some-topic-name", "title": "External Vault",
+                    "created_at": "2026-06-15T00:00:00+00:00", "updated_at": "2026-06-15T08:00:00+00:00"}),
+    )
+    monkeypatch.setattr(explorer, "_vault_roots", lambda: [root])
+
+    v = explorer.list_vaults()[0]
+    assert v["title"] == "Some Topic Name"
