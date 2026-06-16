@@ -144,7 +144,7 @@ def generate_transcript(trace_data: Dict[str, Any], output_path: str):
                     lines.append(json.dumps(tool_input, indent=2))
                 else:
                     lines.append(str(tool_input))
-            except Exception:
+            except (TypeError, ValueError):
                 lines.append(str(tool_input))
             lines.append("```")
             lines.append(f"</details>")
@@ -175,7 +175,7 @@ def generate_transcript(trace_data: Dict[str, Any], output_path: str):
                          if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
                              if parsed[0].get("type") == "text":
                                  final_content_str = parsed[0].get("text", "")
-                except Exception:
+                except (ValueError, SyntaxError):
                     # Fallback: Regex for truncated items usually found in trace.json artifacts
                     # Matches: [{'type': 'text', 'text': '...
                     # We want to capture the content inside the 'text': '...'
@@ -200,7 +200,7 @@ def generate_transcript(trace_data: Dict[str, Any], output_path: str):
                     parsed_json = json.loads(final_content_str)
                     final_content_str = json.dumps(parsed_json, indent=2)
                     code_block_lang = "json"
-                except Exception:
+                except json.JSONDecodeError:
                     # If it's not valid JSON (e.g. truncated), leave as is.
                     # But if it looks like JSON, highlight it as such.
                     if final_content_str.strip().startswith("{") or final_content_str.strip().startswith("["):
@@ -231,6 +231,6 @@ def generate_transcript(trace_data: Dict[str, Any], output_path: str):
         with open(output_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
         return True
-    except Exception as e:
+    except OSError as e:
         print(f"Failed to write transcript: {e}")
         return False
