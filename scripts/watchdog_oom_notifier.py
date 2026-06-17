@@ -77,10 +77,34 @@ def _collect_oom_lines(since_epoch: int) -> list[str]:
     return lines
 
 
+def _bootstrap_secrets() -> None:
+    """Best-effort load of UA_OPS_TOKEN from Infisical.
+
+    This oneshot sources only ``/opt/universal_agent/.env`` (which does NOT
+    contain UA_OPS_TOKEN — it is Infisical-managed), so without this the POST
+    would 401 and OOM alerts would silently never reach email/Telegram.
+    """
+    if (os.getenv("UA_OPS_TOKEN") or "").strip():
+        return
+    try:
+        import sys
+
+        src = Path(__file__).resolve().parent.parent / "src"
+        if src.is_dir() and str(src) not in sys.path:
+            sys.path.insert(0, str(src))
+        from universal_agent.infisical_loader import initialize_runtime_secrets
+
+        initialize_runtime_secrets(profile=os.getenv("UA_WATCHDOG_SECRET_PROFILE") or "vps")
+    except Exception:  # noqa: BLE001 - best-effort, must not raise
+        pass
+
+
 def _post_notification(lines: list[str]) -> tuple[bool, str]:
     if not ENDPOINT:
         return False, "missing_endpoint"
-    if not OPS_TOKEN:
+    _bootstrap_secrets()
+    ops_token = (os.getenv("UA_OPS_TOKEN") or OPS_TOKEN or "").strip()
+    if not ops_token:
         return False, "missing_ops_token"
 
     summary = lines[0]
@@ -106,7 +130,7 @@ def _post_notification(lines: list[str]) -> tuple[bool, str]:
         data=data,
         headers={
             "content-type": "application/json",
-            "x-ua-ops-token": OPS_TOKEN,
+            "x-ua-ops-token": ops_token,
         },
         method="POST",
     )

@@ -14,6 +14,20 @@ HTTP_OK_MAX_STATUS="${UA_WATCHDOG_HTTP_OK_MAX_STATUS:-499}"
 POST_RESTART_SETTLE_SECONDS="${UA_WATCHDOG_POST_RESTART_SETTLE_SECONDS:-2}"
 HEARTBEAT_STALE_SECONDS="${UA_WATCHDOG_HEARTBEAT_STALE_SECONDS:-300}"
 
+# --- Cause-aware controls (alert on restart + restart rate-limit/escalation) ---
+# Previously a degraded service could flap-restart every 30s cycle indefinitely
+# with ZERO operator signal. We now (a) alert on every restart via the existing
+# ops-notifications -> email+Telegram fan-out, and (b) cap restarts/hour: once a
+# service exceeds the cap we back off auto-restart and escalate instead of
+# silently masking a persistent fault.
+NOTIFY_ENABLED="${UA_WATCHDOG_NOTIFY_ENABLED:-1}"
+MAX_RESTARTS_PER_HOUR="${UA_WATCHDOG_MAX_RESTARTS_PER_HOUR:-6}"
+RESTART_WINDOW_SECONDS="${UA_WATCHDOG_RESTART_WINDOW_SECONDS:-3600}"
+FLAP_COOLDOWN_SECONDS="${UA_WATCHDOG_FLAP_COOLDOWN_SECONDS:-600}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NOTIFIER_SCRIPT="${UA_WATCHDOG_NOTIFIER_SCRIPT:-$SCRIPT_DIR/watchdog_restart_notifier.py}"
+NOTIFIER_PYTHON="${UA_WATCHDOG_PYTHON_BIN:-$(dirname "$SCRIPT_DIR")/.venv/bin/python3}"
+
 if ! [[ "$HEALTH_FAIL_THRESHOLD" =~ ^[0-9]+$ ]] || [[ "$HEALTH_FAIL_THRESHOLD" -lt 1 ]]; then
   log "invalid UA_WATCHDOG_HEALTH_FAIL_THRESHOLD=$HEALTH_FAIL_THRESHOLD (must be >=1)"
   exit 2
@@ -115,11 +129,94 @@ is_heartbeat_fresh() {
   return 1
 }
 
+# --- Restart ledger (per-service restart timestamps, for rate-limit/escalation) ---
+restart_ledger_for() {
+  printf '%s/%s.restarts' "$STATE_DIR" "$(service_key "$1")"
+}
+
+flap_alert_marker_for() {
+  printf '%s/%s.flapalert' "$STATE_DIR" "$(service_key "$1")"
+}
+
+# Prune the ledger to RESTART_WINDOW_SECONDS and echo the count of restarts
+# still inside the window (i.e. restarts BEFORE the current one).
+restart_count_in_window() {
+  local service="$1" file now cutoff line count=0 tmp
+  file="$(restart_ledger_for "$service")"
+  if [[ ! -f "$file" ]]; then
+    printf '0'
+    return
+  fi
+  now="$(date +%s)"
+  cutoff=$((now - RESTART_WINDOW_SECONDS))
+  tmp="$(mktemp "${STATE_DIR}/.restarts.XXXXXX")"
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[0-9]+$ ]] || continue
+    if [[ "$line" -ge "$cutoff" ]]; then
+      printf '%s\n' "$line" >>"$tmp"
+      count=$((count + 1))
+    fi
+  done <"$file"
+  mv "$tmp" "$file"
+  printf '%s' "$count"
+}
+
+last_restart_epoch() {
+  local file
+  file="$(restart_ledger_for "$1")"
+  [[ -f "$file" ]] || { printf '0'; return; }
+  tail -1 "$file" 2>/dev/null | grep -oE '^[0-9]+' || printf '0'
+}
+
+record_restart() {
+  printf '%s\n' "$(date +%s)" >>"$(restart_ledger_for "$1")"
+}
+
+# Best-effort dashboard/email/Telegram alert via the Python notifier (which
+# bootstraps Infisical to obtain UA_OPS_TOKEN — not present in this oneshot's
+# env). Never blocks or fails a restart.
+notify_restart() {
+  local service="$1" reason="$2" event="$3" escalated="$4" post_state="$5" count="$6"
+  [[ "$NOTIFY_ENABLED" == "1" ]] || return 0
+  [[ -x "$NOTIFIER_PYTHON" ]] || return 0
+  [[ -f "$NOTIFIER_SCRIPT" ]] || return 0
+  local esc_flag=()
+  [[ "$escalated" == "1" ]] && esc_flag=(--escalated)
+  timeout 30 "$NOTIFIER_PYTHON" "$NOTIFIER_SCRIPT" \
+    --service "$service" --reason "$reason" --event "$event" \
+    --post-state "$post_state" --restart-count "$count" \
+    --window-seconds "$RESTART_WINDOW_SECONDS" --max-per-hour "$MAX_RESTARTS_PER_HOUR" \
+    "${esc_flag[@]}" 2>&1 | sed 's/^/[ua-watchdog] notifier: /' || true
+}
+
 restart_service() {
   local service="$1"
   local reason="$2"
 
-  log "service=$service action=restart reason=$reason"
+  # Rate-limit: how many times have WE restarted this service in the window?
+  local prior_count flapping=0 last now
+  prior_count="$(restart_count_in_window "$service")"
+  if [[ "$prior_count" -ge "$MAX_RESTARTS_PER_HOUR" ]]; then
+    flapping=1
+    last="$(last_restart_epoch "$service")"
+    now="$(date +%s)"
+    if [[ $((now - last)) -lt "$FLAP_COOLDOWN_SECONDS" ]]; then
+      # Back off: a service restarted >= cap/hr is not being fixed by more
+      # restarts — escalate to a human instead of silently flap-masking.
+      log "service=$service action=skip_restart reason=flapping restarts_in_window=$prior_count threshold=$MAX_RESTARTS_PER_HOUR cooldown=${FLAP_COOLDOWN_SECONDS}s"
+      local marker marker_age=999999
+      marker="$(flap_alert_marker_for "$service")"
+      [[ -f "$marker" ]] && marker_age=$((now - $(cat "$marker" 2>/dev/null || echo 0)))
+      if [[ "$marker_age" -ge "$FLAP_COOLDOWN_SECONDS" ]]; then
+        printf '%s' "$now" >"$marker"
+        notify_restart "$service" "$reason" "flapping_backoff" 1 "skipped" "$prior_count"
+      fi
+      return 1
+    fi
+    # Cooldown elapsed while flapping: allow one (escalated) restart attempt.
+  fi
+
+  log "service=$service action=restart reason=$reason flapping=$flapping restarts_in_window=$prior_count"
   "$SYSTEMCTL_BIN" reset-failed "$service" >/dev/null 2>&1 || true
   if "$SYSTEMCTL_BIN" restart "$service"; then
     if [[ "$POST_RESTART_SETTLE_SECONDS" -gt 0 ]]; then
@@ -127,11 +224,15 @@ restart_service() {
     fi
     local new_state
     new_state="$("$SYSTEMCTL_BIN" is-active "$service" 2>/dev/null || true)"
+    record_restart "$service"
     log "service=$service restart_result=ok post_state=${new_state:-unknown}"
+    notify_restart "$service" "$reason" "restart" "$flapping" "${new_state:-unknown}" "$((prior_count + 1))"
     return 0
   fi
 
+  record_restart "$service"
   log "service=$service restart_result=failed"
+  notify_restart "$service" "$reason" "restart" 1 "failed" "$((prior_count + 1))"
   return 1
 }
 
