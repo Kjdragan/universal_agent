@@ -90,6 +90,26 @@ Pin the profile ONCE before any NotebookLM step — some subcommands (e.g. `down
 - `nlm download quiz <nb> -o <path>` → download the quiz JSON.
 - `nlm download flashcards <nb> -o <path>` → download flashcards (only if generated; see Phase B).
 
+### Deploy-restart resume (checkpoint + adopt)
+
+NotebookLM audio generates on Google's servers and can take 5-15 minutes. If a
+deploy restart kills this run mid-generation, the audio still finishes on
+Google's side — but the `notebook_id` needed to fetch it lives only in this
+run's memory unless we write it down. So this skill keeps a tiny **resume
+checkpoint** and checks for one before creating anything:
+
+- The checkpoint is `.nlm_resume.json` in the run workspace root (the directory
+  that contains `work_products/` — your current working directory). It is a
+  dotfile on purpose: the workspace organizer and the artifact notifier both
+  skip dotfiles, so it never leaks into deliverables.
+- It holds `{"notebook_id", "topic", "run_started_at" (epoch seconds), "status"}`,
+  where `status` moves `creating` → `polling` → `done`.
+- Write it the INSTANT the notebook exists (Phase B.2), update it after audio is
+  requested (Phase B.4), and delete it once everything is downloaded (Phase C.5).
+
+A run that finds a fresh checkpoint ADOPTS the existing notebook instead of
+building a new one — that is the recovery path after a deploy-restart.
+
 ### Pipeline Phases
 
 Phase A — Paper Discovery (direct MCP tools):
@@ -99,13 +119,36 @@ Phase A — Paper Discovery (direct MCP tools):
 4. Save paper metadata to work_products/paper_to_podcast/papers_metadata.json
 
 Phase B — NotebookLM Content Generation (via the `nlm` CLI — see Required Capabilities):
+0. RESUME CHECK (deploy-restart recovery — do this BEFORE creating anything).
+   Look for `.nlm_resume.json` in the workspace root. If it exists, parse it, and
+   if its `status` is not `"done"` AND `run_started_at` is within the last 24
+   hours:
+   a. `export NLM_PROFILE=default`, then `nlm login --check` (if it fails, STOP
+      per Anti-Patterns — never fabricate).
+   b. Run `nlm studio status <notebook_id> --json` for the checkpoint's
+      `notebook_id`.
+      - If the notebook is valid and its audio is `completed` or still
+        generating, ADOPT it: SKIP notebook/source/audio creation (steps 1-4),
+        keep using the checkpoint's `topic` for ALL titles/subjects (do NOT pick
+        a new topic), and continue at step 5 (poll) then Phase C (download +
+        package + email). This recovers a run a deploy restart interrupted.
+      - If the notebook is missing/errored/expired, delete `.nlm_resume.json` and
+        fall through to step 1 (fresh run).
+   If there is no checkpoint, or it is stale (>24h) or already `"done"`, proceed
+   to step 1.
 1. `export NLM_PROFILE=default`, then `nlm login --check`. If it fails, STOP per Anti-Patterns
    (report that desktop re-auth is needed — never fabricate audio/quiz/flashcards).
 2. `nlm notebook create "Paper to Podcast: {topic}" --json` → capture `notebook_id` from the JSON.
+   IMMEDIATELY write the resume checkpoint `.nlm_resume.json` at the workspace
+   root: `{"notebook_id": "<id>", "topic": "<topic>", "run_started_at": <epoch
+   seconds now>, "status": "creating"}`. Until the manifest is written at the very
+   end this is the ONLY durable record of the notebook handle, so writing it now
+   is what lets a deploy-restart adopt this notebook instead of building a new one.
 3. For each downloaded paper PDF (from Phase A), `nlm source add <notebook_id> --file <path-to-paper.pdf> --wait`
    (one call per paper, sequential).
 4. Generate artifacts — the audio overview is the headline deliverable, so kick it off FIRST and never skip it:
    a. Audio: `nlm audio create <notebook_id> --format deep_dive --confirm`
+      — then update `.nlm_resume.json` `status` to `"polling"`.
    b. Quiz:  `nlm quiz create <notebook_id> --count 10 --difficulty 3 --confirm`
    c. Flashcards (best-effort ONLY): there is no `nlm` CLI command to *create* flashcards. You MAY
       attempt `mcp__notebooklm-mcp__studio_create` with `artifact_type="flashcards"` AFTER audio + quiz
@@ -121,6 +164,9 @@ Phase C — Download and Package (sequential, one at a time, via `nlm`):
 3. Flashcards (only if generated in B4c): `nlm download flashcards <notebook_id> -o work_products/paper_to_podcast/flashcards.json`
 4. Write manifest.json with: topic, papers, notebook_id, and each artifact's path + size. Note any
    skipped flashcards as a gap — that is acceptable; a missing audio podcast is NOT.
+5. Once manifest.json is written and the audio `.m4a` is verified present, DELETE
+   `.nlm_resume.json` (the run is complete; the next day's run must not adopt this
+   notebook). If deletion fails for any reason, set its `status` to `"done"`.
 
 ## Anti-Patterns
 

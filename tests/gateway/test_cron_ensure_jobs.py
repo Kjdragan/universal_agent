@@ -375,6 +375,43 @@ def test_ensure_paper_to_podcast_declares_notebooklm_auth_cookie_required(monkey
     )
 
 
+def test_ensure_paper_to_podcast_command_has_deploy_restart_resume(monkeypatch):
+    """Deploy-restart recovery: a run killed mid-poll (e.g. a gateway deploy
+    during NotebookLM audio generation) is requeued on next boot with the SAME
+    stored command — ``_build_workflow_trigger`` sets ``command=job.command``
+    verbatim (cron_service.py). For the requeued run to ADOPT the already-finished
+    Google-side audio instead of building a brand-new notebook, the command itself
+    must instruct a resume-first check against the ``.nlm_resume.json`` checkpoint
+    and prefer the checkpoint's topic (so a restart crossing midnight still
+    finishes the same podcast). Pin that contract so the resume directive is never
+    silently dropped from the command template.
+
+    See ADR project_docs/06_platform/13_resumable_external_jobs_adr.md.
+    """
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv("UA_PAPER_TO_PODCAST_ENABLED", "1")
+
+    gateway_server._ensure_paper_to_podcast_cron_job()
+
+    assert len(cron_stub.jobs) == 1
+    command = cron_stub.jobs[0].command or ""
+    # The resume checkpoint must be named so the requeued run can find it.
+    assert ".nlm_resume.json" in command, (
+        "paper_to_podcast command must reference the .nlm_resume.json resume "
+        f"checkpoint so a deploy-killed run can be adopted; command: {command!r}"
+    )
+    # It must be a resume-FIRST directive, not merely a passing mention.
+    assert "RESUME" in command.upper(), (
+        "command must instruct a resume-first check before creating a new notebook"
+    )
+    # Cross-midnight topic-switch guard: prefer the checkpoint's topic.
+    assert "topic" in command.lower() and "checkpoint" in command.lower(), (
+        "command must tell the resumed run to use the checkpoint's topic, not a "
+        f"freshly-computed one; command: {command!r}"
+    )
+
+
 def test_ensure_morning_briefing_declares_ua_ops_token_required(monkeypatch):
     """`briefings_agent.py:23-26` does `sys.exit(1)` when UA_OPS_TOKEN
     is missing, with a generic stderr line.  Declaring the secret in
