@@ -1682,8 +1682,6 @@ class InProcessGateway(Gateway):
             except Exception as exc:  # noqa: BLE001 — teardown must not propagate
                 logger.warning("Adapter close error for session %s: %s", session_id, exc)
 
-        logger.info("Session closed and resources released: %s", session_id)
-
     # ---------------------------------------------------------------------------
     # Session Reaper — activity-based TTL cleanup
     # ---------------------------------------------------------------------------
