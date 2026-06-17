@@ -1,0 +1,37 @@
+[Unit]
+Description=Universal Agent session workspace reaper + archive cleanup (deploy-independent daily disk GC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# REPO_ROOT is consumed by scripts/session_reaper.sh. Defaults to the desktop
+# path in the script itself; this override points it at the VPS deploy root.
+Environment=REPO_ROOT=/opt/universal_agent
+# Secrets-bootstrap backstop (mirrors universal-agent-scratch-pruning). The .env
+# loaded below is authoritative; these inline vars take effect only if .env is
+# absent. The reaper + archive_cleanup.py are pure FS operations with NO
+# Infisical-resolved secrets — these vars are inert for this job and kept only
+# so every maintenance unit is structurally identical to its siblings.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# Phase 1: archive AGENT_RUN_WORKSPACES/{cron_*,session_*} dirs idle > 24h
+# (kills any lingering claude/node/python processes first at the 4h idle mark).
+# Pure bash + standard coreutils; REPO_ROOT env var above sets the correct path.
+ExecStart=/opt/universal_agent/scripts/session_reaper.sh
+# Phase 2: delete AGENT_RUN_WORKSPACES_ARCHIVE entries older than 30 days.
+# Uses Path(__file__) resolution → /opt/universal_agent/AGENT_RUN_WORKSPACES_ARCHIVE.
+# Non-fatal: if the Python step fails the timer still rearms for tomorrow.
+ExecStartPost=-/opt/universal_agent/.venv/bin/python /opt/universal_agent/scripts/archive_cleanup.py --max-age-days 30
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

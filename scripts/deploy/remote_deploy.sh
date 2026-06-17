@@ -316,6 +316,14 @@ sudo bash "$PROD_DIR/scripts/install_vps_migrated_desktop_timers.sh" \
 echo "--> Installing proactive-signal-card-sync timer (autonomous hourly card generation)..."
 sudo bash "$PROD_DIR/scripts/install_vps_proactive_signal_card_sync_timer.sh" \
   || echo "WARN: install_vps_proactive_signal_card_sync_timer.sh failed (non-fatal)"
+# Daily workspace reaper: archives stale AGENT_RUN_WORKSPACES/{cron_*,session_*}
+# dirs (idle > 24h) at 03:00 CT, then deletes AGENT_RUN_WORKSPACES_ARCHIVE entries
+# older than 30 days. AGENT_RUN_WORKSPACES had no deployed filesystem cleaner
+# before this and was 12G+ as of 2026-06-09 (audit). Pure FS — no secrets, no
+# Infisical. Non-fatal.
+echo "--> Installing session-reaper timer (daily AGENT_RUN_WORKSPACES disk GC)..."
+sudo bash "$PROD_DIR/scripts/install_vps_session_reaper_timer.sh" \
+  || echo "WARN: install_vps_session_reaper_timer.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the
