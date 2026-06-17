@@ -7,7 +7,7 @@ code_paths:
   - src/universal_agent/memory/
   - src/universal_agent/tools/memory.py
   - src/universal_agent/feature_flags.py
-last_verified: 2026-06-12
+last_verified: 2026-06-17
 ---
 
 # Memory System

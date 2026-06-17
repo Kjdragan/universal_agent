@@ -12,7 +12,7 @@ code_paths:
   - scripts/infisical_upsert_secret.py
   - scripts/claude_with_mcp_env.sh
   - scripts/_claude_launcher.py
-last_verified: 2026-06-11
+last_verified: 2026-06-17
 ---
 
 # Secrets & Infisical
