@@ -237,17 +237,20 @@ INSTRUCTIONS:
    e. Generate artifacts via NLM studio — fire ALL creates first, then poll once:
       - `nlm report create <id> --confirm`
       - `nlm infographic create <id> --orientation landscape --style professional --confirm`
+      - `nlm audio create <id> --format deep_dive --confirm` (a deep-dive podcast of the topic)
    f. Poll `nlm studio status <id>` with sleep 10 until all artifacts are completed
+      (the audio is the slowest — ~5-10 min — so keep polling until it too is completed)
    g. Download artifacts:
       - `nlm download report <id> --output {wiki_artifacts_dir}/{today}_wiki_report_[TOPIC].md`
       - `nlm download infographic <id> --output {wiki_artifacts_dir}/{today}_wiki_infographic_[TOPIC].png`
+      - `nlm download audio <id> --output {wiki_artifacts_dir}/{today}_wiki_podcast_[TOPIC].m4a` (verify it is a real .m4a > 100 KB)
    h. Register the KB: use the `kb_register` tool with slug, notebook_id, title, and tags
    i. Ingest the report into the Wiki using `wiki_ingest_external_source`
 
    IMPORTANT: Do NOT use `generate_image` or HTML-to-PDF for infographics.
    NLM studio generates source-grounded infographics that are higher quality.
 
-4. When finished, format a "Nightly Wiki Report" documenting the selected topics, notebook URLs, absolute paths to downloaded artifacts, and the core themes added to the Wiki.
+4. When finished, format a "Nightly Wiki Report" documenting the selected topics, notebook URLs, absolute paths to downloaded artifacts (report, infographic, and the new deep-dive podcast .m4a), and the core themes added to the Wiki.
 5. Save exactly one payload file named 'nightly_wiki_{today}.md' to {wiki_artifacts_dir} containing just this summary so the Morning Briefing agent can surface it to the user.
 
 RAW PENDING CARDS:
