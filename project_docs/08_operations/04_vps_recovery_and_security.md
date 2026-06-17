@@ -8,6 +8,7 @@ code_paths:
   - scripts/install_vps_service_watchdog.sh
   - scripts/install_vps_oom_alert.sh
   - scripts/watchdog_oom_notifier.py
+  - scripts/watchdog_restart_notifier.py
   - scripts/vps_health_check.sh
   - src/universal_agent/process_heartbeat.py
   - deployment/systemd/universal-agent-service-watchdog.service
@@ -15,7 +16,7 @@ code_paths:
   - deployment/systemd/universal-agent-oom-alert.service
   - deployment/systemd/universal-agent-oom-alert.timer
   - deployment/systemd/templates/universal-agent-gateway.service.template
-last_verified: 2026-06-14
+last_verified: 2026-06-16
 ---
 
 # VPS Recovery & Security
@@ -112,6 +113,35 @@ Failure counters are tracked as per-service files under `STATE_DIR`
 (default `/var/lib/universal-agent/watchdog/<sanitized-name>.failcount`). The
 service name is sanitized via `service_key` (slashes/colons/at/dot/space →
 underscore) to form the filename.
+
+**Cause-aware restarts — alert + rate-limit/escalation (added 2026-06-16).**
+A `restart_service` call is no longer silent. Before restarting, the watchdog
+consults a per-service **restart ledger** (`<sanitized-name>.restarts`, one epoch
+per restart, pruned to `RESTART_WINDOW_SECONDS`, default 3600) via
+`restart_count_in_window`:
+
+- **Under the cap** (`UA_WATCHDOG_MAX_RESTARTS_PER_HOUR`, default 6): restart as
+  before, record the timestamp (`record_restart`), and fire a best-effort
+  `severity=warning` notification.
+- **At/over the cap**: a service restarted ≥ cap/hr is not being fixed by more
+  restarts. Within `FLAP_COOLDOWN_SECONDS` (default 600) of the last restart the
+  watchdog **backs off** (skips the restart, logs `action=skip_restart
+  reason=flapping`) and escalates a `severity=error, requires_action=true`
+  "flapping" notification (itself rate-limited to once per cooldown via a
+  `<sanitized-name>.flapalert` marker). After the cooldown elapses it allows one
+  more (escalated) attempt. This stops the previously-invisible "restart every
+  30s forever" failure mode.
+
+Alerts are delivered by `scripts/watchdog_restart_notifier.py`, which **bootstraps
+Infisical** (`initialize_runtime_secrets`) to obtain `UA_OPS_TOKEN` — the oneshot's
+`-/opt/universal_agent/.env` does *not* carry that token — then POSTs to
+`/api/v1/ops/notifications`, riding the existing `NotificationDispatcher`
+email+Telegram fan-out. The OOM notifier (`watchdog_oom_notifier.py`) gained the
+same Infisical bootstrap, closing a latent gap where OOM alerts would 401
+silently. The whole notify path is best-effort (`|| true`, `timeout 30`): a
+gateway being down can never block its own restart. Knobs:
+`UA_WATCHDOG_NOTIFY_ENABLED` (default 1), `UA_WATCHDOG_MAX_RESTARTS_PER_HOUR`,
+`UA_WATCHDOG_RESTART_WINDOW_SECONDS`, `UA_WATCHDOG_FLAP_COOLDOWN_SECONDS`.
 
 **Default service specs** (`DEFAULT_SERVICE_SPECS`, format
 `service|http_health_url|heartbeat_file`):
