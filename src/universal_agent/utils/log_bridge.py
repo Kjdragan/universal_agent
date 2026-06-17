@@ -18,7 +18,7 @@ class LogBridgeHandler(logging.Handler):
         # Set a formatter that simplifies the message
         self.setFormatter(logging.Formatter('%(message)s'))
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
         try:
             msg = self.format(record)
             
@@ -54,7 +54,7 @@ class StdoutInterceptor:
         self._buffer = ""
         self._reentrant = False  # Guard against infinite loops
 
-    def write(self, text: str):
+    def write(self, text: str) -> None:
         # Always write to original stream first
         self.original_stream.write(text)
         self.original_stream.flush()  # Ensure immediate terminal output
@@ -89,7 +89,7 @@ class StdoutInterceptor:
         finally:
             self._reentrant = False
 
-    def flush(self):
+    def flush(self) -> None:
         self.original_stream.flush()
         if self._buffer.strip():
             self._emit(self._buffer)
@@ -112,5 +112,5 @@ class StdoutInterceptor:
             pass
             
     # Proxy other attributes to original stream
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self.original_stream, name)
