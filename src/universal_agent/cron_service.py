@@ -205,22 +205,50 @@ def _is_deploy_window_active() -> bool:
 def _is_llm_deploy_kill_result(result: Any) -> bool:
     """True iff a gateway LLM result carries the deploy-kill signature.
 
-    When a deploy restart SIGTERMs the SDK's `claude` CLI subprocess
-    mid-run, the SDK logs "Fatal error in message reader: Command failed
-    with exit code 143" internally and the message stream simply ends —
-    no exception propagates into ``gateway.run_query``, which returns a
-    ``GatewayResult`` with empty ``response_text``, zero ``tool_calls``,
-    and no collected errors (the transcript shows "No tools called").
-    Without detection, the Phase F.1 close computes ``_f_rc_equiv_llm=0``
-    and mis-paints the kill as ``clean_exit_zero`` — the run is marked
-    completed and the artifact notifier discloses stale artifacts as
-    fresh (observed live 2026-06-09/10, paper_to_podcast).
+    Two shapes — both are the SDK's ``claude`` CLI subprocess being
+    SIGTERM'd by a deploy restart, surfaced differently depending on how
+    much work preceded the kill:
+
+    1. **Mid-flight kill** (the 2026-06-16 paper_to_podcast regression).
+       The subprocess had already done real work (notebook + sources +
+       audio created, mid-poll) when it was SIGTERM'd. The engine catches
+       the terminated-process exception
+       (``execution_engine._is_terminated_process_error``), swallows it,
+       and surfaces a ``metadata["subprocess_terminated"]=True`` marker on
+       the ``GatewayResult`` (see ``InProcessGateway.run_query``). This
+       shape has NON-empty ``response_text`` and ``tool_calls > 0``, so the
+       cold-kill signature below would miss it — the marker is checked
+       first. Without it, Phase F.1 computes ``_f_rc_equiv_llm=0`` and
+       mis-paints the kill as ``clean_exit_zero`` / ``status=success``,
+       clearing the in-flight marker (defeating boot-requeue) and
+       suppressing the artifact notifier — zero operator signal for ~20h
+       (observed live 2026-06-16).
+
+    2. **Cold kill** (the 2026-06-09/10 shape). The subprocess was
+       SIGTERM'd before it produced anything: the message stream simply
+       ends, no exception propagates into ``gateway.run_query``, and the
+       result has empty ``response_text`` and zero ``tool_calls``
+       (transcript shows "No tools called").
+
+    The subprocess-exit/signal itself is NOT a field on ``GatewayResult``
+    (the SDK logs "Command failed with exit code 143" internally but the
+    code is swallowed before the result). The mid-flight marker is the
+    surfaced proxy for that signal — it lets this LLM branch mirror the
+    `!script` branch's ``exit_code != 0`` robustness instead of relying on
+    the empty-result surface signature alone.
 
     This predicate is the *signature* only; callers must AND it with
     ``_is_deploy_window_active()`` before downgrading — mirroring the
     `!script` branch's guardrail that the deploy-window predicate is the
     ONLY thing allowed to downgrade a failure-shaped outcome.
     """
+    # Mid-flight kill: the adapter proved the subprocess died mid-run.
+    # Checked first because this shape carries non-empty text + tool_calls.
+    meta = getattr(result, "metadata", None)
+    if isinstance(meta, dict) and meta.get("subprocess_terminated"):
+        return True
+    # Cold-kill signature (fallback): subprocess SIGTERM'd before producing
+    # anything — empty text, zero tool calls.
     response_text = (getattr(result, "response_text", "") or "").strip()
     try:
         tool_calls = int(getattr(result, "tool_calls", 0) or 0)
