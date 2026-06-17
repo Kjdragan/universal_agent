@@ -155,6 +155,29 @@ Reaper poll interval: `UA_SESSION_REAPER_INTERVAL_SECONDS` (default 60 s, min
 `session.metadata["last_activity_at"]`, so the reaper measures from the end of
 the most recent turn.
 
+### Filesystem workspace reaper — daily disk GC
+
+Separate from the in-process session reaper above, a **deploy-independent
+systemd timer** (`universal-agent-session-reaper.timer`, daily at 03:00 CT)
+handles disk reclamation of `AGENT_RUN_WORKSPACES/` on the VPS. It runs in two
+phases:
+
+1. **`scripts/session_reaper.sh`** (ExecStart) — scans `cron_*` and `session_*`
+   subdirs; kills lingering `claude`/node/python processes after 4 h idle; moves
+   dirs to `AGENT_RUN_WORKSPACES_ARCHIVE/` after 24 h idle with no active
+   processes. `REPO_ROOT` env var (set to `/opt/universal_agent` by the service
+   unit) controls the workspace root so the script works correctly on the VPS
+   despite its default pointing at the desktop path.
+
+2. **`scripts/archive_cleanup.py`** (ExecStartPost) — deletes
+   `AGENT_RUN_WORKSPACES_ARCHIVE/` entries older than 30 days, bounding the
+   archive's growth. Path resolves from `__file__` → no hardcoded root needed.
+
+The in-process session reaper (`gateway.py::_session_reaper`) is **in-memory
+only** — it closes inactive `GatewaySession` objects and releases adapters. It
+does **not** delete or move workspace directories on disk. The filesystem timer
+is the distinct mechanism that actually frees disk space.
+
 ### Live sessions vs. durable runs
 
 Do not conflate the two models:

@@ -1,0 +1,19 @@
+[Unit]
+Description=Run Universal Agent workspace reaper + archive cleanup daily at 03:00 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic (OnUnitActiveSec/OnBootSec
+# alone). The deploy daemon-reload (~19x/day) wipes a monotonic timer's anchor
+# -> NextElapse=infinity -> silently dead (the 2026-05/06 dead-timer class).
+# systemd 255 on the VPS supports the OnCalendar timezone suffix; DST is handled
+# by systemd. 03:00 CT is a quiet trough: below the 06:00 active-window floor
+# (no content-generation quota burned), and well before the morning briefing
+# at 06:35. Persistent=true replays a slot missed inside a deploy/reboot window.
+OnCalendar=*-*-* 03:00:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=300
+AccuracySec=1min
+Unit=universal-agent-session-reaper.service
+
+[Install]
+WantedBy=timers.target

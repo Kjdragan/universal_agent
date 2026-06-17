@@ -15,7 +15,7 @@ set -Eeuo pipefail
 IDLE_THRESHOLD_HOURS="${1:-4}"
 ARCHIVE_IDLE_HOURS=24
 
-REPO_ROOT="/home/kjdragan/lrepos/universal_agent"
+REPO_ROOT="${REPO_ROOT:-/home/kjdragan/lrepos/universal_agent}"
 WORKSPACES="${REPO_ROOT}/AGENT_RUN_WORKSPACES"
 ARCHIVE_DIR="${REPO_ROOT}/AGENT_RUN_WORKSPACES_ARCHIVE"
 LOG_FILE="${REPO_ROOT}/logs/session_reaper.log"
