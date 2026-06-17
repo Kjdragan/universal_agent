@@ -20042,6 +20042,18 @@ def _paper_to_podcast_command() -> str:
     topic = PAPER_TO_PODCAST_TOPICS[day_index]
     return "\n".join(
         [
+            (
+                "DEPLOY-RESTART RESUME CHECK FIRST: before anything else, look for a "
+                "`.nlm_resume.json` checkpoint in the workspace root. If it names an "
+                "in-flight or completed NotebookLM notebook from a run started within "
+                'the last 24h (status not "done"), RESUME that notebook — re-poll if '
+                "needed, then download, package, and email — instead of creating a new "
+                "one, and use the TOPIC recorded in that checkpoint rather than the "
+                "topic named below (a deploy restart that crosses midnight must still "
+                "finish the SAME podcast it started). Only if there is no usable "
+                "checkpoint, proceed with the topic below and create a new notebook. "
+                "The skill's Phase B.0 describes this; follow it exactly."
+            ),
             f'Run the paper-to-podcast skill for the topic: "{topic}". Load and follow the skill instructions exactly.',
             "Search ArXiv for the top 5 most relevant recent papers on this topic using the mcp__arxiv-mcp-server__ tools (search_papers, then download_paper + read_paper). Do NOT pip install the `arxiv` library, use curl/wget, or write raw HTTP requests to arxiv.org — those bypass the rate limiter and fail with HTTP 429.",
             "For ALL NotebookLM steps use the `nlm` CLI (NOT the mcp__notebooklm-mcp__* tools): the long-lived MCP server's refresh_auth intermittently reports a FALSE 'Authentication expired' and makes you give up; the `nlm` CLI authenticates reliably per call. First run `export NLM_PROFILE=default` then `nlm login --check`. Then create a NotebookLM notebook, add all papers as sources, and generate:",
