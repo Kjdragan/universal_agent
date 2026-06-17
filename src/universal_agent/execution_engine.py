@@ -71,6 +71,12 @@ _TERMINATED_PROCESS_ERROR_TOKENS = (
     "cannot write to terminated process",
     "exit code -15",
     "exit code: -15",
+    # Positive SIGTERM form (143 = 128 + 15) the SDK's message reader logs
+    # internally as "Command failed with exit code 143" when a deploy restart
+    # SIGTERMs the claude CLI subprocess. The -15 entries above are the
+    # negative-signal form Python's subprocess returns for the same SIGTERM.
+    "exit code 143",
+    "exit code: 143",
     "sigterm",
     "sigkill",
 )
@@ -956,6 +962,14 @@ class ProcessTurnAdapter:
                 # Dead SDK subprocesses (common during service restarts) should
                 # be torn down so the next turn can recreate a clean client.
                 if _is_terminated_process_error(e):
+                    # Stamp the death on the shared holder so the finally
+                    # block below can surface it as a STATUS event — the
+                    # gateway's run_query carries it onto GatewayResult.metadata
+                    # as ``subprocess_terminated``, which the LLM-cron deploy-kill
+                    # detector (cron_service._is_llm_deploy_kill_result) keys on.
+                    # Without this, a mid-flight deploy SIGTERM is mis-painted
+                    # as success (2026-06-16 paper_to_podcast regression).
+                    result_holder["terminated_process"] = True
                     try:
                         logger.warning("Resetting SDK client after terminated process error")
                         await self.reset()
@@ -968,6 +982,21 @@ class ProcessTurnAdapter:
                 # cancelled daemon turns are recorded too. Extracted to a method so
                 # it is unit-testable independent of the live daemon.
                 self._record_turn_tokens(_tok_start_idx)
+                # Surface a subprocess-death marker BEFORE engine_complete so
+                # the gateway's run_query can carry it onto GatewayResult.metadata.
+                # During a deploy restart the SDK's claude CLI subprocess is
+                # SIGTERM'd mid-run; the engine swallows the terminated-process
+                # exception (above) and the event stream ends normally, so
+                # without this marker the LLM-cron finalize would mis-paint the
+                # kill as success (cron_service._is_llm_deploy_kill_result).
+                if result_holder.get("terminated_process"):
+                    await event_queue.put(AgentEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "status": "subprocess_terminated",
+                            "error": result_holder.get("error"),
+                        },
+                    ))
                 # Signal completion
                 await event_queue.put(AgentEvent(
                     type=EventType.STATUS,

@@ -336,18 +336,36 @@ lightweight path implement this; the LLM path has two layers:
 1. The `asyncio.CancelledError` handler covers the gateway's own coroutine
    being cancelled at shutdown.
 2. The **deploy-kill signature** (`cron_service.py::_is_llm_deploy_kill_result`)
-   covers the sneakier shape observed live 2026-06-09/10: the deploy SIGTERM
-   kills the SDK's `claude` CLI subprocess (exit 143), the SDK swallows the
-   message-reader fatal internally, and `gateway.run_query` returns an
-   *empty* result (no text, zero tool calls, no errors) without raising.
+   covers two shapes of the same failure — the SDK's `claude` CLI subprocess
+   being SIGTERM'd (exit 143) by a deploy restart, surfaced differently
+   depending on how much work preceded the kill:
+
+   - **Cold kill** (observed live 2026-06-09/10): the SIGTERM lands before the
+     subprocess produced anything. The SDK swallows the message-reader fatal
+     internally and `gateway.run_query` returns an *empty* result (no text,
+     zero tool calls, no errors) without raising. The detector matches this
+     via the empty-result surface signature.
+   - **Mid-flight kill** (observed live 2026-06-16, `paper_to_podcast`): the
+     SIGTERM lands AFTER the run did real work (notebook + sources + audio
+     created, mid-poll), so the result has NON-empty text and `tool_calls > 0`
+     and the empty-result signature would miss it. The engine
+     (`execution_engine.ProcessTurnAdapter`) catches the terminated-process
+     exception (`_is_terminated_process_error`) and surfaces a
+     `metadata["subprocess_terminated"]=True` marker on the `GatewayResult`
+     (collected by `InProcessGateway.run_query`); the detector keys off that
+     marker first. This mirrors the `!script` branch's `exit_code != 0`
+     robustness — the subprocess-exit signal itself is never a field on
+     `GatewayResult`, so the marker is its surfaced proxy.
+
    Previously the Phase F.1 close computed `rc_equiv=0`, classified the kill
    as `clean_exit_zero`, marked the task completed, and the artifact notifier
-   disclosed stale workspace leftovers as fresh output. Now, when the
-   empty-result signature coincides with `_is_deploy_window_active()`, the
-   run is marked `cancelled` (`failure_class="cancelled"`, never retried),
-   `next_run_at` advances by the same 5s offset, the in-flight marker is
-   kept for next-boot recovery (below), and the artifact notifier does not
-   fire (`rc_equiv=1`).
+   disclosed stale workspace leftovers as fresh output (or, for the mid-flight
+   shape, suppressed the email because no fresh artifacts were ever
+   downloaded) — zero operator signal for ~20h on 2026-06-16. Now, when either
+   signature coincides with `_is_deploy_window_active()`, the run is marked
+   `cancelled` (`failure_class="cancelled"`, never retried), `next_run_at`
+   advances by the same 5s offset, the in-flight marker is kept for next-boot
+   recovery (below), and the artifact notifier does not fire (`rc_equiv=1`).
 
 > Both signals only ever **widen** the "treat as deploy cancellation" window —
 > they never narrow it. A real crash (OOM, code error) outside the window still

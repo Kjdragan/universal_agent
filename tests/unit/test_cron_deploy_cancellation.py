@@ -655,3 +655,142 @@ def test_llm_run_healthy_result_in_deploy_window_stays_success(
 
     assert record.status == "success"
     assert job.job_id not in svc.store.load_inflight()
+# --------------------------------------------------------------------------- #
+# Broadened LLM deploy-kill detector — mid-flight kill (2026-06-16 regression)
+# --------------------------------------------------------------------------- #
+
+
+def test_llm_deploy_kill_detector_matches_midflight_marker_and_cold_empty():
+    """The broadened detector recognises BOTH deploy-kill shapes:
+
+    * mid-flight kill: non-empty text + tool_calls > 0 + the
+      ``metadata["subprocess_terminated"]`` marker the adapter surfaces when
+      the SDK subprocess is SIGTERM'd mid-run (2026-06-16 paper_to_podcast
+      shape — the run had already created the notebook + sources + audio).
+    * cold kill: empty text + zero tool_calls, no marker (2026-06-09/10
+      shape) — no regression of the original empty-result signature.
+
+    A result that genuinely completed (text + tool_calls, NO marker) is NOT
+    a deploy kill — the marker is the only thing that lets a worked-on
+    result downgrade to cancelled.
+    """
+    # Mid-flight kill via the surfaced marker (the regression).
+    midflight = SimpleNamespace(
+        response_text="Created notebook 095f0718, polling audio ee5d49e1...",
+        tool_calls=8,
+        metadata={"subprocess_terminated": True},
+    )
+    assert _is_llm_deploy_kill_result(midflight) is True
+    # Cold kill — empty result, no marker (original signature, no regression).
+    assert _is_llm_deploy_kill_result(
+        SimpleNamespace(response_text="", tool_calls=0, metadata={})
+    ) is True
+    assert _is_llm_deploy_kill_result(
+        SimpleNamespace(response_text="", tool_calls=0)
+    ) is True
+    # Genuine completion — text + tool_calls, NO marker: NOT a deploy kill.
+    assert _is_llm_deploy_kill_result(
+        SimpleNamespace(
+            response_text="Podcast generated.", tool_calls=4, metadata={}
+        )
+    ) is False
+    # Worked-on result with metadata missing entirely: NOT a kill.
+    assert _is_llm_deploy_kill_result(
+        SimpleNamespace(response_text="done", tool_calls=2)
+    ) is False
+
+
+def test_llm_run_midflight_deploy_kill_marks_cancelled_and_keeps_marker(
+    tmp_path: Path, monkeypatch
+):
+    """REGRESSION (2026-06-16 paper_to_podcast): a mid-flight deploy kill —
+    the claude CLI subprocess SIGTERM'd AFTER doing real work (non-empty
+    response_text + tool_calls > 0), surfaced as
+    ``metadata["subprocess_terminated"]`` — must be classified cancelled
+    (NOT success), advance next_run_at, and KEEP the in-flight marker so the
+    next boot's recovery pass requeues the slot.
+
+    Before the fix this exact shape was mis-painted status=success, which
+    cleared the in-flight marker (defeating boot-requeue) and suppressed the
+    artifact notifier — zero operator signal for ~20h.
+    """
+    _isolate_side_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(cron_service, "_is_deploy_window_active", lambda: True)
+    svc = _service(
+        tmp_path,
+        gateway=_StubGateway(
+            SimpleNamespace(
+                response_text=(
+                    "Created notebook 095f0718, added 5 sources, "
+                    "polling audio ee5d49e1..."
+                ),
+                metadata={"subprocess_terminated": True},
+                tool_calls=8,
+            )
+        ),
+    )
+    job = svc.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "ws_llm_midflight"),
+        command="Generate the nightly podcast",
+        cron_expr="0 21 * * *",
+        catch_up_on_restart=True,
+        metadata={"skip_task_hub_link": True},
+    )
+    scheduled_at = time.time() - 30
+    svc.running_jobs.add(job.job_id)
+    svc._mark_inflight(job.job_id, scheduled_at)
+
+    record = asyncio.run(
+        svc._run_job(job, scheduled_at=scheduled_at, reason="schedule")
+    )
+
+    assert record.status == "cancelled"
+    assert "deploy restart" in (record.error or "")
+    # Recovery: slot requeued to a small positive offset from now.
+    assert job.next_run_at is not None
+    assert 0 < (job.next_run_at - time.time()) <= _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC + 1
+    # Recovery: marker survives so the startup recovery pass can requeue.
+    assert job.job_id in svc.store.load_inflight()
+
+
+def test_llm_run_midflight_marker_outside_deploy_window_stays_success(
+    tmp_path: Path, monkeypatch
+):
+    """GUARDRAIL: the deploy-window predicate is the SOLE authority that may
+    downgrade a result to cancelled. A mid-flight-kill-shaped result (marker
+    present) that occurs OUTSIDE a deploy window is NOT a deploy kill — the
+    detector matches the marker, but the AND with ``_is_deploy_window_active()``
+    fails, so classification stays success and the in-flight marker clears as
+    usual. This is the no-false-positive test: a genuinely run-killed-shaped
+    result coinciding with no deploy must not be mis-classified as a kill.
+    """
+    _isolate_side_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(cron_service, "_is_deploy_window_active", lambda: False)
+    result = SimpleNamespace(
+        response_text="partial work, then the subprocess died...",
+        tool_calls=5,
+        metadata={"subprocess_terminated": True},
+    )
+    # The detector alone DOES match the marker ...
+    assert _is_llm_deploy_kill_result(result) is True
+    # ... but with no deploy window active, the close-out must NOT downgrade.
+    svc = _service(tmp_path, gateway=_StubGateway(result))
+    job = svc.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "ws_llm_gate"),
+        command="Generate the nightly podcast",
+        cron_expr="0 21 * * *",
+        metadata={"skip_task_hub_link": True},
+    )
+    scheduled_at = time.time() - 30
+    svc.running_jobs.add(job.job_id)
+    svc._mark_inflight(job.job_id, scheduled_at)
+
+    record = asyncio.run(
+        svc._run_job(job, scheduled_at=scheduled_at, reason="schedule")
+    )
+
+    assert record.status == "success"
+    # No downgrade -> marker clears on the normal success path.
+    assert job.job_id not in svc.store.load_inflight()

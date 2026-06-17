@@ -1514,6 +1514,12 @@ class InProcessGateway(Gateway):
         auth_required = False
         auth_link: Optional[str] = None
         errors: list[str] = []
+        # True iff the engine surfaced a subprocess_terminated STATUS marker
+        # (the SDK's claude CLI was SIGTERM'd mid-run, e.g. by a deploy
+        # restart). Carried onto metadata so the LLM-cron deploy-kill
+        # detector (cron_service._is_llm_deploy_kill_result) can recognise a
+        # mid-flight kill that produced non-empty text + tool_calls.
+        subprocess_terminated = False
         try:
             async for event in self.execute(session, request):
                 if event_callback:
@@ -1542,6 +1548,14 @@ class InProcessGateway(Gateway):
                         msg = event.data.get("message") or event.data.get("error") or "Unknown error"
                         if isinstance(msg, str) and msg.strip():
                             errors.append(msg.strip())
+                if event.type == EventType.STATUS:
+                    # Engine surfaces a subprocess death (deploy SIGTERM of the
+                    # claude CLI) as a STATUS marker just before engine_complete.
+                    if (
+                        isinstance(event.data, dict)
+                        and event.data.get("status") == "subprocess_terminated"
+                    ):
+                        subprocess_terminated = True
                 if event.type == EventType.ITERATION_END:
                     trace_id = event.data.get("trace_id")
         except BaseException as exc:
@@ -1612,6 +1626,7 @@ class InProcessGateway(Gateway):
                 "auth_required": auth_required,
                 "auth_link": auth_link,
                 "errors": errors,
+                "subprocess_terminated": subprocess_terminated,
             },
         )
 
