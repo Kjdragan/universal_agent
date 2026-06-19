@@ -18,10 +18,12 @@ from csi_ingester.config import CSIConfig
 from csi_ingester.emitter.ua_client import UAEmitter
 from csi_ingester.infisical_bootstrap import bootstrap_csi_secrets
 from csi_ingester.metrics import MetricsRegistry
+from csi_ingester.quality import score_threads_terms, score_youtube_channels
 from csi_ingester.scheduler import PollingScheduler
 from csi_ingester.store import (
     dedupe as dedupe_store,
     events as event_store,
+    source_manager as source_manager_store,
     source_state as source_state_store,
 )
 
@@ -66,6 +68,16 @@ class CSIService:
             "dedupe_cleanup",
             3600.0,  # once per hour
             self._run_dedupe_cleanup,
+        )
+
+        # ── Source quality assessment (in-process; daily by default) ──
+        # Runs inside the ingester so its writes go through self.conn — the
+        # write context the ingester already holds — instead of an external
+        # job that loses the WAL write lock (SQLITE_BUSY) against the live DB.
+        self.scheduler.add_job(
+            "source_quality",
+            float(self.config.source_quality_interval_seconds),
+            self._run_source_quality,
         )
         # Run one immediate cleanup on startup to clear any backlog
         startup_purged = dedupe_store.purge_expired(self.conn)
@@ -330,6 +342,60 @@ class CSIService:
         except Exception as exc:
             logger.warning("Dedupe cleanup failed: %s", exc)
             self.metrics.inc("csi.dedupe_cleanup.errors")
+
+    # ── Source quality assessment ─────────────────────────────────────
+
+    async def _run_source_quality(self) -> None:
+        """Score YouTube channels & Threads terms from the analysis tables and
+        persist scores + tier promote/demote — in-process, via self.conn.
+
+        Mirrors scripts/csi_source_quality_assessment.py, but writes through the
+        ingester's own connection so it never contends with the live writer for
+        the WAL lock (an external job fails with SQLITE_BUSY). Exceptions are
+        swallowed — consistent with the other periodic jobs — so a scoring
+        hiccup can never disturb ingestion.
+        """
+        try:
+            lookback_days = int(self.config.source_quality_lookback_days)
+
+            yt_scores = score_youtube_channels(self.conn, lookback_days)
+            for channel_id, m in yt_scores.items():
+                source_manager_store.record_quality_assessment(
+                    self.conn,
+                    source_type="youtube",
+                    source_key=channel_id,
+                    relevance=m["relevance"],
+                    engagement=m["engagement"],
+                    novelty=m["novelty"],
+                    confidence=m["confidence"],
+                    items_count=m["items_count"],
+                )
+            if yt_scores:
+                source_manager_store.auto_promote_demote(self.conn, source_type="youtube")
+
+            th_scores = score_threads_terms(self.conn, lookback_days)
+            for term, m in th_scores.items():
+                source_manager_store.record_quality_assessment(
+                    self.conn,
+                    source_type="threads",
+                    source_key=term,
+                    relevance=m["relevance"],
+                    engagement=m["engagement"],
+                    novelty=m["novelty"],
+                    confidence=m["confidence"],
+                    items_count=m["items_count"],
+                )
+            if th_scores:
+                source_manager_store.auto_promote_demote(self.conn, source_type="threads")
+
+            logger.info(
+                "Source quality cycle: youtube_scored=%d threads_scored=%d lookback=%dd",
+                len(yt_scores), len(th_scores), lookback_days,
+            )
+            self.metrics.inc("csi.source_quality.cycles")
+        except Exception as exc:
+            logger.warning("Source quality cycle failed: %s", exc)
+            self.metrics.inc("csi.source_quality.errors")
 
 
 def _iso_now() -> str:
