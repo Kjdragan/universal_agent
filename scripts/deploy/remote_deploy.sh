@@ -248,6 +248,12 @@ echo "--> Installing Mission Control sweeper service (S5 Phase B — extracted f
 # service on its Restart=always policy. Mirrors the watchdog/oom installs above.
 sudo bash "$PROD_DIR/scripts/install_vps_mission_control_sweeper.sh" \
   || echo "WARN: install_vps_mission_control_sweeper.sh failed (non-fatal)"
+echo "--> Installing autonomous-runtime worker unit (dormant until UA_AUTONOMOUS_RUNTIME_MODE=split cutover)..."
+# Ships the gateway-runtime-split worker unit so the cutover is a config flip.
+# Installs the unit file only (does NOT enable/start it) until the operator cuts
+# over; the restart-list below is is-enabled-guarded so it's a no-op pre-cutover.
+sudo bash "$PROD_DIR/scripts/install_vps_autonomous_runtime.sh" \
+  || echo "WARN: install_vps_autonomous_runtime.sh failed (non-fatal)"
 echo "--> Installing proactive-health timer (S5 Phase C — deploy-independent watchdog)..."
 # Deploy-independent oneshot timer that computes proactive_health, writes the
 # durable snapshot (activity_state.db row + JSON mirror) and emails the operator
@@ -400,7 +406,7 @@ if command -v systemctl >/dev/null 2>&1; then
     # across deploys. Restart them here (after the unit install) for code
     # currency. is-enabled-guarded so a host without the unit is skipped, never
     # failing the deploy.
-    for cont_svc in csi-ingester universal-agent-mission-control-sweeper; do
+    for cont_svc in csi-ingester universal-agent-mission-control-sweeper universal-agent-autonomous-runtime; do
       if systemctl is-enabled "$cont_svc" >/dev/null 2>&1; then
         echo "--> Restarting continuous service: $cont_svc"
         sudo systemctl restart "$cont_svc"
@@ -413,7 +419,7 @@ if command -v systemctl >/dev/null 2>&1; then
     # they now self-restart between missions for code currency).
     echo "--> VP workers: not restarted (self-restart between missions for code currency)"
     # Continuous (non-gateway) services — see the sudo branch above.
-    for cont_svc in csi-ingester universal-agent-mission-control-sweeper; do
+    for cont_svc in csi-ingester universal-agent-mission-control-sweeper universal-agent-autonomous-runtime; do
       if systemctl is-enabled "$cont_svc" >/dev/null 2>&1; then
         echo "--> Restarting continuous service: $cont_svc"
         systemctl restart "$cont_svc"

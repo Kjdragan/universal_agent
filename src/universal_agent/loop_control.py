@@ -137,6 +137,35 @@ def should_run_loop(name: str, *, prod_default: bool = True) -> bool:
     return prod_default
 
 
+def autonomous_runtime_mode() -> str:
+    """Resolve ``UA_AUTONOMOUS_RUNTIME_MODE``: ``in_process`` (default) | ``split``.
+
+    ``in_process`` (today): the gateway process hosts the autonomous loops
+    (heartbeat, daemon sessions, todo-dispatch, cron, idle dispatch) on its
+    HTTP-serving event loop. ``split``: those loops move to a dedicated worker
+    process (``UA_GATEWAY_ROLE=autonomous_worker``) so a long agent turn can no
+    longer starve the public API. Unknown values fall back to ``in_process``.
+    """
+    raw = (os.getenv("UA_AUTONOMOUS_RUNTIME_MODE") or "in_process").strip().lower()
+    return "split" if raw == "split" else "in_process"
+
+
+def should_host_autonomous_runtime() -> bool:
+    """True iff THIS process should run the in-process autonomous loops.
+
+    Exactly one process runs them (mutually exclusive by construction):
+
+    * ``in_process`` mode (default) → the public gateway runs them; a stray
+      worker process idles.
+    * ``split`` mode → only the worker (``UA_GATEWAY_ROLE=autonomous_worker``)
+      runs them; the public gateway sheds them.
+    """
+    is_worker = (os.getenv("UA_GATEWAY_ROLE") or "").strip().lower() == "autonomous_worker"
+    if autonomous_runtime_mode() == "split":
+        return is_worker
+    return not is_worker
+
+
 def explain_loop_decision(name: str, *, prod_default: bool = True) -> str:
     """Human-readable explanation of why ``should_run_loop`` returned what it did.
 

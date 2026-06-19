@@ -137,7 +137,11 @@ from universal_agent.heartbeat_service import (
 )
 from universal_agent.hooks_service import HooksService, build_manual_youtube_action
 from universal_agent.identity import resolve_user_id
-from universal_agent.loop_control import should_run_loop
+from universal_agent.loop_control import (
+    autonomous_runtime_mode,
+    should_host_autonomous_runtime,
+    should_run_loop,
+)
 from universal_agent.memory.memory_index import load_index
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
@@ -14873,7 +14877,20 @@ async def lifespan(app: FastAPI):
     # Initialize Heartbeat Service
     global _heartbeat_service, _todo_dispatch_service, _cron_service, _ops_service, _hooks_service, _gws_event_listener
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
-    if HEARTBEAT_ENABLED:
+    # Autonomous-runtime split (UA_AUTONOMOUS_RUNTIME_MODE): in "split" mode the
+    # heartbeat / daemon-sessions / todo-dispatch / cron / idle loops + startup
+    # recovery run ONLY in the dedicated worker (UA_GATEWAY_ROLE=autonomous_worker),
+    # off the public gateway's HTTP-serving event loop. Default "in_process" runs
+    # them here exactly as before. Gating these off here yields the same None-service
+    # state the gateway already supports when HEARTBEAT_ENABLED/CRON_ENABLED is False.
+    _run_autonomous_loops_here = should_host_autonomous_runtime()
+    logger.info(
+        "🧵 Autonomous runtime: host_here=%s (mode=%s role=%s)",
+        _run_autonomous_loops_here,
+        autonomous_runtime_mode(),
+        os.getenv("UA_GATEWAY_ROLE") or "gateway",
+    )
+    if HEARTBEAT_ENABLED and _run_autonomous_loops_here:
         logger.info("💓 Heartbeat System ENABLED")
 
         async def _heartbeat_session_timeout_callback(session: GatewaySession, payload: dict[str, Any]) -> None:
@@ -15108,7 +15125,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("💤 Heartbeat System DISABLED (feature flag)")
 
-    if CRON_ENABLED:
+    if CRON_ENABLED and _run_autonomous_loops_here:
         async def _cron_agent_event_sink(session_id: str, event: Any) -> None:
             try:
                 await manager.broadcast(session_id, agent_event_to_wire(event))
@@ -15434,23 +15451,24 @@ async def lifespan(app: FastAPI):
         from universal_agent.services.idle_dispatch_loop import (
             idle_dispatch_loop as _idle_loop,
         )
-        _spawn_background_task(
-            _run_after_deployment_window(
-                "idle_dispatch_loop",
-                lambda: _idle_loop(
-                    heartbeat_service=_heartbeat_service,
-                    get_sessions_fn=lambda: dict(_sessions),
-                    notification_sink=_hook_notification_sink,
-                    get_heartbeat_sessions_fn=(
-                        (lambda: dict(_heartbeat_service.active_sessions))
-                        if _heartbeat_service else None
+        if _run_autonomous_loops_here:
+            _spawn_background_task(
+                _run_after_deployment_window(
+                    "idle_dispatch_loop",
+                    lambda: _idle_loop(
+                        heartbeat_service=_heartbeat_service,
+                        get_sessions_fn=lambda: dict(_sessions),
+                        notification_sink=_hook_notification_sink,
+                        get_heartbeat_sessions_fn=(
+                            (lambda: dict(_heartbeat_service.active_sessions))
+                            if _heartbeat_service else None
+                        ),
+                        todo_dispatch_service=_todo_dispatch_service,
                     ),
-                    todo_dispatch_service=_todo_dispatch_service,
                 ),
-            ),
-            task_name="idle_dispatch_loop_startup",
-        )
-        logger.info("🔄 Idle dispatch loop background task started")
+                task_name="idle_dispatch_loop_startup",
+            )
+            logger.info("🔄 Idle dispatch loop background task started")
     except Exception:
         logger.exception("Failed starting idle dispatch loop")
 
