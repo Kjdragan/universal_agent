@@ -24,7 +24,7 @@ import json
 import logging
 import re
 import sqlite3
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,23 @@ _HIGH_CONFIDENCE_THREATS = frozenset({
     "structured_install_block",
 })
 
+# Confidence is a closed three-level vocabulary reported on ScanResult.
+# Named so every producer and consumer agrees on the spelling; downstream
+# code reads ``scan_result.confidence == CONFIDENCE_HIGH`` rather than a
+# bare string that a typo could silently break.
+CONFIDENCE_NONE = "none"
+CONFIDENCE_MEDIUM = "medium"
+CONFIDENCE_HIGH = "high"
+ConfidenceLevel = Literal[CONFIDENCE_NONE, CONFIDENCE_MEDIUM, CONFIDENCE_HIGH]
+
+# Distinct threat types that alone warrant HIGH confidence even when no
+# single matched threat is itself a high-confidence pattern.
+_HIGH_CONFIDENCE_MIN_THREATS = 3
+
+# Truncate the regex source in the matched-pattern label so one greedy
+# pattern cannot flood the ScanResult or the logs.
+_MATCH_LABEL_PREVIEW_CHARS = 40
+
 
 @dataclass
 class ScanResult:
@@ -87,7 +104,7 @@ class ScanResult:
 
     is_suspicious: bool = False
     threats: list[str] = field(default_factory=list)
-    confidence: str = "none"  # "none", "medium", "high"
+    confidence: ConfidenceLevel = CONFIDENCE_NONE
     matched_patterns: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -119,16 +136,21 @@ def scan_for_injection(subject: str, body: str) -> ScanResult:
             if threat_type not in threats:
                 threats.append(threat_type)
             # Record a human-readable label of what matched
-            label = f"{threat_type}:{pattern.pattern[:40]}"
+            label = f"{threat_type}:{pattern.pattern[:_MATCH_LABEL_PREVIEW_CHARS]}"
             if label not in matched:
                 matched.append(label)
 
     if not threats:
         return ScanResult()
 
-    # Confidence: HIGH if any single high-confidence threat, or 3+ total
+    # Confidence: HIGH if any single high-confidence threat, or enough
+    # distinct threat types to be suspicious even without a smoking gun.
     has_high = any(t in _HIGH_CONFIDENCE_THREATS for t in threats)
-    confidence = "high" if has_high or len(threats) >= 3 else "medium"
+    confidence: ConfidenceLevel = (
+        CONFIDENCE_HIGH
+        if has_high or len(threats) >= _HIGH_CONFIDENCE_MIN_THREATS
+        else CONFIDENCE_MEDIUM
+    )
 
     return ScanResult(
         is_suspicious=True,
@@ -139,6 +161,11 @@ def scan_for_injection(subject: str, body: str) -> ScanResult:
 
 
 # ── AgentMail Sender Quarantine ─────────────────────────────────────────
+
+# Sender domain for agent-to-agent mail. Unknown senders here are
+# auto-quarantined because cross-agent traffic is a prompt-injection
+# vector (another AI authoring instructions addressed to this agent).
+AGENTMAIL_DOMAIN = "@agentmail.to"
 
 
 def should_auto_quarantine_agentmail_sender(
@@ -151,7 +178,7 @@ def should_auto_quarantine_agentmail_sender(
     higher-risk vector (potential prompt injection from another AI).
     """
     email_lower = (sender_email or "").strip().lower()
-    if not email_lower.endswith("@agentmail.to"):
+    if not email_lower.endswith(AGENTMAIL_DOMAIN):
         return False
     trusted_lower = {addr.lower() for addr in trusted_senders}
     return email_lower not in trusted_lower
@@ -159,10 +186,20 @@ def should_auto_quarantine_agentmail_sender(
 
 # ── Sender Reputation Tracker ───────────────────────────────────────────
 
-_REPUTATION_SCHEMA = """\
+# Closed set stored in email_sender_reputation.status. Every writer and
+# reader in this module references these constants instead of bare
+# strings, so a status typo fails at the name level rather than silently
+# corrupting the reputation table at runtime.
+STATUS_UNKNOWN = "unknown"
+STATUS_WATCHED = "watched"
+STATUS_BLOCKED = "blocked"
+SenderStatus = Literal[STATUS_UNKNOWN, STATUS_WATCHED, STATUS_BLOCKED]
+REPUTATION_STATUSES = frozenset({STATUS_UNKNOWN, STATUS_WATCHED, STATUS_BLOCKED})
+
+_REPUTATION_SCHEMA = f"""\
 CREATE TABLE IF NOT EXISTS email_sender_reputation (
     sender_email TEXT PRIMARY KEY,
-    status TEXT NOT NULL DEFAULT 'unknown',
+    status TEXT NOT NULL DEFAULT '{STATUS_UNKNOWN}',
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
     total_emails INTEGER NOT NULL DEFAULT 0,
@@ -220,9 +257,9 @@ def record_sender_seen(
                     (sender_email, status, first_seen_at, last_seen_at,
                      total_emails, quarantine_count, threat_types_json,
                      operator_note, updated_at)
-                VALUES (?, 'unknown', ?, ?, 1, 0, '[]', '', ?)
+                VALUES (?, ?, ?, ?, 1, 0, '[]', '', ?)
                 """,
-                (email, now, now, now),
+                (email, STATUS_UNKNOWN, now, now, now),
             )
         conn.commit()
     except Exception as exc:
@@ -262,7 +299,9 @@ def record_sender_quarantined(
         merged_threats = list(set(existing_threats + (threats or [])))
 
         # Auto-escalation: block after threshold
-        new_status = "blocked" if qcount >= _AUTO_BLOCK_THRESHOLD else "watched"
+        new_status: SenderStatus = (
+            STATUS_BLOCKED if qcount >= _AUTO_BLOCK_THRESHOLD else STATUS_WATCHED
+        )
 
         conn.execute(
             """
@@ -277,7 +316,7 @@ def record_sender_quarantined(
         )
         conn.commit()
 
-        if new_status == "blocked":
+        if new_status == STATUS_BLOCKED:
             logger.warning(
                 "📧🔒 Sender auto-blocked after %d quarantines: %s threats=%s",
                 qcount, email, merged_threats,
@@ -305,7 +344,7 @@ def is_sender_blocked(
             "SELECT status FROM email_sender_reputation WHERE sender_email = ?",
             (email,),
         ).fetchone()
-        return bool(row and str(row[0] or "").strip().lower() == "blocked")
+        return bool(row and str(row[0] or "").strip().lower() == STATUS_BLOCKED)
     except Exception:
         return False
 
@@ -328,7 +367,7 @@ def get_sender_reputation(
             return {}
         return {
             "sender_email": str(row[0] or ""),
-            "status": str(row[1] or "unknown"),
+            "status": str(row[1] or STATUS_UNKNOWN),
             "first_seen_at": str(row[2] or ""),
             "last_seen_at": str(row[3] or ""),
             "total_emails": int(row[4] or 0),
