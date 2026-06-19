@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/services/execution_run_service.py
   - src/universal_agent/services/worker_exit_classifier.py
   - src/universal_agent/services/cron_task_hub_link.py
-last_verified: 2026-06-14
+last_verified: 2026-06-19
 ---
 
 # Task Hub & Dispatch
@@ -320,6 +320,30 @@ also persists a `metadata.dispatch` handle block at mission start, and
 `services/proactive_convergence.py::write_convergence_candidate` skips re-queuing a
 candidate that already has an in-flight `vp_mission` (durable double-author backstop).
 See the [Task Type Registry](../01_architecture/07_task_type_registry.md) §1.
+
+### todo_execution run-liveness reconciliation (autonomous-runtime split)
+
+The autonomous-runtime split (`UA_AUTONOMOUS_RUNTIME_MODE=split`, see
+[Gateway, Sessions & Execution](01_gateway_sessions_execution.md)) moves
+`todo_execution` turns into the **worker** process. The gateway's
+`running_session_ids` guard (`gateway_server.py::_running_execution_session_ids`)
+is **in-memory**, so after the split it no longer sees the worker's live sessions —
+and `reconcile_task_lifecycle` (run on every dashboard render) would false-orphan a
+live worker-hosted todo row exactly as it once did VP missions.
+
+`task_hub.py::_todo_execution_run_live` closes this, mirroring the VP-mission guard
+but reading the authoritative **cross-process** signal: the execution `runs` row.
+That row lives in `runtime_state.db` (`durable/db.py::get_runtime_db_path`) — a
+**different database** than the Task Hub `conn` (`activity_state.db`) — so the guard
+opens its own short read connection, linked via
+`task_hub_assignments.workflow_run_id` → `runs.run_id`. A todo row counts as live
+when its run is `status='running'` with recent progress
+(`COALESCE(last_heartbeat_at, updated_at, created_at)` within 35 minutes — `>=` the
+`stuck_run_reaper.py` 30-minute `todo_execution` TTL, so the guard never protects a
+run the reaper has already flipped terminal). It is **strictly additive** (only ever
+adds a `continue`/suppresses a reap, never causes one), returns `False` for
+non-execution rows / when the runs table is absent (so non-split behavior is
+unchanged), and is gated by `UA_RECONCILE_TODO_RUN_GUARD_ENABLED` (default on).
 
 ## Execution runs (run-scoped workspaces)
 

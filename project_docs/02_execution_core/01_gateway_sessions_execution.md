@@ -255,31 +255,35 @@ combines it with `UA_GATEWAY_ROLE` so **exactly one** process hosts the loops
 `gateway_server.py::lifespan` computes `_run_autonomous_loops_here =
 should_host_autonomous_runtime()` once and gates the loop-start sites with it.
 
-> **The foundation + the execution/trigger loops are gated — `split` mode is not
-> yet fully flippable.** Gated with `_run_autonomous_loops_here` (move to the
-> worker): the heartbeat umbrella block (heartbeat + daemon-sessions + todo-dispatch
-> + startup recovery), the cron block, the idle dispatch loop, the
-> `scheduled_dispatch_loop` (claims due dispatch tasks → routes to Simone), and the
-> `gws_event_listener` Gmail poller (dispatches into the hooks pipeline → nudges the
-> heartbeat). These are the loops that drive or trigger Simone execution, so they
-> must co-locate with the daemon sessions. Each gate is a no-op at default.
->
-> **Remaining before cutover:** (1) place the RELAY/MAINTENANCE loops —
+> **ALL autonomous loops are now gated with `_run_autonomous_loops_here`** — in
+> `split` mode the gateway runs **none** of them (pure HTTP) and the worker runs
+> them all. Gated: the heartbeat umbrella block (heartbeat + daemon-sessions +
+> todo-dispatch + startup recovery), the cron block, idle dispatch,
+> `scheduled_dispatch_loop`, `gws_event_listener`, `agentmail_service`,
 > `notification_dispatcher`, `vp_event_bridge`, `vp_stale_reconcile`,
-> `hq_self_heartbeat`, factory-staleness, the digest sweeps. The flagged ones can be
-> disabled in the worker unit via their `UA_*_ENABLED` env (so they stay singular in
-> the public gateway); the idempotent TTL sweeps are harmless to double-run.
-> `agentmail_service` is the awkward one — it is BOTH a trigger (nudges the
-> heartbeat) AND serves a dashboard WebSocket, so it needs a design decision, not a
-> blind gate. (2) Add a DB-visible liveness signal so
-> `task_hub.reconcile_task_lifecycle` (triggered on dashboard render) does not
-> false-orphan live `todo_execution` rows whose only guard today is the
-> gateway-local in-memory `_running_execution_session_ids()`. (3) Validate the
-> worker actually boots as a second gateway and runs a turn off the public loop.
-> Accepted no-relay losses: live token-streaming of autonomous sessions to the
-> dashboard, and operator chat-redirect *into* a daemon session (board, run history,
-> completion state, and cooperative DB cancel all keep working via the shared WAL
-> substrate).
+> factory-staleness, `hq_self_heartbeat`, and the digest TTL sweeps. Each gate is a
+> no-op at default (`_run_autonomous_loops_here` is `True`), so this is byte-identical
+> to pre-split in `in_process` mode. Because every loop is code-gated, the worker
+> unit needs no per-loop env-disables — it's a full gateway clone that simply hosts
+> everything.
+>
+> The worker binds `UA_AUTONOMOUS_WORKER_PORT` (default 8092) — a dedicated var,
+> because `.env` sets `UA_GATEWAY_PORT` and systemd `EnvironmentFile` overrides
+> `Environment=`, which would otherwise force the worker onto :8002 and
+> SO_REUSEPORT-collide with the public gateway.
+>
+> **False-orphan guard:** `task_hub.reconcile_task_lifecycle` (run on dashboard
+> render) gets a DB-backed liveness guard so it does not reap a live `todo_execution`
+> row whose session is hosted in the worker (the gateway-local in-memory
+> `_running_execution_session_ids()` no longer sees it under the split). The guard is
+> purely additive — it can only suppress a reap, never cause one — so it is safe in
+> `in_process` mode too.
+>
+> Accepted no-relay losses in `split` mode: live token-streaming of autonomous
+> sessions to the dashboard, the agentmail inbox WebSocket, live VP-mission event
+> streaming, and operator chat-redirect *into* a daemon session. Board, kanban, run
+> history, completion state, proactive throughput, notification delivery, and
+> cooperative DB cancel all keep working via the shared WAL substrate.
 
 ## Execute / run_query flow
 

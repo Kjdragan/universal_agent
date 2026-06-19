@@ -3732,6 +3732,83 @@ def _vp_mission_lease_live(
     return False
 
 
+def _todo_execution_run_live(
+    assignment_row: Any,
+    metadata: dict[str, Any],
+    now_iso: str,
+    *,
+    freshness_minutes: int = 35,
+) -> bool:
+    """True when an ``in_progress`` row maps to a live execution ``runs`` row.
+
+    After the autonomous-runtime split (``UA_AUTONOMOUS_RUNTIME_MODE=split``),
+    ``todo_execution`` turns run in the WORKER process, so the gateway's
+    in-memory ``running_session_ids`` no longer covers them and the session-id
+    guards in ``reconcile_task_lifecycle`` can't recognise them as live. The
+    authoritative cross-process signal is the execution ``runs`` row — which
+    lives in ``runtime_state.db`` (a DIFFERENT database than the Task Hub
+    ``conn`` = ``activity_state.db``), at ``status='running'`` with recent
+    progress, linked via ``task_hub_assignments.workflow_run_id`` ->
+    ``runs.run_id``.
+
+    Strictly additive: returns ``False`` (caller proceeds to reap) when there is
+    no ``workflow_run_id``, no matching running+fresh run, or the runs table/DB
+    is absent — so it can only SUPPRESS a reap, never cause one, and is a no-op
+    for non-execution rows. Freshness uses ``COALESCE(last_heartbeat_at,
+    updated_at, created_at)`` (the same progress signal ``stuck_run_reaper``
+    uses) with a 35-minute window — deliberately >= the reaper's 30-minute
+    ``todo_execution`` TTL, so this guard never protects a run the reaper has
+    already flipped terminal. Gated by ``UA_RECONCILE_TODO_RUN_GUARD_ENABLED``
+    (default on) as a kill switch.
+    """
+    if str(os.getenv("UA_RECONCILE_TODO_RUN_GUARD_ENABLED", "1")).strip().lower() in {"0", "false", "no", "off"}:
+        return False
+    run_id = ""
+    try:
+        if assignment_row is not None:
+            run_id = str(assignment_row["workflow_run_id"] or "").strip()
+    except Exception:
+        run_id = ""
+    if not run_id:
+        dispatch_meta = dict((metadata or {}).get("dispatch") or {})
+        run_id = str(dispatch_meta.get("last_workflow_run_id") or "").strip()
+    if not run_id:
+        return False
+    now_dt = _parse_iso(now_iso)
+    if now_dt is None:
+        return False
+    try:
+        from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+
+        rconn = connect_runtime_db(get_runtime_db_path())
+    except Exception:
+        return False
+    try:
+        if not rconn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='runs' LIMIT 1"
+        ).fetchone():
+            return False
+        run_row = rconn.execute(
+            "SELECT status, COALESCE(last_heartbeat_at, updated_at, created_at) AS last_progress_at "
+            "FROM runs WHERE run_id = ? LIMIT 1",
+            (run_id,),
+        ).fetchone()
+    except Exception:
+        return False
+    finally:
+        try:
+            rconn.close()
+        except Exception:
+            pass
+    if run_row is None or str(run_row["status"] or "").strip().lower() != "running":
+        return False
+    last_progress = _parse_iso(run_row["last_progress_at"])
+    if last_progress is None:
+        return False
+    age_minutes = max(0.0, (now_dt - last_progress).total_seconds() / 60.0)
+    return age_minutes < freshness_minutes
+
+
 def reconcile_task_lifecycle(
     conn: sqlite3.Connection,
     *,
@@ -3779,7 +3856,7 @@ def reconcile_task_lifecycle(
         if active_assignment_id:
             assignment_row = conn.execute(
                 """
-                SELECT assignment_id, state, started_at, provider_session_id
+                SELECT assignment_id, state, started_at, provider_session_id, workflow_run_id
                 FROM task_hub_assignments
                 WHERE assignment_id = ?
                 LIMIT 1
@@ -3789,7 +3866,7 @@ def reconcile_task_lifecycle(
         else:
             assignment_row = conn.execute(
                 """
-                SELECT assignment_id, state, started_at, provider_session_id
+                SELECT assignment_id, state, started_at, provider_session_id, workflow_run_id
                 FROM task_hub_assignments
                 WHERE task_id = ?
                   AND state IN ('seized', 'running')
@@ -3842,6 +3919,16 @@ def reconcile_task_lifecycle(
         # vp_id, so it protects BOTH Atlas (vp.general.primary) and Cody
         # (vp.coder.primary) missions, which share the same lease machinery.
         if _vp_mission_lease_live(conn, task_id, metadata, now_iso):
+            continue
+        # todo_execution liveness guard — parallel to the VP-mission guard above.
+        # After the autonomous-runtime split, todo turns run in the WORKER, so the
+        # gateway's in-memory running_session_ids no longer covers them and the
+        # session-id guards above can't see them as live. The authoritative
+        # cross-process signal is the execution `runs` row (runtime_state.db,
+        # status='running' + fresh), linked via assignment.workflow_run_id.
+        # Strictly additive: only ever SUPPRESSES a reap, never causes one, and is
+        # a no-op for non-execution rows / when the runs table is absent.
+        if _todo_execution_run_live(assignment_row, metadata, now_iso):
             continue
         if assignment_live:
             mission_id = ""

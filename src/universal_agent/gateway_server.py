@@ -15418,7 +15418,7 @@ async def lifespan(app: FastAPI):
                 parts.append(str(sid))
         return ", ".join(parts[:3]) or "background tasks"
 
-    if should_run_loop("agentmail_service", prod_default=True):
+    if should_run_loop("agentmail_service", prod_default=True) and _run_autonomous_loops_here:
         _agentmail_service = AgentMailService(
             dispatch_fn=_agentmail_dispatch_fn,
             dispatch_with_admission_fn=_agentmail_dispatch_with_admission_fn,
@@ -15528,10 +15528,11 @@ async def lifespan(app: FastAPI):
                 )
                 await _notification_dispatcher.run_loop(interval)
 
-            _spawn_background_task(
-                _run_after_deployment_window("notification_dispatcher", _start_notification_dispatcher),
-                task_name="notification_dispatcher_startup",
-            )
+            if _run_autonomous_loops_here:
+                _spawn_background_task(
+                    _run_after_deployment_window("notification_dispatcher", _start_notification_dispatcher),
+                    task_name="notification_dispatcher_startup",
+                )
         except Exception:
             logger.exception("Failed starting notification dispatcher")
 
@@ -15586,7 +15587,7 @@ async def lifespan(app: FastAPI):
 
     # --- Periodic VP stale-mission reconciliation (covers daemons that stop
     # polling between deploys; on-startup reconcile alone leaves multi-hour gaps). ---
-    if _vp_stale_reconcile_enabled:
+    if _vp_stale_reconcile_enabled and _run_autonomous_loops_here:
         _vp_stale_reconcile_stop = asyncio.Event()
         _vp_stale_reconcile_task = asyncio.create_task(
             _vp_stale_reconcile_loop(_vp_stale_reconcile_stop)
@@ -15598,7 +15599,7 @@ async def lifespan(app: FastAPI):
             _vp_stale_reconcile_seconds,
         )
 
-    if _vp_event_bridge_enabled:
+    if _vp_event_bridge_enabled and _run_autonomous_loops_here:
         _vp_event_bridge_stop_event = asyncio.Event()
         _vp_event_bridge_task = asyncio.create_task(_vp_event_bridge_loop())
         logger.info(
@@ -15610,7 +15611,7 @@ async def lifespan(app: FastAPI):
         logger.info("⏸️ VP event bridge disabled (UA_VP_EVENT_BRIDGE_ENABLED)")
 
     # --- Factory staleness enforcement (marks stale/offline registrations) ---
-    if _factory_registry is not None:
+    if _factory_registry is not None and _run_autonomous_loops_here:
         _factory_staleness_stop = asyncio.Event()
         _factory_staleness_task = asyncio.create_task(
             _factory_staleness_enforcement_loop(_factory_staleness_stop)
@@ -15618,7 +15619,7 @@ async def lifespan(app: FastAPI):
         logger.info("🏭 Factory staleness enforcement enabled (interval=60s)")
 
     # --- HQ self-heartbeat (keeps HQ's own registration fresh) ---
-    if should_run_loop("hq_self_heartbeat", prod_default=True):
+    if should_run_loop("hq_self_heartbeat", prod_default=True) and _run_autonomous_loops_here:
         _hq_self_heartbeat_stop = asyncio.Event()
         _hq_self_heartbeat_task = asyncio.create_task(
             _hq_self_heartbeat_loop(_hq_self_heartbeat_stop)
@@ -15645,19 +15646,20 @@ async def lifespan(app: FastAPI):
     global _digest_expired_sweep_task, _digest_expired_sweep_stop
     global _digest_reminder_dismissal_task, _digest_reminder_dismissal_stop
     try:
-        _digest_expired_sweep_stop = asyncio.Event()
-        _digest_expired_sweep_task = asyncio.create_task(
-            _digest_expired_notifications_sweep(_digest_expired_sweep_stop)
-        )
-        _digest_reminder_dismissal_stop = asyncio.Event()
-        _digest_reminder_dismissal_task = asyncio.create_task(
-            _digest_reminder_dismissal_sweep(_digest_reminder_dismissal_stop)
-        )
-        logger.info(
-            "🕒 Digest TTL sweeps enabled (expired_purge=%ds, telegram_dismiss=%ds)",
-            _digest_expired_sweep_interval_seconds,
-            _digest_reminder_dismissal_interval_seconds,
-        )
+        if _run_autonomous_loops_here:
+            _digest_expired_sweep_stop = asyncio.Event()
+            _digest_expired_sweep_task = asyncio.create_task(
+                _digest_expired_notifications_sweep(_digest_expired_sweep_stop)
+            )
+            _digest_reminder_dismissal_stop = asyncio.Event()
+            _digest_reminder_dismissal_task = asyncio.create_task(
+                _digest_reminder_dismissal_sweep(_digest_reminder_dismissal_stop)
+            )
+            logger.info(
+                "🕒 Digest TTL sweeps enabled (expired_purge=%ds, telegram_dismiss=%ds)",
+                _digest_expired_sweep_interval_seconds,
+                _digest_reminder_dismissal_interval_seconds,
+            )
     except Exception:
         logger.exception("Failed to start digest TTL sweep loops")
 
