@@ -20,9 +20,13 @@ Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
 # This process is the autonomous-runtime worker, not the public gateway. It
 # binds a private throwaway port (nobody routes to it — nginx still points at
 # :8002) and reuses 100% of the gateway lifespan wiring to run the loops.
+# NOTE: the port comes from UA_AUTONOMOUS_WORKER_PORT, NOT UA_GATEWAY_PORT —
+# .env (loaded below) sets UA_GATEWAY_PORT and EnvironmentFile OVERRIDES
+# Environment=, so a UA_GATEWAY_PORT here would be clobbered back to :8002 and
+# the worker would SO_REUSEPORT-collide with the public gateway.
 Environment=UA_GATEWAY_ROLE=autonomous_worker
 Environment=UA_GATEWAY_HOST=127.0.0.1
-Environment=UA_GATEWAY_PORT=8092
+Environment=UA_AUTONOMOUS_WORKER_PORT=8092
 EnvironmentFile=-/opt/universal_agent/.env
 ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.gateway_server
 Restart=always

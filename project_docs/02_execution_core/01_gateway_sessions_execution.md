@@ -244,8 +244,10 @@ combines it with `UA_GATEWAY_ROLE` so **exactly one** process hosts the loops
   `and _run_autonomous_loops_here` gate on each loop-start is a no-op.
 - `split`: only the worker (`UA_GATEWAY_ROLE=autonomous_worker`) hosts them; the
   gateway sheds them. The worker is **the same `gateway_server` process** on a
-  private throwaway port (`UA_GATEWAY_PORT=8092`) — reusing 100% of the lifespan
-  wiring rather than re-implementing it — shipped as
+  private throwaway port (`UA_AUTONOMOUS_WORKER_PORT`, default 8092 — a dedicated
+  var because `.env`'s `UA_GATEWAY_PORT` + systemd `EnvironmentFile` override would
+  otherwise force it onto :8002 and SO_REUSEPORT-collide with the public gateway)
+  — reusing 100% of the lifespan wiring rather than re-implementing it — shipped as
   `deployment/systemd/universal-agent-autonomous-runtime.service` (installed
   **dormant** by `scripts/install_vps_autonomous_runtime.sh`; cutover is a config
   flip + `enable --now`).
