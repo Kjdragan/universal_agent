@@ -997,7 +997,7 @@ wheels = [
 
 [[package]]
 name = "crawl4ai"
-version = "0.8.6"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1034,9 +1034,9 @@ dependencies = [
     { name = "unclecode-litellm" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/07/96/7525bd2e1f8f2f2924f350b0432481d673c3fb43e4d60f7d151e4137b8a6/crawl4ai-0.8.6.tar.gz", hash = "sha256:2a2afab05ae021435fe025cfc5732f5dcebcefd7ff9a529e41050642ee954316", size = 578962, upload-time = "2026-03-24T15:07:51.706Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/37/9b288598bb0049b918eeb00f029592c748465c8a3e819461e95d8b5f9dab/crawl4ai-0.9.0.tar.gz", hash = "sha256:00c1c3516d9ca24a9b5004523ae67974ace8a5baadc6e92e295afca73f077153", size = 591734, upload-time = "2026-06-18T09:31:08.674Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/e2/aa851e2f0248f0b19c63b0fe11f6bdc2ca64900924d399af368dc28f2a20/crawl4ai-0.8.6-py3-none-any.whl", hash = "sha256:57e127e8113640d8358705b231111d3cd9cc4ab05d44705e724cebc4a383e09c", size = 501931, upload-time = "2026-03-24T15:07:50.121Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/19/2d634f26d9ad1281874c503c1043174042fef9af631dc10798f4f22c1544/crawl4ai-0.9.0-py3-none-any.whl", hash = "sha256:1296072d9cd92e79144c6823ed6f27ab3966f16ce44e79fcbe86943b3435c366", size = 499084, upload-time = "2026-06-18T09:31:07.27Z" },
 ]
 
 [[package]]
@@ -6713,7 +6713,7 @@ requires-dist = [
     { name = "composio-anthropic", specifier = ">=0.10.6,<1.0.0" },
     { name = "composio-claude-agent-sdk", specifier = ">=0.10.6,<1.0.0" },
     { name = "composio-client", specifier = ">=1.21.0" },
-    { name = "crawl4ai", specifier = ">=0.3.7" },
+    { name = "crawl4ai", specifier = ">=0.9.0" },
     { name = "crawl4ai-cloud-sdk", git = "https://github.com/unclecode/crawl4ai-cloud-sdk.git?subdirectory=python" },
     { name = "croniter", specifier = ">=6.0.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
@@ -6776,7 +6776,7 @@ requires-dist = [
     { name = "weasyprint", specifier = ">=67.0" },
     { name = "websockets", specifier = ">=14.0" },
     { name = "youtube-transcript-api", specifier = ">=1.2.4,<2" },
-    { name = "yt-dlp", specifier = ">=2025.1.0" },
+    { name = "yt-dlp", specifier = ">=2026.6.9" },
 ]
 
 [package.metadata.requires-dev]
@@ -7392,11 +7392,11 @@ wheels = [
 
 [[package]]
 name = "yt-dlp"
-version = "2026.4.10.235301.dev0"
+version = "2026.6.9"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/04/0f/8b353a75b4905f6e1023de1c3e4ab25a33ffa1c0dd41657aba8ad478cc01/yt_dlp-2026.4.10.235301.dev0.tar.gz", hash = "sha256:a693fedea078e3c90196f35510ee933c2924d91afb0fe05cd5bcd8486ac73b64", size = 3129631, upload-time = "2026-04-10T23:58:41.758Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/a4/1b0979d28f87774bb67fbbc66bce44f9dd1aa0e547a99e22985fac945c33/yt_dlp-2026.6.9.tar.gz", hash = "sha256:d50fcb95f48d61bedde33e408c1881d4c279e51c31354a599ce09e96ba0f4b86", size = 3030590, upload-time = "2026-06-09T23:27:14.831Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7b/be/28ba32c6f13e4d27027e0d7a56ac86c1730ea82420c6a76e5d4dfbb90d3c/yt_dlp-2026.4.10.235301.dev0-py3-none-any.whl", hash = "sha256:2853c3fc6cc63bb94eca54406f15ae91dcf04d2f26cabc16487b1b0cd055f62c", size = 3317138, upload-time = "2026-04-10T23:58:39.445Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/ee/188a3dadf9dfdac713243521f919feca1cd091d4358c9ea7e8ebb710a7cc/yt_dlp-2026.6.9-py3-none-any.whl", hash = "sha256:442ba4c75724b9496144c8434b617962ee08d0ee7c26ec663848fe9b78d5a3e4", size = 3169035, upload-time = "2026-06-09T23:27:12.58Z" },
 ]
 
 [[package]]
