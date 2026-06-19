@@ -32,11 +32,27 @@ logger = logging.getLogger(__name__)
 STALE_RUN_HOURS = 2.0          # runs stuck in running/queued > N hours
 STALE_DELEGATION_HOURS = 4.0   # delegated tasks without VP progress > N hours
 TASK_BACKLOG_WARN = 20         # open tasks older than 24h
-SIGNAL_CARDS_PENDING_WARN = 50 # pending signal cards
+# Steady-state-aware proactive signal-card thresholds. Healthy steady state is
+# ~287 pending cards: Kevin is -1.00 on proactive signals (promote-zero), so
+# cards accumulate as the curator's input queue until it rejects them ~hourly.
+# A raw ">=50 pending" rule fired every heartbeat under healthy operation. We
+# now alert only on a REAL stall: the backlog blows well past the working set
+# (creation outpacing curation) OR the oldest pending card is far older than
+# the hourly curation cadence (curator stopped processing).
+SIGNAL_CARDS_PENDING_WARN = 500   # backlog-burst: creation outpacing curation
+SIGNAL_CARDS_STALE_HOURS = 4.0    # oldest pending card age => curator stalled
 CSI_CONSECUTIVE_FAIL_WARN = 3  # adapter consecutive failures
 CSI_SOURCE_STALE_HOURS = 12.0  # channels not polled in > N hours
 CSI_UNEMITTED_WARN = 100       # events not yet batched/emitted
-CSI_DEDUPE_BLOAT_WARN = 50_000 # dedupe table entries
+CSI_DEDUPE_BLOAT_WARN = 50_000 # dedupe table entries (informational ceiling)
+# Steady-state-aware CSI dedupe thresholds. The ingester purges expired
+# dedupe_keys hourly (service start + every 3600s), so a transient handful of
+# recently-expired keys between sweeps is HEALTHY. Fire only on a genuine
+# purge failure: oldest expired key far past the purge cadence, OR expired
+# keys a significant fraction of a production-scale table.
+CSI_DEDUPE_STALE_HOURS = 4.0             # oldest expired age => purge stalled
+CSI_DEDUPE_EXPIRED_FRACTION_WARN = 0.05  # >5% of keys expired
+CSI_DEDUPE_FRACTION_MIN_TOTAL = 500      # fraction signal only at prod scale
 
 
 def _db_path(name: str) -> str:
@@ -83,6 +99,25 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _age_hours(timestamp: str | None) -> float | None:
+    """Age in hours of an ISO-8601 timestamp vs now (UTC), or None if unparseable.
+
+    Proactive signal cards store ``created_at`` via ``datetime.isoformat()``
+    (e.g. ``2026-06-19T21:23:41.123456+00:00``). Naive timestamps are assumed
+    UTC. Returns None on any parse failure so callers fall back to count-only
+    logic rather than firing a false alarm on a malformed row.
+    """
+    if not timestamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(timestamp))
+    except (ValueError, TypeError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (_utc_now() - parsed).total_seconds()) / 3600.0
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -298,7 +333,19 @@ def check_stale_delegations() -> list[HeartbeatFinding]:
 
 
 def check_pending_signal_cards() -> list[HeartbeatFinding]:
-    """Check activity_state.db for excessive pending signal cards."""
+    """Check activity_state.db for a proactive signal-card backlog that signals
+    a REAL dispatch/curator stall, not steady-state accumulation.
+
+    Healthy steady state (2026-06-19) is ~287 pending proactive_signal_cards.
+    Kevin is -1.00 on proactive signals (promote-zero preference), so cards
+    accumulate as the curator's input queue until the curator rejects them
+    ~hourly; a raw ">=50 pending" rule fired every heartbeat. We now alert
+    only when EITHER (a) the pending count blows well past the known working
+    set (creation severely outpacing curation) OR (b) the oldest pending card
+    is far older than the hourly curation cadence (curator stopped
+    processing). Both thresholds sit far above steady state (~287 cards,
+    oldest ~1h), so normal operation no longer false-fires.
+    """
     findings: list[HeartbeatFinding] = []
     conn = _safe_connect(_db_path("activity_state.db"))
     if not conn:
@@ -307,21 +354,48 @@ def check_pending_signal_cards() -> list[HeartbeatFinding]:
         if not _table_exists(conn, "proactive_signal_cards"):
             return findings
         rows = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM proactive_signal_cards WHERE status = 'pending'"
+            "SELECT COUNT(*) AS cnt, MIN(created_at) AS oldest_created_at "
+            "FROM proactive_signal_cards WHERE status = 'pending'"
         ).fetchone()
         count = int(rows["cnt"]) if rows else 0
-        if count >= SIGNAL_CARDS_PENDING_WARN:
+        if count == 0:
+            return findings
+
+        oldest_age_hours = _age_hours(
+            rows["oldest_created_at"] if rows else None
+        )
+        backlog_burst = count >= SIGNAL_CARDS_PENDING_WARN
+        curator_stalled = (
+            oldest_age_hours is not None
+            and oldest_age_hours > SIGNAL_CARDS_STALE_HOURS
+        )
+
+        if backlog_burst or curator_stalled:
+            detail = (
+                f"oldest pending card {oldest_age_hours:.1f}h old"
+                if curator_stalled
+                else f"{count} pending (>= {SIGNAL_CARDS_PENDING_WARN})"
+            )
             findings.append(HeartbeatFinding(
                 finding_id="signal_cards_backlog",
                 category="database",
                 severity="warn",
                 metric_key="activity.pending_signal_cards",
                 observed_value=count,
-                threshold_text=f">={SIGNAL_CARDS_PENDING_WARN} pending",
+                threshold_text=(
+                    f">={SIGNAL_CARDS_PENDING_WARN} pending OR "
+                    f"oldest pending >{SIGNAL_CARDS_STALE_HOURS:.0f}h"
+                ),
                 known_rule_match=True,
                 confidence="high",
-                title=f"{count} pending proactive signal cards — dispatch may be stalled",
-                recommendation="Check if the ToDo dispatch service is running. Review proactive pipeline health.",
+                title=(
+                    f"Proactive signal cards may be stalled: {detail} "
+                    "(steady state ~287 pending, oldest ~1h)"
+                ),
+                recommendation=(
+                    "Check if the ToDo dispatch / proactive curator service is "
+                    "running and rejecting cards. Review proactive pipeline health."
+                ),
             ))
     except Exception as exc:
         logger.debug("check_pending_signal_cards failed: %s", exc)
@@ -514,11 +588,21 @@ def check_csi_unemitted_events() -> list[HeartbeatFinding]:
 
 
 def check_csi_dedupe_bloat() -> list[HeartbeatFinding]:
-    """Check whether expired CSI dedupe keys are failing to purge.
+    """Check whether expired CSI dedupe keys indicate a purge failure.
 
-    A high active-key count can be healthy for high-volume sources with
-    30-90 day TTLs. The operational problem is expired keys remaining after
-    the CSI ingester's startup/hourly cleanup should have removed them.
+    The CSI ingester purges expired dedupe_keys hourly (service start + every
+    3600s), so a transient handful of recently-expired keys sitting between
+    sweeps is HEALTHY steady state, not bloat. The real operational concern
+    (per this check's original intent) is expired keys remaining AFTER the
+    purge cadence should have removed them.
+
+    Steady-state evidence (2026-06-19): expired count fluctuated 18->28 across
+    two heartbeat cycles while the OLDEST expired key stayed pinned at
+    2026-06-19T21:23:41 (all <1h old; 28/60098 = 0.04%). A ">0 expired" rule
+    fired every heartbeat despite being healthy. We now alert only on a
+    genuine purge failure: the oldest expired key is far past the hourly
+    purge cadence (purge loop stopped) OR expired keys are a significant
+    fraction of a production-scale table (sustained backlog).
     """
     findings: list[HeartbeatFinding] = []
     conn = _safe_connect(_csi_db_path())
@@ -531,23 +615,56 @@ def check_csi_dedupe_bloat() -> list[HeartbeatFinding]:
             """
             SELECT
                 COUNT(*) AS total,
-                SUM(CASE WHEN expires_at <= datetime('now') THEN 1 ELSE 0 END) AS expired
+                SUM(CASE WHEN expires_at <= datetime('now') THEN 1 ELSE 0 END) AS expired,
+                (julianday('now')
+                 - MIN(CASE WHEN expires_at <= datetime('now')
+                            THEN julianday(expires_at) END)) * 24.0 AS oldest_expired_age_hours
             FROM dedupe_keys
             """
         ).fetchone()
         total = int(rows["total"]) if rows else 0
         expired = int(rows["expired"] or 0) if rows else 0
-        if expired > 0:
+        if expired == 0:
+            return findings
+
+        # oldest_expired_age_hours is NULL only when no keys are expired, which
+        # we just guarded against; defend against NULL defensively regardless.
+        age_raw = rows["oldest_expired_age_hours"] if rows else None
+        oldest_age_hours = float(age_raw) if age_raw is not None else 0.0
+
+        stale_purge_failure = oldest_age_hours > CSI_DEDUPE_STALE_HOURS
+        expired_fraction = (expired / total) if total > 0 else 0.0
+        # Fraction signal is only meaningful at production scale: a tiny table
+        # (e.g. fresh-DB startup churn) can show a high fraction without being
+        # a real backlog. Below the floor, only the age signal applies.
+        bloat_fraction = (
+            total >= CSI_DEDUPE_FRACTION_MIN_TOTAL
+            and expired_fraction > CSI_DEDUPE_EXPIRED_FRACTION_WARN
+        )
+
+        if stale_purge_failure or bloat_fraction:
+            reason = (
+                f"oldest expired key {oldest_age_hours:.1f}h overdue"
+                if stale_purge_failure
+                else f"{expired_fraction * 100:.1f}% of {total:,} keys expired"
+            )
             findings.append(HeartbeatFinding(
                 finding_id="csi_dedupe_expired_keys_unpurged",
                 category="database",
                 severity="warn",
                 metric_key="csi.dedupe_keys_expired_count",
                 observed_value=expired,
-                threshold_text=">0 expired keys",
+                threshold_text=(
+                    f"oldest expired >{CSI_DEDUPE_STALE_HOURS:.0f}h OR "
+                    f">{CSI_DEDUPE_EXPIRED_FRACTION_WARN * 100:.0f}% of "
+                    f">{CSI_DEDUPE_FRACTION_MIN_TOTAL} keys"
+                ),
                 known_rule_match=False,
                 confidence="high",
-                title=f"CSI dedupe table has {expired:,} expired key(s) that were not purged",
+                title=(
+                    f"CSI dedupe purge appears stalled: {expired:,} of {total:,} "
+                    f"dedupe keys expired ({reason})"
+                ),
                 recommendation=(
                     "Verify csi-ingester startup/hourly dedupe cleanup is running. "
                     f"Total active+expired keys observed: {total:,}."
