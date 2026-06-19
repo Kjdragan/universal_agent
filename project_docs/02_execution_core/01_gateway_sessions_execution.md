@@ -253,21 +253,31 @@ combines it with `UA_GATEWAY_ROLE` so **exactly one** process hosts the loops
 `gateway_server.py::lifespan` computes `_run_autonomous_loops_here =
 should_host_autonomous_runtime()` once and gates the loop-start sites with it.
 
-> **Phase 1 lands the foundation only — `split` mode is NOT yet flippable.** Gated
-> so far: the heartbeat umbrella block (heartbeat + daemon-sessions + todo-dispatch
-> + startup recovery), the cron block, and the idle dispatch loop. **Cutover (a
-> follow-up PR) must still:** (1) gate the remaining autonomous background loops so
-> they don't double-fire when the worker (a full gateway clone) also runs them —
-> `scheduled_dispatch_loop`, `gws_event_listener`, `agentmail_service`,
-> `vp_event_bridge`, `vp_stale_reconcile`, `hq_self_heartbeat`,
-> `notification_dispatcher`, factory-staleness, the digest sweeps; and (2) add a
-> DB-visible liveness signal so `task_hub.reconcile_task_lifecycle` (triggered on
-> dashboard render) does not false-orphan live `todo_execution` rows whose only
-> guard today is the gateway-local in-memory `_running_execution_session_ids()`.
+> **The foundation + the execution/trigger loops are gated — `split` mode is not
+> yet fully flippable.** Gated with `_run_autonomous_loops_here` (move to the
+> worker): the heartbeat umbrella block (heartbeat + daemon-sessions + todo-dispatch
+> + startup recovery), the cron block, the idle dispatch loop, the
+> `scheduled_dispatch_loop` (claims due dispatch tasks → routes to Simone), and the
+> `gws_event_listener` Gmail poller (dispatches into the hooks pipeline → nudges the
+> heartbeat). These are the loops that drive or trigger Simone execution, so they
+> must co-locate with the daemon sessions. Each gate is a no-op at default.
+>
+> **Remaining before cutover:** (1) place the RELAY/MAINTENANCE loops —
+> `notification_dispatcher`, `vp_event_bridge`, `vp_stale_reconcile`,
+> `hq_self_heartbeat`, factory-staleness, the digest sweeps. The flagged ones can be
+> disabled in the worker unit via their `UA_*_ENABLED` env (so they stay singular in
+> the public gateway); the idempotent TTL sweeps are harmless to double-run.
+> `agentmail_service` is the awkward one — it is BOTH a trigger (nudges the
+> heartbeat) AND serves a dashboard WebSocket, so it needs a design decision, not a
+> blind gate. (2) Add a DB-visible liveness signal so
+> `task_hub.reconcile_task_lifecycle` (triggered on dashboard render) does not
+> false-orphan live `todo_execution` rows whose only guard today is the
+> gateway-local in-memory `_running_execution_session_ids()`. (3) Validate the
+> worker actually boots as a second gateway and runs a turn off the public loop.
 > Accepted no-relay losses: live token-streaming of autonomous sessions to the
-> dashboard, and operator chat-redirect *into* a daemon session (board, run
-> history, completion state, and cooperative DB cancel all keep working — they read
-> the shared WAL substrate).
+> dashboard, and operator chat-redirect *into* a daemon session (board, run history,
+> completion state, and cooperative DB cancel all keep working via the shared WAL
+> substrate).
 
 ## Execute / run_query flow
 
