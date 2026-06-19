@@ -104,6 +104,56 @@ def check_stale_runs() -> list[HeartbeatFinding]:
     try:
         if not _table_exists(conn, "runs") or not _table_exists(conn, "run_attempts"):
             return findings
+
+        # Self-heal first: finalize run_attempts left non-terminal (running/queued/
+        # blocked) when their run already reached a terminal status. Running this
+        # BEFORE the count query below means a failed-but-unfinalized attempt can no
+        # longer trip the "stuck in running/queued >2.0h" alert permanently — the
+        # orphan is reconciled by the very loop that detects it. See
+        # services.stuck_run_reaper.finalize_orphaned_run_attempts for the full
+        # rationale (reap_stale_runs can't reach these: it scopes to
+        # runs.status='running' AND run_attempts.status='running').
+        orphan_finalized: list[Any] = []
+        try:
+            from universal_agent.services.stuck_run_reaper import (
+                finalize_orphaned_run_attempts,
+            )
+
+            orphan_finalized = finalize_orphaned_run_attempts(conn)
+        except Exception as orphan_err:
+            logger.debug(
+                "finalize_orphaned_run_attempts failed (non-fatal): %s", orphan_err
+            )
+        if orphan_finalized:
+            _o_summary = ", ".join(
+                f"{o.run_id}({o.attempt_status_before}->{o.attempt_status_after})"
+                for o in orphan_finalized[:5]
+            )
+            if len(orphan_finalized) > 5:
+                _o_summary += f" ... and {len(orphan_finalized) - 5} more"
+            findings.append(HeartbeatFinding(
+                finding_id="orphaned_attempts_finalized",
+                category="gateway",
+                severity="info",
+                metric_key="runtime.orphaned_attempts_finalized",
+                observed_value=len(orphan_finalized),
+                threshold_text="auto-finalized residual attempts on terminal runs",
+                known_rule_match=True,
+                confidence="high",
+                title=(
+                    f"🧹 Reconciled {len(orphan_finalized)} orphaned run_attempt(s) "
+                    f"left non-terminal by a run failure path: {_o_summary}"
+                ),
+                recommendation=(
+                    "The run already recorded its terminal outcome; the residual "
+                    "attempt was mirrored to match and its lease cleared. No failure "
+                    "was re-surfaced. If this recurs frequently, the originating run "
+                    "failure path finalizes runs.status without finalizing its linked "
+                    "run_attempt — worth tightening at the source."
+                ),
+                runbook_command="sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/runtime_state.db \"SELECT a.attempt_id, a.status, a.failure_reason FROM run_attempts a JOIN runs r ON r.run_id=a.run_id WHERE a.failure_class='orphaned_attempt_cleanup' ORDER BY a.updated_at DESC LIMIT 10;\"",
+            ))
+
         cutoff = (_utc_now() - timedelta(hours=STALE_RUN_HOURS)).isoformat()
         rows = conn.execute(
             """

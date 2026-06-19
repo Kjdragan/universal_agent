@@ -67,6 +67,46 @@ class ReapedRunInfo:
         }
 
 
+@dataclass(frozen=True)
+class OrphanedAttemptInfo:
+    """Structured result for each orphaned attempt finalized by the cleanup pass.
+
+    A run can reach a terminal status (``failed``/``completed``/``cancelled``/
+    ``timed_out``/...) through several failure-finalization paths
+    (workflow_admission, gateway_server, hooks_service, todo_dispatch, the
+    stale-VP reconciler) without finalizing its linked ``run_attempts`` row.
+    That leaves the latest attempt parked in ``running``/``queued``/``blocked``
+    forever — invisible to :func:`reap_stale_runs` (which scopes to
+    ``runs.status = 'running'`` AND ``run_attempts.status = 'running'``) and
+    counted permanently by the ``check_stale_runs`` "stuck in running/queued"
+    health alert. :func:`finalize_orphaned_run_attempts` reconciles exactly
+    those residual attempts.
+    """
+
+    run_id: str
+    attempt_id: str
+    run_status: str
+    attempt_status_before: str
+    attempt_status_after: str
+    terminal_reason: str
+
+    def to_dict(self) -> dict:
+        """Return a JSON-serializable summary of the finalized orphan attempt."""
+        return {
+            "run_id": self.run_id,
+            "attempt_id": self.attempt_id,
+            "run_status": self.run_status,
+            "attempt_status_before": self.attempt_status_before,
+            "attempt_status_after": self.attempt_status_after,
+            "terminal_reason": self.terminal_reason,
+        }
+
+
+# Attempt statuses that keep a run "live" from the health-alert perspective.
+# Mirrors the set counted by ``db_health_monitor.check_stale_runs`` so this
+# cleanup targets exactly the rows that would otherwise trip the alert.
+_ACTIVE_ATTEMPT_STATUSES: frozenset[str] = frozenset({"running", "queued", "blocked"})
+
 # ── Core Reaper ──────────────────────────────────────────────────────────────
 
 def reap_stale_runs(
@@ -204,3 +244,124 @@ def reap_stale_runs(
         )
 
     return reaped
+
+
+# Statuses mirrored from a terminal run onto its residual orphan attempt. The
+# run/attempt status vocabularies overlap; anything unexpected falls back to
+# ``failed`` (see :func:`finalize_orphaned_run_attempts`).
+_MIRRORABLE_TERMINAL_STATUSES: frozenset[str] = frozenset(
+    {"failed", "cancelled", "completed", "succeeded", "timed_out", "needs_review"}
+)
+
+
+def finalize_orphaned_run_attempts(
+    conn: sqlite3.Connection,
+    *,
+    max_rows: int = 500,
+) -> list[OrphanedAttemptInfo]:
+    """Finalize ``run_attempts`` rows left non-terminal when their run already ended.
+
+    Reconciles the orphan state behind the ``check_stale_runs`` "stuck in
+    running/queued >2.0h" alert. A failure-finalization path can mark
+    ``runs.status`` terminal (e.g. ``failed`` with ``terminal_reason =
+    'hook_dispatch_failed'``) without ever moving the linked ``run_attempts``
+    row out of ``running``/``queued``/``blocked``. That residual attempt is then:
+
+      * invisible to :func:`reap_stale_runs` — it scopes to
+        ``runs.status = 'running'`` AND ``run_attempts.status = 'running'``, so a
+        *failed* run with a *queued* attempt is never reached; and
+      * counted forever by ``check_stale_runs``, which joins
+        ``run_attempts.status IN ('running', 'queued', 'blocked')``.
+
+    This pass makes the invariant "a terminal run has only terminal attempts"
+    hold regardless of which failure path produced the orphan. It is strictly
+    additive bookkeeping — the run already recorded its terminal outcome, so we
+    mirror that outcome onto the residual attempt and clear its lease. It
+    deliberately does **not** surface a failure card: the run's
+    ``terminal_reason`` already carries the failure, and re-surfacing would
+    duplicate the ``vp_failure`` / rescue path.
+
+    Args:
+        conn: ``runtime_state.db`` connection (``runs`` + ``run_attempts``).
+        max_rows: Cap on attempts finalized per pass (bounded work per heartbeat).
+
+    Returns:
+        One :class:`OrphanedAttemptInfo` per attempt finalized this pass.
+
+    Idempotent: the ``WHERE ... AND status IN (active set)`` guard makes a repeat
+    call a no-op for already-finalized attempts. Legitimate in-progress runs
+    (``runs.status`` still in the active set) are never touched.
+    """
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    rows = conn.execute(
+        """
+        SELECT r.run_id,
+               r.run_kind,
+               r.status        AS run_status,
+               r.terminal_reason,
+               a.attempt_id,
+               a.status        AS attempt_status,
+               a.started_at
+        FROM run_attempts a
+        JOIN runs r ON r.run_id = a.run_id
+        WHERE a.status IN ('running', 'queued', 'blocked')
+          AND r.status NOT IN ('running', 'queued', 'blocked')
+        ORDER BY a.started_at ASC
+        LIMIT ?
+        """,
+        (max(1, int(max_rows)),),
+    ).fetchall()
+
+    finalized: list[OrphanedAttemptInfo] = []
+    for row in rows:
+        is_row = isinstance(row, sqlite3.Row)
+        run_id = row["run_id"] if is_row else row[0]
+        run_status = (row["run_status"] if is_row else row[2]) or ""
+        terminal_reason = (row["terminal_reason"] if is_row else row[3]) or ""
+        attempt_id = row["attempt_id"] if is_row else row[4]
+        attempt_status_before = (row["attempt_status"] if is_row else row[5]) or ""
+
+        # Mirror the run's outcome onto the attempt; fall back to 'failed'.
+        attempt_status_after = (
+            run_status if run_status in _MIRRORABLE_TERMINAL_STATUSES else "failed"
+        )
+        failure_reason = (
+            f"orphaned_attempt_cleanup:parent_run_{run_status or 'terminal'}"
+            f":{terminal_reason or 'terminal'}"
+        )
+        conn.execute(
+            """
+            UPDATE run_attempts
+            SET status = ?,
+                ended_at = COALESCE(ended_at, ?),
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                failure_class = COALESCE(failure_class, 'orphaned_attempt_cleanup'),
+                failure_reason = COALESCE(failure_reason, ?),
+                updated_at = ?
+            WHERE attempt_id = ? AND status IN ('running', 'queued', 'blocked')
+            """,
+            (attempt_status_after, now_iso, failure_reason, now_iso, attempt_id),
+        )
+        finalized.append(
+            OrphanedAttemptInfo(
+                run_id=run_id,
+                attempt_id=attempt_id,
+                run_status=run_status,
+                attempt_status_before=attempt_status_before,
+                attempt_status_after=attempt_status_after,
+                terminal_reason=terminal_reason,
+            )
+        )
+
+    if finalized:
+        conn.commit()
+        logger.warning(
+            "🧹 Orphan-attempt cleanup: finalized %d residual run_attempt(s) "
+            "left non-terminal by a run failure path: %s",
+            len(finalized),
+            ", ".join(f.attempt_id for f in finalized),
+        )
+    return finalized
