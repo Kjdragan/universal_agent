@@ -239,18 +239,25 @@ The flag `loop_control.autonomous_runtime_mode()` reads `UA_AUTONOMOUS_RUNTIME_M
 combines it with `UA_GATEWAY_ROLE` so **exactly one** process hosts the loops
 (mutually exclusive by construction):
 
-- `in_process` (default, today): the public gateway hosts them. **Byte-identical
+- `in_process` (the code default): the public gateway hosts them. **Byte-identical
   to pre-split behavior** — `should_host_autonomous_runtime()` is `True`, so the
-  `and _run_autonomous_loops_here` gate on each loop-start is a no-op.
-- `split`: only the worker (`UA_GATEWAY_ROLE=autonomous_worker`) hosts them; the
-  gateway sheds them. The worker is **the same `gateway_server` process** on a
-  private throwaway port (`UA_AUTONOMOUS_WORKER_PORT`, default 8092 — a dedicated
-  var because `.env`'s `UA_GATEWAY_PORT` + systemd `EnvironmentFile` override would
-  otherwise force it onto :8002 and SO_REUSEPORT-collide with the public gateway)
-  — reusing 100% of the lifespan wiring rather than re-implementing it — shipped as
-  `deployment/systemd/universal-agent-autonomous-runtime.service` (installed
-  **dormant** by `scripts/install_vps_autonomous_runtime.sh`; cutover is a config
-  flip + `enable --now`).
+  `and _run_autonomous_loops_here` gate on each loop-start is a no-op. Used in dev
+  and as the rollback target.
+- `split` — **LIVE in production since 2026-06-19** (`UA_AUTONOMOUS_RUNTIME_MODE=split`
+  in Infisical prod): only the worker (`UA_GATEWAY_ROLE=autonomous_worker`) hosts the
+  loops; the gateway sheds them and serves HTTP only. The worker is **the same
+  `gateway_server` process** on a private port (`UA_AUTONOMOUS_WORKER_PORT`, default
+  8092 — a dedicated var because `.env`'s `UA_GATEWAY_PORT` + systemd
+  `EnvironmentFile` override would otherwise force it onto :8002 and
+  SO_REUSEPORT-collide with the public gateway) — reusing 100% of the lifespan wiring
+  rather than re-implementing it. Shipped as
+  `deployment/systemd/universal-agent-autonomous-runtime.service` (installed by
+  `scripts/install_vps_autonomous_runtime.sh`, enabled at cutover; `remote_deploy.sh`
+  restarts it on each deploy via the is-enabled-guarded `cont_svc` list). Cutover
+  verified live: the gateway stayed responsive (0 slow / 0 non-200 over a 150s load
+  window) while the worker ran heavy Simone turns, zero double-fire. **Rollback** =
+  set `UA_AUTONOMOUS_RUNTIME_MODE=in_process`, restart the gateway (resumes hosting),
+  stop+disable the worker.
 
 `gateway_server.py::lifespan` computes `_run_autonomous_loops_here =
 should_host_autonomous_runtime()` once and gates the loop-start sites with it.
