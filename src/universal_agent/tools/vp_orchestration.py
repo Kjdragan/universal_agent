@@ -711,7 +711,10 @@ def _with_preference_context(
 ) -> str:
     if bool((constraints or {}).get("skip_preference_context")):
         return objective
-    if vp_id not in {"vp.coder.primary", "vp.general.primary"}:
+    # vp.general.secondary (HOMER) is a capacity twin of ATLAS — it must get the
+    # IDENTICAL delegation/preference context so spilled general work behaves the
+    # same regardless of which general worker picks it up.
+    if vp_id not in {"vp.coder.primary", "vp.general.primary", "vp.general.secondary"}:
         return objective
     topic_tags = constraints.get("topic_tags")
     if not isinstance(topic_tags, list):

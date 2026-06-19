@@ -41,6 +41,7 @@ from universal_agent.feature_flags import _is_truthy, _read_env_bool
 from universal_agent.services.agent_router import (
     AGENT_CODER,
     AGENT_GENERAL,
+    AGENT_GENERAL_SECONDARY,
     AGENT_SIMONE,
 )
 from universal_agent.services.vp_capacity import (
@@ -130,6 +131,111 @@ def prefer_atlas_enabled() -> bool:
     Simone); flip ``UA_DISPATCHER_PREFER_ATLAS`` to route it to ATLAS (Stage B).
     """
     return _prefer_atlas_for_general()
+
+
+# ---------------------------------------------------------------------------
+# HOMER — opportunistic second general VP (capacity twin of ATLAS)
+# ---------------------------------------------------------------------------
+
+
+# Classification rules whose `agent_id == AGENT_GENERAL` is an EXPLICIT operator
+# pin to ATLAS — these must NEVER spill to HOMER. The producer pre-tag
+# (`preferred_vp_general`) and the classifier tail are the general *pool* and ARE
+# HOMER-eligible (otherwise HOMER would be starved, since the convergence/intel
+# producers tag `preferred_vp=vp.general.primary`). Decision recorded 2026-06-19;
+# flip a rule out of this set to make that lane pin to ATLAS instead.
+_GENERAL_PIN_RULES = frozenset({"explicit_target_agent"})
+
+
+def _homer_enabled() -> bool:
+    """True when ``vp.general.secondary`` (HOMER) is in ``UA_VP_ENABLED_IDS``.
+
+    This is the single parameterization seam: when HOMER is absent, every
+    routing decision below short-circuits to atlas-only, so the dispatcher
+    behaves EXACTLY as before Homer existed (zero behavior change).
+    """
+    from universal_agent.feature_flags import vp_enabled_ids
+
+    return AGENT_GENERAL_SECONDARY in set(vp_enabled_ids())
+
+
+def _live_vp_active_counts() -> tuple[int, int, int]:
+    """Live ``(atlas, homer, coder)`` **running** mission counts from the
+    AUTHORITATIVE ``vp_missions`` table, per ``vp_id``.
+
+    Why not ``active_assignments``: a task dispatched to a VP is marked
+    ``delegated`` and its task-hub assignment is COMPLETED, so a *running* VP
+    mission is invisible to ``task_hub.get_agent_activity`` across sweeps. That
+    snapshot therefore cannot enforce the HOMER Cody-idle gate or the peak-≤2
+    invariant — only the cross-process ``vp_missions`` truth can.
+
+    Counts only ``status='running'`` — NOT ``queued``. The peak-≤2 invariant is
+    about concurrent *running* ZAI bursts; a queued mission is not a burst yet.
+    Counting ``queued`` would let a stuck/unclaimable HOMER mission (its worker
+    failed/absent) wedge the CODIE lane forever, since the CODIE-defer gate keys
+    on ``homer_used > 0`` and a queued row never clears on its own. Using
+    ``running`` makes a stuck-queued mission count as zero (it consumes no slot),
+    so the lanes can never deadlock each other.
+
+    Fail-open (return zeros on any read error): HOMER then never spills and CODIE
+    is never wrongly deferred. In the rare case the read fails while ATLAS/CODIE
+    are actually busy, this can transiently over-dispatch by one until the next
+    sweep — acceptable vs. wedging a lane.
+    """
+    import contextlib
+
+    from universal_agent.durable.db import connect_runtime_db, get_vp_db_path
+
+    counts = {AGENT_GENERAL: 0, AGENT_GENERAL_SECONDARY: 0, AGENT_CODER: 0}
+    try:
+        # connect_runtime_db's context manager scopes the TRANSACTION, not the
+        # connection's lifetime — wrap in closing() so the fd is released each
+        # sweep (this runs on the ~60s scheduled dispatch path when HOMER is on).
+        with contextlib.closing(connect_runtime_db(get_vp_db_path())) as vconn:
+            rows = vconn.execute(
+                "SELECT vp_id, COUNT(*) AS n FROM vp_missions "
+                "WHERE status = 'running' GROUP BY vp_id"
+            ).fetchall()
+        for r in rows:
+            vid = str(r["vp_id"] or "").strip().lower()
+            if vid in counts:
+                counts[vid] = int(r["n"] or 0)
+    except Exception as exc:  # pragma: no cover - defensive; fail-open
+        log.warning("priority_dispatcher: live vp_mission count failed (fail-open): %s", exc)
+        return (0, 0, 0)
+    return counts[AGENT_GENERAL], counts[AGENT_GENERAL_SECONDARY], counts[AGENT_CODER]
+
+
+def _pick_general_target(
+    *,
+    coder_used: int,
+    atlas_used: int,
+    homer_used: int,
+    max_general: int,
+    homer_eligible: bool,
+    max_per_instance: int = 1,
+) -> Optional[str]:
+    """Resolve a general decision to a concrete vp_id, or ``None`` to defer.
+
+    - **Not HOMER-eligible** (HOMER disabled, OR an explicit ATLAS pin): goes to
+      ATLAS up to the pool cap counted across the WHOLE pool
+      (``atlas_used + homer_used < max_general``); then defer. Counting HOMER too
+      stops a pin from queuing a 2nd ATLAS mission *beside* a running HOMER
+      (which would be a third concurrent general mission). With HOMER disabled
+      ``homer_used`` is always 0, so this is byte-identical to the pre-HOMER path.
+    - **HOMER-eligible**: ATLAS first (per-instance cap); spill to HOMER ONLY
+      when ATLAS is full AND CODIE is idle (``coder_used == 0``) and a HOMER
+      slot is free. HOMER borrows Cody's idle slack — it is NEVER a third
+      concurrent VP (paired with the CODIE-defers-when-HOMER-live gate in
+      ``dispatch_claimed``, the two are mutually exclusive ⇒ peak ≤ 2 running).
+    """
+    if not homer_eligible:
+        return AGENT_GENERAL if (atlas_used + homer_used) < max_general else None
+    if atlas_used < max_per_instance:
+        return AGENT_GENERAL
+    if coder_used == 0 and homer_used < max_per_instance:
+        return AGENT_GENERAL_SECONDARY
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -341,9 +447,25 @@ async def dispatch_claimed(
             d.rule = "ambiguous_tail"
 
     # 2. Priority-ordered slot fill (decision only — no I/O yet).
-    coder_used, general_used = _vp_active_counts(active_assignments)
     max_coder = _env_positive_int("UA_MAX_CONCURRENT_VP_CODER", 1)
     max_general = _env_positive_int("UA_MAX_CONCURRENT_VP_GENERAL", 2)
+
+    # Slot accounting. When HOMER is OFF we use the legacy per-sweep
+    # ``active_assignments`` counts → byte-identical to the pre-HOMER dispatcher.
+    # When HOMER is ON we MUST observe RUNNING missions (which the snapshot
+    # cannot see) to keep the Cody-idle gate and peak-≤2 invariant honest, so we
+    # source counts from the authoritative ``vp_missions`` live state.
+    homer_on = _homer_enabled()
+    if homer_on:
+        # Live RUNNING counts (atlas, homer, coder) — the cross-process truth.
+        atlas_used, homer_used, coder_used = _live_vp_active_counts()
+    else:
+        # Legacy per-sweep snapshot. NOTE: here ``atlas_used`` is the general
+        # POOL count (``_vp_active_counts`` returns ``(coder, general)``); with
+        # HOMER off ``homer_used`` is 0 so ``atlas_used < max_general`` reproduces
+        # the exact pre-HOMER ``general_used >= max_general`` check (R1).
+        coder_used, atlas_used = _vp_active_counts(active_assignments)
+        homer_used = 0  # never spilled when HOMER is off
 
     from universal_agent.services.capacity_governor import CapacityGovernor
 
@@ -361,17 +483,36 @@ async def dispatch_claimed(
                 d.task_id, d.agent_id, reason,
             )
             continue
-        if d.agent_id == AGENT_CODER and coder_used >= max_coder:
-            d.deferred = True
-            continue
-        if d.agent_id == AGENT_GENERAL and general_used >= max_general:
-            d.deferred = True
-            continue
-        # Reserve the slot for the remainder of this sweep.
         if d.agent_id == AGENT_CODER:
+            # peak-≤2 mutual exclusion: when a HOMER mission is live, CODIE
+            # yields (they share the second slot). HOMER only ever ran because
+            # CODIE was idle, so this transient is rare; honoring it keeps total
+            # concurrent VP missions ≤ 2 (no third ZAI burst).
+            if coder_used >= max_coder or (homer_on and homer_used > 0):
+                d.deferred = True
+                continue
             coder_used += 1
+            to_dispatch.append(d)
+            continue
+        # AGENT_GENERAL -> resolve to a concrete vp_id. An explicit operator pin
+        # (_GENERAL_PIN_RULES) is never HOMER-eligible; the producer pre-tag and
+        # the classifier tail are the general pool and may spill to HOMER.
+        homer_eligible = homer_on and d.rule not in _GENERAL_PIN_RULES
+        target = _pick_general_target(
+            coder_used=coder_used,
+            atlas_used=atlas_used,
+            homer_used=homer_used,
+            max_general=max_general,
+            homer_eligible=homer_eligible,
+        )
+        if target is None:
+            d.deferred = True
+            continue
+        d.agent_id = target  # concrete vp_id flows to dispatch_vp_mission(vp_id=...)
+        if target == AGENT_GENERAL:
+            atlas_used += 1
         else:
-            general_used += 1
+            homer_used += 1
         to_dispatch.append(d)
 
     # 3. Execute the dispatches (await), then record the `delegated` transition.

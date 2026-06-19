@@ -219,7 +219,57 @@ trap cleanup_deployment_window EXIT
 echo "--> Installing canonical production systemd units from repo templates..."
 sudo bash "$PROD_DIR/scripts/install_vps_systemd_units.sh" --lane production --app-root "$PROD_DIR"
 echo "--> Installing canonical VP worker unit template from repo..."
-sudo bash "$PROD_DIR/scripts/install_vp_worker_services.sh" vp.coder.primary vp.general.primary
+# Install a worker per ENABLED VP id (UA_VP_ENABLED_IDS, resolved from Infisical)
+# — not a hardcoded list. This makes ONE flag the single source of truth for
+# both dispatcher routing (priority_dispatcher._homer_enabled) AND systemd
+# worker presence, so the opportunistic third VP "HOMER" (vp.general.secondary)
+# comes up here only when it is enabled. NOTE: installing+starting a worker
+# whose id is NOT in UA_VP_ENABLED_IDS would restart-loop (vp/worker_main exits
+# with SystemExit + the unit is Restart=always), so the list MUST track the
+# flag. The default (flag unset) is exactly the two always-on workers — byte
+# identical to before HOMER existed.
+VPID_ERR="$(mktemp)"
+VPID_RESOLVED=1
+VP_WORKER_IDS="$(run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && PYTHONPATH=src ./.venv/bin/python -c 'import logging; logging.disable(logging.CRITICAL); from universal_agent.infisical_loader import initialize_runtime_secrets; initialize_runtime_secrets(); from universal_agent.feature_flags import vp_enabled_ids; print(\" \".join(vp_enabled_ids()))'" 2>"$VPID_ERR" | tail -n 1 || true)"
+case " $VP_WORKER_IDS " in
+  *" vp.coder.primary "*) : ;;  # sane resolution -> use it
+  *)
+    echo "WARN: could not resolve UA_VP_ENABLED_IDS ('$VP_WORKER_IDS'); falling back to always-on pair"
+    sed 's/^/    [vpid-resolver] /' "$VPID_ERR" >&2 || true
+    VP_WORKER_IDS="vp.coder.primary vp.general.primary"
+    VPID_RESOLVED=0   # fallback, not a trusted enabled set — do NOT tear down workers below
+    ;;
+esac
+rm -f "$VPID_ERR"
+echo "--> Installing VP worker units for enabled ids: $VP_WORKER_IDS"
+# shellcheck disable=SC2086  # intentional word-splitting: pass ids as separate args
+sudo bash "$PROD_DIR/scripts/install_vp_worker_services.sh" $VP_WORKER_IDS
+# Converge worker presence to the flag: disable any vp-worker@<id> instance that
+# is NOT in the enabled set (e.g. HOMER after a rollback that dropped it from
+# UA_VP_ENABLED_IDS). worker_main exits for a disabled id, so leaving the unit
+# enabled would restart-loop until the StartLimit trips. Enumerate ENABLED
+# instances from their WantedBy symlinks (what `systemctl enable` creates), so a
+# crash-looping orphan is caught regardless of its current run state.
+# FAIL-CLOSED: only run this when the enabled set was genuinely resolved. On a
+# resolver hiccup we fell back to the always-on pair, which would otherwise
+# `disable --now` a legitimately-enabled HOMER worker (a transient Infisical
+# read must never tear down a healthy worker).
+if [ "$VPID_RESOLVED" = "1" ]; then
+  for _link in /etc/systemd/system/multi-user.target.wants/universal-agent-vp-worker@*.service; do
+    [ -e "$_link" ] || continue   # glob did not match -> no enabled instances
+    _unit="$(basename "$_link")"
+    _uid="${_unit#universal-agent-vp-worker@}"; _uid="${_uid%.service}"
+    case " $VP_WORKER_IDS " in
+      *" $_uid "*) : ;;  # still enabled — keep
+      *)
+        echo "--> Disabling stale VP worker unit (id not in UA_VP_ENABLED_IDS): $_unit"
+        sudo systemctl disable --now "$_unit" 2>/dev/null || true
+        ;;
+    esac
+  done
+else
+  echo "--> Skipping stale-VP-worker convergence (UA_VP_ENABLED_IDS unresolved; fail-closed)"
+fi
 echo "--> Installing uv-cache-prune timer (daily deploy-independent disk backstop)..."
 # Idempotent; ensures the daily prune timer survives a VPS rebuild and stays in
 # sync with the repo. Non-fatal — a timer-install hiccup must not fail a deploy

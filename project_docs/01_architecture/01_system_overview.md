@@ -67,6 +67,11 @@ principal's presence by checking daemon/worker session state, not by listing sub
     client_kind="claude_generalist", soul_file="ATLAS_SOUL.md", ...)
 ```
 
+> An opt-in third VP, **HOMER** (`vp.general.secondary`), is a capacity twin of ATLAS
+> (shared `ATLAS_SOUL.md`) that fills a second general slot only while CODIE is idle; it
+> resolves only when `vp.general.secondary` ∈ `UA_VP_ENABLED_IDS`. See
+> [VP Workers & Delegation](../03_agents/01_vp_workers_and_delegation.md).
+
 - **Simone** — the primary executor/orchestrator. Always-on. Runs *inside* the gateway
   process. Takes the next task and works it directly, or delegates.
 - **CODIE** (`vp.coder.primary`) — the coding VP. On-demand only; spawns a real `claude`

@@ -9,6 +9,7 @@ from universal_agent.feature_flags import (
     coder_vp_id,
     vp_coder_workspace_root,
     vp_enabled_ids,
+    vp_general_secondary_workspace_root,
     vp_general_workspace_root,
 )
 
@@ -68,6 +69,22 @@ def resolve_vp_profiles(workspace_base: Optional[Path | str] = None) -> dict[str
             soul_file="ATLAS_SOUL.md",
             # ATLAS does research / intel-brief synthesis / general reasoning
             # — runs on ZAI by default; Max is reserved for coding (CODIE).
+            inference_mode="zai",
+        ),
+        "vp.general.secondary": VpProfile(
+            vp_id="vp.general.secondary",
+            display_name="HOMER",
+            runtime_id="runtime.general.secondary.external",
+            # Same client + SHARED SOUL as ATLAS: HOMER is a capacity twin, not
+            # a new persona. It opportunistically fills the second general slot
+            # only while CODIE is idle (priority_dispatcher._pick_general_target),
+            # so it inherits ATLAS's research/general behavior verbatim.
+            client_kind="claude_generalist",
+            workspace_root=_resolve_workspace_root(
+                configured_root=vp_general_secondary_workspace_root(default=""),
+                fallback=(base / "vp_general_secondary_external"),
+            ),
+            soul_file="ATLAS_SOUL.md",
             inference_mode="zai",
         ),
     }

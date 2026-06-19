@@ -13,7 +13,7 @@ code_paths:
   - src/universal_agent/services/vp_failure_rescue.py
   - src/universal_agent/services/wiki_rescue_policy.py
   - src/universal_agent/services/wiki_rescue_driver.py
-last_verified: 2026-06-14
+last_verified: 2026-06-19
 ---
 
 # VP Workers & Delegation
@@ -22,16 +22,38 @@ last_verified: 2026-06-14
 
 A "VP" (Vice President) is an autonomous worker agent that executes a discrete
 **mission** in its own isolated workspace, separate from the Simone orchestrator
-that dispatched it. Two VPs are enabled by default:
+that dispatched it. Two VPs are enabled by default; a third (HOMER) is
+opt-in:
 
 | Registry ID | Display name | `client_kind` | `inference_mode` | Soul file | Workspace |
 |---|---|---|---|---|---|
 | `vp.coder.primary` | **CODIE** (a.k.a. "Cody") | `claude_code` | `anthropic` (Max) | `CODIE_SOUL.md` | per-mission, often a git worktree |
 | `vp.general.primary` | **ATLAS** | `claude_generalist` | `zai` | `ATLAS_SOUL.md` | per-mission directory |
+| `vp.general.secondary` | **HOMER** (opt-in) | `claude_generalist` | `zai` | `ATLAS_SOUL.md` (shared) | per-mission directory |
 
 These are defined in `vp/profiles.py::resolve_vp_profiles`. The enabled set is
-controlled by `UA_VP_ENABLED_IDS` (default both); disabling one removes it from
-the dict so dispatch and the worker loop refuse it.
+controlled by `UA_VP_ENABLED_IDS` (default `vp.coder.primary,vp.general.primary`);
+disabling one removes it from the dict so dispatch and the worker loop refuse it.
+
+**HOMER** is an opportunistic SECOND general worker — a *capacity twin* of ATLAS
+(same `client_kind`, **shared `ATLAS_SOUL.md`**, ZAI inference), not a new
+persona. It exists only when `vp.general.secondary` is in `UA_VP_ENABLED_IDS`,
+and the priority dispatcher spills general-pool work to it **only when ATLAS is
+busy AND CODIE is idle**, gated on **live `vp_missions` RUNNING state** (not the
+assignment snapshot, which is blind to running VP missions; and not `queued`,
+which would let a stuck HOMER mission wedge CODIE). Peak concurrent **running** VP
+missions stays ≤ 2 (ATLAS + exactly one of {CODIE, HOMER}) via a **mutual
+exclusion** — HOMER spills only when no CODIE mission is running, and a CODIE
+dispatch defers when a HOMER mission is running — backed by single-worker
+serialization (one systemd worker per `vp_id`, per-worker concurrency 1, so a
+`queued` row only ever waits). An explicit operator `target_agent`
+pin always stays ATLAS; the producer pre-tag `preferred_vp=vp.general.primary`
+and the classifier tail are the *pool* and may spill to HOMER (nothing ever
+tags `preferred_vp=vp.general.secondary`, so HOMER only takes pool overflow).
+The routing gate lives in `priority_dispatcher.py::_pick_general_target` +
+`::_live_vp_active_counts`; see
+[Simone-First Orchestration](02_simone_first_orchestration.md) for the dispatch
+matrix.
 
 The lifecycle is a durable, SQLite-backed work queue (`vp_missions` table in
 `vp_state.db`). A producer (Simone via an agent tool, the dashboard, the Redis
@@ -131,9 +153,11 @@ now close the class (guard tests: `tests/unit/test_vp_link_discovery_guard.py`):
 ### Preference context injection
 
 `_with_preference_context` appends "KEVIN'S PREFERENCE CONTEXT" to the objective
-for `vp.coder.primary`/`vp.general.primary` missions, pulled from
-`services/proactive_preferences.get_delegation_context`. Suppress with
-`constraints.skip_preference_context=True`.
+for `vp.coder.primary`/`vp.general.primary`/`vp.general.secondary` missions,
+pulled from `services/proactive_preferences.get_delegation_context`. Suppress
+with `constraints.skip_preference_context=True`. HOMER (`vp.general.secondary`)
+is in the allowlist so spilled general work gets the **identical** preference
+context whichever general worker picks it up (capacity-twin parity).
 
 ## Priority tiers
 
@@ -324,10 +348,36 @@ git credentials (so VP subprocesses can push) before starting.
 
 In production each VP runs as its own **systemd templated unit** —
 `universal-agent-vp-worker@vp.coder.primary` and
-`universal-agent-vp-worker@vp.general.primary`. The two VPs also share a single **AgentMail inbox**
+`universal-agent-vp-worker@vp.general.primary` (plus
+`universal-agent-vp-worker@vp.general.secondary` when HOMER is enabled). The
+generalist VPs also share a single **AgentMail inbox**
 (`vp.agents@agentmail.to`, display name `Codie/Atlas`), with inbound mail routed
 to the right VP by name detection (scanning subject/body for Cody/Codie vs
 Atlas). See the Email Architecture source-of-truth doc for that protocol.
+
+`worker_main` **refuses** to run a `--vp-id` that is not in `UA_VP_ENABLED_IDS`
+(it `raise SystemExit`); since the unit is `Restart=always`, installing+starting
+a worker for a disabled id would restart-loop. Two mechanisms keep worker
+presence converged to the flag:
+
+1. **`remote_deploy.sh` installs a worker per ENABLED id** — it resolves
+   `feature_flags.py::vp_enabled_ids` (from Infisical) at deploy time and passes
+   that list to `scripts/install_vp_worker_services.sh`, rather than a hardcoded
+   pair. It then **disables any `universal-agent-vp-worker@<id>` instance whose id
+   is NOT in the enabled set** (enumerated from the `multi-user.target.wants`
+   symlinks), so a removed worker (e.g. HOMER after a rollback) is taken down on
+   the next deploy. This makes `UA_VP_ENABLED_IDS` the single source of truth for
+   **both** dispatcher routing (`priority_dispatcher.py::_homer_enabled`) and
+   systemd worker presence.
+2. **`StartLimitIntervalSec`/`StartLimitBurst` on the unit** — a belt-and-braces
+   rail so a disabled-id worker that somehow stays enabled enters `failed` after
+   a few attempts instead of hot-looping forever.
+
+To enable HOMER: add `vp.general.secondary` to `UA_VP_ENABLED_IDS` in Infisical,
+then deploy (or run the installer with the third id). To roll back: drop it from
+the flag — routing degrades to atlas-only **instantly** (no redeploy), and the
+HOMER worker is disabled on the next deploy (or immediately via
+`systemctl disable --now universal-agent-vp-worker@vp.general.secondary`).
 
 ### Deploy resilience: workers are NOT restarted by deploys
 
