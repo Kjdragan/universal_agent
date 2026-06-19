@@ -4,13 +4,15 @@ PartOf=csi.target
 
 [Service]
 Type=oneshot
-# Run as ua (the owner of the canonical DB below). MUST match the DB owner:
-# a root writer on the ua-owned WAL DB would create root-owned -wal/-shm files
-# and break the live ua ingester's access.
 User=ua
 WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
 ExecStart=/opt/universal_agent/CSI_Ingester/development/.venv/bin/python scripts/csi_source_quality_assessment.py --lookback-days 7
-# Canonical production DB (was the stale dev DB .../development/var/csi.db,
-# which has 0 rows — the assessment silently scored 0/0 every night).
-Environment=CSI_DB_PATH=/var/lib/universal-agent/csi/csi.db
+# INTERIM: deliberately pointed at the (empty) dev DB, NOT the canonical
+# /var/lib/universal-agent/csi/csi.db. Pointing it at canonical (PR #1086) made
+# every run fail with SQLITE_BUSY — the live csi-ingester is the sole, continuous
+# writer and holds the WAL write lock, so an external batch writer never gets a
+# window (verified: BEGIN IMMEDIATE failed after 30s). Real fix = move source-
+# quality scoring in-process into the ingester (where it already holds the lock);
+# tracked as a follow-up. Until then this stays a harmless no-op.
+Environment=CSI_DB_PATH=/opt/universal_agent/CSI_Ingester/development/var/csi.db
 TimeoutStartSec=300
