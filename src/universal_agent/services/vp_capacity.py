@@ -33,12 +33,23 @@ def _vp_active_counts(active_assignments: list[dict[str, Any]] | None) -> tuple[
 
     Known ids/aliases:
       - Coder:   "vp.coder.primary", "codie", "coder"
-      - General: "vp.general.primary", "atlas"
+      - General: "vp.general.primary", "atlas", "vp.general.secondary", "homer"
+
+    The ``general`` count is a POOL total (ATLAS + HOMER) so the shared
+    availability check (``_available_agents_for_llm_routing``) sees the pool
+    correctly. NOTE: this reads the per-sweep ``active_assignments`` snapshot,
+    which does NOT reflect *running* VP missions — the HOMER concurrency gate
+    instead uses live ``vp_missions`` state via
+    ``priority_dispatcher._live_vp_active_counts``.
     """
-    from universal_agent.services.agent_router import AGENT_CODER, AGENT_GENERAL
+    from universal_agent.services.agent_router import (
+        AGENT_CODER,
+        AGENT_GENERAL,
+        AGENT_GENERAL_SECONDARY,
+    )
 
     coder_patterns = {AGENT_CODER, "codie", "coder"}
-    general_patterns = {AGENT_GENERAL, "atlas"}
+    general_patterns = {AGENT_GENERAL, "atlas", AGENT_GENERAL_SECONDARY, "homer"}
 
     coder = 0
     general = 0

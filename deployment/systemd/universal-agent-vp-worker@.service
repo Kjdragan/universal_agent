@@ -2,6 +2,13 @@
 Description=Universal Agent VP Worker (%i)
 After=network-online.target
 Wants=network-online.target
+# Safety rail for a worker whose %i is NOT in UA_VP_ENABLED_IDS (worker_main
+# exits immediately): without a start limit, Restart=always relaunches it every
+# RestartSec forever. With this it tries a few times then enters `failed`
+# (visible, not a hot loop). An enabled worker's between-missions code-currency
+# self-restart is far slower than 5 starts / 60s, so it is unaffected.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple

@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/services/vp_capacity.py
   - src/universal_agent/services/llm_classifier.py
   - src/universal_agent/gateway.py
-last_verified: 2026-06-16
+last_verified: 2026-06-19
 ---
 
 # Simone-First Orchestration
@@ -124,6 +124,59 @@ caps, not the worker bound.
 > `release_stale_assignments`) consume the ToDo retry budget and would churn a capacity-deferred
 > backlog into `needs_review`.
 
+### General-pool routing — ATLAS, and HOMER when Cody is idle
+
+A general decision (`agent_id == AGENT_GENERAL`) is **not** a fixed worker — it is a *pool*
+decision resolved to a concrete `vp_id` at dispatch time by
+`priority_dispatcher.py::_pick_general_target`:
+
+- **HOMER disabled** (`vp.general.secondary` absent from `UA_VP_ENABLED_IDS` — the default): all
+  general work goes to ATLAS up to the pool cap (`UA_MAX_CONCURRENT_VP_GENERAL`, default 2), then
+  defers. This path uses the legacy per-sweep `vp_capacity.py::_vp_active_counts(active_assignments)`
+  and is **byte-identical** to the pre-HOMER dispatcher — the parameterized-off guarantee (the live
+  reader below is never even called).
+- **HOMER enabled**: ATLAS first (per-instance cap 1); the second general slot **spills to HOMER**
+  (`vp.general.secondary`) **only when ATLAS is busy AND CODIE is idle** and HOMER's own slot is
+  free. Otherwise it defers.
+
+**The concurrency gate reads LIVE mission state, not the assignment snapshot.** A task dispatched to
+a VP is marked `delegated` and its task-hub assignment is *completed*, so a **running** VP mission is
+invisible to `task_hub.py::get_agent_activity` (`active_assignments`) across sweeps — the dispatcher's
+per-agent caps are per-sweep only (see "Slot decision" above). That snapshot therefore cannot enforce
+the Cody-idle gate or the peak invariant. So when HOMER is enabled, `dispatch_claimed` sources the
+counts from the authoritative `vp_missions` table via `priority_dispatcher.py::_live_vp_active_counts`
+(fail-open → never spills HOMER / never defers CODIE on a read error). It counts only **`running`**
+missions, NOT `queued`: the invariant is about concurrent running ZAI bursts, and counting `queued`
+would let a stuck/unclaimable HOMER mission wedge the CODIE lane forever.
+
+**Peak ≤ 2 concurrent *running* VP missions is a mutual exclusion**, enforced in both directions on the
+live running counts: HOMER spills only when CODIE has no running mission, **and** a CODIE dispatch
+*defers* when a HOMER mission is running; and the ATLAS-pin path is pool-aware
+(`atlas_used + homer_used < max_general`) so a pin can't queue a 2nd ATLAS beside a running HOMER. So
+at most one of {CODIE, HOMER} ever runs alongside ATLAS — never a third concurrent ZAI burst. The
+bound is on *running* missions: each `vp_id` has a single systemd worker with per-worker concurrency 1,
+so an extra `queued` row only ever waits, it never adds concurrency. (The `DagConcurrencyGovernor`
+semaphore is **per-process** and cannot bound concurrency across the separate worker processes, so it
+is not the cross-VP guard — this dispatch-time gate + single-worker serialization are.) **Trade-off:**
+with HOMER enabled, ATLAS's own per-sweep cap drops to 1 (the 2nd general slot is reserved for HOMER),
+so when CODIE is busy a 2nd pool general task *defers* rather than queueing on ATLAS — bounded latency,
+not lost work, and the reason the realistic gain is ≈1.3–1.5× not 2×.
+
+There is one accepted residual: across two sweeps a HOMER mission can be `queued`-but-not-yet-`running`
+when a CODIE task arrives, so both may briefly run with ATLAS (≈ the VP poll interval). It is a rare,
+short transient — strictly better than wedging a lane — and the worker-level yield to fully close it is
+deferred to v2 (see `01_vp_workers_and_delegation.md`).
+
+**Pins vs pool.** `classify_task` yields `agent_id == AGENT_GENERAL` for three rules. An explicit
+operator `target_agent` pin (`rule="explicit_target_agent"`, in `priority_dispatcher.py::_GENERAL_PIN_RULES`)
+is **never** HOMER-eligible — it stays ATLAS. The producer pre-tag (`preferred_vp=vp.general.primary`,
+`rule="preferred_vp_general"`) and the classifier tail are the general **pool** and *may* spill to
+HOMER — this is deliberate: the convergence/intel producers tag `preferred_vp=vp.general.primary`, so
+excluding that tag would starve HOMER. HOMER is never individually *named* by any producer (nothing
+tags `preferred_vp=vp.general.secondary`), so it only ever takes pool overflow. Realistic throughput
+gain ≈ 1.3–1.5× (HOMER fills only when CODIE is idle *and* general work is queued), not 2×. Full build
+rationale lives in `project_docs/03_agents/01_vp_workers_and_delegation.md`.
+
 ## The router itself is trivial
 
 The "router" (`agent_router.py`) is intentionally tiny. Its job is not to make routing
@@ -202,7 +255,8 @@ are read from env (`vp_capacity.py::_available_agents_for_llm_routing`, re-expor
 | Env var | Default | Meaning |
 |---|---|---|
 | `UA_MAX_CONCURRENT_VP_CODER` | `1` | Max simultaneous Cody (`vp.coder.primary`) missions |
-| `UA_MAX_CONCURRENT_VP_GENERAL` | `2` | Max simultaneous Atlas (`vp.general.primary`) missions |
+| `UA_MAX_CONCURRENT_VP_GENERAL` | `2` | Max simultaneous general-**pool** (ATLAS + HOMER) missions |
+| `UA_VP_ENABLED_IDS` | `vp.coder.primary,vp.general.primary` | Enabled VP roster; add `vp.general.secondary` to enable HOMER (the opportunistic second general VP) |
 
 `simone` is always in the available set. A VP is only added if its active assignment
 count is below its cap. If the LLM picks an unavailable VP, `classify_agent_route` falls

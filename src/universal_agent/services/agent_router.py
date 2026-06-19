@@ -21,6 +21,11 @@ from typing import Any
 AGENT_SIMONE = "simone"
 AGENT_CODER = "vp.coder.primary"
 AGENT_GENERAL = "vp.general.primary"
+# HOMER — opportunistic SECOND general VP (capacity twin of ATLAS). It is never
+# a *classification* target; the priority dispatcher resolves the generic
+# AGENT_GENERAL pool decision to this concrete id only when ATLAS is full and
+# CODIE is idle (see priority_dispatcher.py::_pick_general_target).
+AGENT_GENERAL_SECONDARY = "vp.general.secondary"
 
 
 # ---------------------------------------------------------------------------

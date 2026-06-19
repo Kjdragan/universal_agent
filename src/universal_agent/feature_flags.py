@@ -469,6 +469,12 @@ def vp_general_workspace_root(default: str = "") -> str:
     return value or default
 
 
+def vp_general_secondary_workspace_root(default: str = "") -> str:
+    """Workspace root for the secondary generalist VP worker (HOMER)."""
+    value = (os.getenv("UA_VP_GENERAL_SECONDARY_WORKSPACE_ROOT") or "").strip()
+    return value or default
+
+
 def sdk_typed_task_events_enabled(default: bool = False) -> bool:
     """Enable typed SDK task lifecycle message handling."""
     if _is_truthy(os.getenv("UA_DISABLE_SDK_TYPED_TASK_EVENTS")):
