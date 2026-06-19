@@ -21,6 +21,7 @@ def _fake_systemctl(tmp_path: Path, restart_log: Path) -> Path:
         "#!/usr/bin/env bash\n"
         'case "$1" in\n'
         "  is-active) echo inactive; exit 0;;\n"
+        '  is-enabled) echo "${ENABLED_STATE:-enabled}"; exit 0;;\n'
         '  restart) echo "$2" >> "$RESTART_LOG"; exit 0;;\n'
         "  reset-failed) exit 0;;\n"
         "  *) exit 0;;\n"
@@ -31,7 +32,7 @@ def _fake_systemctl(tmp_path: Path, restart_log: Path) -> Path:
     return fake
 
 
-def _run_cycle(tmp_path: Path, state_dir: Path, fake_systemctl: Path, restart_log: Path, max_per_hour: int):
+def _run_cycle(tmp_path: Path, state_dir: Path, fake_systemctl: Path, restart_log: Path, max_per_hour: int, enabled_state: str = "enabled"):
     env = dict(os.environ)
     env.update(
         {
@@ -42,11 +43,34 @@ def _run_cycle(tmp_path: Path, state_dir: Path, fake_systemctl: Path, restart_lo
             "UA_WATCHDOG_POST_RESTART_SETTLE_SECONDS": "0",
             "UA_WATCHDOG_MAX_RESTARTS_PER_HOUR": str(max_per_hour),
             "RESTART_LOG": str(restart_log),
+            "ENABLED_STATE": enabled_state,
         }
     )
     return subprocess.run(
         ["bash", str(WATCHDOG)], env=env, capture_output=True, text=True, timeout=60
     )
+
+
+def test_watchdog_skips_disabled_unit(tmp_path):
+    """A disabled unit (e.g. the autonomous-runtime worker after a split
+    rollback) is left alone — never auto-restarted, even though it's inactive."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    restart_log = tmp_path / "restarts.log"
+    restart_log.write_text("", encoding="utf-8")
+    fake = _fake_systemctl(tmp_path, restart_log)
+
+    proc = _run_cycle(tmp_path, state_dir, fake, restart_log, max_per_hour=6, enabled_state="disabled")
+    assert proc.returncode == 0, proc.stderr
+    restarts = [ln for ln in restart_log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert restarts == [], f"disabled unit must NOT be restarted, got {restarts}"
+    assert "state=skipped reason=is-enabled:disabled" in proc.stdout
+
+    # Sanity: the SAME inactive unit, when enabled, IS restarted (skip is the diff).
+    proc2 = _run_cycle(tmp_path, state_dir, fake, restart_log, max_per_hour=6, enabled_state="enabled")
+    assert proc2.returncode == 0, proc2.stderr
+    restarts2 = [ln for ln in restart_log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert restarts2 == ["fakesvc"], f"enabled inactive unit must be restarted, got {restarts2}"
 
 
 def test_watchdog_rate_limits_restarts_and_backs_off(tmp_path):
