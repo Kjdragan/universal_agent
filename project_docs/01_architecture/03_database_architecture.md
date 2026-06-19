@@ -16,9 +16,10 @@ code_paths:
   - src/universal_agent/memory/lancedb_backend.py
   - src/universal_agent/memory/memory_vector_index.py
   - src/universal_agent/utils/db_health_monitor.py
+  - src/universal_agent/services/stuck_run_reaper.py
   - CSI_Ingester/development/csi_ingester/store/sqlite.py
   - src/universal_agent/services/proactive_convergence.py
-last_verified: 2026-06-14
+last_verified: 2026-06-19
 ---
 
 # Database Architecture
@@ -183,7 +184,7 @@ A separate, self-contained SQLite store implements a Semantic-RAG conversation g
 
 The heartbeat health monitor inspects DBs and emits `HeartbeatFinding`s. It resolves paths via its own `_db_path(name)` (env-var-first, then `AGENT_RUN_WORKSPACES/<name>`):
 
-- `check_stale_runs` — `runtime_state.db`: counts (and auto-reaps via the stuck-run reaper) runs whose latest attempt is `running`/`queued`/`blocked` past `STALE_RUN_HOURS`. The reaper exists to prevent the dispatch-cascade resource-exhaustion incident.
+- `check_stale_runs` — `runtime_state.db`: first **self-heals**, then counts, runs whose latest attempt is `running`/`queued`/`blocked` past `STALE_RUN_HOURS`. It calls `stuck_run_reaper.py::finalize_orphaned_run_attempts` BEFORE its count query, so an attempt left non-terminal when its run already reached a terminal status (a failure-finalization path can stamp `runs.status` terminal — e.g. `failed` with `terminal_reason='hook_dispatch_failed'` — without finalizing the linked `run_attempts` row) is reconciled by the very loop that detects it and can no longer trip the "stuck in running/queued" alert permanently. The orphan is mirrored to the run's outcome with no re-surfaced failure card (the run already recorded its terminal outcome). It then counts the residual and auto-reaps genuinely-stuck `running` runs via `stuck_run_reaper.py::reap_stale_runs` (progress-based TTL), which exists to prevent the dispatch-cascade resource-exhaustion incident. `reap_stale_runs` alone cannot reach the orphan class — it scopes to `runs.status='running'` AND `run_attempts.status='running'` — which is why the dedicated orphan pass runs first.
 - `check_stale_delegations`, `check_stuck_vp_missions` — runtime/VP DBs.
 - `check_pending_signal_cards` — `activity_state.db`.
 - CSI checks — the `/var/lib/universal-agent/csi/csi.db` store.
