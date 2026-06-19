@@ -15243,10 +15243,14 @@ async def lifespan(app: FastAPI):
         dispatch_fn=_gws_event_dispatch_fn,
         notification_sink=_hook_notification_sink,
     )
-    _spawn_background_task(
-        _run_after_deployment_window("gws_event_listener", _startup_start_gws_event_listener),
-        task_name="gws_event_listener_startup",
-    )
+    # Gmail poller that dispatches new messages into the hooks pipeline (which
+    # nudges the heartbeat). A trigger source — co-locate with the autonomous
+    # runtime so it runs in exactly one process. No-op gate at default.
+    if _run_autonomous_loops_here:
+        _spawn_background_task(
+            _run_after_deployment_window("gws_event_listener", _startup_start_gws_event_listener),
+            task_name="gws_event_listener_startup",
+        )
 
     # --- AgentMail Service (Simone's native inbox) ---
     global _agentmail_service
@@ -15551,13 +15555,17 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("Scheduled dispatch loop error")
 
-    asyncio.create_task(
-        _run_after_deployment_window(
-            "scheduled_dispatch_loop",
-            lambda: _scheduled_dispatch_loop(_scheduled_dispatch_stop),
+    # Execution-driving: claims due dispatch tasks and routes them to Simone
+    # sessions, which live wherever the autonomous runtime is hosted. Moves with
+    # the heartbeat/cron/idle loops under the split. No-op gate at default.
+    if _run_autonomous_loops_here:
+        asyncio.create_task(
+            _run_after_deployment_window(
+                "scheduled_dispatch_loop",
+                lambda: _scheduled_dispatch_loop(_scheduled_dispatch_stop),
+            )
         )
-    )
-    logger.info("⏰ Scheduled dispatch timer enabled (interval=60s)")
+        logger.info("⏰ Scheduled dispatch timer enabled (interval=60s)")
 
     if _vp_event_bridge_enabled:
         _vp_event_bridge_prime_cursor_to_latest()
