@@ -16,7 +16,7 @@ code_paths:
   - deployment/systemd/universal-agent-oom-alert.service
   - deployment/systemd/universal-agent-oom-alert.timer
   - deployment/systemd/templates/universal-agent-gateway.service.template
-last_verified: 2026-06-16
+last_verified: 2026-06-19
 ---
 
 # VPS Recovery & Security
@@ -97,6 +97,12 @@ fires.
 
 Per cycle, for each configured service (`check_service`):
 
+0. **Disabled/masked skip** — `systemctl is-enabled`. A unit reporting `disabled`
+   or `masked` is intentional operator state and is **skipped** (never
+   auto-restarted). This keeps the watchdog from fighting a deliberate shutdown —
+   e.g. an autonomous-runtime-split rollback `stop`+`disable`s the worker, and
+   resurrecting it would re-enter split mode. All always-on monitored units report
+   `enabled`, so this only ever skips a deliberately-off unit.
 1. **Active-state check** — `systemctl is-active`. If not `active`, restart
    immediately (`restart_service`) and reset the fail counter. No threshold for
    the inactive case.
@@ -153,7 +159,18 @@ gateway being down can never block its own restart. Knobs:
 | `universal-agent-webui` | `http://127.0.0.1:3000/` | — | HTTP |
 | `universal-agent-telegram` | — | `/var/lib/universal-agent/heartbeat/telegram.heartbeat` | **heartbeat** |
 | `universal-agent-mission-control-sweeper` | — | — | **active-state only** (no HTTP/heartbeat) |
+| `universal-agent-autonomous-runtime` | — | — | **active-state only** (the autonomous-runtime split worker; see note) |
 | `csi-ingester` | `http://127.0.0.1:8091/healthz` | — | HTTP |
+
+> **The autonomous-runtime split worker is `active-state only` ON PURPOSE.** It is
+> a 2nd `gateway_server` process that hosts all the autonomous loops
+> (`UA_AUTONOMOUS_RUNTIME_MODE=split`; see
+> [Gateway, Sessions & Execution](../02_execution_core/01_gateway_sessions_execution.md)).
+> Its `:8092` health endpoint shares the event loop with the heavy agent turns it
+> runs, so an HTTP probe would time out and **false-restart it mid-turn** — exactly
+> the starvation the split eliminated. `is-active` monitoring (recover a crashed /
+> start-limit-exhausted worker, the backstop above `Restart=always`) is the correct
+> coverage; a busy-loop probe is not.
 
 > **CSI Ingester health path is `/healthz`, not `/health`.** The CSI service
 > (`CSI_Ingester/development/csi_ingester/app.py`) intentionally exposes only

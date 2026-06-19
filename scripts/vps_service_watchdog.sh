@@ -241,6 +241,20 @@ check_service() {
   local health_url="${2:-}"
   local heartbeat_file="${3:-}"
 
+  # Never auto-restart a unit the operator deliberately turned off. A
+  # disabled/masked unit is intentional state — e.g. the autonomous-runtime
+  # worker is `stop`+`disable`d by an autonomous-runtime-split rollback;
+  # resurrecting it would re-enter split mode and fight the rollback. (All
+  # always-on monitored units report is-enabled=enabled, so this only ever
+  # skips a deliberately-off unit.)
+  local enabled_state
+  enabled_state="$("$SYSTEMCTL_BIN" is-enabled "$service" 2>/dev/null || true)"
+  if [[ "$enabled_state" == "disabled" || "$enabled_state" == "masked" ]]; then
+    reset_fail_count "$service"
+    log "service=$service state=skipped reason=is-enabled:$enabled_state"
+    return
+  fi
+
   local active_state
   active_state="$("$SYSTEMCTL_BIN" is-active "$service" 2>/dev/null || true)"
   if [[ "$active_state" != "active" ]]; then
@@ -311,11 +325,16 @@ check_service() {
 # Service specs format: service_name|http_health_url|heartbeat_file
 # If heartbeat_file is set, it takes priority over http_health_url.
 DEFAULT_HEARTBEAT_DIR="/var/lib/universal-agent/heartbeat"
-# mission-control-sweeper has no HTTP endpoint and no heartbeat file, so it is
-# is-active-monitored only: a healthy active process is a no-op, but a dead /
+# mission-control-sweeper AND autonomous-runtime are is-active-monitored ONLY
+# (no HTTP, no heartbeat file): a healthy active process is a no-op, but a dead /
 # start-limit-exhausted unit gets reset-failed + restarted (the backstop a
-# now-standalone process needs; Restart=always covers single crashes).
-DEFAULT_SERVICE_SPECS=$'universal-agent-gateway|http://127.0.0.1:8002/api/v1/health|/var/lib/universal-agent/heartbeat/gateway.heartbeat\nuniversal-agent-api|http://127.0.0.1:8001/api/health|\nuniversal-agent-webui|http://127.0.0.1:3000/|\nuniversal-agent-telegram||/var/lib/universal-agent/heartbeat/telegram.heartbeat\nuniversal-agent-mission-control-sweeper||\ncsi-ingester|http://127.0.0.1:8091/healthz|'
+# now-standalone process needs; Restart=always covers single crashes). The split
+# worker (universal-agent-autonomous-runtime) intentionally has NO HTTP probe:
+# its :8092 health endpoint shares the loop with the autonomous turns it hosts,
+# so an HTTP probe would false-restart it mid-turn — the very starvation the
+# split eliminated. is-active monitoring + the is-enabled skip above (so a
+# split-rollback's disabled worker is left alone) is the correct, safe coverage.
+DEFAULT_SERVICE_SPECS=$'universal-agent-gateway|http://127.0.0.1:8002/api/v1/health|/var/lib/universal-agent/heartbeat/gateway.heartbeat\nuniversal-agent-api|http://127.0.0.1:8001/api/health|\nuniversal-agent-webui|http://127.0.0.1:3000/|\nuniversal-agent-telegram||/var/lib/universal-agent/heartbeat/telegram.heartbeat\nuniversal-agent-mission-control-sweeper||\nuniversal-agent-autonomous-runtime||\ncsi-ingester|http://127.0.0.1:8091/healthz|'
 SERVICE_SPECS="${UA_WATCHDOG_SERVICE_SPECS:-$DEFAULT_SERVICE_SPECS}"
 
 while IFS= read -r spec; do
