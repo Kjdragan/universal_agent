@@ -10,7 +10,8 @@ code_paths:
   - src/universal_agent/timeout_policy.py
   - src/universal_agent/api/server.py
   - src/universal_agent/api/gateway_bridge.py
-last_verified: 2026-06-16
+  - src/universal_agent/loop_control.py
+last_verified: 2026-06-19
 ---
 
 # Gateway, Sessions & Execution
@@ -224,6 +225,49 @@ run-scoped state. The durable answer is a per-session `SessionContext` refactor
 (still a future milestone). Until then, real isolation comes from running heavy
 work in separate VP worker *processes*, and pushing in-process concurrency too
 high (e.g. raising VP worker concurrency) risks asyncio event-loop starvation.
+
+### Autonomous runtime split (`UA_AUTONOMOUS_RUNTIME_MODE`) — Phase 1
+
+The gateway process co-hosts the autonomous loops (heartbeat, daemon sessions,
+todo-dispatch, cron, idle dispatch) **on the same asyncio loop as the public
+HTTP API**. A long agent turn (e.g. a glm-5.2 thinking turn) therefore starves
+uvicorn → the dashboard's "Gateway unreachable" banner. The durable fix moves the
+autonomous runtime into a **separate worker process**.
+
+The flag `loop_control.autonomous_runtime_mode()` reads `UA_AUTONOMOUS_RUNTIME_MODE`
+∈ `{in_process (default), split}`; `loop_control.should_host_autonomous_runtime()`
+combines it with `UA_GATEWAY_ROLE` so **exactly one** process hosts the loops
+(mutually exclusive by construction):
+
+- `in_process` (default, today): the public gateway hosts them. **Byte-identical
+  to pre-split behavior** — `should_host_autonomous_runtime()` is `True`, so the
+  `and _run_autonomous_loops_here` gate on each loop-start is a no-op.
+- `split`: only the worker (`UA_GATEWAY_ROLE=autonomous_worker`) hosts them; the
+  gateway sheds them. The worker is **the same `gateway_server` process** on a
+  private throwaway port (`UA_GATEWAY_PORT=8092`) — reusing 100% of the lifespan
+  wiring rather than re-implementing it — shipped as
+  `deployment/systemd/universal-agent-autonomous-runtime.service` (installed
+  **dormant** by `scripts/install_vps_autonomous_runtime.sh`; cutover is a config
+  flip + `enable --now`).
+
+`gateway_server.py::lifespan` computes `_run_autonomous_loops_here =
+should_host_autonomous_runtime()` once and gates the loop-start sites with it.
+
+> **Phase 1 lands the foundation only — `split` mode is NOT yet flippable.** Gated
+> so far: the heartbeat umbrella block (heartbeat + daemon-sessions + todo-dispatch
+> + startup recovery), the cron block, and the idle dispatch loop. **Cutover (a
+> follow-up PR) must still:** (1) gate the remaining autonomous background loops so
+> they don't double-fire when the worker (a full gateway clone) also runs them —
+> `scheduled_dispatch_loop`, `gws_event_listener`, `agentmail_service`,
+> `vp_event_bridge`, `vp_stale_reconcile`, `hq_self_heartbeat`,
+> `notification_dispatcher`, factory-staleness, the digest sweeps; and (2) add a
+> DB-visible liveness signal so `task_hub.reconcile_task_lifecycle` (triggered on
+> dashboard render) does not false-orphan live `todo_execution` rows whose only
+> guard today is the gateway-local in-memory `_running_execution_session_ids()`.
+> Accepted no-relay losses: live token-streaming of autonomous sessions to the
+> dashboard, and operator chat-redirect *into* a daemon session (board, run
+> history, completion state, and cooperative DB cancel all keep working — they read
+> the shared WAL substrate).
 
 ## Execute / run_query flow
 

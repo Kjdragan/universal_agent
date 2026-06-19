@@ -1,0 +1,39 @@
+[Unit]
+# Autonomous-runtime worker: the SAME gateway_server process, but with
+# UA_GATEWAY_ROLE=autonomous_worker so it hosts the autonomous loops
+# (heartbeat / daemon-sessions / todo-dispatch / cron / idle dispatch) +
+# startup recovery, OFF the public gateway's HTTP-serving event loop. Active
+# only when UA_AUTONOMOUS_RUNTIME_MODE=split (the shared flag in .env/Infisical);
+# until then it idles. See loop_control.should_host_autonomous_runtime.
+Description=Universal Agent Autonomous Runtime Worker (Simone loops off the gateway loop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# This process is the autonomous-runtime worker, not the public gateway. It
+# binds a private throwaway port (nobody routes to it — nginx still points at
+# :8002) and reuses 100% of the gateway lifespan wiring to run the loops.
+Environment=UA_GATEWAY_ROLE=autonomous_worker
+Environment=UA_GATEWAY_HOST=127.0.0.1
+Environment=UA_GATEWAY_PORT=8092
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.gateway_server
+Restart=always
+RestartSec=5
+# Same graceful-drain window as the gateway (ADR §C2): in split mode the
+# in-flight Simone heartbeat iteration lives HERE, so this is the process that
+# must drain it on SIGTERM instead of killing it mid-flight.
+TimeoutStopSec=90s
+MemoryMax=8G
+MemoryHigh=6G
+TasksMax=500
+
+[Install]
+WantedBy=multi-user.target
