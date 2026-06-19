@@ -36552,8 +36552,18 @@ if __name__ == "__main__":
     except Exception as exc:
         logger.warning("Infisical secret bootstrap skipped: %s", exc)
 
-    port = int(os.getenv("UA_GATEWAY_PORT", "8002"))
-    host = os.getenv("UA_GATEWAY_HOST", "0.0.0.0")
+    if (os.getenv("UA_GATEWAY_ROLE") or "").strip().lower() == "autonomous_worker":
+        # The autonomous-runtime split worker co-runs as a SECOND gateway_server.
+        # It MUST bind a dedicated private port, not :8002 — otherwise it
+        # SO_REUSEPORT-collides with the public gateway and self-exits. It reads
+        # its OWN env var because the deploy-managed .env sets UA_GATEWAY_PORT and
+        # systemd EnvironmentFile= overrides Environment=, so a worker unit that
+        # set UA_GATEWAY_PORT would still be forced back onto :8002.
+        port = int(os.getenv("UA_AUTONOMOUS_WORKER_PORT", "8092"))
+        host = os.getenv("UA_GATEWAY_HOST", "127.0.0.1")
+    else:
+        port = int(os.getenv("UA_GATEWAY_PORT", "8002"))
+        host = os.getenv("UA_GATEWAY_HOST", "0.0.0.0")
 
     print(f"""
 ╔══════════════════════════════════════════════════════════════╗
