@@ -49,14 +49,18 @@ enable_timer_if_installed() {
 # AND deleted from deployment/systemd/, so the orphan sweep below disables+removes
 # them on deploy (a bare `systemctl disable` would otherwise be re-enabled here on
 # the next deploy). Do not re-add. See project_docs/04_intelligence/01_csi_architecture.md §3.6.
+# RETIRED 2026-06-19: csi-quality-assessment (.service + .timer) — replaced by an
+# in-process task in the ingester (CSIService._run_source_quality, #1092). The
+# external job could never write the canonical csi.db (the live ingester holds the
+# WAL write lock → SQLITE_BUSY every run). Removed from this list AND deleted from
+# deployment/systemd/ so the orphan sweep disables+removes it on deploy. Do not
+# re-add — the in-process task supersedes it.
 CANONICAL_UNITS=(
   csi-daily-summary.service
   csi-daily-summary.timer
   csi-db-backup.service
   csi-db-backup.timer
   csi-ingester.service
-  csi-quality-assessment.service
-  csi-quality-assessment.timer
   csi-replay-dlq.service
   csi-replay-dlq.timer
   csi-rss-semantic-enrich.service

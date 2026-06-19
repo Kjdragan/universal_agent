@@ -347,6 +347,13 @@ Three **CSI Ingester oneshot scripts** (each runs on a systemd timer, not a daem
 - Global brief (`csi-global-trend-brief.timer`) — **retired 2026-06-13**, turned off together
   with the RSS timer because it consumed RSS trend output as its YouTube input. Existing
   `global_trend_briefs` rows still render; no new ones are produced.
+- Source quality assessment (`csi-quality-assessment.timer`) — **retired 2026-06-19**, replaced by
+  an in-process task in the ingester (`CSIService._run_source_quality`, #1092). The external daily
+  job could never write the canonical `csi.db`: the live ingester holds the WAL write lock
+  continuously, so every run failed with `SQLITE_BUSY`. The in-process task scores via the
+  ingester's own connection (no contention) and writes `source_quality_history` + tier
+  promote/demote on the same daily cadence (`CSI_SOURCE_QUALITY_INTERVAL_SECONDS`). Removed from
+  `CANONICAL_UNITS` and `deployment/systemd/` so the orphan sweep disables+removes it on deploy.
 
 > **Boundary (do not conflate):** the `csi_ingester` `delivered`-flagging conveyor
 > (`batch_brief.py::mark_events_delivered`) is a **separate, load-bearing step that was left
