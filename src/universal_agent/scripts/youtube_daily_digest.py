@@ -2752,7 +2752,10 @@ def process_daily_digest(
         items = get_playlist_items(playlist_id)
     except (YouTubeAPIError, YouTubeOAuthError) as e:
         logger.error("Failed to fetch playlist items: %s", e)
-        return
+        # Re-raise so the run exits non-zero: a dead OAuth token / API failure
+        # must surface as a FAILED cron run (cron_run_failed alert), not a
+        # silent exit-0 that hides a broken digest for days.
+        raise
 
     if not items:
         logger.info("Playlist is empty. Nothing to process today.")
@@ -2942,7 +2945,9 @@ def process_daily_digest(
             )
     except Exception as e:
         logger.error("Failed to generate digest content with LLM (pipeline=%s): %s", pipeline, e)
-        return
+        # Re-raise: an LLM failure produced no digest, so the run must exit
+        # non-zero (FAILED cron run) instead of silently exiting 0.
+        raise
 
     # Save Artifact to the persistent daily_digests workspace
     artifacts_dir = _digest_artifacts_dir()
@@ -3236,7 +3241,10 @@ def process_daily_digest(
             "the next cron tick can retry the same videos.",
             day_name,
         )
-        return
+        # Exit non-zero so a delivery failure is a FAILED cron run (alerts via
+        # cron_run_failed) rather than a silent exit-0. Videos stay unprocessed
+        # for the next tick to retry.
+        sys.exit(1)
 
     logger.info("Saving state to processed_videos database...")
     _save_processed_videos(videos_to_persist, day_name)
