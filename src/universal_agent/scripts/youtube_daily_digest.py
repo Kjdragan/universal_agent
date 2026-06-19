@@ -3241,10 +3241,11 @@ def process_daily_digest(
             "the next cron tick can retry the same videos.",
             day_name,
         )
-        # Exit non-zero so a delivery failure is a FAILED cron run (alerts via
-        # cron_run_failed) rather than a silent exit-0. Videos stay unprocessed
-        # for the next tick to retry.
-        sys.exit(1)
+        # NOT silent: this path already emitted a proactive delivery-failure
+        # alert via _emit_proactive_delivery_failure above, and intentionally
+        # retries on the next tick. So it stays a graceful exit-0 — unlike the
+        # OAuth/LLM paths, which raise (no prior alert, nothing produced).
+        return
 
     logger.info("Saving state to processed_videos database...")
     _save_processed_videos(videos_to_persist, day_name)
