@@ -106,6 +106,21 @@ class CSIConfig:
                 return max(1, int(val))
         return 3
 
+    # ── Source quality assessment (in-process periodic task) ────────────
+    @property
+    def source_quality_interval_seconds(self) -> int:
+        env = (os.getenv("CSI_SOURCE_QUALITY_INTERVAL_SECONDS") or "").strip()
+        if env:
+            return max(3600, int(env))
+        return 86400  # default: once per day
+
+    @property
+    def source_quality_lookback_days(self) -> int:
+        env = (os.getenv("CSI_SOURCE_QUALITY_LOOKBACK_DAYS") or "").strip()
+        if env:
+            return max(1, int(env))
+        return 7
+
     @property
     def zai_api_key(self) -> str:
         """Z.AI API key for batch_brief summarisation.
