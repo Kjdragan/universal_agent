@@ -1,14 +1,15 @@
 """reflection_engine.py — 24/7 autonomous ideation engine for idle agents.
 
 When the Task Hub dispatch queue is empty and the agent would otherwise idle,
-this engine provides an "ideation" prompt that asks the agent to:
-1. Review its memory and Kevin's goals/missions
-2. Consider recent task completions and patterns
-3. Generate new Task Hub items for autonomous execution
+this engine provides an "ideation" prompt that asks the agent to propose ONE
+high-value next action, grounded in memory / Kevin's goals, recent completions,
+and stalled brainstorms.
 
-IMPORTANT: The reflection engine is IDEATION-ONLY.  It creates tasks in the
-Task Hub — it does NOT execute them inline.  The ToDo Dispatch service handles
-all execution to ensure session isolation and workspace integrity.
+IMPORTANT: The reflection engine is IDEATION-ONLY. Proposals are created as
+`source_kind="reflection"` Task Hub items in a HOLDING state (agent_ready=False)
+via `task_hub_create` — never auto-executed. They are surfaced to Kevin in the
+morning ideation report, where a one-click "promote" flips them into the live
+dispatch queue. (The ToDo Dispatch service then handles execution.)
 
 All logic is pure Python — the LLM receives the formatted context and decides
 what tasks to create.  The engine itself never calls an LLM.
@@ -191,13 +192,18 @@ def _format_reflection_prompt(
 ) -> str:
     """Format the ideation context into a prompt section for the agent."""
     lines: list[str] = [
-        "## 🧠 Autonomous Ideation Mode",
+        "## 🧠 Autonomous Ideation Mode — one proposal this cycle",
         "",
-        "The Task Hub dispatch queue is currently empty. You are operating in",
-        "**Autonomous Ideation Mode**. Your job is to think about what Kevin's",
-        "team should work on next and create Task Hub items for autonomous execution.",
+        "The Task Hub dispatch queue is empty. Instead of idling, propose **one**",
+        "high-value thing Kevin's team should take on next. This is a *proposal*, not",
+        "work you execute: it is held for Kevin's review in tomorrow morning's ideation",
+        "report, where he can promote it into the live queue with one click.",
         "",
-        f"**Daily Budget:** You may create up to **{budget_remaining}** more proactive tasks today.",
+        "Quality bar: one specific, non-obvious, well-reasoned proposal grounded in the",
+        "context below beats five generic ones. **If nothing genuinely worthwhile comes",
+        "to mind this cycle, create nothing** — silence is better than noise.",
+        "",
+        f"**Budget:** {budget_remaining} proposal(s) remaining today (paced ~1 per cycle).",
         f"**Currently queued:** {open_task_count} task(s) already in the Task Hub.",
         "",
     ]
@@ -234,30 +240,29 @@ def _format_reflection_prompt(
 
     # Action instructions — IDEATION ONLY
     lines.extend([
-        "### Your Role: Create Tasks, Don't Execute Them",
+        "### How to record the proposal",
         "",
-        "Use the `task_hub_task_action` tool to create new Task Hub items.",
-        "The ToDo Dispatch service will handle all execution independently.",
+        "Call the **`task_hub_create`** tool exactly once with:",
+        "- `title` — a crisp, specific headline (not a category).",
+        "- `source_kind` = `\"reflection\"` — this routes it to the morning report and",
+        "  holds it for review; it is never auto-executed.",
+        "- `description` — use this exact structure so the report renders cleanly:",
         "",
-        "Consider creating tasks for:",
-        "1. **Advancing stalled brainstorms** — Create actionable tasks from brainstorm ideas",
-        "2. **Research & investigation** — Topics aligned with Kevin's missions and goals",
-        "3. **System improvements** — Monitoring, documentation, code quality",
-        "4. **Novel exploration** — Something new and interesting you've noticed in the context",
-        "5. **Follow-ups** — Continue work from recent completions that could benefit from more depth",
+        "  ```",
+        "  **Rationale:** why this matters now / what it unblocks (2-3 sentences).",
+        "  **First concrete step:** the very first action to take if approved.",
+        "  **Effort:** S | M | L",
+        "  **Suggested executor:** Atlas (research/synthesis) | Cody (code) | Simone | Kevin",
+        "  ```",
         "",
-        "Use your judgment. Sometimes prioritize novelty. Sometimes follow up on",
-        "stalled work. Sometimes create something entirely new based on what you",
-        "know about Kevin's goals. Be a proactive colleague, not a passive executor.",
+        "Good sources: advancing a stalled brainstorm, a research/investigation tied to",
+        "Kevin's missions, a system/quality improvement, a novel opportunity you noticed,",
+        "or deepening a recent completion. Be a proactive colleague — pick what you would",
+        "if it were your own product.",
         "",
-        "Set `source_kind` to `reflection` on all tasks you create.",
-        "",
-        "**Do NOT:**",
-        "- Deploy to production",
-        "- Delete data or files without explicit approval",
-        "- Send emails to external parties",
-        "- Make breaking API changes",
-        "- Execute the tasks yourself — only create them",
+        "**Do NOT** use `task_hub_task_action` to create — it only transitions existing",
+        "tasks and will fail. **Do NOT** execute the idea, deploy, delete data, send",
+        "external email, or make breaking changes — only record the one proposal.",
     ])
 
     return "\n".join(lines)

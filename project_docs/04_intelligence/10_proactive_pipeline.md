@@ -117,17 +117,25 @@ wiring differs — some run continuously, some ship scaffolding only.
 > `reflection_engine` produces an ideation prompt instructing the agent to create
 > `source_kind="reflection"` Task Hub items.
 >
-> **Reality check (2026-06-20):** as of this writing **zero** `source_kind='reflection'`
-> rows have ever been created. Two faults stacked: (a) the heartbeat-side ideation
-> activation was wedged shut by the `has_heartbeat_content` skip term (fixed —
-> activation is now reachable and **paced** via `proactive_budget.should_ideate_now`,
-> so the daily budget spreads across the overnight window instead of bursting at the
-> reset; see [Heartbeat Service § guard policy](../03_agents/03_heartbeat_service.md)),
-> and (b) the prompt tells the agent to create with `task_hub_task_action` (which only
-> does lifecycle transitions, not creation) while the real `task_hub_create` tool is
-> **not registered** in the agent's tool surface. (b) — plus enriching the ideation
-> context and delivering a reviewable morning report — is the pending follow-on
-> (Phase 2). Until then, reflection can *activate* but cannot yet *create*.
+> **History (2026-06-20):** for its entire prior history, **zero** `source_kind='reflection'`
+> rows were ever created. Two faults stacked, both now fixed:
+> - **(a) Activation** was wedged shut by the `has_heartbeat_content` skip term (Phase 1 —
+>   activation is now reachable and **paced** via `proactive_budget.should_ideate_now`, so
+>   the daily budget spreads across the overnight window instead of bursting at the reset;
+>   see [Heartbeat Service § guard policy](../03_agents/03_heartbeat_service.md)).
+> - **(b) Creation** — the prompt told the agent to create with `task_hub_task_action`
+>   (lifecycle-only, cannot create) while the real `task_hub_create` tool was unregistered.
+>   Phase 2a registered `task_hub_create_wrapper` in `tools/internal_registry.py::get_core_internal_tools`,
+>   rewrote `reflection_engine.py::_format_reflection_prompt` to ask for **one** structured
+>   proposal per cycle via `task_hub_create`, and made reflection creates land in a **holding
+>   state** (`task_hub_bridge.py::_task_hub_create_impl` forces `agent_ready=False` +
+>   `ideation` label for `source_kind='reflection'`) so proposals await operator review
+>   rather than auto-dispatching.
+>
+> **Still pending (Phase 2b):** enriching `build_reflection_context` with real goals/CSI/
+> preference signals, and the **reviewable morning ideation report** (scratchpad + email with
+> one-click promote/dismiss/refine). A `promote` action flips a held proposal's `agent_ready`
+> back to True so the next `dispatch_sweep` claims it.
 
 ### 1. Convergence + ideation (the centerpiece) — WIRED
 

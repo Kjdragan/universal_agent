@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/notebooklm_runtime.py
   - src/universal_agent/utils/composio_discovery.py
   - src/universal_agent/constants.py
-last_verified: 2026-06-12
+last_verified: 2026-06-20
 ---
 
 # MCP Server & Tools
@@ -148,7 +148,7 @@ The core list registered into `internal` spans these bridges (all in
 | `mermaid_bridge.py` | `mermaid_to_image` | Mermaid → image |
 | `x_trends_bridge.py` | `x_trends_posts` | xAI/Grok `x_search` evidence fetch |
 | `csi_bridge.py` | `csi_recent_reports`, `csi_opportunity_bundles`, `csi_source_health`, `csi_watchlist_snapshot` | Read-only CSI snapshots from `csi.db` |
-| `task_hub_bridge.py` | `task_hub_task_action`, `task_hub_decompose` | Task Hub mutations from inside a turn |
+| `task_hub_bridge.py` | `task_hub_create`, `task_hub_task_action`, `task_hub_decompose` | Task Hub create + mutations from inside a turn (`task_hub_create` is the only creator; reflection/ideation uses it) |
 | `task_hub_simone_verbs.py` | `task_re_evaluate`, `task_redirect_to`, `task_request_revision` | Simone-callable "unstick" verbs (closes the Simone-directs-Cody loop) |
 | `wiki_bridge.py` | `wiki_init_vault`, `wiki_sync_internal_memory`, `wiki_query`, `wiki_lint`, `wiki_ingest_external_source` | LLM Wiki vault ops |
 | `vp_orchestration.py` | `vp_dispatch_mission`, `vp_get_mission`, `vp_list_missions`, `vp_wait_mission`, `vp_cancel_mission`, `vp_read_result_artifacts` | VP (Cody/Atlas) mission control |

@@ -245,7 +245,10 @@ class TestReflectionPrompt:
             budget_remaining=5,
         )
         assert "Do NOT" in text
-        assert "Deploy to production" in text
+        assert "deploy" in text.lower()
+        # Pin the Phase-2a fix: creation goes through task_hub_create, not the
+        # lifecycle-only task_hub_task_action.
+        assert "task_hub_create" in text
 
 
 # ===========================================================================
