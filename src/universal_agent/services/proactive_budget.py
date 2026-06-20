@@ -118,10 +118,6 @@ def should_ideate_now(conn: sqlite3.Connection, *, now: float | None = None) -> 
     False simply lets the idle tick fall through to a cheap skip — it can never
     interrupt real work. Set UA_PROACTIVE_IDEATION_MIN_INTERVAL_SECONDS=0 to
     disable pacing.
-
-    ponytail: min-interval + jitter only; the jitter floor already caps the
-    effective rate. If a hard per-hour ceiling is ever needed, store a windowed
-    timestamp list under _LAST_IDEATION_KEY instead.
     """
     base = _parse_int_env(
         "UA_PROACTIVE_IDEATION_MIN_INTERVAL_SECONDS",
