@@ -9,7 +9,7 @@ code_paths:
   - src/universal_agent/services/email_task_bridge.py
   - src/universal_agent/services/email_tags.py
   - src/universal_agent/services/vp_email_directive.py
-last_verified: 2026-06-16
+last_verified: 2026-06-20
 ---
 
 # Email / AgentMail
@@ -137,10 +137,16 @@ Defaults (`_DEFAULT_TRUSTED_SENDERS`):
 - `kevin.dragan@outlook.com`
 - `kevinjdragan@gmail.com`
 - `kevin@clearspringcg.com`
+- `oddcity216@agentmail.to` — Simone's own inbox, so a Simone→Simone send (or an
+  app sending **as** Simone) is ingested + triaged instead of auto-quarantined as
+  an unknown `@agentmail.to` sender.
 
 Overridable via `UA_AGENTMAIL_TRUSTED_SENDERS` (comma-separated). Trust drives
 everything downstream: trusted mail can auto-execute; untrusted mail is screened
-hard and parked for review.
+hard and parked for review. The list is **static** (loaded once at init from
+env/code); there is no runtime/agent-driven trust expansion — any future dynamic
+trust must be gated against prompt-injection so Simone can't be talked into
+trusting an attacker.
 
 ### 3. Pre-triage security screening (untrusted only)
 
