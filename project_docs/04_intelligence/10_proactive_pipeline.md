@@ -648,7 +648,15 @@ implicit signals without understanding this loop.
   (explicitly pinned, like `youtube_daily_digest.py`'s `DIGEST_MAP_MODEL_DEFAULT`);
   it replaced a direct google-genai `gemini-2.0-flash` call whose key was blocked
   (`403 API_KEY_SERVICE_BLOCKED`), and degrades to a deterministic templated
-  summary (`_fallback_analysis`) on any failure so the report always ships.
+  summary (`_fallback_analysis`) on any failure so the report always ships. The
+  `_call_reasoning_llm` system prompt carries a strict **grounding rule**: the
+  stats JSON is the only allowed source of fact — the model may only name source
+  kinds present in `by_source` (the report's scope is `PROACTIVE_SOURCE_KINDS` =
+  `proactive_signal` + `reflection`, **not** task types like `tutorial_build`)
+  and must never invent a failure cause/category, since the JSON carries failure
+  *counts* but no failure *reasons*. This closed a 2026-06-19 hallucination where
+  the narrative fabricated "17 tutorial_build protocol violations" (a source kind
+  the report never even sees) from a bare `failed` count.
 - **Proactive artifact digest** (`proactive_artifact_digest`, 8:35 AM Houston):
   `proactive_digest_agent.py::_run_digest` emails Kevin a digest of new CODIE
   PRs, tutorial builds, convergence insights via the real `AgentMailService`

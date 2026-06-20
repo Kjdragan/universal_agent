@@ -162,6 +162,37 @@ async def test_reasoning_llm_uses_glm_4_5_air(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reasoning_prompt_is_grounded_against_hallucinated_failures(monkeypatch):
+    """Guard: the reasoning prompt must forbid inventing failure causes/categories.
+
+    Regression for the phantom "17 tutorial_build protocol violations" report —
+    the LLM confabulated a failure category (and a source kind not even in
+    PROACTIVE_SOURCE_KINDS) because the old prompt said "don't hedge" while
+    handing it only bare `failed: N` counts with no reasons. The grounding rule
+    must reach the model so it can't fabricate a cause it cannot see.
+    """
+    captured: dict = {}
+
+    async def _fake_call_llm(*, system, user, model=None, max_tokens=1024):
+        captured["system"] = system
+        return "grounded analysis"
+
+    monkeypatch.setattr(llm_classifier, "_call_llm", _fake_call_llm)
+
+    out = await pir._call_reasoning_llm(
+        {"proactive_tasks": {"failed": 3, "by_source": {"proactive_signal": 3}}},
+        "afternoon",
+    )
+    assert out == "grounded analysis"
+
+    system = captured["system"].lower()
+    assert "grounding rule" in system
+    assert "by_source" in system
+    # Must steer the model away from inventing a failure cause it cannot see.
+    assert "never state or invent a failure cause" in system
+
+
+@pytest.mark.asyncio
 async def test_reasoning_llm_falls_back_on_exception(monkeypatch):
     async def _boom(*, system, user, model=None, max_tokens=1024):
         raise RuntimeError("zai unreachable")

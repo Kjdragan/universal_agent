@@ -245,7 +245,14 @@ async def _call_reasoning_llm(stats: dict[str, Any], period: str) -> str:
         "colleague, not a dashboard — if tasks failed, suggest investigation "
         "priorities; if under-utilized, suggest work to explore; if over-utilized, "
         "suggest throttling.\n"
-        "Be specific, reference actual numbers, and don't hedge."
+        "Be specific and reference the actual numbers you are given. GROUNDING "
+        "RULE (strict): every fact must be derivable from the JSON below. Only "
+        "name source kinds that appear in 'by_source'. The JSON does NOT explain "
+        "WHY anything failed — so never state or invent a failure cause/category "
+        "(e.g. a specific error type, 'protocol violations', a task type that "
+        "isn't in by_source). If failures occurred, say they need investigation "
+        "without naming a cause you cannot see. Do not hedge on the numbers; do "
+        "hedge on anything the data doesn't show."
     )
     user = (
         f"This is the {period} briefing. Note: proactive_tasks counts are ACTIVITY "
