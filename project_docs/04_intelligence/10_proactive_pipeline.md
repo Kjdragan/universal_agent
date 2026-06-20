@@ -132,10 +132,16 @@ wiring differs — some run continuously, some ship scaffolding only.
 >   `ideation` label for `source_kind='reflection'`) so proposals await operator review
 >   rather than auto-dispatching.
 >
-> **Still pending (Phase 2b):** enriching `build_reflection_context` with real goals/CSI/
-> preference signals, and the **reviewable morning ideation report** (scratchpad + email with
-> one-click promote/dismiss/refine). A `promote` action flips a held proposal's `agent_ready`
-> back to True so the next `dispatch_sweep` claims it.
+> **Phase 2b (shipped):** the **morning ideation report** — `services/ideation_report.py`
+> (queries held proposals → renders HTML cards with one-click action links → publishes to the
+> scratchpad + emails via `AgentMailService`), driven by the `morning_ideation_report` cron
+> (`scripts/morning_ideation_report.py`, 6:30 AM CT fixed-time, skips when no proposals). The
+> action links are HMAC-signed (`cron_artifact_notifier.sign_ideation_token`) and handled by
+> `gateway_server.py::ideation_action_get` (`GET /api/v1/ideation/{task_id}/action`): **promote**
+> runs the new `task_hub.py` `ACTION_PROMOTE` verb (open + `agent_ready=1` + score floored above
+> the dispatch threshold so the next `dispatch_sweep` claims it); **dismiss** parks it; **refine**
+> is the scratchpad review toolbar. *Still pending:* enriching `build_reflection_context` with
+> real goals/CSI/preference signals (idea-quality lever, separate from delivery).
 
 ### 1. Convergence + ideation (the centerpiece) — WIRED
 

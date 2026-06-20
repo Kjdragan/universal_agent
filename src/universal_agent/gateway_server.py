@@ -15166,6 +15166,7 @@ async def lifespan(app: FastAPI):
                 _ensure_hourly_intel_digest_cron_job()
                 _ensure_insight_scoring_health_cron_job()
                 _ensure_proactive_report_morning_cron_job()
+                _ensure_morning_ideation_report_cron_job()
                 _ensure_proactive_report_midday_cron_job()
                 _ensure_proactive_report_afternoon_cron_job()
                 _ensure_proactive_artifact_digest_cron_job()
@@ -20889,6 +20890,22 @@ def _ensure_proactive_report_morning_cron_job() -> Optional[dict[str, Any]]:
     )
 
 
+def _ensure_morning_ideation_report_cron_job() -> Optional[dict[str, Any]]:
+    return _register_system_cron_job(
+        system_job="morning_ideation_report",
+        default_cron="30 6 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.morning_ideation_report",
+        description="Morning ideation report — held reflection proposals with one-click promote/dismiss.",
+        timeout_seconds=300,
+        # Fixed-time cron (one discrete time) → exempt from dormancy. Skips
+        # delivery when there are no held proposals (no noise).
+        enabled=_proactive_cron_enabled("UA_IDEATION_REPORT_ENABLED"),
+        cron_env_var="UA_MORNING_IDEATION_REPORT_CRON",
+        timezone_env_var="UA_PROACTIVE_REPORTS_TIMEZONE",
+    )
+
+
 def _ensure_proactive_report_midday_cron_job() -> Optional[dict[str, Any]]:
     return _register_system_cron_job(
         system_job="proactive_report_midday",
@@ -22337,6 +22354,85 @@ async def briefs_feedback_get(artifact_id: str, v: str = "", t: str = ""):
         f"influence future intel selection.</p>{back_link}",
         status_color="#1a7f37" if vote == "up" else "#cf222e",
     )
+    return HTMLResponse(content=body, status_code=200)
+
+
+@app.get("/api/v1/ideation/{task_id}/action")
+async def ideation_action_get(task_id: str, a: str = "", t: str = ""):
+    """One-click promote/dismiss for a held ideation proposal (morning report).
+
+    ``a`` in {"promote","dismiss"}, ``t`` an HMAC over ``f"ideation:{task_id}:{a}"``.
+    The HMAC IS the auth (the link lands in a mail client, no bearer header).
+    ``promote`` flips the held proposal into the live dispatch queue; ``dismiss``
+    parks it. Returns a small HTML landing page (200/401/404).
+    """
+    from fastapi.responses import HTMLResponse
+
+    from universal_agent import task_hub
+    from universal_agent.services.cron_artifact_notifier import verify_ideation_token
+
+    action = (a or "").strip().lower()
+    if action not in {"promote", "dismiss"}:
+        return HTMLResponse(
+            content=_brief_chrome(
+                "Link invalid",
+                "<p>This action link is missing or has an unknown action. "
+                "Use the dashboard instead.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=401,
+        )
+
+    if not verify_ideation_token(task_id, action, t or ""):
+        return HTMLResponse(
+            content=_brief_chrome(
+                "Link expired or invalid",
+                "<p>We couldn't verify this link. Use the dashboard instead.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=401,
+        )
+
+    verb = "promote" if action == "promote" else "park"
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            try:
+                task_hub.perform_task_action(
+                    conn,
+                    task_id=task_id,
+                    action=verb,
+                    agent_id="kevin",
+                    reason=f"{action} from morning ideation report",
+                )
+                conn.commit()
+            except ValueError:
+                return HTMLResponse(
+                    content=_brief_chrome(
+                        "Proposal not found",
+                        f"<p>This proposal could not be {action}d. It may have "
+                        "already been actioned, or no longer exists.</p>",
+                        status_color="#cf222e",
+                    ),
+                    status_code=404,
+                )
+        finally:
+            conn.close()
+
+    if action == "promote":
+        body = _brief_chrome(
+            "Promoted ✓",
+            "<p>This idea is now in the live dispatch queue and will be picked up "
+            "for execution. Track it on the dashboard.</p>",
+            status_color="#1a7f37",
+        )
+    else:
+        body = _brief_chrome(
+            "Dismissed ✓",
+            "<p>This idea has been parked and won't be worked on.</p>",
+            status_color="#6e7781",
+        )
     return HTMLResponse(content=body, status_code=200)
 
 

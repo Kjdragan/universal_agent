@@ -56,6 +56,10 @@ ACTION_PARK = "park"
 ACTION_SNOOZE = "snooze"
 ACTION_DELEGATE = "delegate"
 ACTION_APPROVE = "approve"
+# Operator-promote: flip a held proposal (e.g. a reflection/ideation idea created
+# agent_ready=False) into the live dispatch queue. Used by the morning ideation
+# report's one-click "promote" button.
+ACTION_PROMOTE = "promote"
 # Hermes-adaptation Phase B.1 — operator-driven "unstick" verbs.
 ACTION_REHYDRATE = "rehydrate"
 ACTION_RE_EVALUATE = "re_evaluate"
@@ -65,6 +69,7 @@ ACTION_REQUEST_REVISION = "request_revision"
 VALID_ACTIONS = {
     ACTION_SEIZE, ACTION_REJECT, ACTION_BLOCK, ACTION_UNBLOCK, ACTION_REVIEW,
     ACTION_COMPLETE, ACTION_PARK, ACTION_SNOOZE, ACTION_DELEGATE, ACTION_APPROVE,
+    ACTION_PROMOTE,
     # Hermes-adaptation Phase B.1 — operator-driven "unstick" verbs.
     # Defined for tasks wedged in needs_review / blocked because the
     # heartbeat or todo retry budget tripped. Operator-only initially;
@@ -5356,6 +5361,17 @@ def perform_task_action(
         )
     elif action_norm == "unblock":
         conn.execute("UPDATE task_hub_items SET status=?, updated_at=? WHERE task_id=?", (TASK_STATUS_OPEN, now_iso, task_id))
+    elif action_norm == "promote":
+        # Operator approved a held proposal (reflection/ideation idea from the
+        # morning report). Flip it into the live dispatch queue: open + agent_ready,
+        # and floor the score above the dispatch threshold so it is guaranteed
+        # claimable regardless of the original (deliberately conservative) score.
+        _promote_threshold = float(current_policy().agent_threshold)
+        _promote_score = max(float(item.get("score") or 0.0), _promote_threshold + 1.0)
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, agent_ready=1, score=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_OPEN, _promote_score, now_iso, task_id),
+        )
     elif action_norm == "review":
         metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
         _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "needs_review", ended_at=now_iso)
