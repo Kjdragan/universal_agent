@@ -216,7 +216,7 @@
       "tier_current": "haiku",
       "tier_verdict": "appropriate",
       "notes": "Hardcoded glm-4.5-air (haiku) — intentionally lightweight.",
-      "source_sha": "809192de1121e77d"
+      "source_sha": "0ccee7b5662a59dc"
     }
   }
 }
