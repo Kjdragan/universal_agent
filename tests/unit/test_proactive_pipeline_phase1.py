@@ -215,7 +215,8 @@ class TestReflection24x7:
             actionable_count=0,
             brainstorm_candidate_count=0,
             system_event_count=0,
-            has_exec_completion=False,            pending_question_count=0,
+            has_exec_completion=False,
+            pending_question_count=0,
         )
         assert policy["reflection_mode"] is True
         assert policy["skip_reason"] is None
@@ -232,7 +233,8 @@ class TestReflection24x7:
             actionable_count=0,
             brainstorm_candidate_count=0,
             system_event_count=0,
-            has_exec_completion=False,            pending_question_count=0,
+            has_exec_completion=False,
+            pending_question_count=0,
         )
         assert policy["reflection_mode"] is True
         assert policy["skip_reason"] is None
@@ -254,7 +256,8 @@ class TestHeartbeatDemoReviewGuard:
             actionable_count=0,
             brainstorm_candidate_count=0,
             system_event_count=0,
-            has_exec_completion=False,            pending_question_count=0,
+            has_exec_completion=False,
+            pending_question_count=0,
             pending_demo_review_count=0,
         )
         assert policy["skip_reason"] == "no_actionable_work"
@@ -270,7 +273,8 @@ class TestHeartbeatDemoReviewGuard:
             actionable_count=0,
             brainstorm_candidate_count=0,
             system_event_count=0,
-            has_exec_completion=False,            pending_question_count=0,
+            has_exec_completion=False,
+            pending_question_count=0,
             pending_demo_review_count=3,
         )
         assert policy["skip_reason"] is None
@@ -289,7 +293,8 @@ class TestHeartbeatDemoReviewGuard:
             actionable_count=0,
             brainstorm_candidate_count=0,
             system_event_count=0,
-            has_exec_completion=False,            pending_question_count=0,
+            has_exec_completion=False,
+            pending_question_count=0,
             pending_demo_review_count=999,
         )
         assert policy["skip_reason"] is None

@@ -2712,10 +2712,7 @@ class HeartbeatService:
                                 "daily_budget_exhausted" if not _has_budget else "ideation_paced"
                             )
                             _is_reflection_mode = False
-                            try:
-                                metadata["heartbeat_guard"]["skip_reason"] = guard_skip_reason
-                            except Exception:
-                                pass
+                            metadata["heartbeat_guard"]["skip_reason"] = guard_skip_reason
                             logger.info(
                                 "Ideation mode skipped for %s: %s",
                                 session.session_id,
