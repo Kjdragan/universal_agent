@@ -71,6 +71,7 @@ from universal_agent.tools.research_bridge import (
     run_research_pipeline_wrapper,
 )
 from universal_agent.tools.task_hub_bridge import (
+    task_hub_create_wrapper,
     task_hub_decompose_wrapper,
     task_hub_task_action_wrapper,
 )
@@ -134,6 +135,11 @@ def get_core_internal_tools() -> List[Callable]:
         csi_watchlist_snapshot_wrapper,
         task_hub_task_action_wrapper,
         task_hub_decompose_wrapper,
+        # task_hub_create — the ONLY tool that creates new Task Hub items.
+        # Required for reflection/ideation (the prompt previously pointed at
+        # task_hub_task_action, which only transitions existing tasks, so
+        # ideation could never create anything — 0 reflection rows ever).
+        task_hub_create_wrapper,
         # Hermes Phase D — Simone-callable unstick verb tools (closes the
         # Simone-directs-Cody autonomy loop). Wrap perform_task_action verbs
         # so Simone can re-evaluate / redirect / request_revision from her

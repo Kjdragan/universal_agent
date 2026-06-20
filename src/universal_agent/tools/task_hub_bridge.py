@@ -209,6 +209,18 @@ async def _task_hub_create_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     source_kind = str(args.get("source_kind", "reflection") or "reflection").strip()
     mission_plan = args.get("mission_plan")
 
+    # Reflection (autonomous ideation) items are PROPOSALS awaiting operator
+    # review in the morning ideation report — never auto-dispatched. They land in
+    # a holding state (agent_ready=False) regardless of what the LLM passes; the
+    # report's "promote" action flips them into the live queue. Other callers may
+    # set agent_ready explicitly (default True, preserving prior behaviour).
+    if source_kind == "reflection":
+        agent_ready = False
+        if "ideation" not in labels:
+            labels = [*labels, "ideation"]
+    else:
+        agent_ready = bool(args.get("agent_ready", True))
+
     conn = connect_runtime_db(get_activity_db_path())
     conn.row_factory = sqlite3.Row
     try:
@@ -238,7 +250,7 @@ async def _task_hub_create_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                 "labels": labels,
                 "source_kind": source_kind,
                 "status": "open",
-                "agent_ready": True,
+                "agent_ready": agent_ready,
                 "trigger_type": "autonomous",
             }
 
