@@ -440,8 +440,9 @@ class TestStatus:
         assert status["ws_connected"] is False
         assert isinstance(status["messages_sent"], int)
         assert isinstance(status["drafts_created"], int)
-        assert status["trusted_sender_count"] == 3
+        assert status["trusted_sender_count"] == 4
         assert "kevin@clearspringcg.com" in status["trusted_senders"]
+        assert "oddcity216@agentmail.to" in status["trusted_senders"]  # Simone self-trust
 
 
 class TestNotifications:
