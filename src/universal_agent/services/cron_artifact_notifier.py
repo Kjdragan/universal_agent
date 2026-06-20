@@ -986,6 +986,47 @@ def verify_feedback_token(artifact_id: str, vote: str, token: str) -> bool:
     return hmac.compare_digest(expected, supplied)
 
 
+# ── Ideation action HMAC helpers (morning ideation report promote/dismiss) ──
+#
+# Reuse the same secret material as the ack/feedback tokens (no new env var or
+# rotation surface). The payload prefix "ideation:" is distinct, so an ideation
+# token cannot be replayed as a feedback or ack token, and vice versa.
+
+
+def _ideation_payload(task_id: str, action: str) -> bytes:
+    return f"ideation:{task_id}:{action}".encode("utf-8")
+
+
+def sign_ideation_token(task_id: str, action: str) -> str:
+    """HMAC-SHA256 over f"ideation:{task_id}:{action}", truncated to 16 hex.
+
+    ``action`` must be "promote" or "dismiss"; anything else returns "" so the
+    token cannot validate against a foreign action shape.
+    """
+    secret = _ack_secret()
+    if not secret:
+        return ""
+    clean_action = (action or "").strip().lower()
+    if clean_action not in {"promote", "dismiss"}:
+        return ""
+    clean_id = (task_id or "").strip()
+    if not clean_id:
+        return ""
+    mac = hmac.new(secret, _ideation_payload(clean_id, clean_action), hashlib.sha256)
+    return mac.hexdigest()[:16]
+
+
+def verify_ideation_token(task_id: str, action: str, token: str) -> bool:
+    """Constant-time HMAC verification for an ideation action link. False on any error."""
+    expected = sign_ideation_token(task_id, action)
+    if not expected:
+        return False
+    supplied = (token or "").strip()
+    if not supplied:
+        return False
+    return hmac.compare_digest(expected, supplied)
+
+
 def _digest_pause_payload(hours: int) -> bytes:
     return f"digest_pause:{int(hours)}".encode("utf-8")
 
