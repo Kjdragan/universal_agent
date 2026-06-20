@@ -18,7 +18,7 @@ code_paths:
   - src/universal_agent/services/invariants/cron_staleness.py
   - src/universal_agent/services/invariants/cron_consecutive_failures.py
   - memory/HEARTBEAT.md
-last_verified: 2026-06-16
+last_verified: 2026-06-20
 ---
 
 # Heartbeat Service
@@ -156,7 +156,10 @@ The agent turn runs via `self.gateway.execute(session, request)` with `force_com
 - `actionable_over_capacity` — actionable count exceeds `UA_HEARTBEAT_MAX_ACTIONABLE`.
 - `autonomous_disabled` — `UA_HEARTBEAT_AUTONOMOUS_ENABLED` is off and there is actionable/brainstorm work but no exec completion / system events / pending questions.
 - `no_actionable_work` — nothing to do AND the reflection engine is not enabled.
-- If the queue is empty but `services/reflection_engine.is_reflection_enabled()` returns true, the run enters **Autonomous Ideation Mode** (24/7, no active-hours restriction) and `skip_reason` is cleared so the agent generates Task Hub items, gated by a daily budget (`services/proactive_budget.has_daily_budget`).
+- `daily_budget_exhausted` / `ideation_paced` — the queue is empty and ideation *would* run, but the daily budget is spent (`services/proactive_budget.has_daily_budget`) or pacing is withholding this tick (`services/proactive_budget.should_ideate_now`). Either way the tick falls through to a cheap skip.
+- If the queue is empty AND `services/reflection_engine.is_reflection_enabled()` is true AND ideation is both in-budget and paced-OK, the run enters **Autonomous Ideation Mode** (24/7, no active-hours restriction) and `skip_reason` is cleared so the agent generates Task Hub items.
+
+> **The "genuine work" signal is queue / system-event / exec-completion / pending-question / pending-demo-review — NOT `HEARTBEAT.md` content.** An earlier `and not has_heartbeat_content` term in `_heartbeat_guard_policy` gated this whole branch on the directive file being *empty*. Because `memory/HEARTBEAT.md` is a permanently-populated standing playbook (edited only via git through `_sync_heartbeat_file`, never a transient work queue), that term wedged the branch shut forever — silently defeating **both** the idle cheap-skip and ideation activation (0 `source_kind='reflection'` rows ever; the daily-budget counter was never incremented). The term was removed. Genuine transient operator asks still wake her via `pending_question_count` / chat tasks. **Ideation pacing** (`should_ideate_now`, knobs `UA_PROACTIVE_IDEATION_MIN_INTERVAL_SECONDS` / `UA_PROACTIVE_IDEATION_JITTER_FRAC`) then spreads the daily budget across the overnight window so it cannot burst right after the reset and spike ZAI rate limits.
 
 When `should_skip_agent_run` is true the heartbeat emits an OK token and skips the LLM turn — but the deterministic health checks above still ran.
 
