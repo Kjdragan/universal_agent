@@ -203,6 +203,16 @@ _DEFAULT_TRUSTED_SENDERS = (
     "kevin.dragan@outlook.com",
     "kevinjdragan@gmail.com",
     "kevin@clearspringcg.com",
+    # Simone's own AgentMail inbox. A message FROM this address (a Simone→Simone
+    # send, or an app sending AS Simone — display "Simone <oddcity216@agentmail.to>")
+    # is trusted so it is INGESTED + triaged rather than auto-quarantined as an
+    # unknown @agentmail.to sender. Trusted senders bypass the pre-triage security
+    # gates (incl. the injection scan), which is acceptable here because the AgentMail
+    # API only lets the inbox owner send from this address. NOTE: this is a STATIC
+    # list — see _trusted_sender_addresses (UA_AGENTMAIL_TRUSTED_SENDERS env extends
+    # it). Any future *dynamic*/agent-driven trust expansion must be gated against
+    # prompt-injection (Simone must not be talk-able into trusting an attacker).
+    "oddcity216@agentmail.to",
 )
 _QUEUE_STATUS_QUEUED = "queued"
 _QUEUE_STATUS_DISPATCHING = "dispatching"
