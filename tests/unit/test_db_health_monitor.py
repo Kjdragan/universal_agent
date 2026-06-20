@@ -96,8 +96,9 @@ def test_csi_source_freshness_all_stale_channels_flagged(monkeypatch, tmp_path) 
 
 
 # ── Steady-state-aware check_pending_signal_cards tests ───────────────
-# Both directions: healthy promote-zero steady state must NOT fire, while a
-# genuine backlog burst or a stopped curator MUST fire.
+# Both directions: healthy promote-zero steady state must NOT fire (a backlog
+# up to ~TTL days is the designed state, since the TTL sweep is the only
+# automatic drain), while a genuine backlog burst or a stopped TTL sweep MUST fire.
 
 
 def _make_activity_db(path: Path) -> None:
@@ -112,28 +113,52 @@ def _make_activity_db(path: Path) -> None:
 
 
 def _insert_pending_cards(path: Path, count: int, age_hours: float,
-                          *, start_index: int = 0) -> None:
+                          *, start_index: int = 0,
+                          updated_age_hours: float = -1.0) -> None:
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     created = (now - timedelta(hours=age_hours)).isoformat()
+    # In production created_at is the source video's publish time (frozen on
+    # insert) and updated_at is the last refresh -- they diverge. updated_age_hours
+    # models that; -1.0 (default) keeps them equal for legacy callers.
+    upd_age = age_hours if updated_age_hours < 0 else updated_age_hours
+    updated = (now - timedelta(hours=upd_age)).isoformat()
     conn = sqlite3.connect(str(path))
     conn.executemany(
         "INSERT INTO proactive_signal_cards(card_id, status, created_at, updated_at)"
         " VALUES (?, 'pending', ?, ?)",
-        [(f"card-{start_index + i}", created, created) for i in range(count)],
+        [(f"card-{start_index + i}", created, updated) for i in range(count)],
     )
     conn.commit()
     conn.close()
 
 
 def test_signal_cards_steady_state_not_flagged(monkeypatch, tmp_path) -> None:
-    # Documented healthy promote-zero steady state: ~287 pending cards with the
-    # oldest well under the hourly curation cadence. The old >=50 rule fired
-    # here every single heartbeat; the steady-state-aware check must NOT.
+    # Designed promote-zero steady state: ~287 pending whose oldest updated_at
+    # sits at the TTL boundary (~72h). The TTL sweep is the only automatic
+    # drain, so a backlog up to TTL days old is healthy, not a stall. Must NOT
+    # fire even though created_at (video publish) is far older.
     db_path = tmp_path / "activity_state.db"
     _make_activity_db(db_path)
-    _insert_pending_cards(db_path, count=287, age_hours=0.5)
+    ttl_hours = db_health_monitor._proactive_card_ttl_hours()
+    _insert_pending_cards(
+        db_path, count=287, age_hours=120.0,
+        updated_age_hours=ttl_hours - 2.0,
+    )
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(db_path))
+
+    assert db_health_monitor.check_pending_signal_cards() == []
+
+
+def test_signal_cards_old_created_but_fresh_updated_not_flagged(monkeypatch, tmp_path) -> None:
+    # REGRESSION for the production false-positive: created_at is the video
+    # publish time and can be days old while updated_at (last refresh) is fresh.
+    # The pre-fix logic keyed oldest-age on created_at and false-fired here
+    # every heartbeat. Must NOT fire.
+    db_path = tmp_path / "activity_state.db"
+    _make_activity_db(db_path)
+    _insert_pending_cards(db_path, count=257, age_hours=120.0, updated_age_hours=0.7)
     monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(db_path))
 
     assert db_health_monitor.check_pending_signal_cards() == []
@@ -156,14 +181,15 @@ def test_signal_cards_backlog_burst_flagged(monkeypatch, tmp_path) -> None:
     assert findings[0].observed_value == burst
 
 
-def test_signal_cards_curator_stalled_flagged(monkeypatch, tmp_path) -> None:
-    # Modest count (well under 500) but the oldest pending card is far past
-    # the hourly curation cadence => curator stopped processing. Must fire on
-    # age alone even though the count branch would not.
+def test_signal_cards_sweep_stalled_flagged(monkeypatch, tmp_path) -> None:
+    # Modest count (well under 500) but the oldest pending updated_at exceeds
+    # TTL+grace -- the TTL sweep stopped expiring cards. Must fire on age alone
+    # even though the count branch would not.
     db_path = tmp_path / "activity_state.db"
     _make_activity_db(db_path)
-    stall_age = db_health_monitor.SIGNAL_CARDS_STALE_HOURS + 2.0
-    _insert_pending_cards(db_path, count=50, age_hours=stall_age)
+    ttl_hours = db_health_monitor._proactive_card_ttl_hours()
+    stall_age = ttl_hours + db_health_monitor.SIGNAL_CARDS_SWEEP_GRACE_HOURS + 6.0
+    _insert_pending_cards(db_path, count=50, age_hours=stall_age, updated_age_hours=stall_age)
     monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(db_path))
 
     findings = db_health_monitor.check_pending_signal_cards()

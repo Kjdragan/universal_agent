@@ -32,15 +32,22 @@ logger = logging.getLogger(__name__)
 STALE_RUN_HOURS = 2.0          # runs stuck in running/queued > N hours
 STALE_DELEGATION_HOURS = 4.0   # delegated tasks without VP progress > N hours
 TASK_BACKLOG_WARN = 20         # open tasks older than 24h
-# Steady-state-aware proactive signal-card thresholds. Healthy steady state is
-# ~287 pending cards: Kevin is -1.00 on proactive signals (promote-zero), so
-# cards accumulate as the curator's input queue until it rejects them ~hourly.
-# A raw ">=50 pending" rule fired every heartbeat under healthy operation. We
-# now alert only on a REAL stall: the backlog blows well past the working set
-# (creation outpacing curation) OR the oldest pending card is far older than
-# the hourly curation cadence (curator stopped processing).
-SIGNAL_CARDS_PENDING_WARN = 500   # backlog-burst: creation outpacing curation
-SIGNAL_CARDS_STALE_HOURS = 4.0    # oldest pending card age => curator stalled
+# Steady-state-aware proactive signal-card thresholds. There is NO autonomous
+# hourly curator of pending cards: Kevin is -1.00 on proactive (promote-zero),
+# so cards sit as the dashboard's input queue and the ONLY automatic drain is
+# the TTL sweep (proactive_signals.expire_stale_pending_cards,
+# UA_PROACTIVE_CARD_TTL_DAYS default 3). A backlog spanning up to ~TTL days is
+# the designed steady state (observed ~250 pending, oldest updated_at ~72h),
+# not a stall. We alert only on a REAL drain failure: the count blows well past
+# the working set (creation outpacing the TTL drain) OR the oldest pending
+# card's updated_at exceeds TTL + grace (the sweep stopped expiring cards).
+SIGNAL_CARDS_PENDING_WARN = 500        # backlog-burst: creation outpacing the TTL drain
+# Grace beyond the TTL window before "sweep stopped expiring cards" fires. The
+# age metric is updated_at (last refresh), NEVER created_at: created_at is the
+# source video's publish time (frozen on insert -- see upsert_generated_card's
+# ON CONFLICT clause), so a created_at age is "how old is the video," not "how
+# long has this card waited," and would false-fire on every backlog.
+SIGNAL_CARDS_SWEEP_GRACE_HOURS = 24.0
 CSI_CONSECUTIVE_FAIL_WARN = 3  # adapter consecutive failures
 CSI_SOURCE_STALE_HOURS = 12.0  # channels not polled in > N hours
 CSI_UNEMITTED_WARN = 100       # events not yet batched/emitted
@@ -332,19 +339,38 @@ def check_stale_delegations() -> list[HeartbeatFinding]:
     return findings
 
 
+def _proactive_card_ttl_hours() -> float:
+    """Pending-card TTL in hours, mirroring proactive_signals._card_ttl_days
+    (UA_PROACTIVE_CARD_TTL_DAYS, default 3). Read directly here so the monitor
+    does not import proactive_signals (keeps the detection graph dependency-free)."""
+    try:
+        days = int(os.getenv("UA_PROACTIVE_CARD_TTL_DAYS", "3") or "3")
+    except ValueError:
+        days = 3
+    return float(max(days, 0)) * 24.0
+
+
 def check_pending_signal_cards() -> list[HeartbeatFinding]:
     """Check activity_state.db for a proactive signal-card backlog that signals
-    a REAL dispatch/curator stall, not steady-state accumulation.
+    a REAL drain failure, not steady-state accumulation.
 
-    Healthy steady state (2026-06-19) is ~287 pending proactive_signal_cards.
-    Kevin is -1.00 on proactive signals (promote-zero preference), so cards
-    accumulate as the curator's input queue until the curator rejects them
-    ~hourly; a raw ">=50 pending" rule fired every heartbeat. We now alert
-    only when EITHER (a) the pending count blows well past the known working
-    set (creation severely outpacing curation) OR (b) the oldest pending card
-    is far older than the hourly curation cadence (curator stopped
-    processing). Both thresholds sit far above steady state (~287 cards,
-    oldest ~1h), so normal operation no longer false-fires.
+    There is no autonomous hourly curator of pending cards. Kevin is -1.00 on
+    proactive signals (promote-zero), so cards sit as the dashboard's input
+    queue and the ONLY automatic drain is the TTL sweep
+    (``proactive_signals.expire_stale_pending_cards``, ``UA_PROACTIVE_CARD_TTL_DAYS``
+    default 3 days): a pending card whose ``updated_at`` passes the TTL is
+    soft-deleted. A backlog spanning up to ~TTL days is therefore the designed
+    steady state (observed ~250 pending, oldest ``updated_at`` ~72h), not a stall.
+
+    We alert only when EITHER (a) the pending count blows well past the known
+    working set (creation severely outpacing the TTL drain) OR (b) the oldest
+    pending card's ``updated_at`` exceeds the TTL window + grace -- which can
+    only happen if the TTL sweep stopped running (a card the sweep should have
+    expired is still pending). The age metric is ``updated_at`` (last refresh),
+    NEVER ``created_at``: ``created_at`` is the source video's publish time
+    (frozen on insert -- see ``upsert_generated_card``'s ``ON CONFLICT`` clause),
+    so its age is "how old is the video," not "how long has this card waited,"
+    and would false-fire on every backlog.
     """
     findings: list[HeartbeatFinding] = []
     conn = _safe_connect(_db_path("activity_state.db"))
@@ -354,26 +380,29 @@ def check_pending_signal_cards() -> list[HeartbeatFinding]:
         if not _table_exists(conn, "proactive_signal_cards"):
             return findings
         rows = conn.execute(
-            "SELECT COUNT(*) AS cnt, MIN(created_at) AS oldest_created_at "
+            "SELECT COUNT(*) AS cnt, MIN(updated_at) AS oldest_updated_at "
             "FROM proactive_signal_cards WHERE status = 'pending'"
         ).fetchone()
         count = int(rows["cnt"]) if rows else 0
         if count == 0:
             return findings
 
+        ttl_hours = _proactive_card_ttl_hours()
+        sweep_stale_hours = ttl_hours + SIGNAL_CARDS_SWEEP_GRACE_HOURS
         oldest_age_hours = _age_hours(
-            rows["oldest_created_at"] if rows else None
+            rows["oldest_updated_at"] if rows else None
         )
         backlog_burst = count >= SIGNAL_CARDS_PENDING_WARN
-        curator_stalled = (
+        sweep_stalled = (
             oldest_age_hours is not None
-            and oldest_age_hours > SIGNAL_CARDS_STALE_HOURS
+            and oldest_age_hours > sweep_stale_hours
         )
 
-        if backlog_burst or curator_stalled:
+        if backlog_burst or sweep_stalled:
             detail = (
-                f"oldest pending card {oldest_age_hours:.1f}h old"
-                if curator_stalled
+                f"oldest pending card not refreshed in {oldest_age_hours:.1f}h "
+                f"(> TTL {ttl_hours:.0f}h + {SIGNAL_CARDS_SWEEP_GRACE_HOURS:.0f}h grace)"
+                if sweep_stalled
                 else f"{count} pending (>= {SIGNAL_CARDS_PENDING_WARN})"
             )
             findings.append(HeartbeatFinding(
@@ -384,17 +413,19 @@ def check_pending_signal_cards() -> list[HeartbeatFinding]:
                 observed_value=count,
                 threshold_text=(
                     f">={SIGNAL_CARDS_PENDING_WARN} pending OR "
-                    f"oldest pending >{SIGNAL_CARDS_STALE_HOURS:.0f}h"
+                    f"oldest pending updated_at >{sweep_stale_hours:.0f}h"
                 ),
                 known_rule_match=True,
                 confidence="high",
                 title=(
                     f"Proactive signal cards may be stalled: {detail} "
-                    "(steady state ~287 pending, oldest ~1h)"
+                    "(TTL sweep is the only drain -- check it is running)"
                 ),
                 recommendation=(
-                    "Check if the ToDo dispatch / proactive curator service is "
-                    "running and rejecting cards. Review proactive pipeline health."
+                    "Check the universal-agent-proactive-signal-card-sync timer/service "
+                    "(runs proactive_signals.expire_stale_pending_cards hourly). "
+                    "A pending card older than TTL+grace means the sweep stopped "
+                    "expiring cards. Review proactive pipeline health."
                 ),
             ))
     except Exception as exc:
