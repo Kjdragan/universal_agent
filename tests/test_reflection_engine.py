@@ -282,9 +282,7 @@ class TestGuardPolicyReflection:
             actionable_count=0,
             brainstorm_candidate_count=0,
             system_event_count=0,
-            has_exec_completion=False,
-            has_heartbeat_content=False,
-            pending_question_count=0,
+            has_exec_completion=False,            pending_question_count=0,
         )
         assert policy["reflection_mode"] is True
         assert policy["skip_reason"] is None  # Should NOT skip
@@ -301,9 +299,7 @@ class TestGuardPolicyReflection:
             actionable_count=0,
             brainstorm_candidate_count=0,
             system_event_count=0,
-            has_exec_completion=False,
-            has_heartbeat_content=False,
-            pending_question_count=0,
+            has_exec_completion=False,            pending_question_count=0,
         )
         # Reflection is 24/7, so with UA_REFLECTION_ENABLED=1 it should activate
         assert policy["reflection_mode"] is True
@@ -321,9 +317,7 @@ class TestGuardPolicyReflection:
             actionable_count=0,
             brainstorm_candidate_count=0,
             system_event_count=0,
-            has_exec_completion=False,
-            has_heartbeat_content=False,
-            pending_question_count=0,
+            has_exec_completion=False,            pending_question_count=0,
         )
         assert policy["reflection_mode"] is False
         assert policy["skip_reason"] == "no_actionable_work"
@@ -340,9 +334,7 @@ class TestGuardPolicyReflection:
             actionable_count=3,
             brainstorm_candidate_count=0,
             system_event_count=0,
-            has_exec_completion=False,
-            has_heartbeat_content=False,
-            pending_question_count=0,
+            has_exec_completion=False,            pending_question_count=0,
         )
         assert policy["reflection_mode"] is False
         assert policy["skip_reason"] is None  # Still should run (has work)

@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/scripts/proactive_signal_card_sync.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-14
+last_verified: 2026-06-20
 ---
 
 # Proactive Pipeline
@@ -115,7 +115,19 @@ wiring differs — some run continuously, some ship scaffolding only.
 > The signal-curation half of that lane was **decommissioned 2026-06** (see
 > "Signal curator (Track 1)" below). For reflection the correction still holds:
 > `reflection_engine` produces an ideation prompt instructing the agent to create
-> `source_kind="reflection"` Task Hub items, so reflection does reach Task Hub.
+> `source_kind="reflection"` Task Hub items.
+>
+> **Reality check (2026-06-20):** as of this writing **zero** `source_kind='reflection'`
+> rows have ever been created. Two faults stacked: (a) the heartbeat-side ideation
+> activation was wedged shut by the `has_heartbeat_content` skip term (fixed —
+> activation is now reachable and **paced** via `proactive_budget.should_ideate_now`,
+> so the daily budget spreads across the overnight window instead of bursting at the
+> reset; see [Heartbeat Service § guard policy](../03_agents/03_heartbeat_service.md)),
+> and (b) the prompt tells the agent to create with `task_hub_task_action` (which only
+> does lifecycle transitions, not creation) while the real `task_hub_create` tool is
+> **not registered** in the agent's tool surface. (b) — plus enriching the ideation
+> context and delivering a reviewable morning report — is the pending follow-on
+> (Phase 2). Until then, reflection can *activate* but cannot yet *create*.
 
 ### 1. Convergence + ideation (the centerpiece) — WIRED
 

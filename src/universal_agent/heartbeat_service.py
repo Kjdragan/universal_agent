@@ -1090,7 +1090,6 @@ def _heartbeat_guard_policy(
     brainstorm_candidate_count: int,
     system_event_count: int,
     has_exec_completion: bool,
-    has_heartbeat_content: bool = False,
     pending_question_count: int = 0,
     pending_demo_review_count: int = 0,
 ) -> dict[str, object]:
@@ -1132,7 +1131,12 @@ def _heartbeat_guard_policy(
         and brainstorm_candidate_count <= 0
         and system_event_count <= 0
         and not has_exec_completion
-        and not has_heartbeat_content
+        # NOTE: HEARTBEAT.md being non-empty is NOT a "stay awake" signal. It is
+        # Simone's standing playbook (always populated, edited only via git), so
+        # gating on its content here permanently wedged this whole branch closed
+        # — defeating both the cheap idle-skip AND ideation activation. Genuine
+        # transient operator asks arrive as pending_question / chat tasks (which
+        # raise actionable/pending_question_count), so they remain wake signals.
         and pending_question_count <= 0
         # Demo review (cody_demo_task in pending_review) is real work but is NOT
         # a *dispatchable* queue item, so it never increments actionable_count.
@@ -2370,7 +2374,6 @@ class HeartbeatService:
                 brainstorm_candidate_count=0,
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
-                has_heartbeat_content=bool(heartbeat_content.strip()),
             )
             max_proactive_per_cycle = int(guard_policy.get("max_proactive_per_cycle") or 1)
             max_system_events = int(guard_policy.get("max_system_events") or 1)
@@ -2636,7 +2639,6 @@ class HeartbeatService:
                 brainstorm_candidate_count=int(dispatch_claimed_count or 0),
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
-                has_heartbeat_content=bool(heartbeat_content.strip()),
                 pending_question_count=_pending_q_count,
                 pending_demo_review_count=_pending_demo_review_count,
             )
@@ -2667,6 +2669,8 @@ class HeartbeatService:
                     from universal_agent.services.proactive_budget import (
                         has_daily_budget as has_nightly_budget,
                         increment_daily_proactive_count as _increment_nightly_task_count,
+                        record_ideation_now,
+                        should_ideate_now,
                     )
                     from universal_agent.services.reflection_engine import (
                         build_reflection_context,
@@ -2674,13 +2678,22 @@ class HeartbeatService:
                     ref_conn = connect_runtime_db(get_activity_db_path())
                     ref_conn.row_factory = sqlite3.Row  # type: ignore[name-defined]
                     try:
-                        if has_nightly_budget(ref_conn):
+                        _has_budget = has_nightly_budget(ref_conn)
+                        # Pace ideation: spread the daily budget across the
+                        # overnight window instead of letting every idle tick
+                        # fire it back-to-back right after the reset (a burst
+                        # that would spike ZAI rate limits). should_ideate_now is
+                        # only consulted here (queue empty, no other work), so a
+                        # False just lets the tick fall through to a cheap skip.
+                        _paced_ok = should_ideate_now(ref_conn)
+                        if _has_budget and _paced_ok:
                             ref_ctx = build_reflection_context(
                                 ref_conn,
                                 workspace_dir=str(session.workspace_dir),
                             )
                             _reflection_ctx_text = str(ref_ctx.get("reflection_prompt_text") or "")
                             _increment_nightly_task_count(ref_conn, increment=1)
+                            record_ideation_now(ref_conn)
                             metadata["reflection"] = {
                                 "mode": True,
                                 "nightly_task_count": ref_ctx.get("nightly_task_count", 0),
@@ -2695,11 +2708,18 @@ class HeartbeatService:
                                 len(ref_ctx.get("stalled_brainstorms") or []),
                             )
                         else:
-                            guard_skip_reason = "daily_budget_exhausted"
+                            guard_skip_reason = (
+                                "daily_budget_exhausted" if not _has_budget else "ideation_paced"
+                            )
                             _is_reflection_mode = False
+                            try:
+                                metadata["heartbeat_guard"]["skip_reason"] = guard_skip_reason
+                            except Exception:
+                                pass
                             logger.info(
-                                "Ideation mode skipped for %s: daily proactive budget exhausted",
+                                "Ideation mode skipped for %s: %s",
                                 session.session_id,
+                                guard_skip_reason,
                             )
                     finally:
                         ref_conn.close()
