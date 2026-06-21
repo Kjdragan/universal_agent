@@ -31,10 +31,11 @@ REMOTE_DEPLOY = REPO_ROOT / "scripts" / "deploy" / "remote_deploy.sh"
 GATEWAY_SRC = REPO_ROOT / "src" / "universal_agent" / "gateway_server.py"
 
 BATCH1 = {
+    # insight_scoring_health RETIRED 2026-06-21 (zombie monitor — producer
+    # hourly_insight_email deregistered in #745). Removed from the frozenset.
     "scratch_pruning",
     "vault_lint_contradictions",
     "architecture_canvas_drift",
-    "insight_scoring_health",
     "vp_coder_workspace_pruning",
 }
 

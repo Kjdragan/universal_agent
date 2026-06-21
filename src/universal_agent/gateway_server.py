@@ -15164,7 +15164,11 @@ async def lifespan(app: FastAPI):
                 _ensure_morning_briefing_cron_job()
                 _ensure_evening_briefing_cron_job()
                 _ensure_hourly_intel_digest_cron_job()
-                _ensure_insight_scoring_health_cron_job()
+                # insight_scoring_health weekly monitor RETIRED 2026-06-21 — its
+                # data producer (hourly_insight_email) was deregistered in #745,
+                # so it emailed a false "0 briefs scored / 0 delivered" every
+                # Sunday off a frozen proactive_brief_scoring_log. Convergence
+                # moved to convergence_candidates + the hourly_intel_digest path.
                 _ensure_proactive_report_morning_cron_job()
                 _ensure_morning_ideation_report_cron_job()
                 _ensure_proactive_report_midday_cron_job()
@@ -20748,30 +20752,6 @@ def _ensure_hourly_intel_digest_cron_job() -> Optional[dict[str, Any]]:
         cron_env_var="UA_INTEL_DIGEST_CRON",
         timezone_env_var="UA_INTEL_DIGEST_CRON_TIMEZONE",
     )
-
-
-def _ensure_insight_scoring_health_cron_job() -> Optional[dict[str, Any]]:
-    """Register the weekly insight-scoring health-check cron.
-
-    Schedule: ``0 8 * * 0`` (Sunday 8 AM Houston). Pulls the last 7 days of
-    proactive_brief_scoring_log rows, computes delivery/sub-threshold/honorable
-    mention stats, and emails Kevin a one-paragraph LLM verdict.
-    """
-    return _register_system_cron_job(
-        system_job="insight_scoring_health",
-        default_cron="0 8 * * 0",
-        default_timezone="America/Chicago",
-        command="!script universal_agent.scripts.insight_scoring_health",
-        description="Weekly health check on hourly insight scoring (calibration audit).",
-        timeout_seconds=600,
-        # S5 Phase A batch 1: migrated to systemd timer — force in-process
-        # registration disabled (no double-fire). See _is_migrated_to_systemd.
-        enabled=_proactive_cron_enabled("UA_INSIGHT_SCORING_HEALTH_ENABLED")
-        and not _is_migrated_to_systemd("insight_scoring_health"),
-        cron_env_var="UA_INSIGHT_SCORING_HEALTH_CRON",
-        timezone_env_var="UA_INSIGHT_SCORING_HEALTH_TIMEZONE",
-    )
-
 
 
 def _ensure_vault_lint_contradictions_cron_job() -> Optional[dict[str, Any]]:

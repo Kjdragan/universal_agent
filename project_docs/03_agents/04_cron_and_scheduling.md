@@ -48,8 +48,12 @@ For slot-critical deterministic jobs that is unacceptable, so they run as
 
 **Migrated so far:**
 - **Batch 1** (maintenance/audit): `scratch_pruning`, `vault_lint_contradictions`,
-  `architecture_canvas_drift`, `insight_scoring_health`, `vp_coder_workspace_pruning`
-  (`scripts/install_vps_phase_a_batch1_timers.sh`).
+  `architecture_canvas_drift`, `vp_coder_workspace_pruning`
+  (`scripts/install_vps_phase_a_batch1_timers.sh`). `insight_scoring_health`
+  was **retired 2026-06-21** (zombie monitor; its producer `hourly_insight_email`
+  was deregistered in #745, so it emailed a false "0 briefs scored / 0 delivered"
+  every Sunday off a frozen `proactive_brief_scoring_log` — units + registration
+  removed).
 - **Batch 2** (content dailies): the 3 `proactive_report_*` slots (sharing one
   `universal-agent-proactive-report.service` driven by 3 timers),
   `proactive_artifact_digest`, `intel_auto_promoter`, `codie_proactive_cleanup`
@@ -75,8 +79,8 @@ timers); per-job rollback = remove the job from the frozenset. Stay-in-process
 **`TimeoutStartSec`.** A `Type=oneshot` defaults to `TimeoutStartSec=infinity`,
 so a hung network/LLM run blocks its own timer's next fire forever. The
 network/LLM units bound it to their old in-process budget
-(`proactive-report` 600, `proactive-artifact-digest` 300, `insight-scoring-health`
-600); pure-FS/SQLite units keep `infinity`.
+(`proactive-report` 600, `proactive-artifact-digest` 300); pure-FS/SQLite units
+keep `infinity`.
 
 ### Is this scheduled job actually running? (diagnostic — read this before concluding "disabled")
 

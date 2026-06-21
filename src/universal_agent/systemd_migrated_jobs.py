@@ -21,10 +21,13 @@ import os
 SYSTEMD_MIGRATED_SYSTEM_JOBS: frozenset[str] = frozenset(
     {
         # Batch 1 (#753) — low-blast-radius maintenance/audit jobs.
+        # ``insight_scoring_health`` was retired 2026-06-21 (zombie monitor: its
+        # producer hourly_insight_email was deregistered in #745, so it emailed a
+        # false "0 scored" every Sunday off a frozen scoring log). Its timer +
+        # service units and the in-process registration were removed.
         "scratch_pruning",
         "vault_lint_contradictions",
         "architecture_canvas_drift",
-        "insight_scoring_health",
         "vp_coder_workspace_pruning",
         # Batch 2 — content dailies. NOTE: most are gated via the
         # _register_system_cron_job(enabled=…) arg, BUT ``codie_proactive_cleanup``
