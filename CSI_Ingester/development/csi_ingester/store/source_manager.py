@@ -374,6 +374,72 @@ def auto_promote_demote(
     return {"promoted": promoted, "demoted": demoted}
 
 
+# ── Dead-channel auto-deactivation ──────────────────────────────────────
+
+def record_channel_fetch_result(
+    conn: sqlite3.Connection,
+    channel_id: str,
+    *,
+    status_code: int | None,
+    deactivate_after: int = 10,
+) -> bool:
+    """Track per-channel "gone" responses and deactivate persistently-dead feeds.
+
+    A 404/410 (channel deleted / feed gone) increments ``consecutive_failures``;
+    any success (HTTP < 400, incl. 304 not-modified) resets it. Transient errors
+    (429 rate-limit, 5xx, network) are NEUTRAL — they neither increment nor reset,
+    so a YouTube outage can't falsely deactivate a live channel. After
+    ``deactivate_after`` consecutive gone-responses the channel is set
+    ``active=0`` with ``demoted_at=now`` so the dead feed stops being polled.
+
+    Returns True iff this call deactivated the channel.
+    """
+    cid = str(channel_id or "").strip()
+    if not cid:
+        return False
+    code = int(status_code) if status_code is not None else None
+    gone = code in (404, 410)
+    success = code is not None and code < 400
+
+    if success:
+        conn.execute(
+            "UPDATE youtube_channels SET consecutive_failures = 0 WHERE channel_id = ?",
+            (cid,),
+        )
+        conn.commit()
+        return False
+    if not gone:
+        return False  # transient (429/5xx/None) — leave the streak untouched
+
+    row = conn.execute(
+        "SELECT consecutive_failures FROM youtube_channels WHERE channel_id = ?",
+        (cid,),
+    ).fetchone()
+    if row is None:
+        return False
+    failures = int((row["consecutive_failures"] if "consecutive_failures" in row.keys() else 0) or 0) + 1
+
+    if failures >= max(1, int(deactivate_after)):
+        conn.execute(
+            "UPDATE youtube_channels SET consecutive_failures = ?, active = 0, demoted_at = ? "
+            "WHERE channel_id = ?",
+            (failures, _utc_now(), cid),
+        )
+        conn.commit()
+        logger.warning(
+            "Auto-deactivated YouTube channel %s after %d consecutive gone-responses (HTTP %s)",
+            cid, failures, code,
+        )
+        return True
+
+    conn.execute(
+        "UPDATE youtube_channels SET consecutive_failures = ? WHERE channel_id = ?",
+        (failures, cid),
+    )
+    conn.commit()
+    return False
+
+
 # ── Reporting ───────────────────────────────────────────────────────────
 
 def get_source_summary(conn: sqlite3.Connection) -> dict[str, Any]:

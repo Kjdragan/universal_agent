@@ -18,6 +18,7 @@ from csi_ingester.adapters.base import RawEvent, SourceAdapter
 from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.store.source_manager import (
     get_active_youtube_channels,
+    record_channel_fetch_result,
     seed_youtube_channels,
 )
 
@@ -328,6 +329,19 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         except Exception as exc:
             logger.warning("RSS request failed channel_id=%s error=%s", channel_id, exc)
             return []
+        # Track per-channel "gone" responses; deactivate a feed after N
+        # consecutive 404/410s so dead channels stop being polled (H18-b).
+        # Best-effort + transient-safe (429/5xx never deactivate).
+        if self._db_conn is not None:
+            try:
+                record_channel_fetch_result(
+                    self._db_conn,
+                    channel_id,
+                    status_code=response.status_code,
+                    deactivate_after=max(1, int(self.config.get("channel_deactivate_after", 10))),
+                )
+            except Exception as exc:
+                logger.debug("channel fetch-result tracking (non-fatal) channel_id=%s: %s", channel_id, exc)
         if response.status_code == 304:
             return []
         if response.status_code >= 400:
