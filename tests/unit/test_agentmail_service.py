@@ -2169,3 +2169,76 @@ class TestUniversalScanner:
         service._pre_triage_quarantine.assert_called_once()
         assert service._pre_triage_quarantine.call_args.kwargs["reason"] == "unknown_agentmail_sender"
         service._dispatch_fn.assert_not_awaited()
+
+
+class TestVpStreamForward:
+    """H7: VP status/intel FYI emails are forwarded to the operator's gmail."""
+
+    def test_forward_config_defaults(self, monkeypatch):
+        from universal_agent.services.agentmail_service import (
+            _vp_stream_forward_enabled,
+            _vp_stream_forward_to,
+        )
+        monkeypatch.delenv("UA_VP_STREAM_FORWARD_ENABLED", raising=False)
+        monkeypatch.delenv("UA_VP_STREAM_FORWARD_TO", raising=False)
+        assert _vp_stream_forward_enabled() is True
+        assert _vp_stream_forward_to() == "kevinjdragan@gmail.com"
+
+    def test_forward_can_be_disabled_and_retargeted(self, monkeypatch):
+        from universal_agent.services.agentmail_service import (
+            _vp_stream_forward_enabled,
+            _vp_stream_forward_to,
+        )
+        monkeypatch.setenv("UA_VP_STREAM_FORWARD_ENABLED", "0")
+        assert _vp_stream_forward_enabled() is False
+        monkeypatch.setenv("UA_VP_STREAM_FORWARD_TO", "ops@example.com")
+        assert _vp_stream_forward_to() == "ops@example.com"
+
+    @pytest.mark.asyncio
+    async def test_vp_fyi_email_is_forwarded_and_creates_no_task(self, service):
+        service.send_email = AsyncMock(return_value={"status": "sent", "message_id": "m"})
+
+        class _Message:
+            from_ = "Cody <vp.agents@agentmail.to>"
+            subject = "[VP Status] cleanup PR opened"
+            thread_id = "thd_vp_1"
+            message_id = "msg_vp_1"
+            text = "Opened PR #999. No action needed."
+            html = "<p>Opened PR #999.</p>"
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service._handle_inbound_email(_Event())
+
+        service.send_email.assert_awaited_once()
+        kw = service.send_email.await_args.kwargs
+        assert kw["to"] == "kevinjdragan@gmail.com"
+        assert "[VP Status]" in kw["subject"]
+        assert "Opened PR #999" in kw["text"]
+        assert kw["force_send"] is True
+        # FYI-only: still no task dispatched.
+        service._dispatch_fn.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_vp_fyi_forward_disabled_skips_send(self, service, monkeypatch):
+        monkeypatch.setenv("UA_VP_STREAM_FORWARD_ENABLED", "0")
+        service.send_email = AsyncMock()
+
+        class _Message:
+            from_ = "vp.agents@agentmail.to"
+            subject = "[VP Status] x"
+            thread_id = "t"
+            message_id = "msg_vp_2"
+            text = "y"
+            html = ""
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service._handle_inbound_email(_Event())
+
+        service.send_email.assert_not_awaited()
+        service._dispatch_fn.assert_not_awaited()
