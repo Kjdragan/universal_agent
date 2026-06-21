@@ -90,7 +90,9 @@ flowchart TD
     AUTO -- no --> VPCC{VP status CC to Simone?}
     VPCC -- yes --> FWD[forward VP stream to operator gmail]
     FWD --> DROP2[log FYI, claim seen, return]
-    VPCC -- no --> SEEN{claim_seen_message_id}
+    VPCC -- no --> IGN{ignore-marker test send?}
+    IGN -- yes --> DROP2b[claim seen, return]
+    IGN -- no --> SEEN{claim_seen_message_id}
     SEEN -- duplicate --> DROP3[skip]
     SEEN -- new --> EXTRACT[_extract_reply_text strips quotes]
     EXTRACT --> ORIGIN{external sender?<br/>not trusted, not self-send}
@@ -128,6 +130,10 @@ order:
   interception point. Best-effort (a forward failure never blocks the inbound
   pipeline); gated by `UA_VP_STREAM_FORWARD_ENABLED` (default on), target
   `UA_VP_STREAM_FORWARD_TO` (default `kevinjdragan@gmail.com`).
+- **Ignore-marker suppression** (`_is_ignore_marker`): operator test-sends whose
+  subject OR first body line *starts with* `(ignore)` / `[ignore]` / `ignore:` /
+  `(test)` are dropped (FYI-only, no task), mirroring the automated/VP-FYI gates.
+  Start-anchored so legitimate mail mentioning "ignore" mid-sentence is unaffected.
 - **Dedup** (`_claim_seen_message_id`): atomic claim against the
   `agentmail_seen_messages` table; duplicates are skipped. On any later
   exception the claim is released (`_release_seen_message_id`) so the message

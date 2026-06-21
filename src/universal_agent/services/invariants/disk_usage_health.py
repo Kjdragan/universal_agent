@@ -15,11 +15,14 @@ partition):
 - `/opt` — where AGENT_RUN_WORKSPACES + the repo's .uv-cache live
 - `/var/lib` — where csi.db + activity_state.db + runtime_state.db live
 
-The dominant growth driver (confirmed 2026-06-04) is the unpruned uv cache
-(~65G across ua ~/.cache/uv, root /root/.cache/uv, /tmp/uv_cache, and the
-repo .uv-cache), NOT AGENT_RUN_WORKSPACES or the DBs. remote_deploy.sh now
-prunes the uv caches on every deploy; this probe surfaces real top consumers
-via runbook_command. See scripts/deploy/remote_deploy.sh and
+The dominant growth driver as of 2026-06-21 is unpruned **VP-coder mission
+workspaces** under AGENT_RUN_WORKSPACES/vp_coder_primary_external (~22G; the
+weekly pruner had been a no-op due to a writer/reaper path mismatch, fixed in
+scripts/vp_coder_workspace_pruner.py). The uv cache was the driver in 2026-06-04
+but is now ~tiny (~676M — remote_deploy.sh prunes it every deploy), so it is no
+longer the concern. Secondary one-time reclaimable: stale containerd build cache
+(`docker builder prune`). This probe surfaces real top consumers via
+runbook_command. See scripts/deploy/remote_deploy.sh and
 project_docs/06_platform/04_deployment_and_cicd.md.
 
 Severity (strict per operator pattern set in P4):

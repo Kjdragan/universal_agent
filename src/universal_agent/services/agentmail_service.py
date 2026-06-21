@@ -472,6 +472,22 @@ def _is_automated_sender(sender_email: str, subject: str = "") -> bool:
     return False
 
 
+# Operator test-email markers. A message whose subject OR first body line STARTS
+# WITH one of these is dropped (FYI-only, no task) — the operator uses them to
+# poke the inbox without spawning work. Matched at the start only, so legitimate
+# mail mentioning "ignore" mid-sentence is unaffected.
+_IGNORE_MARKERS = ("(ignore)", "[ignore]", "ignore:", "(test ignore)", "(test)")
+
+
+def _is_ignore_marker(subject: str, first_line: str = "") -> bool:
+    """Return True if the email is an operator test-send to be silently dropped."""
+    subj = (subject or "").strip().lower()
+    line = (first_line or "").strip().lower()
+    return any(subj.startswith(m) for m in _IGNORE_MARKERS) or any(
+        line.startswith(m) for m in _IGNORE_MARKERS
+    )
+
+
 # ── VP agent routing helpers ─────────────────────────────────────────
 # These support the Hybrid Routing model where Kevin can email Cody/Atlas
 # directly at the shared VP inbox, with Simone kept informed via CC.
@@ -1928,6 +1944,19 @@ class AgentMailService:
                     text_body=text_body,
                     html_body=html_body,
                     message_id=message_id,
+                )
+                if message_id:
+                    self._claim_seen_message_id(message_id)
+                return
+
+            # ── Drop operator test-send "(ignore)" emails ──
+            # The operator pokes the inbox with subjects/first-lines like
+            # "(ignore) ..."; suppress them (FYI-only, no task) the same way as
+            # automated/VP-FYI mail.
+            if _is_ignore_marker(subject, (text_body or "").lstrip().split("\n", 1)[0]):
+                logger.info(
+                    "📧🧪 Ignore-marker test email suppressed (no task): from=%s subject=%r",
+                    sender_email, subject,
                 )
                 if message_id:
                     self._claim_seen_message_id(message_id)
@@ -4169,6 +4198,16 @@ class AgentMailService:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def is_ready(self) -> bool:
+        """True only when enabled, client built, AND the inbox id is resolved.
+
+        Callers (e.g. the notification dispatcher) can poll this to avoid a
+        startup race where a send fires before ``_ensure_inbox`` finishes
+        resolving the inbox id — which would raise "AgentMail inbox not
+        configured" transiently. See ``_assert_ready``.
+        """
+        return bool(self._enabled and self._client and self._inbox_id)
 
     def _assert_ready(self) -> None:
         if not self._enabled or not self._client:

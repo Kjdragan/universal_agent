@@ -16,10 +16,12 @@ import asyncio
 import logging
 import os
 from pathlib import Path
+import shutil
 import sys
+import time
 
-from universal_agent.feature_flags import vp_coder_workspace_root
 from universal_agent.session.reaper import cleanup_stale_workspaces
+from universal_agent.vp.profiles import get_vp_profile
 
 logger = logging.getLogger(__name__)
 
@@ -36,36 +38,79 @@ def _retention_hours(default: int = 168) -> int:
     return value if value > 0 else default
 
 
+def _resolve_coder_workspace_root() -> Path | None:
+    """Resolve the SAME path the writer uses (vp/profiles.py::resolve_vp_profiles).
+
+    The previous implementation read ``UA_VP_CODER_WORKSPACE_ROOT`` directly with
+    no fallback, so when the env var is unset (the production default) the pruner
+    no-op'd while the writer kept creating workspaces under
+    ``AGENT_RUN_WORKSPACES/vp_coder_primary_external`` — an unbounded leak (H21).
+    Resolving via the profile guarantees writer and reaper can never diverge.
+    """
+    profile = get_vp_profile("vp.coder.primary")
+    if profile is None or not getattr(profile, "workspace_root", None):
+        return None
+    return Path(profile.workspace_root)
+
+
+def _hard_delete_aged_archive(archive_root: Path, max_age_hours: int) -> int:
+    """Delete archived workspace dirs older than ``max_age_hours``.
+
+    ``cleanup_stale_workspaces`` only MOVES stale dirs into ``_archive`` on the
+    SAME filesystem, which reclaims zero bytes. This second tier actually frees
+    the space, after a longer grace window (default 2× retention) so an archived
+    dir is recoverable for a while before deletion.
+    """
+    if not archive_root.exists():
+        return 0
+    cutoff = time.time() - max(1, max_age_hours) * 3600
+    deleted = 0
+    for child in sorted(archive_root.iterdir()):
+        try:
+            if child.is_dir() and child.stat().st_mtime < cutoff:
+                shutil.rmtree(child, ignore_errors=True)
+                deleted += 1
+        except Exception as exc:  # never let one bad dir abort the sweep
+            logger.warning("Failed deleting archived workspace %s: %s", child, exc)
+    return deleted
+
+
 async def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    root_str = vp_coder_workspace_root(default="")
-    if not root_str:
-        logger.info("UA_VP_CODER_WORKSPACE_ROOT unset; nothing to prune.")
+    root = _resolve_coder_workspace_root()
+    if root is None:
+        logger.info("VP-coder profile unavailable (VP disabled?); nothing to prune.")
         return 0
 
-    root = Path(root_str).expanduser()
-    if not root.exists():
-        logger.info("VP-coder workspace root does not exist: %s", root)
-        return 0
-
+    root = root.expanduser()
     archive_root = root.parent / f"{root.name}_archive"
     retention = _retention_hours()
+    delete_after = retention * 2  # grace before hard-delete from _archive
 
     logger.info(
-        "Pruning VP-coder workspaces older than %dh (root=%s, archive=%s)",
+        "Pruning VP-coder workspaces older than %dh (root=%s, archive=%s, delete_after=%dh)",
         retention,
         root,
         archive_root,
+        delete_after,
     )
 
-    archived = await cleanup_stale_workspaces(
-        max_age_hours=retention,
-        workspaces_dir=root,
-        archive_dir=archive_root,
-        dry_run=False,
-    )
-    logger.info("Archived %d stale VP-coder workspace(s).", len(archived))
+    archived: list = []
+    if root.exists():
+        archived = await cleanup_stale_workspaces(
+            max_age_hours=retention,
+            workspaces_dir=root,
+            archive_dir=archive_root,
+            dry_run=False,
+        )
+        logger.info("Archived %d stale VP-coder workspace(s).", len(archived))
+    else:
+        logger.info("VP-coder workspace root does not exist yet: %s", root)
+
+    # Reclaim disk: archiving alone (a same-filesystem move) frees nothing.
+    deleted = _hard_delete_aged_archive(archive_root, delete_after)
+    logger.info("Hard-deleted %d archived workspace(s) older than %dh.", deleted, delete_after)
     return 0
 
 

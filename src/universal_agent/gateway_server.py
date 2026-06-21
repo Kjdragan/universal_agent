@@ -15522,6 +15522,27 @@ async def lifespan(app: FastAPI):
             interval = float(os.getenv("UA_NOTIFICATION_DISPATCHER_INTERVAL_SECONDS", "30") or 30)
 
             async def _start_notification_dispatcher() -> None:
+                # Wait for AgentMail to finish resolving its inbox before the
+                # first dispatch tick. The dispatcher and the AgentMail startup
+                # are independent post-deploy-window tasks; without this, the
+                # first tick can call send_email before _ensure_inbox completes
+                # and log a transient "AgentMail inbox not configured" error
+                # (H19). Bounded so a genuinely unconfigured inbox still surfaces.
+                _ready_deadline = 30.0
+                _waited = 0.0
+                while (
+                    _agentmail_service is not None
+                    and not _agentmail_service.is_ready()
+                    and _waited < _ready_deadline
+                ):
+                    await asyncio.sleep(1.0)
+                    _waited += 1.0
+                if _agentmail_service is not None and not _agentmail_service.is_ready():
+                    logger.warning(
+                        "🔔 Notification dispatcher starting before AgentMail is ready "
+                        "(waited %.0fs) — email sends may transiently fail until the inbox resolves",
+                        _waited,
+                    )
                 logger.info(
                     "🔔 Notification dispatcher started (interval=%.0fs cooldown=%.0fs)",
                     interval,
