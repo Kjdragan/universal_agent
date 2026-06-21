@@ -13,7 +13,7 @@ code_paths:
   - scripts/claude_with_mcp_env.sh
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/scripts/glm52_probe.py
-last_verified: 2026-06-13
+last_verified: 2026-06-21
 ---
 
 # Model Choice & Resolution
@@ -325,7 +325,7 @@ in turn decides what a tier name resolves to in practice.
 |---|---|---|---|---|
 | 1 | **Interactive coding** (Kevin's `claude` / Antigravity) | Anthropic Max via OAuth (real Opus/Sonnet/Haiku) | `ANTHROPIC_*` **excluded/stripped** so OAuth wins | `scripts/claude_with_mcp_env.sh` → `scripts/_claude_launcher.py` |
 | 2 | **UA autonomous in-process** (Simone heartbeats, Atlas, dispatch sweep, intel crons) | ZAI proxy / GLM (glm-5.2 opus, glm-5-turbo sonnet) | `ANTHROPIC_*` ZAI-routing vars **kept** on `os.environ` (loaded at service start) | `agent_setup.py` `ClaudeAgentOptions` |
-| 3 | **Cody per-task CLI subprocess** | Anthropic Max by default (or ZAI when `cody_mode="zai"`) | `ANTHROPIC_*` scrubbed when `cody_mode=="anthropic"` | `vp/clients/claude_cli_client.py::_build_cli_env` |
+| 3 | **Cody per-task CLI subprocess** | ZAI / GLM by default (since 2026-06-07; Anthropic Max only when `cody_mode="anthropic"`) | `ANTHROPIC_*` scrubbed when `cody_mode=="anthropic"` | `vp/clients/claude_cli_client.py::_build_cli_env` |
 
 The governing principle: **any `ANTHROPIC_*` key on `os.environ` overrides OAuth.**
 `ANTHROPIC_API_KEY` makes Claude Code treat it as an external API key (and reject it
@@ -460,21 +460,30 @@ Everything else (~25 direct SDK clients across `services/`, `urw/`, `discord_int
 Every Cody task carries a `cody_mode` ∈ {`"zai"`, `"anthropic"`} that decides whether it
 runs cheap (ZAI/GLM) or on real Anthropic Max.
 
-`resolve_cody_mode(task, *, conn=None)` resolution order (highest priority first):
+`resolve_cody_mode(task, *, conn=None, vp_id=None)` resolution order (highest priority first):
 
 1. `task["cody_mode"]` — per-task override on `task_hub_items`.
-2. DB setting `cody_default_mode` — operator-configurable via the dashboard tile,
+2. Per-VP DB pin — operator flip of a single VP (e.g. CODIE → zai) without disturbing the
+   others, via `_resolve_vp_db_setting`. Requires a `conn`; skipped if `conn` is `None`.
+3. Global DB setting `cody_default_mode` — operator-configurable via the dashboard tile,
    persisted in `task_hub_settings` (read through `_resolve_db_setting` →
    `task_hub._get_setting`). Requires a `conn` to the activity DB; skipped if `conn`
    is `None`.
-3. `UA_CODY_DEFAULT_MODE` env var — deploy-time override, usually unset.
-4. `_HARDCODED_FALLBACK_MODE = "anthropic"`.
+4. `UA_CODY_DEFAULT_MODE` env var — deploy-time override, usually unset.
+5. `VpProfile.inference_mode` for the resolving `vp_id` — the agent defines its own
+   inference backend (`_resolve_profile_default`). Only consulted when a `vp_id` is
+   supplied and nothing above matched.
+6. `_HARDCODED_FALLBACK_MODE = "zai"` — the final VP-blind default.
 
-> **Gotcha — the hardcoded default is `anthropic`, flipped from `zai` on 2026-05-11 PM**
-> per an operator decision. Cody now runs on real Anthropic Max for *every* task unless
-> explicitly overridden. Reverting requires a per-task `cody_mode="zai"`, the dashboard
-> tile, or `UA_CODY_DEFAULT_MODE=zai`. (Older docs/memory may say "Cody normally runs on
-> ZAI" — that's stale.)
+> **Gotcha — the hardcoded default is `zai`, re-flipped from `anthropic` on 2026-06-07.**
+> It was flipped `zai → anthropic` on 2026-05-11 PM, then flipped **back**
+> `anthropic → zai` on 2026-06-07 (`cody_mode.py::_HARDCODED_FALLBACK_MODE`) because
+> Anthropic began **API-billing the Claude-Code-via-Max SDK path**. Every CODIE/ATLAS/HOMER
+> `VpProfile.inference_mode` is also `"zai"`. So Cody/all VPs now run on **ZAI/GLM for every
+> task** unless explicitly opted into Anthropic Max: per-task `cody_mode="anthropic"`, a
+> per-VP DB pin, the global dashboard tile, `UA_CODY_DEFAULT_MODE=anthropic`, or a VP profile
+> with `inference_mode="anthropic"`. (Older docs/memory saying "Cody defaults to Anthropic
+> Max" reflect the 2026-05-11→2026-06-07 window and are now stale.)
 
 `resolve_from_payload(payload)` is the downstream variant (VP worker, CLI client) used
 after dispatch when the task row is out of scope. It reads `payload["cody_mode"]`, then
