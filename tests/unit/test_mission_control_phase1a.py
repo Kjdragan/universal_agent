@@ -340,8 +340,13 @@ def test_csi_ingester_tile_yellow_when_some_sources_stale(csi_db, monkeypatch):
     assert [s["source"] for s in state.evidence["stale_sources"]] == [stale_source]
 
 
-def test_csi_ingester_tile_red_when_all_sources_stale(csi_db):
+def test_csi_ingester_tile_red_when_all_sources_stale(csi_db, monkeypatch):
     """Every monitored source past its threshold → RED (ingester down)."""
+    # Arm the HN snapshot cron so hackernews rejoins the effective monitored set
+    # (parked behind UA_HACKERNEWS_SNAPSHOT_ENABLED by default since the liveness
+    # repark). Mirrors the yellow sibling so this test exercises the full
+    # multi-source RED premise rather than the degenerate single-source case.
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")
     from universal_agent.services.invariants.csi_source_liveness import (
         effective_source_thresholds,
     )
