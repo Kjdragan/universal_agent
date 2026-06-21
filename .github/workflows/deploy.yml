@@ -29,6 +29,12 @@ on:
       # reads these — they're operator-tier state — so a deploy that
       # only touches memory/ would restart the gateway for nothing.
       - 'memory/**'
+      # Durable scratchpad artifact archive — dated copies + index of every
+      # exhibit published from this repo interactively (written by
+      # publish_scratch.sh / scratch_archive.py). Operator-tier records, never
+      # read by the gateway, so a deploy on an archived-exhibit commit would
+      # restart prod for zero behavior change.
+      - 'scratch_archive/**'
   workflow_dispatch:
 
 # 2026-05-11 PM: serialize concurrent deploys to prevent races on the

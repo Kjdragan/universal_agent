@@ -41,10 +41,19 @@ def _isolate_scratch_root(tmp_path_factory):
     process_daily_digest with email_to set) writes there instead of /home/ua/ua_scratch.
     This is the systemic backstop behind per-test mocking — it closes the leak that put
     "Fake Digest" stubs into the live store when the suite ran on the VPS.
+
+    Also pins UA_SCRATCH_ARCHIVE_ROOT to a throwaway dir: publish_scratch.sh now drops a
+    durable archive copy after each publish, and the desktop/dev default for that root is
+    ``<repo>/scratch_archive`` — so without this a test reaching the real publish path
+    would write archive files straight into the working tree. Pointing it at a temp dir
+    keeps the repo clean.
     """
     root = tmp_path_factory.mktemp("ua_scratch_isolated")
+    archive_root = tmp_path_factory.mktemp("ua_scratch_archive_isolated")
     prev = os.environ.get("UA_SCRATCH_ROOT")
+    prev_archive = os.environ.get("UA_SCRATCH_ARCHIVE_ROOT")
     os.environ["UA_SCRATCH_ROOT"] = str(root)
+    os.environ["UA_SCRATCH_ARCHIVE_ROOT"] = str(archive_root)
     try:
         yield
     finally:
@@ -52,6 +61,10 @@ def _isolate_scratch_root(tmp_path_factory):
             os.environ.pop("UA_SCRATCH_ROOT", None)
         else:
             os.environ["UA_SCRATCH_ROOT"] = prev
+        if prev_archive is None:
+            os.environ.pop("UA_SCRATCH_ARCHIVE_ROOT", None)
+        else:
+            os.environ["UA_SCRATCH_ARCHIVE_ROOT"] = prev_archive
 
 
 @pytest.fixture
