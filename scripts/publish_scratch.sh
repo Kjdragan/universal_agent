@@ -49,6 +49,17 @@ TS_HOST="uaonvps.taildcc090.ts.net"
 INDEX_BUILDER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/build_scratch_index.py"
 REMOTE_INDEX_BUILDER="/opt/universal_agent/scripts/build_scratch_index.py"
 
+# Durable artifact archive (stdlib-only). After a successful publish, drop a permanent,
+# dated, named copy + ongoing index into a per-project archive root, so there's always a
+# standing record of every exhibit — independent of the docs system and never pruned.
+# Runs locally on the publishing machine; the src file is still present at archive time.
+ARCHIVER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scratch_archive.py"
+ARCHIVE_ENABLED="${UA_SCRATCH_ARCHIVE_ENABLED:-1}"
+# Permanent archive store on the VPS for autonomous (robot) runs. A SIBLING of
+# SCRATCH_ROOT — never under it — so prune_scratch.py can never reach it. Retention is
+# unlimited by design; nothing prunes the archive.
+ARCHIVE_ROOT_VPS="${UA_SCRATCH_ARCHIVE_ROOT:-/home/ua/ua_scratch_archive}"
+
 err() { printf '%s\n' "$*" >&2; }
 die() { err "ERROR: $*"; exit 1; }
 
@@ -66,15 +77,16 @@ cmd_status() {
 }
 
 cmd_init() {
-  # Configure the /scratch path-mount. Idempotent: tailscale serve replaces an
-  # existing mapping with an identical one, and leaves all other mappings intact.
-  local setup='mkdir -p '"$SCRATCH_ROOT"' && sudo tailscale serve --bg --set-path /scratch '"$SCRATCH_ROOT"
+  # Configure the /scratch and /scratch-archive path-mounts. Idempotent: tailscale serve
+  # replaces an existing mapping with an identical one, and leaves all other mappings
+  # intact. /scratch-archive serves the permanent durable archive (browsable index).
+  local setup='mkdir -p '"$SCRATCH_ROOT"' '"$ARCHIVE_ROOT_VPS"' && sudo tailscale serve --bg --set-path /scratch '"$SCRATCH_ROOT"' && sudo tailscale serve --bg --set-path /scratch-archive '"$ARCHIVE_ROOT_VPS"
   if on_vps; then
     bash -c "$setup"
   else
     run_remote "$setup"
   fi
-  err "Scratchpad serve mapping ensured. Verifying it did not disturb others:"
+  err "Scratchpad + archive serve mappings ensured. Verifying they did not disturb others:"
   cmd_status
 }
 
@@ -107,6 +119,7 @@ cmd_publish() {
 
   reindex_quiet
   local url="https://$TS_HOST/scratch/$slug/$fname"
+  archive_quiet "$src" "$slug" "$url"
   err "Published (tailnet-only, private to your devices):"
   # The URL goes to stdout alone so callers can capture it: URL=$(publish_scratch.sh f.html)
   printf '%s\n' "$url"
@@ -135,6 +148,7 @@ cmd_publish_dir() {
 
   reindex_quiet
   local url="https://$TS_HOST/scratch/$slug/"
+  archive_quiet "$src" "$slug" "$url" "dir"
   err "Published directory (tailnet-only, private to your devices):"
   printf '%s\n' "$url"
 }
@@ -155,6 +169,32 @@ cmd_reindex() {
   else
     run_remote "python3 '$REMOTE_INDEX_BUILDER'"
   fi
+}
+
+# Where the durable copy lands: an explicit UA_SCRATCH_ARCHIVE_ROOT override always wins;
+# on the VPS it's the permanent store; on the desktop it's a git-tracked scratch_archive/
+# INSIDE whatever repo you're working in (so artifacts are organized per-project), falling
+# back to ~/ua_scratch_archive when you're not inside a git repo.
+resolve_archive_root() {
+  if [[ -n "${UA_SCRATCH_ARCHIVE_ROOT:-}" ]]; then printf '%s\n' "$UA_SCRATCH_ARCHIVE_ROOT"; return; fi
+  if on_vps; then printf '%s\n' "$ARCHIVE_ROOT_VPS"; return; fi
+  local repo
+  repo="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$repo" ]]; then printf '%s\n' "$repo/scratch_archive"; else printf '%s\n' "$HOME/ua_scratch_archive"; fi
+}
+
+# Drop a durable, dated copy of what we just published into the per-project archive + index.
+# Best-effort + quiet: a failure here must NEVER fail a publish (the artifact is already
+# served), and stdout stays clean so it can't pollute the URL on stdout.
+archive_quiet() {
+  local src="$1" slug="$2" url="$3" is_dir="${4:-}"
+  [[ "$ARCHIVE_ENABLED" == "1" ]] || return 0
+  [[ -f "$ARCHIVER" ]] || { err "warning: archiver not found at $ARCHIVER (artifact still published)"; return 0; }
+  local root args
+  root="$(resolve_archive_root)"
+  args=(--src "$src" --slug "$slug" --root "$root" --url "$url")
+  [[ -n "$is_dir" ]] && args+=(--dir)
+  python3 "$ARCHIVER" "${args[@]}" >/dev/null 2>&1 || err "warning: artifact archive failed (artifact still published)"
 }
 
 main() {

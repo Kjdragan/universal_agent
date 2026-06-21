@@ -133,6 +133,33 @@ with the raw shell command). Hand the operator the index URL when they want to *
 artifact rather than open a specific one; hand a direct `/scratch/<slug>/…` URL for a
 specific report.
 
+## HTML by default; render markdown only to *view* an existing markdown
+
+Default to **rich HTML** for exhibits and reports — graphics, diagrams, and interactivity
+convey concepts far better than plain prose, so HTML is the better choice for most
+deliverables. The markdown path is for a narrower case: when the operator wants to **see an
+existing markdown document displayed easily** (e.g. "show me this `.md`", "render this
+doc"). Then publish it through `publish_markdown_to_scratch` (or pass markdown to the skill)
+so it renders as a styled, light-mode page with a working TOC and the review toolbar —
+rather than hand-converting it to bespoke HTML. Rule of thumb: *viewing a markdown → render
+markdown; building an exhibit → author HTML.*
+
+## Every publish is auto-archived (durable, dated, per-project)
+
+After **every** successful publish, a permanent dated copy + an ongoing index are written
+to a per-project archive (`scripts/scratch_archive.py`, wired into `publish_scratch.sh`),
+so there's a standing record of every exhibit — independent of the docs system and **never
+pruned**. You do nothing extra; publish as usual.
+
+- **Interactive runs (desktop):** archived into a git-tracked `<repo>/scratch_archive/`
+  *inside whatever repo you're working in* — per-project, committed with that project.
+- **Autonomous runs (VPS):** archived into `/home/ua/ua_scratch_archive/`, served read-only
+  at `https://uaonvps.taildcc090.ts.net/scratch-archive/`.
+- Each archive root holds `INDEX.md` (newest-first, open this), `index.html` (searchable),
+  `index.jsonl` (ledger), and dated `<YYYY-MM-DD>/<HHMMSS>__<slug>__<name>` copies.
+- Knobs: `UA_SCRATCH_ARCHIVE_ENABLED=0` disables it; `UA_SCRATCH_ARCHIVE_ROOT` overrides the
+  root. Best-effort — archiving never fails a publish.
+
 ## Two-way review (mark up → respond) — you ↔ Claude Code
 
 Markdown/doc-set pages (anything rendered through `scratch_publish.py::_html_page`) carry a
