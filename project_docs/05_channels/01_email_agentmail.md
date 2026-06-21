@@ -92,11 +92,13 @@ flowchart TD
     VPCC -- no --> SEEN{claim_seen_message_id}
     SEEN -- duplicate --> DROP3[skip]
     SEEN -- new --> EXTRACT[_extract_reply_text strips quotes]
-    EXTRACT --> TRUST{sender trusted?}
-    TRUST -- untrusted --> SEC[email_security pre-triage gates]
-    SEC -- quarantine --> PTQ[_pre_triage_quarantine]
-    SEC -- clean --> TGT[detect target VP by name]
-    TRUST -- trusted --> TGT
+    EXTRACT --> ORIGIN{external sender?<br/>not trusted, not self-send}
+    ORIGIN -- external --> G01[Gate 0/1: blocklist + unknown @agentmail.to]
+    G01 -- quarantine --> PTQ[_pre_triage_quarantine]
+    G01 -- pass --> SCAN[Gate 2: scan_for_injection<br/>ALL senders]
+    ORIGIN -- "trusted / self-send" --> SCAN
+    SCAN -- injection --> PTQ
+    SCAN -- clean --> TGT[detect target VP by name]
     TGT --> MAT[materialize email task in Task Hub]
     MAT --> QUEUE[_queue_insert_inbound into agentmail_inbox_queue]
     QUEUE --> WAKE[set queue_wakeup]
@@ -137,30 +139,48 @@ Defaults (`_DEFAULT_TRUSTED_SENDERS`):
 - `kevin.dragan@outlook.com`
 - `kevinjdragan@gmail.com`
 - `kevin@clearspringcg.com`
-- `oddcity216@agentmail.to` — Simone's own inbox, so a Simone→Simone send (or an
-  app sending **as** Simone) is ingested + triaged instead of auto-quarantined as
-  an unknown `@agentmail.to` sender.
+
+Simone's own inbox (`oddcity216@agentmail.to`) is **deliberately NOT** in the
+trust list. A self-send (Simone→Simone, or an app sending **as** Simone — e.g. an
+external diagnostics app emailing logs into the inbox) gets its own
+`sender_role = "self_send"` classification (distinct from `trusted_operator` and
+`external`). It is **not trusted** (no auto-execute), but it is exempt from the
+unknown-`@agentmail.to` quarantine at **both** Gate 1 (ingress) **and** the
+post-triage routing in `_route_external_email_task` — so it ingests and reaches
+normal review. It is **still run through the injection scanner** (Gate 2) like
+every other message. Trusting it instead would route it *around* the scanner — and
+because `From` is forgeable, "trust ⇒ skip scan" is the exact hole this design
+closes. (See `agentmail_service.py::_is_self_send` and the `sender_role` branch in
+`_handle_inbound_email`.)
 
 Overridable via `UA_AGENTMAIL_TRUSTED_SENDERS` (comma-separated). Trust drives
-everything downstream: trusted mail can auto-execute; untrusted mail is screened
-hard and parked for review. The list is **static** (loaded once at init from
-env/code); there is no runtime/agent-driven trust expansion — any future dynamic
-trust must be gated against prompt-injection so Simone can't be talked into
-trusting an attacker.
+ingestion/quarantine downstream: trusted mail can auto-execute; untrusted mail is
+parked for review. Trust does **not** govern scanning — the injection scanner runs
+on every message regardless of trust (see §3). The list is **static** (loaded once
+at init from env/code); there is no runtime/agent-driven trust expansion — any
+future dynamic trust must be gated against prompt-injection so Simone can't be
+talked into trusting an attacker.
 
-### 3. Pre-triage security screening (untrusted only)
+### 3. Pre-triage security screening
 
 `email_security.py` is **pure Python, no LLM** — deterministic, microsecond-fast,
 and runs *before* any content reaches a triage LLM (closing the gap where the
-old auto-quarantine depended on triage completing). For untrusted senders,
-`_handle_inbound_email` runs three gates:
+old auto-quarantine depended on triage completing).
 
-- **Gate 0 — sender blocklist** (`is_sender_blocked`): blocked in the
-  `email_sender_reputation` table → quarantine.
-- **Gate 1 — unknown @agentmail.to sender** (`should_auto_quarantine_agentmail_sender`):
-  any non-trusted `@agentmail.to` address is auto-quarantined as high-risk
-  agent-to-agent traffic.
-- **Gate 2 — injection pattern scan** (`scan_for_injection`): regex scan for
+The gates split by purpose: **Gate 0/1 are origin gates** that apply only to
+genuinely external senders (skipped for trusted operators and self-sends), while
+**Gate 2 — the injection scanner — runs on EVERY inbound message** (trusted,
+untrusted, self-send). Trust governs ingestion/quarantine, never scanning: a
+`From` address is forgeable, so a spoofed "trusted" sender must not be a way to
+skip the scan. `_handle_inbound_email` runs:
+
+- **Gate 0 — sender blocklist** (`is_sender_blocked`) *(external only)*: blocked
+  in the `email_sender_reputation` table → quarantine.
+- **Gate 1 — unknown @agentmail.to sender** (`should_auto_quarantine_agentmail_sender`)
+  *(external only)*: any non-trusted `@agentmail.to` address is auto-quarantined as
+  high-risk agent-to-agent traffic. **Self-sends are exempt** (`_is_self_send`) so
+  they ingest — but they still hit Gate 2.
+- **Gate 2 — injection pattern scan** (`scan_for_injection`) *(ALL senders)*: regex scan for
   remote-code fetch (`curl http://`), package execution (`npx`, `npm install`,
   `pip install`, `uv add`), skill/MCP injection (`skill_url:`, `mcp: http://`),
   prompt injection ("ignore previous instructions", "system prompt:"), role
@@ -173,7 +193,10 @@ old auto-quarantine depended on triage completing). For untrusted senders,
 Any gate hit → `_pre_triage_quarantine`, which materializes the email as a
 quarantined Task Hub item, records the quarantine in sender reputation, emits an
 operator notification, and **never** enqueues the email or dispatches it to a
-triage agent.
+triage agent. A **Gate 2 injection flag quarantines regardless of trust** —
+including a (possibly spoofed) trusted operator address — as
+quarantine-with-notification: the held message is reviewable and normal content
+won't trip the scanner, so this is the safe anti-spoofing posture.
 
 **Sender reputation** (`email_sender_reputation` table) tracks every untrusted
 sender: `record_sender_seen` on arrival, `record_sender_quarantined` on a
@@ -433,9 +456,13 @@ Simone. `vp_display_name` maps `vp.coder.primary` → "Cody",
   `UA_AGENTMAIL_WS_FAIL_OPEN_AFTER_ATTEMPTS` (default 3) attempts, the WS
   listener stops and the system relies on the polling loop. This avoids hammering
   AgentMail on auth/rate-limit failures.
-- **Polling fallback** (`_inbox_poll_loop`): every
+- **Polling fallback** (`_poll_inbox_once` / `_inbox_poll_loop`): every
   `UA_AGENTMAIL_INBOUND_POLL_INTERVAL_SECONDS` (default 60, min 15) when
-  `UA_AGENTMAIL_INBOUND_POLL_ENABLED=1`. Processes oldest-first.
+  `UA_AGENTMAIL_INBOUND_POLL_ENABLED=1`. Processes oldest-first. Messages
+  `from` the inbox's own address are split by `_is_self_send`: a pure **outbound
+  copy** (Simone's own digests/alerts — `sent` label only) is dropped, but a
+  deliberate **self-send** (`received` label / inbox address in `To`) is processed
+  through `_handle_inbound_email` like any other inbound message.
 - **Read timeouts**: each read op is bounded by `UA_AGENTMAIL_READ_TIMEOUT_SECONDS`
   (default 12); slow reads above `UA_AGENTMAIL_SLOW_READ_LOG_SECONDS` (default 5)
   are logged. The SDK client timeout is `UA_AGENTMAIL_API_TIMEOUT_SECONDS`
