@@ -21,6 +21,7 @@ Never raises — the briefing must not break because the watchdog query did.
 
 from __future__ import annotations
 
+from datetime import datetime
 import sqlite3
 from unittest.mock import MagicMock, patch
 
@@ -28,7 +29,12 @@ import pytest
 
 from universal_agent.services.watchdog_briefing_context import (
     build_briefing_block,
+    render_in_window_recovered_criticals,
 )
+
+
+def _ts(iso: str) -> float:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
 
 
 def _ok_payload() -> dict:
@@ -201,3 +207,74 @@ def test_block_never_raises(monkeypatch):
     block = build_briefing_block()
     assert isinstance(block, str)
     assert block == ""
+
+
+# ── render_in_window_recovered_criticals (the bug fix) ───────────────────────
+# Issue 8: a 1:10a critical page (csi_source_liveness hackernews false alarm)
+# fired in-window and recovered before the 6:30a render. The live endpoint
+# reflects only the current heartbeat, so the digest falsely read "no critical
+# alerts". Reconstruct the recovered page from the durable digest-cooldown
+# columns on the singleton proactive_health snapshot.
+
+_NOW = _ts("2026-06-21T06:30:00+00:00")
+_IN_WINDOW_SENT = "2026-06-21T01:10:00+00:00"  # 5h20m before render — inside 24h
+_OUT_OF_WINDOW_SENT = "2026-06-19T01:10:00+00:00"  # ~53h before render — outside 24h
+
+
+def test_recovered_line_emitted_when_in_window_and_no_longer_critical():
+    """In-window page + finding-id absent from current criticals -> recovered line."""
+    line = render_in_window_recovered_criticals(
+        current_critical_ids=set(),  # live endpoint is clean now
+        last_digest_fingerprint="invariant:csi_source_liveness",
+        last_digest_sent_at_utc=_IN_WINDOW_SENT,
+        now_ts=_NOW,
+    )
+    assert line != ""
+    assert "Criticals fired in-window (since recovered)" in line
+    assert "invariant:csi_source_liveness" in line
+
+
+def test_recovered_line_omitted_when_still_critical():
+    """A finding still in the current critical set is active, not recovered -> "" ."""
+    line = render_in_window_recovered_criticals(
+        current_critical_ids={"invariant:csi_source_liveness"},
+        last_digest_fingerprint="invariant:csi_source_liveness",
+        last_digest_sent_at_utc=_IN_WINDOW_SENT,
+        now_ts=_NOW,
+    )
+    assert line == ""
+
+
+def test_recovered_line_omitted_when_page_outside_window():
+    """A page older than the lookback window is not 'in-window' -> "" ."""
+    line = render_in_window_recovered_criticals(
+        current_critical_ids=set(),
+        last_digest_fingerprint="invariant:csi_source_liveness",
+        last_digest_sent_at_utc=_OUT_OF_WINDOW_SENT,
+        now_ts=_NOW,
+    )
+    assert line == ""
+
+
+def test_recovered_line_omitted_when_no_prior_digest():
+    """No last_digest_sent_at_utc (timer never paged) -> "" ."""
+    line = render_in_window_recovered_criticals(
+        current_critical_ids=set(),
+        last_digest_fingerprint=None,
+        last_digest_sent_at_utc=None,
+        now_ts=_NOW,
+    )
+    assert line == ""
+
+
+def test_recovered_line_only_lists_recovered_subset():
+    """When some fingerprint ids are still critical, only the recovered ones
+    are surfaced as recovered."""
+    line = render_in_window_recovered_criticals(
+        current_critical_ids={"invariant:disk_usage_health"},
+        last_digest_fingerprint="invariant:csi_source_liveness|invariant:disk_usage_health",
+        last_digest_sent_at_utc=_IN_WINDOW_SENT,
+        now_ts=_NOW,
+    )
+    assert "invariant:csi_source_liveness" in line
+    assert "invariant:disk_usage_health" not in line
