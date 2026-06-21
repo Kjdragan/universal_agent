@@ -46,8 +46,34 @@ __all__ = [
     "KindTag",
     "format_tagged_subject",
     "format_body_header",
+    "promote_text_to_html",
     "SUBJECT_TAG_RE",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Plain-text → HTML promotion
+# ---------------------------------------------------------------------------
+
+
+def promote_text_to_html(text: str) -> str:
+    """Synthesize a minimal HTML body from a plain-text body.
+
+    Outbound mail must always carry a *non-empty* ``html`` part when one is
+    requested: AgentMail renders an empty ``html`` value as a blank
+    ``<div dir=ltr></div>``, so a sender that passes only ``text`` (e.g. a VP
+    ``[VP Status]``/failure email, or the deterministic VP-stream forward)
+    lands blank in Gmail/Outlook. Promotion escapes the text and converts
+    newlines to ``<br>`` so the body renders identically to the plaintext part.
+
+    Returns an empty string when ``text`` is empty — callers gate on truthiness
+    so an empty body never produces a stray ``<div></div>``.
+    """
+    import html as _html
+
+    if not text or not text.strip():
+        return ""
+    return "<div>" + _html.escape(text).replace("\n", "<br>") + "</div>"
 
 
 # ---------------------------------------------------------------------------

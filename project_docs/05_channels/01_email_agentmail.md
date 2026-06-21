@@ -9,7 +9,7 @@ code_paths:
   - src/universal_agent/services/email_task_bridge.py
   - src/universal_agent/services/email_tags.py
   - src/universal_agent/services/vp_email_directive.py
-last_verified: 2026-06-20
+last_verified: 2026-06-21
 ---
 
 # Email / AgentMail
@@ -379,6 +379,25 @@ untouched (first tagger wins). `format_body_header` returns an `(html, text)`
 banner pair with `Tags:`, `Source:`, `Related:`, and a `Time:` line in
 **Houston time** (`America/Chicago`, via `_houston_now_iso`). Tagging is purely
 additive; callers that pass only one of action/kind get no prefix/banner.
+
+### Empty-HTML-part defense (`promote_text_to_html`)
+
+AgentMail renders an **empty** `html` value as a blank `<div dir=ltr></div>`, so
+a sender that supplies only a plaintext `text` body lands **blank** in
+Gmail/Outlook even though the text part is populated. This bit VP
+`[VP Status]`/failure emails and the deterministic VP-stream forward
+(`_forward_vp_stream_to_operator`, which passes `html=None` when the original VP
+email carried no HTML).
+
+`email_tags.py::promote_text_to_html` is the shared fix: it escapes the text and
+converts newlines to `<br>`, wrapping the result in a `<div>` (and returns `""`
+for empty text so no stray container is emitted). `send_email` applies it
+defensively — after banner injection, **if `html` is falsy but `text` is
+present, it synthesizes the HTML part** from the (banner-prefixed) text before
+the draft/send branch. The same helper is reused by the agent-facing send/reply
+tools in `tools/local_toolkit_bridge.py` (see [MCP server & tools](../07_tools/01_mcp_server_and_tools.md)),
+which previously only promoted text→HTML inside the large-attachment branch and
+so POSTed `html=""` on the common small-PDF / text-only path.
 
 ### Gmail (gws CLI) 429 fallback
 
