@@ -315,8 +315,13 @@ def test_csi_ingester_tile_red_when_no_events(csi_db):
     assert len(state.evidence["stale_sources"]) == state.evidence["monitored_sources"]
 
 
-def test_csi_ingester_tile_yellow_when_some_sources_stale(csi_db):
+def test_csi_ingester_tile_yellow_when_some_sources_stale(csi_db, monkeypatch):
     """Some (not all) monitored sources past their threshold → YELLOW."""
+    # Arm the HN snapshot cron so hackernews rejoins the effective monitored set
+    # (parked behind UA_HACKERNEWS_SNAPSHOT_ENABLED by default since the liveness
+    # repark). Without it only youtube_channel_rss is monitored, so the ≥2-source
+    # partial-stale premise this test constructs can't hold.
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")
     from universal_agent.services.invariants.csi_source_liveness import (
         effective_source_thresholds,
     )
