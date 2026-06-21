@@ -948,6 +948,17 @@ async def _monitor_cli_output(
     )
 
 
+# Source kinds whose linked source task is closed to ``completed`` by the
+# deterministic finalize in ``vp/worker_loop.py`` AFTER ``run_mission`` returns
+# (``finalize_tutorial_build_demo`` for tutorial_build; the cody_demo_task
+# terminal routing). For these, a clean rc=0 exit while the task is still
+# in_progress is NOT a genuine protocol violation — the worker loop will
+# finalize it — so the protocol-violation PARK is suppressed (the _close_run
+# classification is still written for observability). Must stay in sync with
+# the ``_src_kind in (...)`` set in ``vp/worker_loop.py``.
+_WORKER_LOOP_FINALIZED_SOURCE_KINDS = frozenset({"tutorial_build", "cody_demo_task"})
+
+
 def _classify_and_route_cli_exit(
     *,
     outcome: MissionOutcome,
@@ -1084,13 +1095,50 @@ def _classify_and_route_cli_exit(
                         mission_id, _close_exc,
                     )
             if _classification.is_protocol_violation:
-                _f_park(
-                    _conn,
-                    task_id=tid,
-                    site="vp_cli",
-                    summary=f"vp cli mission_id={mission_id}",
-                    agent_id="vp_cli_client",
-                )
+                # Race guard: tutorial_build / cody_demo_task source tasks are
+                # closed to ``completed`` by the deterministic finalize in
+                # ``vp/worker_loop.py`` (finalize_tutorial_build_demo /
+                # cody_demo_task terminal routing) which runs AFTER
+                # ``run_mission`` returns. At this point the source task is
+                # still ``in_progress`` so ``classify_worker_exit`` flags a
+                # clean_exit_zero_no_disposition protocol violation — but it is
+                # NOT genuine for these kinds; the worker loop will finalize it.
+                # Parking it here double-counts the completed mission as both a
+                # protocol-violation review AND a completion (and writes
+                # spurious proactive_outcomes ACTION_REVIEW rows). Suppress the
+                # PARK for these worker-loop-finalized kinds while still writing
+                # the ``_close_run`` classification above for observability.
+                # Genuine violations at cron/demo-unaware sites keep the park.
+                _src_kind = ""
+                try:
+                    _src_item = _f_th.get_item(_conn, tid)
+                    _src_kind = (
+                        str((_src_item or {}).get("source_kind") or "")
+                        .strip()
+                        .lower()
+                    )
+                except Exception as _src_exc:
+                    logger.debug(
+                        "Phase F.3 source_kind lookup skipped for CLI "
+                        "mission %s task %s: %s",
+                        mission_id, tid, _src_exc,
+                    )
+                if _src_kind in _WORKER_LOOP_FINALIZED_SOURCE_KINDS:
+                    logger.info(
+                        "Phase F.3 suppressing protocol-violation park for "
+                        "CLI mission %s task %s (source_kind=%s is "
+                        "worker-loop-finalized; deterministic finalize will "
+                        "close it to completed)",
+                        mission_id, tid, _src_kind,
+                    )
+                else:
+                    _f_park(
+                        _conn,
+                        task_id=tid,
+                        site="vp_cli",
+                        summary=f"vp cli mission_id={mission_id}",
+                        agent_id="vp_cli_client",
+                    )
         finally:
             _conn.close()
     except Exception as exc:

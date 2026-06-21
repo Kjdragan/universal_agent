@@ -10,7 +10,8 @@ code_paths:
   - src/universal_agent/services/execution_run_service.py
   - src/universal_agent/services/worker_exit_classifier.py
   - src/universal_agent/services/cron_task_hub_link.py
-last_verified: 2026-06-19
+  - src/universal_agent/vp/clients/claude_cli_client.py
+last_verified: 2026-06-21
 ---
 
 # Task Hub & Dispatch
@@ -456,6 +457,25 @@ reason string from `PROTOCOL_VIOLATION_REASONS` (sites: `cron` / `vp_cli` /
 `demo`). `task_was_closed_normally` (status ∈ {completed, cancelled}) feeds the
 `task_closed_normally` flag and is conservative — unknown task / DB error returns
 `False`.
+
+**Worker-loop-finalized exception (vp_cli site).**
+`claude_cli_client.py::_classify_and_route_cli_exit` runs synchronously inside
+`run_mission` the moment the CLI session returns — *before* `vp/worker_loop.py`'s
+deterministic finalize (`finalize_tutorial_build_demo` / the `cody_demo_task`
+terminal routing) closes the source task to `completed`. For those two source
+kinds the source task is therefore still `in_progress` at classification time,
+so a clean rc=0 exit classifies as `clean_exit_zero_no_disposition` even though
+the mission completed and is about to be finalized. Parking it would
+double-count the mission as both a protocol-violation review **and** a
+completion (and write a spurious `proactive_outcomes` ACTION_REVIEW row). So
+`_classify_and_route_cli_exit` reads the linked task's `source_kind` from the
+same connection and **suppresses the park** when it is in
+`_WORKER_LOOP_FINALIZED_SOURCE_KINDS` (`{tutorial_build, cody_demo_task}`),
+while still writing the `_close_run` classification for observability. This is
+deliberately narrow — `task_was_closed_normally` is *not* widened to treat
+`in_progress` as closed, so genuine violations at cron/demo-unaware sites still
+park. The set must stay in sync with the `_src_kind in (...)` finalize set in
+`vp/worker_loop.py`.
 
 `find_active_assignment_for_task` correlates a just-spawned subprocess back to
 its `seized`/`running` assignment so `record_worker_pid` knows which row to
