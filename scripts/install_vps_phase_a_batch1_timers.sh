@@ -30,9 +30,12 @@ UNITS=(
   "universal-agent-scratch-pruning"
   "universal-agent-vault-lint-contradictions"
   "universal-agent-architecture-canvas-drift"
-  "universal-agent-insight-scoring-health"
   "universal-agent-vp-coder-workspace-pruning"
 )
+# NOTE: universal-agent-insight-scoring-health was RETIRED 2026-06-21 (zombie
+# monitor — producer hourly_insight_email deregistered in #745). Its units are
+# removed from the repo; the installer no longer arms them. The already-installed
+# live timer is stopped/disabled out-of-band (not re-installed here).
 
 # Validate every unit file is present BEFORE touching systemd.
 for base in "${UNITS[@]}"; do
@@ -63,4 +66,4 @@ done
 
 echo "== Phase A batch-1 timers =="
 systemctl list-timers "${UNITS[0]}.timer" "${UNITS[1]}.timer" "${UNITS[2]}.timer" \
-  "${UNITS[3]}.timer" "${UNITS[4]}.timer" --all --no-pager || true
+  "${UNITS[3]}.timer" --all --no-pager || true

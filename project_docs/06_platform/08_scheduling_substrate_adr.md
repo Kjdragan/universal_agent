@@ -199,7 +199,7 @@ Legend — **Substrate**: `systemd` = `OnCalendar`+`Persistent` timer (migrate);
 | 6321bde1a9 | codie_proactive_cleanup | `30 1` | det (enqueue) | daily | **systemd ✅ migrated (batch 2)** | the enqueue is deterministic; Cody executes downstream. Registers via bespoke `add_job` path → bespoke disable gate |
 | df1def4ad2 | vault_lint_contradictions | `0 7 1 * *` | det | monthly | **systemd ✅ migrated (batch 1)** | strongest `Persistent` case — a lost monthly slot = a lost month |
 | 73767a8730 | architecture_canvas_drift | `30 6 * * 1` | det | weekly | **systemd ✅ migrated (batch 1)** | weekly product |
-| c8061c36c9 | insight_scoring_health | `0 8 * * 0` | det | weekly | **systemd ✅ migrated (batch 1)** | weekly calibration audit |
+| c8061c36c9 | insight_scoring_health | `0 8 * * 0` | det | weekly | **🪦 RETIRED 2026-06-21** | zombie monitor — producer `hourly_insight_email` deregistered in #745; emailed a false "0 scored" weekly off a frozen scoring log. Units + registration removed |
 | 6d29a53e64 | vp_coder_workspace_pruning | `5 17 * * 0` | det | weekly | **systemd ✅ migrated (batch 1)** | weekly maintenance |
 | 9ad58b493f | csi_demo_triage_rank | `5 10,15` | det (LLM API) | 2×/day | **systemd** | LLM via API key, not agent runtime; slot-bearing |
 | 6f661208f8 | intel_auto_promoter | `35 10,15` | det | 2×/day | **systemd ✅ migrated (batch 2)** | promotes triage output; capped/day; pure SQLite (no `TimeoutStartSec`) |

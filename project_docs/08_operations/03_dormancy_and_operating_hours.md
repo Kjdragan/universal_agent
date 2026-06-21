@@ -352,7 +352,6 @@ guard tests in `tests/unit/test_cron_dormancy_defaults.py` keep this honest.
 | `scratch_pruning` | 7:00 AM daily |
 | `proactive_report_morning` | 7:05 AM daily |
 | `vault_lint_contradictions` | 7:00 AM on the 1st of each month |
-| `insight_scoring_health` | 8:00 AM Sundays |
 | `proactive_artifact_digest` | 8:35 AM daily |
 | `csi_demo_triage_rank` | 10:05 AM & 3:05 PM daily |
 | `intel_auto_promoter` | 10:35 AM & 3:35 PM daily |

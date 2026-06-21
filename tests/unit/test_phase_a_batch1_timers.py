@@ -59,10 +59,8 @@ MIGRATED = {
         "universal-agent-architecture-canvas-drift",
         "architecture_canvas_drift_check",
     ),
-    "insight_scoring_health": (
-        "universal-agent-insight-scoring-health",
-        "insight_scoring_health",
-    ),
+    # insight_scoring_health RETIRED 2026-06-21 (zombie monitor — producer
+    # hourly_insight_email deregistered in #745). Units + registration removed.
     "vp_coder_workspace_pruning": (
         "universal-agent-vp-coder-workspace-pruning",
         "vp_coder_workspace_pruner",
@@ -157,15 +155,3 @@ def test_installer_covers_all_units_and_arms_timers():
 def test_remote_deploy_wires_the_installer():
     text = REMOTE_DEPLOY.read_text()
     assert "install_vps_phase_a_batch1_timers.sh" in text
-
-
-def test_insight_service_bounds_runtime_against_hang():
-    """insight_scoring_health makes an LLM call + an AgentMail WebSocket
-    connection — either can hang unboundedly. A Type=oneshot defaults to
-    TimeoutStartSec=infinity, and a hung oneshot blocks its .timer from starting
-    the next weekly run. Pin an explicit bound so a hang self-heals. (The
-    pure-FS batch-1 jobs have no hang risk and intentionally keep the default.)"""
-    lines = _active_directives(
-        (SYSTEMD_DIR / "universal-agent-insight-scoring-health.service").read_text()
-    )
-    assert "TimeoutStartSec=600" in lines

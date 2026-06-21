@@ -121,7 +121,7 @@ _ALLOWLIST_ENTRIES: tuple[dict[str, Any], ...] = (
     _activity("universal-agent-csi-demo-triage-rank.timer", "CSI demo triage rank", "timers"),
     _activity("universal-agent-skill-gap-finder.timer", "Skill-gap finder", "timers"),
     _activity("universal-agent-backlog-triage.timer", "Backlog triage", "timers"),
-    _activity("universal-agent-insight-scoring-health.timer", "Insight-scoring health", "timers"),
+    # insight-scoring-health.timer RETIRED 2026-06-21 (zombie monitor) — removed.
     _activity("universal-agent-proactive-signal-card-sync.timer", "Signal-card sync", "timers"),
     _activity("universal-agent-youtube-daily-digest.timer", "YouTube daily digest", "timers"),
     _activity("universal-agent-youtube-gold-channel-poller.timer", "YouTube gold-channel poller (CSI ingest)", "timers"),

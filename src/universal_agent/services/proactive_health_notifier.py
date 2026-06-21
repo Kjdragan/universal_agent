@@ -83,7 +83,7 @@ async def _construct_started_agentmail_service() -> Optional[Any]:
     gateway-injected handle (the daemon heartbeat subprocess, where
     ``gateway_server._agentmail_service`` is the pristine module-level None).
 
-    Mirrors the one-shot cron mailers (scripts/insight_scoring_health.py,
+    Mirrors the one-shot cron mailers (scripts/hourly_insight_email.py,
     scripts/dependency_upgrade.py): construct → startup() → use → shutdown().
     The caller OWNS the returned service and MUST call ``await
     service.shutdown()``. Returns None when AgentMail is disabled or can't
