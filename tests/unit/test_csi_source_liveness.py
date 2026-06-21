@@ -117,17 +117,22 @@ def test_one_stale_source_emits_one_finding(tmp_path: Path) -> None:
     assert not any(s.get("source") == "hackernews" for s in stale)
 
 
-def test_multiple_stale_sources_listed_in_one_finding(tmp_path: Path) -> None:
+def test_multiple_stale_sources_listed_in_one_finding(tmp_path: Path, monkeypatch) -> None:
     """Multiple monitored sources dead → ONE finding listing them all (operator
     gets the full picture per alert, not one email per source). One source is
     seeded fresh so we can assert the finding contains only the stale set.
     Built from the effective (parking-aware) monitored set so it stays correct
-    as lanes are added/removed."""
+    as lanes are added/removed. UA_HACKERNEWS_SNAPSHOT_ENABLED is armed here so
+    hackernews joins the effective set — without it (and with Threads parked),
+    only youtube_channel_rss would be monitored and the multi-source premise
+    wouldn't hold."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")
     from universal_agent.services.invariants.csi_source_liveness import (
         effective_source_thresholds,
     )
     db = tmp_path / "csi.db"
     monitored = list(effective_source_thresholds())
+    assert len(monitored) >= 2  # youtube_channel_rss + armed hackernews
     fresh = monitored[-1]
     stale_sources_expected = {s for s in monitored if s != fresh}
     rows = [
@@ -185,30 +190,59 @@ def test_threads_lanes_monitored_when_flag_enabled(tmp_path: Path, monkeypatch) 
     assert "threads_owned" in stale
 
 
-def test_hackernews_always_monitored_regardless_of_snapshot_flag(
+def test_hackernews_parked_when_snapshot_flag_off(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """HN liveness is decoupled from the snapshot-cron flag. PR #757 parked HN
-    behind UA_HACKERNEWS_SNAPSHOT_ENABLED on the premise "cron disabled ⟹ source
-    dead"; live data (2026-06-06) showed HN stays alive via the convergence
-    /refresh path regardless of the cron, so the flag is the wrong key. HN is
-    monitored whether the flag is 0 or 1."""
+    """HN is parked behind UA_HACKERNEWS_SNAPSHOT_ENABLED — the SAME flag that
+    arms its only producer (the hackernews_snapshot cron). With the flag unset or
+    off, HN is excluded from the effective monitored set. This reverts the
+    2026-06-06 un-park: grep (2026-06-21) found POST /api/v1/hackernews/refresh
+    has ZERO internal callers (only the manual dashboard refresh button), so the
+    "overnight convergence /refresh producer" premise was false — live csi.db
+    shows 0 HN events/48h (a source with no producer)."""
+    from universal_agent.services.invariants.csi_source_liveness import (
+        _HACKERNEWS_SOURCES,
+        effective_source_thresholds,
+    )
+    for flag in (None, "0", "off", "false"):
+        if flag is None:
+            monkeypatch.delenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", raising=False)
+        else:
+            monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", flag)
+        assert "hackernews" not in effective_source_thresholds()
+        assert not (_HACKERNEWS_SOURCES & set(effective_source_thresholds()))
+
+
+def test_hackernews_parked_emits_no_finding_even_when_db_is_ancient(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The whole point of the re-park: with the snapshot cron off, an ancient or
+    absent HN events table must NOT produce a finding. Before this revert the
+    probe false-flagged HN every heartbeat (last real HN event was ~127h stale)."""
+    monkeypatch.delenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", raising=False)
     from universal_agent.services.invariants.csi_source_liveness import (
         effective_source_thresholds,
     )
-    for flag in ("0", "1"):
-        monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", flag)
-        assert "hackernews" in effective_source_thresholds()
+    db = tmp_path / "csi.db"
+    rows = [
+        (s, _hours_ago(0.5)) for s in effective_source_thresholds() if s != "hackernews"
+    ]
+    rows.append(("hackernews", _hours_ago(400)))
+    _seed_events(db, rows)
+    findings = run_invariants({"csi_db_path": db})
+    matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
+    assert matches == []
 
 
 def test_hackernews_bursty_gap_within_widened_threshold_does_not_fire(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """HN is bursty (overnight convergence pulls), so a multi-hour daytime gap is
-    NORMAL. With the widened threshold it must not fire at e.g. 10h silence — the
-    old 3h threshold false-flagged exactly this healthy-but-bursty cadence, which
-    is what drove the #757 park."""
-    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")  # flag must not matter
+    """HN is only monitored while UA_HACKERNEWS_SNAPSHOT_ENABLED arms the snapshot
+    cron (its sole producer). With the cron ON, a multi-hour daytime gap is still
+    NORMAL bursty HN cadence; the widened threshold must not fire at e.g. 10h
+    silence — the old 3h threshold false-flagged exactly this, which (via the
+    disproven /refresh-producer premise) drove the 2026-06-06 un-park."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")  # arm the cron so HN is monitored
     from universal_agent.services.invariants.csi_source_liveness import (
         SOURCE_THRESHOLDS_HOURS,
         effective_source_thresholds,
@@ -225,15 +259,21 @@ def test_hackernews_bursty_gap_within_widened_threshold_does_not_fire(
     assert matches == []
 
 
-def test_hackernews_fires_when_truly_dead(tmp_path: Path, monkeypatch) -> None:
-    """Coverage is restored: if HN produces nothing past its (widened) threshold it
-    fires. The #757 park had made a genuine HN outage invisible; un-parking + a
-    cadence-appropriate threshold catches a real multi-day silence."""
-    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")
+def test_hackernews_monitored_when_snapshot_flag_on(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Flipping UA_HACKERNEWS_SNAPSHOT_ENABLED=1 re-activates HN monitoring (the
+    snapshot cron is now armed), so a dead HN lane fires again — mirroring the
+    Threads re-arm test. This is also the 'fires when truly dead' case under the
+    corrected flag-gated model: the old test gated on flag=0, which now parks HN;
+    the flag-on path is the one that actually monitors."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")
     from universal_agent.services.invariants.csi_source_liveness import (
+        _HACKERNEWS_SOURCES,
         SOURCE_THRESHOLDS_HOURS,
         effective_source_thresholds,
     )
+    assert _HACKERNEWS_SOURCES <= set(effective_source_thresholds())
     db = tmp_path / "csi.db"
     dead_age = SOURCE_THRESHOLDS_HOURS["hackernews"] + 12.0
     rows = [
@@ -251,13 +291,13 @@ def test_hackernews_fires_when_truly_dead(tmp_path: Path, monkeypatch) -> None:
 def test_hackernews_observed_max_bursty_gap_does_not_fire(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Locks the data-driven threshold. 30d of live csi.db (2026-06-10) showed a
-    legitimate-but-quiet 94h gap (06-06->06-09) while HN stayed alive; the
-    next-largest gap was 27.6h. The old 36h threshold false-flagged that 94h
-    spell, which made the proactive_health digest re-spam on every critical/clear
-    flip. The threshold must sit comfortably above the observed max so a normal
-    bursty quiet spell never fires."""
-    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")
+    """Locks the data-driven threshold while the snapshot cron is ON (HN monitored).
+    30d of live csi.db (2026-06-10) showed a legitimate-but-quiet 94h gap
+    (06-06->06-09; max; next-largest 27.6h). The old 36h threshold false-flagged
+    that spell, which made the proactive_health digest re-spam on every
+    critical/clear flip. The threshold must sit comfortably above the observed max
+    so a normal bursty quiet spell never fires."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")  # arm the cron so HN is monitored
     from universal_agent.services.invariants.csi_source_liveness import (
         SOURCE_THRESHOLDS_HOURS,
         effective_source_thresholds,
