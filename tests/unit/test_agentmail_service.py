@@ -2242,3 +2242,52 @@ class TestVpStreamForward:
 
         service.send_email.assert_not_awaited()
         service._dispatch_fn.assert_not_awaited()
+
+
+class TestIgnoreMarkerFilter:
+    """H14: operator '(ignore)' test emails are dropped (FYI-only, no task)."""
+
+    def test_is_ignore_marker_subject_and_first_line(self):
+        from universal_agent.services.agentmail_service import _is_ignore_marker
+        assert _is_ignore_marker("(ignore) poke", "")
+        assert _is_ignore_marker("[ignore] x", "")
+        assert _is_ignore_marker("ignore: x", "")
+        assert _is_ignore_marker("real subject", "(ignore) just testing")
+        # mid-sentence 'ignore' must NOT match (start-anchored)
+        assert not _is_ignore_marker("please do not ignore this", "act on this now")
+        assert not _is_ignore_marker("", "")
+
+    @pytest.mark.asyncio
+    async def test_ignore_email_suppressed_no_task(self, service):
+        class _Message:
+            from_ = "Kevin <kevinjdragan@gmail.com>"
+            subject = "(ignore) inbox poke"
+            thread_id = "thd_ign_1"
+            message_id = "msg_ign_1"
+            text = "just checking the pipeline"
+            html = ""
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service._handle_inbound_email(_Event())
+        service._dispatch_fn.assert_not_awaited()
+
+
+class TestAgentMailReadiness:
+    """H19: is_ready() reflects enabled + client + resolved inbox."""
+
+    @pytest.mark.asyncio
+    async def test_ready_when_inbox_resolved(self, service):
+        assert service.is_ready() is True
+
+    def test_not_ready_before_inbox_resolves(self):
+        from universal_agent.services.agentmail_service import AgentMailService
+        svc = AgentMailService()
+        assert svc.is_ready() is False  # no client / inbox yet
+        svc._enabled = True
+        svc._client = object()
+        assert svc.is_ready() is False  # client set but inbox_id still empty
+        svc._inbox_id = "oddcity216@agentmail.to"
+        assert svc.is_ready() is True

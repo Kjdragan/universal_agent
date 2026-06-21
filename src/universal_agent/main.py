@@ -4383,6 +4383,12 @@ def _get_current_run_attempt_id() -> Optional[str]:
     return current_run_attempt_id
 
 
+# Run IDs already logged as post-restart orphans, so the benign guard below logs
+# once per run_id instead of on every ~10-min heartbeat iteration (long-lived
+# daemon sessions otherwise re-trip it 80+ times each — H16 log noise).
+_orphan_run_logged: set[str] = set()
+
+
 def _ensure_current_run_attempt(
     *,
     status: str = "running",
@@ -4423,12 +4429,16 @@ def _ensure_current_run_attempt(
         # Do NOT create a phantom "running" row for orphaned run IDs.
         # These recovered rows are never attached to a real runner process,
         # so they stay "running" forever and accumulate as zombies.
-        # Instead, log the situation and bail out gracefully.
-        logging.getLogger(__name__).info(
-            "Skipping run attempt creation for orphaned run_id=%s — "
-            "parent row missing from runs table (post-restart orphan).",
-            run_id,
-        )
+        # Instead, log the situation and bail out gracefully. Log once per
+        # run_id (a genuinely new orphan still logs once; a long-lived daemon
+        # session re-tripping the guard every heartbeat no longer spams).
+        if run_id not in _orphan_run_logged:
+            _orphan_run_logged.add(run_id)
+            logging.getLogger(__name__).info(
+                "Skipping run attempt creation for orphaned run_id=%s — "
+                "parent row missing from runs table (post-restart orphan).",
+                run_id,
+            )
         return None
 
     try:
