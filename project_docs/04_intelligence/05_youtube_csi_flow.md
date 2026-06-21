@@ -456,7 +456,7 @@ facts (verified live 2026-06-01):
 > after it was verified). The durable fix is therefore the **normal branch → PR →
 > `main`** flow, committing these to the tracked source: the analyzer
 > `_select_pending` policy + `CSI_RSS_SELECTION_*` env levers, the
-> `--max-events 40` source unit, and the canary `--stale-after-hours 6` source unit
+> `--max-events 40` source unit, and the canary `--stale-after-hours 10` source unit
 > + script default. No 242-commit reconciliation is involved.
 
 ### B.3 Transcript-pipeline canary
@@ -464,10 +464,13 @@ facts (verified live 2026-06-01):
 `csi-youtube-transcript-canary.service` (timer `OnCalendar=*:17`, hourly) probes
 whether the YouTube transcript/analysis pipeline is fresh and pings Telegram RED
 when it goes stale. The staleness threshold `--stale-after-hours` was **raised
-2 → 6 on 2026-06-01**: at 2h it false-RED'd in the gaps between the analyzer's
-**4h** cadence (a run every 4h can't keep a 2h freshness window green). 6h spans
-one full analyzer interval plus headroom. The fix is live in the unit file and in
-the deployed-source systemd template + script default.
+2 → 6 on 2026-06-01, then 6 → 10 on 2026-06-21**: at 2h it false-RED'd in the
+gaps between the analyzer's **4h** cadence; at 6h it still false-RED'd once daily
+because the analyzer (`csi-rss-semantic-enrich`) **no-ops when it has already
+drained the backlog**, so the real worst-case inter-write gap is ~8h once a day.
+10h covers that with headroom while still tripping on a genuine
+2-consecutive-run miss. The fix is live in the unit file and in the
+deployed-source systemd template + script default.
 
 ### B.4 Health invariants
 

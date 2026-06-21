@@ -82,7 +82,7 @@ def resolve_goal_eval_model(cody_mode: str = "zai") -> str | None:
     routing the haiku tier is operator-locked to ``glm-4.5-air`` — too weak to
     adjudicate demo-build acceptance conditions reliably.
 
-    This resolves a STRONGER evaluator model (sonnet tier → ``glm-5-turbo``)
+    This resolves a STRONGER evaluator model (opus tier → ``glm-5.2``)
     to be injected into the ``/goal`` work-turn subprocess ENV ONLY (see
     ``vp/clients/claude_cli_client.py::_execute_cli_session``). The value is
     never written to ``os.environ`` and never mutates ``ZAI_MODEL_MAP`` — the
@@ -99,14 +99,23 @@ def resolve_goal_eval_model(cody_mode: str = "zai") -> str | None:
         (off/none/default/haiku/disable/disabled).
 
     Precedence: anthropic-mode short-circuit → ``UA_GOAL_EVAL_MODEL`` (explicit
-    model id, or opt-out token) → default ``resolve_sonnet()`` (glm-5-turbo).
+    model id, or opt-out token) → default ``resolve_opus()`` (glm-5.2).
+
+    The default moved sonnet→opus (glm-5-turbo→glm-5.2) on 2026-06-21: glm-5-turbo
+    was stalling the goal evaluator (~600s upstream endpoint hangs → the liveness
+    watchdog killed the subprocess → ~17% CODIE mission failures). glm-5.2 is the
+    reliable flagship and adjudicates acceptance conditions better. Caveat: glm-5.2
+    defaults thinking ON and thinking is not disable-able on the CLI path, so the
+    evaluator turn costs more tokens / runs a bit slower — an accepted tradeoff for
+    reliability + adjudication quality. Pin a cheaper id via ``UA_GOAL_EVAL_MODEL``
+    if that cost ever matters.
     """
     # Never inject a Z.AI model id into an Anthropic-Max (OAuth) session.
     if (cody_mode or "").strip().lower() == "anthropic":
         return None
     raw = (os.getenv("UA_GOAL_EVAL_MODEL") or "").strip()
     if not raw:
-        return resolve_sonnet()  # default ON: glm-5-turbo for the ZAI /goal evaluator
+        return resolve_opus()  # default ON: glm-5.2 for the ZAI /goal evaluator
     if raw.lower() in {"off", "none", "default", "haiku", "disable", "disabled"}:
         return None  # explicit opt-out → built-in haiku/small-fast (glm-4.5-air)
     return raw  # explicit operator-pinned model id

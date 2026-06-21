@@ -211,7 +211,13 @@ mechanism — no outer retries). That runner:
 1. **Briefing turn** — if `goal_condition.txt` doesn't already exist, runs a
    briefing subprocess whose prompt comes from
    `self_briefing.py::build_self_briefing_prompt` (invoke the skill, write
-   `BRIEF.md`/`ACCEPTANCE.md`/`goal_condition.txt`).
+   `BRIEF.md`/`ACCEPTANCE.md`/`goal_condition.txt`). The briefing turn shares the
+   **full mission budget** and is governed by the shared `LivenessWatchdog`
+   idle-kill (`vp_no_progress_kill_seconds`), not a bare wall-clock cap — a former
+   hard 900s clamp (`GOAL_BRIEFING_TIMEOUT_SECONDS`) was retired 2026-06-21
+   because it killed briefing turns that were actively streaming tool calls (the
+   wall-clock anti-pattern banned in the root `CLAUDE.md`). `timeout_seconds`
+   remains the lane's high absolute backstop in `_monitor_cli_output`.
 2. **Work turn** — reads the condition via `self_briefing.py::read_goal_condition`
    and runs a *second* subprocess `claude -p "/goal <condition>"`; the evaluator
    loops until the condition (or its self-bounding ACCEPTANCE clause) is met. The

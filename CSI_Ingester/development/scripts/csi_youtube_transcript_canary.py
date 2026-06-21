@@ -360,9 +360,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--window-hours", type=int, default=24)
-    # Default 6h spans one full analyzer interval (csi-rss-semantic-enrich runs
-    # every 4h) plus headroom; 2h false-RED'd in the gaps between runs.
-    parser.add_argument("--stale-after-hours", type=int, default=6)
+    # Default 10h: the analyzer (csi-rss-semantic-enrich, every 4h) no-ops when it
+    # has already drained the backlog, so the real worst-case inter-write gap is
+    # ~8h once daily. A 6h threshold false-RED'd in that gap every day; 10h covers
+    # it with headroom while still tripping on a genuine 2-consecutive-run miss —
+    # far under the multi-day silent-regression this canary exists to catch.
+    parser.add_argument("--stale-after-hours", type=int, default=10)
     parser.add_argument("--min-ok-rate", type=float, default=0.25)
     parser.add_argument("--max-http-error-rate", type=float, default=0.50)
     parser.add_argument("--require-min-events", type=int, default=5)

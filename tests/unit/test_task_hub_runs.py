@@ -257,3 +257,74 @@ def test_finalize_assignments_closes_run_row_as_failed_with_error() -> None:
         assert run_row["error"] == "API returned 500"
     finally:
         conn.close()
+
+
+# ── H3: normal self-disposition closes the run ledger ───────────────────────
+
+
+def test_perform_task_action_complete_closes_run_row() -> None:
+    """H3 regression: the NORMAL self-disposition path (perform_task_action ->
+    _complete_active_assignments_for_task) must close the parallel run row, not
+    just the assignment. Before the fix only finalize_assignments (an abnormal
+    path) closed runs, so every clean completion leaked an open run row."""
+    conn = _conn()
+    try:
+        _seed_open_task(conn, "h3-complete-1")
+        claimed = task_hub.claim_next_dispatch_tasks(
+            conn, limit=1, agent_id="todo:daemon_simone_todo"
+        )
+        assignment_id = claimed[0]["assignment_id"]
+        # sanity: the run is open before disposition
+        before = conn.execute(
+            "SELECT ended_at FROM task_hub_runs WHERE assignment_id = ?", (assignment_id,)
+        ).fetchone()
+        assert before is not None and before["ended_at"] is None
+
+        task_hub.perform_task_action(
+            conn, task_id="h3-complete-1", action="complete",
+            note="done", agent_id="simone",
+        )
+
+        run_row = conn.execute(
+            "SELECT * FROM task_hub_runs WHERE assignment_id = ?", (assignment_id,)
+        ).fetchone()
+        assert run_row is not None
+        assert run_row["ended_at"], "run must be closed after self-completion"
+        assert run_row["outcome"] == "completed"
+        # No open runs leaked for this task.
+        open_runs = conn.execute(
+            "SELECT COUNT(*) AS c FROM task_hub_runs r "
+            "JOIN task_hub_assignments a ON a.assignment_id = r.assignment_id "
+            "WHERE a.task_id = ? AND r.ended_at IS NULL",
+            ("h3-complete-1",),
+        ).fetchone()["c"]
+        assert open_runs == 0
+    finally:
+        conn.close()
+
+
+def test_perform_task_action_block_records_non_completed_outcome() -> None:
+    """H3 fidelity: a non-completion verb (block) must close the run with a
+    non-'completed' outcome so the failure-context trail (re_evaluation_context)
+    doesn't misreport a stopped attempt as a success."""
+    conn = _conn()
+    try:
+        _seed_open_task(conn, "h3-block-1")
+        claimed = task_hub.claim_next_dispatch_tasks(
+            conn, limit=1, agent_id="todo:daemon_simone_todo"
+        )
+        assignment_id = claimed[0]["assignment_id"]
+        task_hub.perform_task_action(
+            conn, task_id="h3-block-1", action="block", reason="waiting on operator",
+            agent_id="simone",
+        )
+        run_row = conn.execute(
+            "SELECT ended_at, outcome FROM task_hub_runs WHERE assignment_id = ?",
+            (assignment_id,),
+        ).fetchone()
+        assert run_row is not None
+        assert run_row["ended_at"], "run must be closed even for a non-completion verb"
+        assert run_row["outcome"] == "gave_up"
+        assert run_row["outcome"] != "completed"
+    finally:
+        conn.close()

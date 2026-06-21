@@ -89,7 +89,7 @@ The thin wrappers express intent at call sites:
 | `resolve_haiku()` | `glm-4.5-air` | `model_resolution.py::resolve_haiku` |
 | `resolve_sonnet()` | `glm-5-turbo` | `model_resolution.py::resolve_sonnet` |
 | `resolve_opus()` | `glm-5.2` | `model_resolution.py::resolve_opus` (migrated from glm-5.1 2026-06-13) |
-| `resolve_goal_eval_model(cody_mode)` | `glm-5-turbo` on ZAI, `None` on anthropic | `model_resolution.py::resolve_goal_eval_model` |
+| `resolve_goal_eval_model(cody_mode)` | `glm-5.2` on ZAI, `None` on anthropic | `model_resolution.py::resolve_goal_eval_model` (default moved sonnet→opus 2026-06-21: glm-5-turbo was stalling the evaluator) |
 | `resolve_claude_code_model(default="sonnet")` | tier passthrough | the string passed to claude-agent-sdk |
 
 ### GLM-5.2 — validated opus-tier candidate (thinking semantics)
@@ -228,7 +228,7 @@ the CC **"small fast model"**, which current Claude Code reads from
 [Claude Code model-config docs](https://code.claude.com/docs/en/model-config)). On the ZAI
 routing that is the operator-locked `glm-4.5-air` — too weak to adjudicate demo-build
 acceptance reliably. `model_resolution.py::resolve_goal_eval_model` returns a **stronger**
-evaluator model (sonnet tier → `glm-5-turbo`) that `claude_cli_client.py::_execute_cli_session`
+evaluator model (opus tier → `glm-5.2`) that `claude_cli_client.py::_execute_cli_session`
 injects as `ANTHROPIC_DEFAULT_HAIKU_MODEL` **on the `/goal` work-turn subprocess's env dict
 only** (threaded from `claude_cli_client.py::_run_goal_loop_mission`, recorded as
 `payload.goal_eval_model`). This never writes `os.environ` and never mutates `ZAI_MODEL_MAP`
@@ -237,7 +237,11 @@ plus its own SDK background calls) runs on the stronger model. Resolution preced
 `cody_mode == "anthropic"` → `None` (a Claude-Max session keeps the real Haiku evaluator;
 never inject a ZAI id into an `api.anthropic.com` session); else `UA_GOAL_EVAL_MODEL`
 (explicit model id, or an `off`/`none`/`default`/`haiku`/`disable` opt-out token → `None`);
-else `resolve_sonnet()` (`glm-5-turbo`).
+else `resolve_opus()` (`glm-5.2`). The default moved sonnet→opus on 2026-06-21: `glm-5-turbo`
+was stalling the evaluator (~600s upstream hangs → liveness watchdog killed the subprocess →
+~17% CODIE failures); `glm-5.2` is the reliable flagship. Caveat: `glm-5.2` defaults thinking
+ON and thinking is not disable-able on the CLI path, so the evaluator turn costs more tokens —
+an accepted reliability/quality tradeoff; pin a cheaper id via `UA_GOAL_EVAL_MODEL` if needed.
 
 > Why ride the haiku knob at all? Claude Code exposes **no separate small-fast-model lever** —
 > the legacy `ANTHROPIC_SMALL_FAST_MODEL` was folded into `ANTHROPIC_DEFAULT_HAIKU_MODEL`, and
