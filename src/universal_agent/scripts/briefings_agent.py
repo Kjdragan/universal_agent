@@ -406,8 +406,13 @@ def _build_objective(
             "operator's top priority for the day — surface every CRITICAL row from the watchdog "
             "block prominently with its runbook command. Warn-tier findings get a brief mention. "
             "The Task Hub backlog (`proactive_health:*` rows) is the actionable list of unresolved "
-            "issues — quote the task_ids so the operator can triage from the dashboard. If the "
-            "watchdog reports `overall: ok` and the backlog is empty, say so in one line and move on."
+            "issues — quote the task_ids so the operator can triage from the dashboard. **If the "
+            "watchdog block includes a 'Criticals fired in-window (since recovered)' line, surface "
+            "it as a one-line acknowledgement** — a critical paged overnight and self-recovered "
+            "before this digest rendered, so do NOT say 'no critical alerts' / 'a clean night'; "
+            "name the recovered finding-id(s) and note they are no longer active. If the watchdog "
+            "reports `overall: ok`, the backlog is empty, AND no in-window-recovered criticals are "
+            "listed, say so in one line and move on."
         )
 
     atlas_section = ""

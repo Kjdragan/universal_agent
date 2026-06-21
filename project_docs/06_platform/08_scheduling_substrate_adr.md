@@ -12,12 +12,14 @@ code_paths:
   - src/universal_agent/services/proactive_health_notifier.py
   - src/universal_agent/services/proactive_health_snapshot.py
   - src/universal_agent/services/proactive_health_timer_main.py
+  - src/universal_agent/services/watchdog_briefing_context.py
+  - src/universal_agent/scripts/briefings_agent.py
   - src/universal_agent/services/agentmail_service.py
   - src/universal_agent/services/invariants/
   - src/universal_agent/durable/db.py
   - scripts/deploy/remote_deploy.sh
   - deployment/systemd/
-last_verified: 2026-06-16
+last_verified: 2026-06-21
 ---
 
 # ADR: Scheduling Substrate Redesign
@@ -376,6 +378,23 @@ concretions:
   oneshot has **no** in-memory `_notifications` cache — the cooldown must be
   durable. The 6 h window is keyed on the **finding-SET** fingerprint (sorted
   `finding_id`s); a new or changed critical resets it.
+- **Morning-digest reuse: in-window-but-recovered criticals (added 2026-06-21).**
+  The morning briefing's watchdog block (`watchdog_briefing_context.py::build_briefing_block`)
+  sources its *active* alerts from the live `/api/v1/ops/proactive_health` endpoint,
+  which re-probes every invariant at render time and so reflects ONLY the current
+  heartbeat. A critical that paged overnight and **recovered before the 06:30 render**
+  leaves no trace there, so the digest used to falsely read "no critical alerts".
+  The block now *also* reads the singleton snapshot via
+  `watchdog_briefing_context.py::_read_latest_snapshot_safe` and, when
+  `last_digest_sent_at_utc` falls inside the lookback window
+  (`UA_BRIEFING_WATCHDOG_RECOVERED_LOOKBACK_SECONDS`, default 24 h) AND a
+  `last_digest_fingerprint` id is absent from the current critical set, renders a
+  distinct **"Criticals fired in-window (since recovered)"** line
+  (`watchdog_briefing_context.py::render_in_window_recovered_criticals`). No new
+  schema — it reuses the existing digest-cooldown columns. The briefing prompt
+  (`briefings_agent.py::_build_objective`) instructs Simone to surface that line as
+  a one-line acknowledgement rather than implying a clean night. Best-effort: a
+  missing snapshot / DB never breaks the briefing.
 - **One digest email** (not per-finding): `proactive_health_notifier.py::send_critical_digest`
   reuses `_acquire_agentmail_service` / `_construct_started_agentmail_service`
   (S1's subprocess mailer, AgentMail-primary with the gws/HTTP-429 fallback) and
