@@ -82,27 +82,13 @@ The Universal Agent infrastructure includes a seamless, transparent file resolut
 - **Capability Implication**: **Never** build custom "file fetcher" tools or syncing scripts to move files from the desktop to the VPS for agent tasks. Instead, simply refer to the absolute `/home/kjdragan/...` path directly. Standard OS operations (`cat`, Python `open()`, etc.) will seamlessly resolve over the SSHFS mount.
 - **Architectural Tenet**: This demonstrates the core design philosophy of "expanding system capabilities at the OS level" rather than building complex, brittle agent workarounds.
 
-## Tailnet HTML Scratchpad — how to hand the operator a rendered report
+## Tailnet HTML Scratchpad — operator artifact + communication system
 
-Kevin runs Claude Code terminal-only. Markdown shows as raw text, and HTML/PDF email attachments get their links + anchors stripped. **When you produce a report, analysis, diff review, or anything that benefits from real HTML rendering (styling, Mermaid/SVG diagrams, working in-page anchors), publish it to the tailnet HTML scratchpad and hand over the link** instead of pasting markdown or attaching a file.
+The full concept (what it is, proactive use, the two-way review loop, the markdown-vs-HTML rule, auto-archive) lives in the **global `~/.claude/CLAUDE.md`** (loaded on every project) and is documented canonically in **[`project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md`](project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md) § 1.6**. This repo *owns the mechanism* — pointers only here:
 
-One command does it — `scripts/publish_scratch.sh` auto-detects whether it runs on the VPS (writes directly) or anywhere else on the tailnet (copies over `ssh ua@uaonvps`), generates an unguessable slug, and prints the URL:
-
-```bash
-scripts/publish_scratch.sh report.html                       # random slug
-scripts/publish_scratch.sh report.html my-analysis           # readable slug -> /scratch/my-analysis/report.html
-URL=$(scripts/publish_scratch.sh report.html)                # capture URL (stdout = URL only)
-scripts/publish_scratch.sh --init    # one-time/idempotent setup of the /scratch mapping
-scripts/publish_scratch.sh --status  # verify mappings (must still show / -> :3000)
-```
-
-- **URL shape:** `https://uaonvps.taildcc090.ts.net/scratch/<slug>/<file>.html` — auto-HTTPS, **tailnet-only** (private to Kevin's own devices; never public). Tailnet membership is the auth boundary, not the slug.
-- **Mechanism:** `tailscale serve` path-mount of `/home/ua/ua_scratch` (daemon-managed, reboot-safe; survives `/opt/universal_agent` deploys). Don't disturb the other serve mappings.
-- **Workflow:** write your HTML anywhere, run the script, paste the printed URL back to Kevin. That's the whole loop for "spin up a report and give me the link."
-- **HTML by default; render markdown only to *view* an existing `.md`.** Default to rich hand-authored HTML for exhibits/reports — graphics + interactivity convey more. Use the markdown path (`publish_markdown_to_scratch`) specifically when Kevin wants to *see a markdown document displayed* (e.g. "show me/render this `.md`") — then publish it as rendered markdown instead of hand-building HTML.
-- **Every publish is auto-archived (durable, dated, per-project).** `publish_scratch.sh` now also drops a permanent copy + index into a per-project archive after each publish (`scripts/scratch_archive.py`): interactive desktop runs → git-tracked `<repo>/scratch_archive/`; autonomous VPS runs → `/home/ua/ua_scratch_archive/` (served at `/scratch-archive`, never pruned). You don't do anything — publish as usual. Knobs: `UA_SCRATCH_ARCHIVE_ENABLED`, `UA_SCRATCH_ARCHIVE_ROOT`. See `scratch_archive/README.md`.
-- **Two reusable front doors (one mechanism — both wrap `publish_scratch.sh`):** for **agentic** work, invoke the **`publish-to-scratchpad` skill** (it triggers whenever you're about to paste markdown or attach a report — publish + hand over the link instead). For **deterministic Python pipelines** (cron/services, which can't invoke a skill), call `from universal_agent.services.scratch_publish import publish_html_to_scratch` — returns the URL, or `None` so you can fall back to attaching the file. The YouTube daily digest uses this helper for **link-first** delivery (PDF only as a fallback).
-- Full reference (mechanism, failure signatures): `project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md` § 1.6. The `visual-explainer` skill is a good way to generate the HTML itself.
+- **Mechanism:** `scripts/publish_scratch.sh <file> [slug]` (prints the URL on stdout; `--dir` for a tree; `--init`/`--status` manage the serve mounts). Python pipelines use `src/universal_agent/services/scratch_publish.py` (`publish_html_to_scratch` / `publish_markdown_to_scratch` / `publish_file_to_scratch` / `publish_docset_to_scratch`); agents use the **`publish-to-scratchpad` skill**. `visual-explainer` is a good way to author the HTML.
+- **HTML by default; render markdown only to *view* an existing `.md`** (use `publish_markdown_to_scratch` for that case).
+- **Every publish auto-archives** a durable, dated copy + index (`scripts/scratch_archive.py`): interactive → git-tracked `<repo>/scratch_archive/`; VPS → `/home/ua/ua_scratch_archive/` (served at `/scratch-archive`, never pruned). See `scratch_archive/README.md`. Knobs: `UA_SCRATCH_ARCHIVE_ENABLED`, `UA_SCRATCH_ARCHIVE_ROOT`.
 
 ## Secrets, Infisical & gws/Gmail auth
 

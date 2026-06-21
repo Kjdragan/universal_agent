@@ -83,8 +83,12 @@ cmd_init() {
   local setup='mkdir -p '"$SCRATCH_ROOT"' '"$ARCHIVE_ROOT_VPS"' && sudo tailscale serve --bg --set-path /scratch '"$SCRATCH_ROOT"' && sudo tailscale serve --bg --set-path /scratch-archive '"$ARCHIVE_ROOT_VPS"
   if on_vps; then
     bash -c "$setup"
+    # Seed the archive index so /scratch-archive renders even before the first artifact
+    # (a directory with no index.html serves blank).
+    python3 "$ARCHIVER" --ensure-index --root "$ARCHIVE_ROOT_VPS" >/dev/null 2>&1 || err "warning: archive index seed skipped"
   else
     run_remote "$setup"
+    run_remote "python3 /opt/universal_agent/scripts/scratch_archive.py --ensure-index --root '$ARCHIVE_ROOT_VPS'" >/dev/null 2>&1 || err "warning: remote archive index seed skipped"
   fi
   err "Scratchpad + archive serve mappings ensured. Verifying they did not disturb others:"
   cmd_status
