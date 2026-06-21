@@ -264,6 +264,7 @@ CREATE TABLE IF NOT EXISTS youtube_channels (
     added_at       TEXT DEFAULT (datetime('now')),
     last_assessed  TEXT,
     demoted_at     TEXT
+    -- consecutive_failures added by MIGRATION_0015 (append-only; do not add here)
 );
 CREATE INDEX IF NOT EXISTS idx_youtube_channels_domain ON youtube_channels(domain);
 CREATE INDEX IF NOT EXISTS idx_youtube_channels_tier ON youtube_channels(tier);
@@ -358,6 +359,10 @@ CREATE INDEX IF NOT EXISTS idx_youtube_transcripts_event_id ON youtube_transcrip
 CREATE INDEX IF NOT EXISTS idx_youtube_transcripts_fetched_at ON youtube_transcripts(fetched_at);
 """
 
+MIGRATION_0015_CHANNEL_FAILURE_TRACKING = """
+ALTER TABLE youtube_channels ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
+"""
+
 MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0001_core", MIGRATION_0001_CORE),
     ("0002_source_state", MIGRATION_0002_SOURCE_STATE),
@@ -373,6 +378,7 @@ MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0012_transcript_error", MIGRATION_0012_TRANSCRIPT_ERROR),
     ("0013_transcript_incidents", MIGRATION_0013_TRANSCRIPT_INCIDENTS),
     ("0014_youtube_transcripts", MIGRATION_0014_YOUTUBE_TRANSCRIPTS),
+    ("0015_channel_failure_tracking", MIGRATION_0015_CHANNEL_FAILURE_TRACKING),
 )
 
 

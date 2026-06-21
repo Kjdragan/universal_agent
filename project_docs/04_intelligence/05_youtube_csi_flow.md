@@ -520,6 +520,18 @@ no active producer remains), and the experimental Threads lanes
 `UA_CSI_THREADS_LANES_ENABLED=1` — their adapters are also `enabled: false` in the CSI
 ingester config while parked, so they neither run nor alert until re-enabled with creds.
 
+### B.5 Dead-channel auto-deactivation
+
+The YouTube RSS adapter (`CSI_Ingester` → `csi_ingester/adapters/youtube_channel_rss.py`)
+tracks per-channel "gone" responses and stops polling permanently-dead feeds. Each fetch
+result is recorded by `source_manager.record_channel_fetch_result`: a `404`/`410`
+(channel deleted / feed gone) increments a `youtube_channels.consecutive_failures` counter
+(added by migration `0015_channel_failure_tracking`); any success (HTTP `< 400`, incl. `304`
+not-modified) resets it; **transient errors (`429`/`5xx`/network) are neutral** so a YouTube
+outage can't falsely deactivate a live channel. After `channel_deactivate_after` consecutive
+gone-responses (default `10`) the channel is set `active = 0` with `demoted_at = now`, so the
+dead feed drops out of `get_active_youtube_channels` and is no longer polled.
+
 ---
 
 ## Gold-channel poller (feeds Pipeline A's playlists)

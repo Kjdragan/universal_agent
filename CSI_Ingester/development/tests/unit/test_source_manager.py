@@ -10,6 +10,7 @@ from csi_ingester.store.source_manager import (
     get_active_threads_terms,
     get_active_youtube_channels,
     get_source_summary,
+    record_channel_fetch_result,
     record_quality_assessment,
     seed_threads_terms,
     seed_youtube_channels,
@@ -227,3 +228,67 @@ def test_get_source_summary(db_conn, tmp_path: Path):
     summary = get_source_summary(db_conn)
     assert summary["youtube"]["total"] == 2
     assert "ai_models" in summary["youtube"]["by_domain"] or "ai_coding" in summary["youtube"]["by_domain"]
+
+
+# ── H18-b: dead-channel auto-deactivation ───────────────────────────────
+
+def _insert_channel(conn, channel_id="UC_dead"):
+    conn.execute(
+        "INSERT INTO youtube_channels (channel_id, channel_name, active) VALUES (?, ?, 1)",
+        (channel_id, "Dead Channel"),
+    )
+    conn.commit()
+
+
+def _state(conn, channel_id="UC_dead"):
+    row = conn.execute(
+        "SELECT active, consecutive_failures FROM youtube_channels WHERE channel_id = ?",
+        (channel_id,),
+    ).fetchone()
+    return int(row["active"]), int(row["consecutive_failures"])
+
+
+def test_migration_adds_consecutive_failures_column(db_conn):
+    cols = {r["name"] for r in db_conn.execute("PRAGMA table_info(youtube_channels)")}
+    assert "consecutive_failures" in cols
+
+
+def test_404_streak_deactivates_after_threshold(db_conn):
+    _insert_channel(db_conn)
+    for i in range(1, 5):
+        deactivated = record_channel_fetch_result(db_conn, "UC_dead", status_code=404, deactivate_after=5)
+        active, failures = _state(db_conn)
+        assert failures == i
+        assert active == 1  # not yet
+        assert deactivated is False
+    deactivated = record_channel_fetch_result(db_conn, "UC_dead", status_code=404, deactivate_after=5)
+    active, failures = _state(db_conn)
+    assert deactivated is True
+    assert active == 0  # 5th consecutive 404 deactivates
+    assert failures == 5
+
+
+def test_success_resets_streak(db_conn):
+    _insert_channel(db_conn)
+    record_channel_fetch_result(db_conn, "UC_dead", status_code=404, deactivate_after=5)
+    record_channel_fetch_result(db_conn, "UC_dead", status_code=404, deactivate_after=5)
+    assert _state(db_conn) == (1, 2)
+    record_channel_fetch_result(db_conn, "UC_dead", status_code=200, deactivate_after=5)
+    assert _state(db_conn) == (1, 0)  # success reset the streak
+    # 304 not-modified also counts as success/reset
+    record_channel_fetch_result(db_conn, "UC_dead", status_code=404, deactivate_after=5)
+    record_channel_fetch_result(db_conn, "UC_dead", status_code=304, deactivate_after=5)
+    assert _state(db_conn) == (1, 0)
+
+
+def test_transient_errors_are_neutral(db_conn):
+    _insert_channel(db_conn)
+    record_channel_fetch_result(db_conn, "UC_dead", status_code=404, deactivate_after=3)
+    assert _state(db_conn) == (1, 1)
+    # 429 / 5xx / None must NOT increment (transient) nor reset the streak
+    for code in (429, 503, None):
+        record_channel_fetch_result(db_conn, "UC_dead", status_code=code, deactivate_after=3)
+        assert _state(db_conn) == (1, 1)
+    # a real 404 still advances toward deactivation
+    record_channel_fetch_result(db_conn, "UC_dead", status_code=404, deactivate_after=3)
+    assert _state(db_conn)[1] == 2
