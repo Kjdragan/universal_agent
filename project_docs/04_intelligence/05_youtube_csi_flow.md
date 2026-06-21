@@ -519,6 +519,11 @@ no active producer remains), and the experimental Threads lanes
 (`threads_owned`, `threads_trends_seeded`, `threads_trends_broad`) are excluded unless
 `UA_CSI_THREADS_LANES_ENABLED=1` — their adapters are also `enabled: false` in the CSI
 ingester config while parked, so they neither run nor alert until re-enabled with creds.
+`hackernews` is likewise parked behind `UA_HACKERNEWS_SNAPSHOT_ENABLED` (re-parked
+2026-06-21): it has no automatic CSI-event producer — the `hackernews_snapshot` cron is
+its only producer, and `POST /api/v1/hackernews/refresh` has zero internal callers (only
+the manual dashboard button hits it), so with the cron off it is intentionally silent
+and must not alert. Re-arming the cron re-arms the detector.
 
 ### B.5 Dead-channel auto-deactivation
 
