@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sent-Email Triage — Outcomes (2026-06-21)</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1c2330; --muted:#5b6675; --line:#e3e7ee;
+    --green:#1a7f46; --red:#c0392b; --amber:#b7791f; --blue:#2563eb; --slate:#475569;
+    --chip:#eef2f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1040px;margin:0 auto;padding:32px 22px 80px}
+  header h1{font-size:26px;margin:0 0 6px;letter-spacing:-.3px}
+  header .sub{color:var(--muted);font-size:14px;margin-bottom:4px}
+  .meta{color:var(--slate);font-size:13px;margin-top:8px}
+  .meta code{background:var(--chip);padding:2px 6px;border-radius:5px;font-size:12px}
+  .stats{display:flex;flex-wrap:wrap;gap:12px;margin:22px 0 8px}
+  .stat{flex:1;min-width:150px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .stat b{display:block;font-size:24px;line-height:1.1}
+  .stat span{color:var(--muted);font-size:12.5px}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:.06em;color:var(--slate);margin:34px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:11px 13px;font-size:13.5px;vertical-align:top;border-bottom:1px solid var(--line)}
+  th{background:#f0f3f8;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--slate)}
+  tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
+  .v-fixed{background:#e7f6ec;color:#1a7f46}
+  .v-refuted{background:#fdecea;color:#c0392b}
+  .v-already{background:#eef2f7;color:#475569}
+  .sev-h{color:#c0392b;font-weight:700}
+  .sev-m{color:#b7791f;font-weight:700}
+  .sev-l{color:#64748b;font-weight:700}
+  .pr{font-variant-numeric:tabular-nums;color:var(--blue);font-weight:600;white-space:nowrap}
+  .claim{color:var(--muted)}
+  .reality b{color:var(--ink)}
+  .callout{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--red);border-radius:10px;padding:14px 16px;margin:12px 0}
+  .callout.green{border-left-color:#1a7f46}
+  .callout h3{margin:0 0 6px;font-size:14px}
+  .callout p{margin:4px 0;font-size:13.5px;color:var(--slate)}
+  ul.verif{margin:8px 0 0;padding-left:18px}
+  ul.verif li{font-size:13.5px;color:var(--slate);margin:5px 0}
+  .foot{margin-top:30px;color:var(--muted);font-size:12.5px;text-align:center}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Sent-Email Triage — Outcomes</h1>
+    <div class="sub">9 issues from Simone &amp; VP self-reports (sent mail since 2026-06-21 00:00 CT) — verified against live code/DB, then fixed.</div>
+    <div class="meta">Verify-then-fix · live deployed SHA before → <code>5dedef8c</code> · after → <code>3b56a13f</code> · 2 multi-agent workflows (9 verify + 7 fix agents) · 8 PRs merged &amp; deployed</div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><b>7</b><span>real bugs fixed &amp; shipped</span></div>
+    <div class="stat"><b>1</b><span>refuted (doc-only — code was correct)</span></div>
+    <div class="stat"><b>1</b><span>already fixed live (verified)</span></div>
+    <div class="stat"><b>8/8</b><span>PRs merged + deployed green</span></div>
+  </div>
+
+  <h2>The headline corrections (Simone's narrative drifted)</h2>
+
+  <div class="callout">
+    <h3>#3 — "Cody on ZAI" is <u>not</u> a bug. Do not flip the constant.</h3>
+    <p>The <code>_HARDCODED_FALLBACK_MODE = "zai"</code> constant is <b>correct</b> — deliberately flipped back on 2026-06-07 because Anthropic began API-billing the Claude-Code-via-Max SDK path. The 3:23a failed mission resolved <code>zai</code> <b>by design</b>, and two sibling ZAI missions in the same window <b>succeeded</b> — so ZAI wasn't the cause; the real outcome was <code>Unknown error</code>/empty turn. Profile-binding precedence is intact. Only the <b>docs</b> (CLAUDE.md + my memory) were stale → corrected.</p>
+  </div>
+
+  <div class="callout">
+    <h3>#1 — Not a starved pipeline, a <u>zombie weekly alarm</u>.</h3>
+    <p>Intake is healthy (249 cards flowing). The "0 scored / 0 delivered" email comes from a monitor whose producer was retired in PR #745; convergence moved to <code>convergence_candidates</code> + VP missions + the working hourly intel digest. Per your call: <b>retired</b> the monitor (code + live systemd timer removed). No real visibility lost.</p>
+  </div>
+
+  <div class="callout green">
+    <h3>#6 — Already fixed &amp; verified live.</h3>
+    <p>The recurring paper-to-podcast zero-artifact fault was fixed earlier (long-poll + <code>max_turns=30</code>; Jun 15-20 runs complete end-to-end). The two flagged runs were early ZAI-429 aborts mislabeled <code>success</code>. Per your call: optional hardening <b>skipped</b>.</p>
+  </div>
+
+  <h2>Per-issue results</h2>
+  <table>
+    <thead><tr><th>#</th><th>Sev</th><th>Reality (verified)</th><th>Outcome</th><th>PR</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>1</td><td class="sev-h">HIGH</td>
+        <td class="reality"><b>Zombie monitor.</b> Producer retired #745; monitor left running → false "0 scored" every Sunday.</td>
+        <td>Retired monitor (code + live timer). Next Sun: no false email.</td>
+        <td class="pr">#1131</td>
+      </tr>
+      <tr>
+        <td>2</td><td class="sev-h">HIGH</td>
+        <td class="reality"><b>Telemetry inflated + cross-process blind.</b> "246 completed" = housekeeping crons (1382 <code>simone_chat_auto_complete</code> runs/24h, all stamped autonomous); real proactive = 4. <code>cron_runs_in_window:0</code> = the split (<code>_cron_service</code> lives only in the worker process).</td>
+        <td>Exclude housekeeping jobs from the tally; read durable <code>cron_runs.jsonl</code> when <code>_cron_service</code> is None.</td>
+        <td class="pr">#1128</td>
+      </tr>
+      <tr>
+        <td>3</td><td class="sev-h">HIGH</td>
+        <td class="reality"><span class="pill v-refuted">refuted</span> &nbsp;Code is correct (ZAI default since 2026-06-07). Failure was an empty turn, not ZAI.</td>
+        <td>Docs corrected (CLAUDE.md + model-choice doc); memory stamped superseded.</td>
+        <td class="pr">#1129</td>
+      </tr>
+      <tr>
+        <td>4</td><td class="sev-m">MED</td>
+        <td class="reality"><b>Reflection lane had no insert-time dedup</b> → 3 near-identical tasks in 3.5h from one false premise. (Invariant "contradiction" was a non-issue — already reconciled by #985+#1116.)</td>
+        <td>Insert-time dedup for <code>source_kind=reflection</code> via normalized incident_key — the durable guard the ideation report wanted.</td>
+        <td class="pr">#1125</td>
+      </tr>
+      <tr>
+        <td>5</td><td class="sev-m">MED</td>
+        <td class="reality"><b>Premature-park race, not a failure class.</b> <code>_classify_and_route_cli_exit</code> parked tutorial_build as "protocol violation" before <code>worker_loop</code> finalized it → polluted the outcome ledger (the "43% / protocol violation").</td>
+        <td>Suppress the park for worker-loop-finalized kinds {tutorial_build, cody_demo_task}; keep classification write for observability.</td>
+        <td class="pr">#1124</td>
+      </tr>
+      <tr>
+        <td>6</td><td class="sev-m">MED</td>
+        <td class="reality"><span class="pill v-already">already fixed</span> &nbsp;Recurring fault shipped &amp; verified live; flagged runs were 429 aborts mislabeled success.</td>
+        <td>No action (hardening skipped per operator).</td>
+        <td class="pr">—</td>
+      </tr>
+      <tr>
+        <td>7</td><td class="sev-l">LOW</td>
+        <td class="reality"><b>Digest noisy:</b> cross-path duplicate demos, merged/closed PRs shown as fresh, raw chatter/BRIEF.md leaking.</td>
+        <td>Dedup by work-target + 7d staleness/merged-PR backstop + chatter strip (DB-free, no per-item gh calls).</td>
+        <td class="pr">#1133</td>
+      </tr>
+      <tr>
+        <td>8</td><td class="sev-l">LOW</td>
+        <td class="reality"><b>Digest dropped in-window recovered criticals</b> → "no critical alerts" hid the 1:10a page.</td>
+        <td>Surface "criticals fired in-window (since recovered)" from the existing snapshot cooldown columns.</td>
+        <td class="pr">#1126</td>
+      </tr>
+      <tr>
+        <td>9</td><td class="sev-l">LOW</td>
+        <td class="reality"><b>VP-status emails had an empty HTML part</b> (text→HTML promotion only ran in the &gt;4MB branch) → blank in Gmail/Outlook.</td>
+        <td>Promote text→HTML unconditionally in both send entry points (+ the reply twin).</td>
+        <td class="pr">#1130</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Verification status</h2>
+  <ul class="verif">
+    <li><b>All 8 PRs</b> merged via auto-merge (CI green) and deployed — live SHA <code>3b56a13f</code>, both gateway processes restarted clean.</li>
+    <li><b>#1 fully retired:</b> live <code>insight-scoring-health</code> systemd timer stopped/disabled/removed + verified gone; deployed code has 0 references; no enabled in-app cron row remains.</li>
+    <li><b>#2 &amp; #9 backend logic verified in deployed bodies</b> + passing CI unit tests. Numeric/visual confirmation lands on the next scheduled run (next briefing for #2; next VP-status email for #9).</li>
+    <li><b>One CI catch:</b> the retire PR initially failed a hardcoded <code>migrated jobs == 21</code> assertion (it's a systemd-migrated batch-1 job); corrected to <code>20</code> and re-merged.</li>
+  </ul>
+
+  <div class="foot">Generated 2026-06-21 · verify-then-fix triage · every claim proven against live code/DB before acting.</div>
+</div>
+</body>
+</html>
