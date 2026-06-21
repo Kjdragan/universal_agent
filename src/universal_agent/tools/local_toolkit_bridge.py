@@ -69,6 +69,20 @@ def _normalize_agentmail_inbox_id(raw: str) -> str:
     return f"{cleaned}@agentmail.to"
 
 
+def _promote_text_to_html(text: str) -> str:
+    """Synthesize an HTML body from plaintext (delegates to the shared helper).
+
+    Avoids emitting an empty ``html`` part to AgentMail (which renders blank in
+    Gmail/Outlook). Uses the canonical promotion in ``services.email_tags`` so
+    both this tool path and ``agentmail_service`` stay consistent.
+    """
+    try:
+        from src.universal_agent.services.email_tags import promote_text_to_html
+    except ImportError:
+        from universal_agent.services.email_tags import promote_text_to_html
+    return promote_text_to_html(text)
+
+
 @tool(
     name="upload_to_composio",
     description=(
@@ -361,17 +375,18 @@ async def _agentmail_send_with_local_attachments_impl(args: dict[str, Any]) -> d
         else:
             return {"content": [{"type": "text", "text": f"error: attachment not found: {path_str}"}]}
 
+    # Unconditionally promote text -> HTML when only plaintext was supplied.
+    # AgentMail renders an empty "html" value as a blank <div dir=ltr></div>,
+    # so a caller passing only text (e.g. a VP [VP Status]/failure email with a
+    # small inlined PDF and no large_file_links) would otherwise land blank in
+    # Gmail/Outlook. Promotion runs BEFORE building the payload and before the
+    # large-attachment link block so the links append to a real HTML body.
+    if not html and text:
+        html = _promote_text_to_html(text)
+
     if large_file_links:
         links_html = f"<br/><br/><p><b>Large Attachments:</b></p><ul>{''.join(large_file_links)}</ul>"
-        if html:
-            html += links_html
-        elif text:
-            # If there's text but no HTML, we must promote text to HTML to embed the links nicely
-            # or just leave it as text. We will do both.
-            html = f"<p>{text}</p>{links_html}"
-        else:
-            html = links_html
-            
+        html += links_html
         links_plain = "\n\nLarge Attachments:\n" + "\n".join(large_file_text)
         text += links_plain
 
@@ -540,15 +555,15 @@ async def agentmail_reply_with_local_attachments_wrapper(args: dict[str, Any]) -
         else:
             return {"content": [{"type": "text", "text": f"error: attachment not found: {path_str}"}]}
 
+    # Unconditionally promote text -> HTML when only plaintext was supplied
+    # (see send impl above): an empty "html" value renders blank in
+    # Gmail/Outlook. Runs before the large-attachment link block.
+    if not html and text:
+        html = _promote_text_to_html(text)
+
     if large_file_links:
         links_html = f"<br/><br/><p><b>Large Attachments:</b></p><ul>{''.join(large_file_links)}</ul>"
-        if html:
-            html += links_html
-        elif text:
-            html = f"<p>{text}</p>{links_html}"
-        else:
-            html = links_html
-            
+        html += links_html
         links_plain = "\n\nLarge Attachments:\n" + "\n".join(large_file_text)
         text += links_plain
 

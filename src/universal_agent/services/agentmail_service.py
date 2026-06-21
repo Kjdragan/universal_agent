@@ -54,6 +54,7 @@ from universal_agent.services.email_tags import (
     KindTag,
     format_body_header,
     format_tagged_subject,
+    promote_text_to_html,
 )
 
 logger = logging.getLogger(__name__)
@@ -895,6 +896,15 @@ class AgentMailService:
             else:
                 # If the caller only sent plaintext, keep it that way.
                 pass
+
+        # Defensive HTML promotion: when a caller passes only plaintext (e.g. a
+        # VP [VP Status]/failure email or the deterministic VP-stream forward),
+        # synthesize a real HTML part from the text. Without this, downstream
+        # senders that always emit an html field land blank in Gmail/Outlook
+        # ("<div dir=ltr></div>"). Promotion runs after banner injection so the
+        # synthesized HTML mirrors the final plaintext body.
+        if not html and text:
+            html = promote_text_to_html(text)
 
         if require_approval:
             return await self._create_draft(
