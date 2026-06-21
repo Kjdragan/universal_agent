@@ -203,16 +203,15 @@ _DEFAULT_TRUSTED_SENDERS = (
     "kevin.dragan@outlook.com",
     "kevinjdragan@gmail.com",
     "kevin@clearspringcg.com",
-    # Simone's own AgentMail inbox. A message FROM this address (a Simone→Simone
-    # send, or an app sending AS Simone — display "Simone <oddcity216@agentmail.to>")
-    # is trusted so it is INGESTED + triaged rather than auto-quarantined as an
-    # unknown @agentmail.to sender. Trusted senders bypass the pre-triage security
-    # gates (incl. the injection scan), which is acceptable here because the AgentMail
-    # API only lets the inbox owner send from this address. NOTE: this is a STATIC
-    # list — see _trusted_sender_addresses (UA_AGENTMAIL_TRUSTED_SENDERS env extends
-    # it). Any future *dynamic*/agent-driven trust expansion must be gated against
-    # prompt-injection (Simone must not be talk-able into trusting an attacker).
-    "oddcity216@agentmail.to",
+    # NOTE: Simone's own inbox (oddcity216@agentmail.to) is deliberately NOT
+    # trusted here. A self-send (Simone→Simone, or an app sending AS Simone) is
+    # handled by the dedicated self-send path: it skips the unknown-@agentmail.to
+    # quarantine (Gate 1) so it INGESTS, but is STILL run through the deterministic
+    # injection scanner (Gate 2) like every other message. Trusting it instead
+    # would route it around the scanner — and because From is forgeable, "trust =
+    # skip scan" is the very hole we are closing. See _handle_inbound_email and
+    # _is_self_send. UA_AGENTMAIL_TRUSTED_SENDERS env extends this static list;
+    # any future *dynamic* trust expansion must be gated against prompt-injection.
 )
 _QUEUE_STATUS_QUEUED = "queued"
 _QUEUE_STATUS_DISPATCHING = "dispatching"
@@ -391,6 +390,45 @@ def _trusted_sender_addresses() -> tuple[str, ...]:
         seen.add(address)
         normalized.append(address)
     return tuple(normalized)
+
+
+def _is_self_send(
+    sender_email: str,
+    inbox_sender: str,
+    labels: Any,
+    to_list: Any,
+) -> bool:
+    """Distinguish a deliberate self-send from a pure outbound copy.
+
+    Both are ``from`` the inbox's own address. AgentMail labels them differently:
+
+    - **Self-send** (Simone→Simone, or an app sending AS Simone — e.g. an
+      external diagnostics app emailing logs into the inbox): the message lands
+      in the inbox, so it carries the ``received`` label (and the inbox address
+      appears in ``To``). We WANT to process these.
+    - **Pure outbound copy** (Simone's own digests/alerts to the operator): only
+      the ``sent`` label, ``To`` is the operator. We DROP these so they don't
+      re-ingest as inbound tasks.
+
+    Returns True only for a self-send. Anything not from our own address is not a
+    self-send (returns False).
+
+    The ``received`` label is AgentMail's authoritative signal (operator-confirmed:
+    a self-send is ``['sent','received']``, a pure outbound copy is ``['sent']``).
+    The ``To`` check is a degraded fallback for the rare case the label hasn't
+    landed yet; ``To`` may arrive as a list or a comma/semicolon-joined string.
+    """
+    if not sender_email or not inbox_sender or sender_email != inbox_sender:
+        return False
+    label_set = {str(item).strip().lower() for item in (labels or [])}
+    if "received" in label_set:
+        return True
+    if isinstance(to_list, str):
+        to_items: Any = to_list.replace(";", ",").split(",")
+    else:
+        to_items = to_list or []
+    to_norm = {_normalize_sender_email(str(item)) for item in to_items}
+    return inbox_sender in to_norm
 
 
 # ── Automated / bounce sender detection ──────────────────────────────────
@@ -1761,11 +1799,23 @@ class AgentMailService:
             receiving_inbox = getattr(event, "inbox_id", getattr(msg, "inbox_id", self._inbox_address))
             sender = getattr(msg, "from_", "unknown")
             sender_email = _normalize_sender_email(sender)
-            sender_role = (
-                "trusted_operator"
-                if sender_email and sender_email in self._trusted_senders
-                else "external"
+            inbox_sender = _normalize_sender_email(self._inbox_address)
+            is_self_send = _is_self_send(
+                sender_email, inbox_sender,
+                getattr(msg, "labels", None), getattr(msg, "to", None),
             )
+            if sender_email and sender_email in self._trusted_senders:
+                sender_role = "trusted_operator"
+            elif is_self_send:
+                # Self-sends are their own class: NOT trusted (no auto-execute,
+                # but still scanned by Gate 2), and exempt from the
+                # unknown-@agentmail.to quarantine at BOTH Gate 1 (below) and the
+                # post-triage routing in _route_external_email_task. Without this
+                # distinct role a self-send would ingest past Gate 1 only to be
+                # re-quarantined post-triage as an "unknown agent-to-agent sender".
+                sender_role = "self_send"
+            else:
+                sender_role = "external"
             sender_trusted = sender_role == "trusted_operator"
             subject = getattr(msg, "subject", None) or "(no subject)"
             thread_id = getattr(msg, "thread_id", "")
@@ -1825,15 +1875,23 @@ class AgentMailService:
             # These checks fire BEFORE any email content reaches the triage
             # LLM.  They are pure Python — deterministic, microsecond-fast,
             # and cannot be bypassed by prompt injection.
-            if not sender_trusted:
-                try:
-                    from universal_agent.services.email_security import (
-                        is_sender_blocked,
-                        record_sender_seen,
-                        scan_for_injection,
-                        should_auto_quarantine_agentmail_sender,
-                    )
+            #
+            # The injection SCANNER (Gate 2) runs on EVERY inbound message —
+            # trusted, untrusted, and self-send alike. Trust governs
+            # ingestion/quarantine, never scanning: a From address is forgeable,
+            # so a spoofed "trusted" sender must NOT be a way to skip the scan.
+            # The reputation/origin gates (blocklist, unknown-@agentmail.to) only
+            # apply to genuinely external senders; trusted operators and
+            # self-sends bypass those gates but are still scanned.
+            try:
+                from universal_agent.services.email_security import (
+                    is_sender_blocked,
+                    record_sender_seen,
+                    scan_for_injection,
+                    should_auto_quarantine_agentmail_sender,
+                )
 
+                if not sender_trusted and not is_self_send:
                     # Track sender reputation
                     try:
                         _rep_conn = connect_runtime_db(get_activity_db_path())
@@ -1859,7 +1917,9 @@ class AgentMailService:
                         )
                         return
 
-                    # Gate 1: Auto-quarantine unknown @agentmail.to senders
+                    # Gate 1: Auto-quarantine unknown @agentmail.to senders.
+                    # Self-sends are exempt (excluded by the guard above) so they
+                    # ingest — but they are still scanned by Gate 2 below.
                     if should_auto_quarantine_agentmail_sender(
                         sender_email, self._trusted_senders,
                     ):
@@ -1879,37 +1939,40 @@ class AgentMailService:
                         )
                         return
 
-                    # Gate 2: Deterministic injection pattern scan
-                    _scan = scan_for_injection(
-                        subject, reply_text or text_body or "",
-                    )
-                    if _scan.is_suspicious:
-                        logger.warning(
-                            "📧🚨 Injection patterns detected PRE-TRIAGE: "
-                            "from=%s subject=%r threats=%s confidence=%s",
-                            sender_email, subject,
-                            _scan.threats, _scan.confidence,
-                        )
-                        self._pre_triage_quarantine(
-                            sender=sender, sender_email=sender_email,
-                            subject=subject, thread_id=thread_id,
-                            message_id=message_id,
-                            text_body=text_body,
-                            reply_text=reply_text or text_body or "",
-                            reason=f"injection_detected:{','.join(_scan.threats)}",
-                            scan_result=_scan,
-                            receiving_inbox=receiving_inbox,
-                        )
-                        return
-                except ImportError:
-                    logger.debug("email_security module not available, skipping pre-triage screen")
-                except Exception as _screen_exc:
-                    # Pre-triage screening must never block the pipeline.
-                    # If it fails, fall through to the existing post-triage guards.
+                # Gate 2: Deterministic injection pattern scan — runs for ALL
+                # senders (trusted, untrusted, self-send). On a flag we
+                # quarantine-with-notification regardless of trust, so a forged
+                # "trusted" From can never reach triage unscanned.
+                _scan = scan_for_injection(
+                    subject, reply_text or text_body or "",
+                )
+                if _scan.is_suspicious:
                     logger.warning(
-                        "📧 Pre-triage screening failed (falling through): %s",
-                        _screen_exc,
+                        "📧🚨 Injection patterns detected PRE-TRIAGE: "
+                        "from=%s subject=%r trusted=%s self_send=%s threats=%s confidence=%s",
+                        sender_email, subject, sender_trusted, is_self_send,
+                        _scan.threats, _scan.confidence,
                     )
+                    self._pre_triage_quarantine(
+                        sender=sender, sender_email=sender_email,
+                        subject=subject, thread_id=thread_id,
+                        message_id=message_id,
+                        text_body=text_body,
+                        reply_text=reply_text or text_body or "",
+                        reason=f"injection_detected:{','.join(_scan.threats)}",
+                        scan_result=_scan,
+                        receiving_inbox=receiving_inbox,
+                    )
+                    return
+            except ImportError:
+                logger.debug("email_security module not available, skipping pre-triage screen")
+            except Exception as _screen_exc:
+                # Pre-triage screening must never block the pipeline.
+                # If it fails, fall through to the existing post-triage guards.
+                logger.warning(
+                    "📧 Pre-triage screening failed (falling through): %s",
+                    _screen_exc,
+                )
 
 
             # ── Detect target VP agent by name ──
@@ -2497,8 +2560,12 @@ class AgentMailService:
                 );
                 """
             )
-            # Migration-safe column additions for post-triage lifecycle tracking
+            # Migration-safe column additions for post-triage lifecycle tracking.
+            # sender_role is in the base CREATE TABLE but also listed here so a DB
+            # whose table predates the column (old backup / snapshot) gets it via
+            # ALTER instead of crash-looping on every queue INSERT.
             _migration_columns = [
+                ("sender_role", "TEXT NOT NULL DEFAULT 'external'"),
                 ("completed_at", "TEXT DEFAULT ''"),
                 ("session_exit_status", "TEXT DEFAULT ''"),
                 ("reply_sent", "INTEGER DEFAULT 0"),
@@ -3145,6 +3212,7 @@ class AgentMailService:
 
         note = str(triage.get("subject_summary") or triage.get("raw_text") or "").strip()
         sender_email = str(payload.get("sender_email") or "").strip().lower()
+        sender_role = str(payload.get("sender_role") or "").strip().lower()
 
         if str(triage.get("routing_decision") or "") == "quarantine":
             bridge.mark_quarantined(
@@ -3168,9 +3236,14 @@ class AgentMailService:
         # ── Auto-quarantine unknown @agentmail.to senders ────────────────
         # Agent-to-agent email from external agents we don't control is a
         # higher-risk vector (potential prompt injection from another AI).
-        if sender_email.endswith("@agentmail.to") and sender_email not in {
-            addr.lower() for addr in self._trusted_senders
-        }:
+        # Self-sends are exempt: they are the inbox's OWN address (an app sending
+        # AS Simone), were already scanned at Gate 2, and must reach normal
+        # review rather than be re-quarantined here.
+        if (
+            sender_role != "self_send"
+            and sender_email.endswith("@agentmail.to")
+            and sender_email not in {addr.lower() for addr in self._trusted_senders}
+        ):
             bridge.mark_quarantined(
                 thread_id,
                 note=note or f"Auto-quarantined: unknown agent-to-agent sender {sender_email}",
@@ -3778,8 +3851,20 @@ class AgentMailService:
             if not message_id or self._seen_message_id(message_id):
                 continue
             sender_email = _normalize_sender_email(str(getattr(msg, "from_", "") or ""))
-            # Ignore self-authored outbound copies in inbox listing.
-            if sender_email and inbox_sender and sender_email == inbox_sender:
+            # Drop pure self-authored OUTBOUND copies (Simone's own digests/alerts
+            # to the operator) — but PROCESS deliberate self-sends (a message
+            # Simone sent into her own inbox, e.g. an app emailing logs AS Simone).
+            # A self-send carries the 'received' label / has the inbox in To; an
+            # outbound copy does not. _handle_inbound_email still scans it.
+            if (
+                sender_email
+                and inbox_sender
+                and sender_email == inbox_sender
+                and not _is_self_send(
+                    sender_email, inbox_sender,
+                    getattr(msg, "labels", None), getattr(msg, "to", None),
+                )
+            ):
                 self._claim_seen_message_id(message_id)
                 continue
             # Filter automated / bounce / DSN emails in the polling path too.
