@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import html
 import os
+import re
 import sqlite3
 from typing import Any
 
@@ -308,15 +309,22 @@ class IntelligenceReporter:
             for artifact in artifacts
             if artifact.get("artifact_type") != "daily_digest"
             and artifact.get("status") not in {proactive_artifacts.ARTIFACT_STATUS_ARCHIVED}
+            # Staleness backstop: drop days-old candidates (e.g. already
+            # merged/closed PRs) without a synchronous per-item gh lookup.
+            and not _is_stale_candidate(artifact)
         ]
-        candidates.sort(
-            key=lambda artifact: (
-                score_artifact_for_review(self._conn, artifact),
-                str(artifact.get("updated_at") or ""),
-            ),
+        scored = [
+            (artifact, float(score_artifact_for_review(self._conn, artifact)))
+            for artifact in candidates
+        ]
+        scored.sort(
+            key=lambda pair: (pair[1], str(pair[0].get("updated_at") or "")),
             reverse=True,
         )
-        return candidates[:limit]
+        # Collapse duplicates that point at the same underlying work target
+        # (e.g. a demo mirrored as both cody_demo_task and proactive_work_item).
+        deduped = _dedup_candidates(scored)
+        return [artifact for artifact, _score in deduped][:limit]
 
     def _compose_digest_text(
         self,
@@ -339,7 +347,16 @@ class IntelligenceReporter:
             lines.extend(["", "No proactive work products are waiting for review right now."])
         for index, artifact in enumerate(artifacts, start=1):
             link = _artifact_link(artifact)
-            summary = str(artifact.get("summary") or "").strip()
+            task_context = self._artifact_task_context(artifact)
+            # Prefer the recap's success_assessment over the raw description, then
+            # scrub any BRIEF/ACCEPTANCE boilerplate and conversational tails.
+            recap_for_summary = (
+                task_context.get("recap") if isinstance(task_context.get("recap"), dict) else {}
+            )
+            summary = _sanitize_summary(
+                str(recap_for_summary.get("success_assessment") or "").strip()
+                or str(artifact.get("summary") or "").strip()
+            )
             lines.extend(
                 [
                     "",
@@ -349,7 +366,6 @@ class IntelligenceReporter:
             )
             if summary:
                 lines.append(f"   Summary: {summary}")
-            task_context = self._artifact_task_context(artifact)
             if task_context:
                 recap = task_context.get("recap") if isinstance(task_context.get("recap"), dict) else {}
                 assessment = str(recap.get("success_assessment") or "").strip()
@@ -533,3 +549,169 @@ def _task_context_lines(context: dict[str, Any]) -> list[str]:
     if next_action:
         lines.append(f"- Recommended next action: {next_action}")
     return lines
+
+
+# ── Digest hygiene: dedup, staleness, chatter strip ─────────────────────────
+# The daily proactive-review digest historically built candidates with a single
+# filter (drop daily_digest + archived). That let the same underlying work
+# surface twice (a demo mirrored as both ``cody_demo_task`` and
+# ``proactive_work_item`` — distinct make_artifact_id seeds → two rows), let
+# days-old already-merged/closed PRs ride along as "fresh" candidates, and
+# leaked raw chatter (BRIEF.md instruction blocks, conversational tails) into
+# the summary. These helpers are deterministic and DB-free so they are unit
+# testable in isolation.
+
+# Demo workspace slugs look like ``opus-port-rust-to-ts__demo-1`` — the part
+# before the trailing ``__demo-N`` (or ``__iter-N``) identifies the work target
+# across iterations / sync paths.
+_DEMO_SLUG_SUFFIX_RE = re.compile(r"__(?:demo|iter|iteration)-\d+$", re.IGNORECASE)
+
+# Per-type preference order when collapsing duplicates: the task-typed demo
+# artifact is richer than the generic proactive_work_item mirror of the same
+# task, so prefer it on a score tie.
+_DEDUP_TYPE_PREFERENCE = {
+    "cody_demo_task": 2,
+}
+
+_STALE_MAX_AGE_DAYS = 7
+
+# Conversational / instructional lines that must never leak into the digest.
+_CHATTER_LINE_RE = re.compile(
+    r"^\s*(?:want me to .*\?|should i .*\?|let me know\b.*|shall i .*\?|"
+    r"do you want me to .*\?|would you like me to .*\?)\s*$",
+    re.IGNORECASE,
+)
+
+# Leading instruction-boilerplate headers emitted by BRIEF.md-style prompts.
+_BRIEF_BOILERPLATE_RE = re.compile(
+    r"^\s*(?:#+\s*)?(?:brief|acceptance(?:\s+criteria)?|task|objective|"
+    r"instructions?|context|deliverables?)\s*:?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _dedup_key_for_artifact(artifact: dict[str, Any]) -> str:
+    """Stable key identifying the underlying work target.
+
+    Prefers ``metadata.task_id`` (shared across the cody_demo_task mirror and the
+    proactive_work_item sync of the same Task Hub item). Falls back to the demo
+    workspace slug parsed from ``source_ref`` (collapsing iterations of the same
+    demo), then to the artifact_id (no collapse).
+    """
+    metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
+    task_id = str(metadata.get("task_id") or "").strip()
+    if task_id:
+        return f"task:{task_id}"
+    source_ref = str(artifact.get("source_ref") or "").strip()
+    if source_ref:
+        slug = _DEMO_SLUG_SUFFIX_RE.sub("", source_ref).strip()
+        if slug:
+            return f"ref:{slug}"
+    return f"id:{artifact.get('artifact_id') or id(artifact)}"
+
+
+def _dedup_preference(artifact: dict[str, Any], score: float) -> tuple[float, int]:
+    """Rank a duplicate: higher score wins; on a tie prefer the richer type."""
+    type_rank = _DEDUP_TYPE_PREFERENCE.get(str(artifact.get("artifact_type") or "").strip(), 0)
+    return (float(score), type_rank)
+
+
+def _dedup_candidates(
+    scored: list[tuple[dict[str, Any], float]],
+) -> list[tuple[dict[str, Any], float]]:
+    """Collapse candidates sharing a work-target key, keeping the best one.
+
+    ``scored`` is a list of ``(artifact, score)``. Returns the kept subset in the
+    same order they first appeared (preserving the caller's sort)."""
+    best: dict[str, tuple[dict[str, Any], float]] = {}
+    order: list[str] = []
+    for artifact, score in scored:
+        key = _dedup_key_for_artifact(artifact)
+        if key not in best:
+            best[key] = (artifact, score)
+            order.append(key)
+            continue
+        kept_artifact, kept_score = best[key]
+        if _dedup_preference(artifact, score) > _dedup_preference(kept_artifact, kept_score):
+            best[key] = (artifact, score)
+    return [best[key] for key in order]
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _pr_state_is_resolved(metadata: dict[str, Any]) -> bool:
+    """True if metadata already carries a closed/merged PR state (no live lookup)."""
+    if not isinstance(metadata, dict):
+        return False
+    for key in ("pr_state", "state", "pull_request_state", "merge_state", "status"):
+        value = str(metadata.get(key) or "").strip().lower()
+        if value in {"merged", "closed"}:
+            return True
+    for flag in ("merged", "is_merged", "closed", "is_closed"):
+        if bool(metadata.get(flag)):
+            return True
+    return False
+
+
+def _is_stale_candidate(
+    artifact: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    max_age_days: int = _STALE_MAX_AGE_DAYS,
+) -> bool:
+    """Drop candidates that are stale by age, or carry a resolved PR state.
+
+    Staleness is a backstop for already-merged/closed PRs (which are days old by
+    the time the digest runs) — we deliberately avoid a synchronous gh lookup in
+    this cron path. Uses the most recent of created_at/updated_at."""
+    metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
+    if _pr_state_is_resolved(metadata):
+        return True
+    now = now or datetime.now(timezone.utc)
+    stamps = [
+        ts
+        for ts in (_parse_iso(artifact.get("updated_at")), _parse_iso(artifact.get("created_at")))
+        if ts is not None
+    ]
+    if not stamps:
+        return False
+    newest = max(stamps)
+    return (now - newest).total_seconds() > max_age_days * 86400
+
+
+def _sanitize_summary(summary: str) -> str:
+    """Strip leading BRIEF/ACCEPTANCE boilerplate and trailing conversational tails."""
+    text = str(summary or "").strip()
+    if not text:
+        return ""
+    lines = text.splitlines()
+    # Drop leading instruction-boilerplate header lines (and any blank lines).
+    start = 0
+    while start < len(lines):
+        line = lines[start].strip()
+        if not line or _BRIEF_BOILERPLATE_RE.match(line):
+            start += 1
+            continue
+        break
+    # Drop trailing conversational / blank lines.
+    end = len(lines)
+    while end > start:
+        line = lines[end - 1].strip()
+        if not line or _CHATTER_LINE_RE.match(line):
+            end -= 1
+            continue
+        break
+    return "\n".join(lines[start:end]).strip()

@@ -11,11 +11,12 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - src/universal_agent/services/hourly_intel_digest.py
+  - src/universal_agent/services/intelligence_reporter.py
   - src/universal_agent/scripts/hourly_intel_digest_cron.py
   - src/universal_agent/scripts/proactive_signal_card_sync.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-20
+last_verified: 2026-06-21
 ---
 
 # Proactive Pipeline
@@ -691,7 +692,21 @@ implicit signals without understanding this loop.
   `AgentMailService()` + `await startup()` directly — the one-shot subprocess
   mailer pattern of `insight_scoring_health.py` — so they inherit the
   AgentMail→gws 429 fallback for free (gated `UA_AGENTMAIL_GMAIL_FALLBACK`,
-  pinned `1` in the deploy bootstrap).
+  pinned `1` in the deploy bootstrap). Candidate selection in
+  `intelligence_reporter.py::IntelligenceReporter._rank_digest_artifacts` applies
+  three deterministic hygiene passes before truncating to the limit: (1) **dedup
+  by work target** — `_dedup_candidates` collapses artifacts sharing a
+  `_dedup_key_for_artifact` (`metadata.task_id`, else the demo workspace slug
+  parsed from `source_ref` with the `__demo-N` suffix stripped), keeping the
+  highest-scored and preferring `cody_demo_task` over its `proactive_work_item`
+  mirror on a tie; (2) **staleness backstop** — `_is_stale_candidate` drops
+  candidates whose newest of `created_at`/`updated_at` is older than 7 days, or
+  whose metadata already carries a `merged`/`closed` PR state (so days-old merged
+  PRs don't resurface; no synchronous `gh` lookup runs in this cron path); and
+  (3) **chatter strip** — `_compose_digest_text` runs `_sanitize_summary` over
+  each summary (preferring `recap.success_assessment` over the raw description),
+  removing leading BRIEF/ACCEPTANCE instruction boilerplate and trailing
+  conversational tails like "Want me to … ?" / "Should I … ?".
 - **Hourly intel digest** — the convergence-brief digest (one collated email of
   `intel_brief` ships per active hour). The composition/render/throttle contract
   lives in `hourly_intel_digest.py::compose_send_payload` (per-brief 👍/👎 links
