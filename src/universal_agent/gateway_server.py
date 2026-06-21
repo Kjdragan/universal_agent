@@ -444,6 +444,22 @@ _LOCAL_WORKER_ALLOWED_PATHS = {
 }
 
 AUTONOMOUS_DAILY_BRIEFING_JOB_KEY = "autonomous_daily_briefing"
+# Lightweight housekeeping crons (skip_task_hub_link, no work-product) that
+# still get stamped metadata.autonomous=True by `_register_system_cron_job`.
+# Their per-minute / quarter-hourly success notifications massively inflate the
+# autonomous-briefing "completed" tally (`simone_chat_auto_complete` alone =
+# ~1382 runs/24h) yet represent NO proactive work the operator wants surfaced.
+# `_register_system_cron_job` stamps `metadata.housekeeping=True` for these, and
+# the briefing collectors (`_collect_autonomous_activity_rows`,
+# `_collect_autonomous_runs_from_cron`) exclude housekeeping completions from the
+# "completed" buckets. Hardcoded backstop in case an older persisted cron row
+# predates the metadata stamp.
+HOUSEKEEPING_SYSTEM_JOBS = frozenset(
+    {
+        "simone_chat_auto_complete",
+        "vp_mission_pr_reconciler",
+    }
+)
 AUTONOMOUS_DAILY_BRIEFING_DEFAULT_CRON = "0 7 * * *"
 AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE = (
     (os.getenv("UA_AUTONOMOUS_BRIEFING_TIMEZONE") or "").strip()
@@ -20606,6 +20622,12 @@ def _register_system_cron_job(
         metadata["skip_task_hub_link"] = True
     if lightweight:
         metadata["lightweight"] = True
+    if system_job in HOUSEKEEPING_SYSTEM_JOBS:
+        # Mark lightweight housekeeping crons so the autonomous-briefing
+        # collectors can exclude their high-frequency success notifications
+        # from the "completed" tally (they do real bookkeeping, but no
+        # operator-facing proactive work). See HOUSEKEEPING_SYSTEM_JOBS.
+        metadata["housekeeping"] = True
     updates = {
         "user_id": "cron_system",
         "workspace_dir": workspace_dir,
@@ -32643,6 +32665,58 @@ def _autonomous_job_artifact_links(job_id: str, *, max_files: int = 6) -> list[d
 
 
 
+def _count_cron_runs_in_window_from_jsonl(
+    *,
+    window_start: float,
+    window_end: float,
+) -> int:
+    """Count durable cron runs in [window_start, window_end] from cron_runs.jsonl.
+
+    Split-aware fallback for ROOT B: under UA_AUTONOMOUS_RUNTIME_MODE=split the
+    in-memory `_cron_service` (and its run buffer) live only in the
+    autonomous_worker process. When the briefing-composition path runs in a
+    process where `_cron_service is None`, the in-memory run list is empty and
+    `cron_runs_in_window` reported 0 even though crons fired thousands of times.
+    The CronStore durably appends every run to `WORKSPACES_DIR/cron_runs.jsonl`
+    (see `cron_service.CronStore.append_run`), so we read that file directly and
+    count records whose finished/started/scheduled timestamp lands in the window.
+    Best-effort: returns 0 on any read/parse error (never raises into the
+    briefing path).
+    """
+    runs_path = WORKSPACES_DIR / "cron_runs.jsonl"
+    if not runs_path.exists():
+        return 0
+    count = 0
+    try:
+        with runs_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                raw_ts = (
+                    record.get("finished_at")
+                    or record.get("started_at")
+                    or record.get("scheduled_at")
+                )
+                try:
+                    event_ts = float(raw_ts)
+                except Exception:
+                    continue
+                if event_ts <= 0.0 or event_ts < window_start or event_ts > (window_end + 5):
+                    continue
+                count += 1
+    except Exception:
+        logger.exception("Failed counting cron_runs.jsonl window for autonomous briefing")
+        return 0
+    return count
+
+
 def _collect_autonomous_runs_from_cron(
     *,
     window_start: float,
@@ -32656,11 +32730,24 @@ def _collect_autonomous_runs_from_cron(
         "cron_runs_missing_job_metadata": 0,
         "cron_runs_non_autonomous": 0,
         "cron_runs_daily_briefing_excluded": 0,
+        "cron_runs_housekeeping_excluded": 0,
         "cron_autonomous_runs_in_window": 0,
         "cron_autonomous_completed": 0,
         "cron_autonomous_failed": 0,
     }
     if not _cron_service:
+        # ROOT B (split-aware): under UA_AUTONOMOUS_RUNTIME_MODE=split this code
+        # can run in a process where `_cron_service` is None, so the in-memory
+        # run buffer is empty. Fall back to the durable cron_runs.jsonl so
+        # `cron_runs_in_window` reflects reality (was hardcoded 0 despite 1000s
+        # of real runs). We can only count total runs from the jsonl (it carries
+        # no job metadata for autonomous/housekeeping classification), so the
+        # completed/failed backfill buckets stay empty — but the count diagnostic
+        # is now truthful.
+        diagnostics["cron_runs_in_window"] = _count_cron_runs_in_window_from_jsonl(
+            window_start=window_start, window_end=window_end
+        )
+        diagnostics["cron_runs_source"] = "cron_runs_jsonl"
         return {"completed": completed, "failed": failed, "diagnostics": diagnostics}
 
     try:
@@ -32714,6 +32801,16 @@ def _collect_autonomous_runs_from_cron(
         if system_job == AUTONOMOUS_DAILY_BRIEFING_JOB_KEY:
             diagnostics["cron_runs_daily_briefing_excluded"] = (
                 int(diagnostics.get("cron_runs_daily_briefing_excluded", 0) or 0) + 1
+            )
+            continue
+        # Exclude lightweight housekeeping crons from the completed/failed
+        # backfill for the same reason the notification path does (ROOT A):
+        # their high-frequency runs are bookkeeping, not operator-facing work.
+        # Match the cron-job metadata flag OR the hardcoded name set (the latter
+        # covers persisted rows registered before the flag existed).
+        if bool(metadata.get("housekeeping")) or system_job in HOUSEKEEPING_SYSTEM_JOBS:
+            diagnostics["cron_runs_housekeeping_excluded"] = (
+                int(diagnostics.get("cron_runs_housekeeping_excluded", 0) or 0) + 1
             )
             continue
 
@@ -32800,6 +32897,7 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
         "notification_completed_in_window": 0,
         "notification_failed_in_window": 0,
         "notification_heartbeat_in_window": 0,
+        "housekeeping_completions_excluded": 0,
         "cron_backfill_applied": False,
         "signals_ingest_enabled": (
             str(os.getenv("UA_SIGNALS_INGEST_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
@@ -32819,6 +32917,19 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
         metadata = item.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
+        # Exclude lightweight housekeeping crons (e.g. simone_chat_auto_complete,
+        # vp_mission_pr_reconciler) from the briefing tally. Their per-minute /
+        # quarter-hourly success notifications carry autonomous=True but are NOT
+        # operator-facing proactive work — counting them inflated "completed" by
+        # 1000s/24h. `_emit_cron_event` stores `system_job` on the notification
+        # metadata; match against the hardcoded set (the `housekeeping` flag
+        # lives on the cron-job metadata, not the notification, so we key on the
+        # job name here).
+        if str(metadata.get("system_job") or "").strip() in HOUSEKEEPING_SYSTEM_JOBS:
+            diagnostics["housekeeping_completions_excluded"] = (
+                int(diagnostics.get("housekeeping_completions_excluded", 0) or 0) + 1
+            )
+            continue
         row = {
             "id": str(item.get("id") or ""),
             "kind": kind,

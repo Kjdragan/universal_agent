@@ -11,7 +11,7 @@ code_paths:
   - deployment/systemd/
   - scripts/install_vps_phase_a_batch1_timers.sh
   - scripts/install_vps_phase_a_batch2_timers.sh
-last_verified: 2026-06-15
+last_verified: 2026-06-21
 ---
 
 # Cron & Scheduling
@@ -444,6 +444,32 @@ The full system-cron roster is the block of `_ensure_*_cron_job()` calls in the
 gateway startup (briefings, CSI convergence, ClaudeDevs intel, YouTube digests,
 nightly wiki, proactive reports, Atlas direct dispatch, vault lint, etc.).
 
+### Autonomous-briefing telemetry (housekeeping exclusion + split-aware run count)
+
+Every system cron is stamped `metadata.autonomous=True`, so each successful run
+emits a `kind="autonomous_run_completed"` notification (`gateway_server.py::_emit_cron_event`).
+The autonomous daily-briefing collectors (`gateway_server.py::_collect_autonomous_activity_rows`
+and its cron backfill `gateway_server.py::_collect_autonomous_runs_from_cron`) tally
+those into the operator-facing "completed" count. Two corrections live here:
+
+- **Housekeeping exclusion (ROOT A).** Lightweight bookkeeping crons fire far too
+  often to be "proactive work" — `simone_chat_auto_complete` (`*/1`) alone is
+  ~1382 runs/24h. They are listed in `gateway_server.py::HOUSEKEEPING_SYSTEM_JOBS`,
+  stamped `metadata.housekeeping=True` at registration, and both collectors skip
+  them from the `completed`/`failed` buckets (the notification path matches the
+  `system_job` name; the cron-backfill path matches the flag **or** the name set, so
+  pre-flag persisted rows are still excluded). Real proactive completions
+  (briefings, digests, proactive reports) are unaffected.
+- **Split-aware run count (ROOT B).** Under `UA_AUTONOMOUS_RUNTIME_MODE=split` the
+  in-process `_cron_service` lives only in the `autonomous_worker` process, so a
+  briefing composed elsewhere saw `_cron_service is None` and reported
+  `cron_runs_in_window=0` despite thousands of real runs. `_collect_autonomous_runs_from_cron`
+  now falls back to `gateway_server.py::_count_cron_runs_in_window_from_jsonl`, which
+  reads the durable `WORKSPACES_DIR/cron_runs.jsonl` (the same file `CronStore.append_run`
+  writes) and counts records in the 24h window. The completed/failed backfill buckets
+  stay empty on that path (the jsonl carries no job metadata to classify by), but the
+  count diagnostic is truthful.
+
 ## Hermes Phase F: Task Hub linking
 
 Unless `metadata.skip_task_hub_link` is set, every `!script` and LLM cron tick
@@ -555,6 +581,7 @@ view the transcript; the gateway's session reaper cleans them up later.
 | `metadata.max_attempts` | `3` | Per-job retry ceiling. |
 | `metadata.lightweight` | `False` | Skip agent bootstrap for `!script` housekeeping crons. |
 | `metadata.skip_task_hub_link` | `False` | Opt out of Phase F Task Hub linking. |
+| `metadata.housekeeping` | `False` | Stamped by `_register_system_cron_job` for jobs in `HOUSEKEEPING_SYSTEM_JOBS` (`simone_chat_auto_complete`, `vp_mission_pr_reconciler`). Excludes their high-frequency success runs from the autonomous-briefing "completed" tally — see "Autonomous-briefing telemetry" below. |
 | `metadata.required_secrets` | — | Env vars verified pre-flight. |
 
 ## Dormancy & timezone gotchas
