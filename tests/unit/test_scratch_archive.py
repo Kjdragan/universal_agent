@@ -45,7 +45,7 @@ def test_archive_single_html_file(archiver, tmp_path):
     )
 
     # Dated, named copy on disk.
-    dest = root / "2026-06-21" / "093015__triage-abc123__report.html"
+    dest = root / "2026-06-21" / "093015__triage-abc123__report.html"  # date-pinned-ok
     assert dest.is_file()
     assert dest.read_text(encoding="utf-8").startswith("<html>")
 
@@ -59,7 +59,7 @@ def test_archive_single_html_file(archiver, tmp_path):
     assert len(ledger) == 1
     assert json.loads(ledger[0])["slug"] == "triage-abc123"
     md = (root / "INDEX.md").read_text(encoding="utf-8")
-    assert "My Triage" in md and "2026-06-21" in md
+    assert "My Triage" in md and "2026-06-21" in md  # date-pinned-ok
     html = (root / "index.html").read_text(encoding="utf-8")
     assert "My Triage" in html and "093015__triage-abc123__report.html" in html
 
@@ -69,7 +69,7 @@ def test_title_falls_back_to_slug(archiver, tmp_path):
     root = tmp_path / "archive"
     rec = archiver.archive_artifact(src=src, slug="export-x", root=root, is_dir=False, url="", now=datetime(2026, 6, 21, 1, 2, 3))
     assert rec["title"] == "export-x"
-    assert (root / "2026-06-21" / "010203__export-x__data.csv").is_file()
+    assert (root / "2026-06-21" / "010203__export-x__data.csv").is_file()  # date-pinned-ok
 
 
 def test_archive_docset_uses_sidecar_title(archiver, tmp_path):
@@ -82,7 +82,7 @@ def test_archive_docset_uses_sidecar_title(archiver, tmp_path):
 
     rec = archiver.archive_artifact(src=src, slug="plan-9", root=root, is_dir=True, url="https://h/scratch/plan-9/", now=datetime(2026, 6, 21, 12, 0, 0))
 
-    dest_dir = root / "2026-06-21" / "120000__plan-9"
+    dest_dir = root / "2026-06-21" / "120000__plan-9"  # date-pinned-ok
     assert (dest_dir / "DESIGN.html").is_file()
     assert (dest_dir / "sub" / "page.html").is_file()
     assert rec["title"] == "Big Plan"
@@ -112,7 +112,7 @@ def test_same_second_collision_gets_suffix(archiver, tmp_path):
     now = datetime(2026, 6, 21, 7, 7, 7)
     archiver.archive_artifact(src=a, slug="dup", root=root, is_dir=False, url="", now=now)
     archiver.archive_artifact(src=b, slug="dup", root=root, is_dir=False, url="", now=now)
-    day = root / "2026-06-21"
+    day = root / "2026-06-21"  # date-pinned-ok
     names = sorted(p.name for p in day.iterdir())
     assert names == ["070707__dup__1__x.html", "070707__dup__x.html"]
 
