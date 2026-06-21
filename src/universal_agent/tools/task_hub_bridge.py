@@ -221,9 +221,42 @@ async def _task_hub_create_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     else:
         agent_ready = bool(args.get("agent_ready", True))
 
+    # Reflection-lane insert-time dedup. Simone's heartbeat LLM re-proposes the
+    # same observation almost verbatim on every heartbeat (the hackernews false
+    # premise spawned 3 near-identical reflection tasks in ~3.5h, all with
+    # incident_key=NULL). Normalize the title into a stable dedup key and, if an
+    # OPEN/needs_review reflection row already carries it, return that task_id as
+    # a no-op instead of inserting a duplicate. The key is stored in the existing
+    # incident_key column. Scoped to reflection only — normalize_reflection_dedup_key
+    # returns "" for every other source_kind, leaving the CSI/cron paths untouched.
+    dedup_key = task_hub.normalize_reflection_dedup_key(source_kind=source_kind, title=title)
+
     conn = connect_runtime_db(get_activity_db_path())
     conn.row_factory = sqlite3.Row
     try:
+        if dedup_key:
+            existing = conn.execute(
+                """
+                SELECT task_id
+                FROM task_hub_items
+                WHERE source_kind = 'reflection'
+                  AND incident_key = ?
+                  AND status IN (?, ?)
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (dedup_key, task_hub.TASK_STATUS_OPEN, task_hub.TASK_STATUS_REVIEW),
+            ).fetchone()
+            if existing:
+                existing_id = str(existing["task_id"])
+                return _ok({
+                    "success": True,
+                    "task_id": existing_id,
+                    "deduplicated": True,
+                    "dedup_key": dedup_key,
+                    "item": task_hub.get_item(conn, existing_id),
+                })
+
         import uuid
         task_id = f"task_{uuid.uuid4().hex[:12]}"
 
@@ -253,6 +286,8 @@ async def _task_hub_create_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                 "agent_ready": agent_ready,
                 "trigger_type": "autonomous",
             }
+            if dedup_key:
+                item["incident_key"] = dedup_key
 
             created = task_hub.upsert_item(conn, item)
     except Exception as exc:

@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/scripts/proactive_signal_card_sync.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-20
+last_verified: 2026-06-21
 ---
 
 # Proactive Pipeline
@@ -131,6 +131,17 @@ wiring differs — some run continuously, some ship scaffolding only.
 >   state** (`task_hub_bridge.py::_task_hub_create_impl` forces `agent_ready=False` +
 >   `ideation` label for `source_kind='reflection'`) so proposals await operator review
 >   rather than auto-dispatching.
+>
+> **Insert-time dedup (reflection only).** The heartbeat LLM re-proposes the same observation
+> almost verbatim every cycle (a single false premise once spawned three near-identical
+> reflection tasks in ~3.5h, all with `incident_key=NULL`). `_task_hub_create_impl` now derives
+> a stable key from the title via `task_hub.py::normalize_reflection_dedup_key` (lowercase +
+> collapse non-alphanumeric runs → `reflection:<normalized>`), and before inserting checks for an
+> existing `source_kind='reflection'` row with that `incident_key` in an `open`/`needs_review`
+> status. On a hit it returns the existing `task_id` as a no-op (`deduplicated: true`) instead of
+> inserting; on a miss it stores the key in the existing `incident_key` column. The gate is scoped
+> to reflection — `normalize_reflection_dedup_key` returns `""` for every other `source_kind`, so
+> the CSI/cron incident-key paths are untouched.
 >
 > **Phase 2b (shipped):** the **morning ideation report** — `services/ideation_report.py`
 > (queries held proposals → renders HTML cards with one-click action links → publishes to the

@@ -288,6 +288,25 @@ def normalize_csi_incident_key(*, incident_key: Any, event_type: Any = None) -> 
     return collapsed or key
 
 
+def normalize_reflection_dedup_key(*, source_kind: Any, title: Any) -> str:
+    """Build a stable incident_key for reflection-lane proposals.
+
+    Simone's heartbeat LLM re-proposes the same observation almost verbatim on
+    every heartbeat, so the reflection create path needs an insert-time dedup
+    key derived purely from the title. We lowercase, collapse every run of
+    non-alphanumeric characters to a single space, and trim — so near-identical
+    phrasings (differing only in punctuation, casing, or trailing whitespace)
+    map to the same key. Returns "" when the source is not reflection or the
+    title yields no tokens, signalling "no dedup" to the caller.
+    """
+    if str(source_kind or "").strip().lower() != "reflection":
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(title or "").lower()).strip()
+    if not normalized:
+        return ""
+    return f"reflection:{normalized}"
+
+
 def _parse_iso(raw: Any) -> Optional[datetime]:
     text = str(raw or "").strip()
     if not text:
