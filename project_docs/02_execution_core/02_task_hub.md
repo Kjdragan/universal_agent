@@ -514,7 +514,12 @@ into Task Hub rather than running invisibly. The canonical helpers:
    success path ever reset those fields. The clear is a no-op for *genuine*
    dispositions (e.g. `heartbeat_retry_exhausted`) — only the orphan-reconcile
    reasons in `task_hub.py::_TRANSIENT_RECONCILE_DISPOSITION_REASONS` are wiped.
-2. **Run history** — `_open_run` at claim/link, `_close_run` at finalize.
+2. **Run history** — `_open_run` at claim/link; `_close_run` at finalize
+   (`finalize_assignments`) **and** on normal self-disposition
+   (`_complete_active_assignments_for_task`, reached from `perform_task_action`).
+   The latter close was added 2026-06-21: previously only the finalize path closed
+   runs, so every clean self-completion leaked an open `task_hub_runs` row
+   (audit-ledger only — never affected dispatch/concurrency).
 3. **Subprocess identity** — `record_worker_pid` / `record_provider_session_id`.
 4. **Worker-exit classification** — `classify_worker_exit`.
 5. **Protocol-violation routing** — `park_task_for_protocol_violation`.

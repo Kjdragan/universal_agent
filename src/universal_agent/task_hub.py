@@ -2654,7 +2654,21 @@ def _complete_active_assignments_for_task(
     task_id: str,
     result_summary: str,
     ended_at: str,
+    outcome: str = "completed",
 ) -> None:
+    # Capture the assignments we're about to close so we can also close their
+    # parallel run-ledger rows. Without this, a normal self-disposition via
+    # perform_task_action closes the assignment but leaks the task_hub_runs row
+    # (ended_at stays NULL forever) — the only path that closed runs was
+    # finalize_assignments, reached only on abnormal/stuck paths (H3 ledger leak).
+    affected = [
+        str(r["assignment_id"])
+        for r in conn.execute(
+            "SELECT assignment_id FROM task_hub_assignments "
+            "WHERE task_id=? AND state IN ('seized', 'running')",
+            (task_id,),
+        ).fetchall()
+    ]
     conn.execute(
         """
         UPDATE task_hub_assignments
@@ -2663,6 +2677,16 @@ def _complete_active_assignments_for_task(
         """,
         (ended_at, result_summary.strip() or None, task_id),
     )
+    # Close the run ledger for each closed assignment. _close_run is idempotent
+    # (no-op when the run is already closed or absent) and best-effort — an
+    # audit-write hiccup must never block a legitimate task disposition.
+    for aid in affected:
+        try:
+            _close_run(conn, assignment_id=aid, outcome=outcome, summary=result_summary)
+        except Exception:
+            logger.debug(
+                "run-ledger close (best-effort) failed for assignment %s", aid, exc_info=True
+            )
 
 
 def _summarize_prior_assignments(
@@ -5315,6 +5339,24 @@ def perform_task_action(
     reason_text = str(reason or note or "").strip()
     now_iso = _now_iso()
 
+    # Map the disposition verb to the run-ledger outcome so the per-attempt
+    # history (task_hub_runs, consumed by re_evaluation_context → the next
+    # claimer's prompt and the dashboard failure drawer) records WHY the attempt
+    # ended — not a blanket "completed". Verbs that hand the work back or stop
+    # short must not read as a success of the prior attempt.
+    _run_outcome = {
+        "complete": "completed",
+        "approve": "completed",
+        "review": "completed",        # work done, routed to human review
+        "block": "gave_up",
+        "park": "reclaimed",
+        "delegate": "reclaimed",
+        "rehydrate": "reclaimed",
+        "re_evaluate": "reclaimed",
+        "redirect_to": "reclaimed",
+        "request_revision": "reclaimed",
+    }.get(action_norm, "completed")
+
     if action_norm == "seize":
         assignment_id = f"asg_{uuid.uuid4().hex[:16]}"
         conn.execute(
@@ -5354,7 +5396,7 @@ def perform_task_action(
         )
     elif action_norm == "block":
         metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
-        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "blocked", ended_at=now_iso)
+        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "blocked", ended_at=now_iso, outcome=_run_outcome)
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
             (TASK_STATUS_BLOCKED, "unseized", _json_dumps(metadata), now_iso, task_id),
@@ -5374,7 +5416,7 @@ def perform_task_action(
         )
     elif action_norm == "review":
         metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
-        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "needs_review", ended_at=now_iso)
+        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "needs_review", ended_at=now_iso, outcome=_run_outcome)
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
             (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
@@ -5418,6 +5460,7 @@ def perform_task_action(
                     task_id=task_id,
                     result_summary="completion_requires_demo_finalize",
                     ended_at=now_iso,
+                    outcome="failed",  # completion claim rejected by the demo-finalize gate
                 )
                 conn.execute(
                     "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
@@ -5480,6 +5523,7 @@ def perform_task_action(
                     task_id=task_id,
                     result_summary="completion_claim_missing_email_delivery",
                     ended_at=now_iso,
+                    outcome="failed",  # completion claim rejected: no verified delivery
                 )
                 conn.execute(
                     "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
@@ -5506,14 +5550,14 @@ def perform_task_action(
         dispatch_meta["completion_unverified"] = False
         metadata["dispatch"] = dispatch_meta
         _completion_token = f"api_{uuid.uuid4().hex[:12]}_{now_iso}"
-        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "completed", ended_at=now_iso)
+        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "completed", ended_at=now_iso, outcome=_run_outcome)
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, completion_token=?, metadata_json=?, updated_at=? WHERE task_id=?",
             (TASK_STATUS_COMPLETED, "completed", _completion_token, _json_dumps(metadata), now_iso, task_id),
         )
     elif action_norm == "park":
         metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
-        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "parked", ended_at=now_iso)
+        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "parked", ended_at=now_iso, outcome=_run_outcome)
         conn.execute(
             "UPDATE task_hub_items SET status=?, stale_state=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
             (TASK_STATUS_PARKED, "parked_manual", "unseized", _json_dumps(metadata), now_iso, task_id),
@@ -5551,6 +5595,7 @@ def perform_task_action(
             task_id=task_id,
             result_summary=reason_text or f"delegated:{delegate_meta.get('mission_id') or 'vp'}",
             ended_at=now_iso,
+            outcome=_run_outcome,
         )
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
@@ -5576,7 +5621,7 @@ def perform_task_action(
         delegation["approved_by"] = agent_id or "simone"
         delegation["approval_note"] = str(note or "").strip() or "approved_by_simone"
         metadata["delegation"] = delegation
-        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "approved", ended_at=now_iso)
+        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "approved", ended_at=now_iso, outcome=_run_outcome)
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
             (TASK_STATUS_COMPLETED, "completed", _json_dumps(metadata), now_iso, task_id),
@@ -5607,6 +5652,7 @@ def perform_task_action(
             task_id=task_id,
             result_summary=reason_text or "rehydrated",
             ended_at=now_iso,
+            outcome=_run_outcome,
         )
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
@@ -5659,6 +5705,7 @@ def perform_task_action(
             task_id=task_id,
             result_summary=reason_text or "re_evaluated",
             ended_at=now_iso,
+            outcome=_run_outcome,
         )
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
@@ -5699,6 +5746,7 @@ def perform_task_action(
             task_id=task_id,
             result_summary=f"redirected_to:{target_agent}",
             ended_at=now_iso,
+            outcome=_run_outcome,
         )
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
@@ -5741,6 +5789,7 @@ def perform_task_action(
             task_id=task_id,
             result_summary="revision_requested",
             ended_at=now_iso,
+            outcome=_run_outcome,
         )
         # Bump max_retries: NULL → 4 (default 3 + 1), set → +1.
         # Mirrors Phase A.1 semantics where NULL means "use dispatcher default"

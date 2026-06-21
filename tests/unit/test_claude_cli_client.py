@@ -1196,7 +1196,7 @@ async def test_goal_loop_passes_eval_model_on_work_turn_only(tmp_path: Path, mon
     it onto the /goal WORK turn (prompt_in_argv=True), recording it in the
     payload. The briefing turn is skipped here (goal_condition.txt exists)."""
     monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
-    monkeypatch.delenv("ANTHROPIC_DEFAULT_SONNET_MODEL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_DEFAULT_OPUS_MODEL", raising=False)
     (tmp_path / "goal_condition.txt").write_text(
         "The transcript shows pytest exited 0. OR stop after 20 turns."
     )
@@ -1232,8 +1232,8 @@ async def test_goal_loop_passes_eval_model_on_work_turn_only(tmp_path: Path, mon
     work = calls[0]
     assert work["prompt_in_argv"] is True
     assert work["prompt"].startswith("/goal ")
-    assert work["goal_eval_model"] == "glm-5-turbo"
-    assert out.payload["goal_eval_model"] == "glm-5-turbo"
+    assert work["goal_eval_model"] == "glm-5.2"
+    assert out.payload["goal_eval_model"] == "glm-5.2"
 
 
 @pytest.mark.asyncio
@@ -1269,3 +1269,42 @@ async def test_goal_eligible_mission_gets_higher_wallclock(tmp_path: Path, monke
     assert _mod.GOAL_DEFAULT_CLI_TIMEOUT_SECONDS == 6000
     assert captured["timeout_seconds"] == _mod.GOAL_DEFAULT_CLI_TIMEOUT_SECONDS
     assert captured["timeout_seconds"] > _mod.DEFAULT_CLI_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_goal_briefing_turn_uses_full_budget_not_900s_clamp(tmp_path: Path, monkeypatch):
+    """H10: the /goal briefing turn must NOT be clamped to a hard 900s wall-clock
+    cap. It shares the full mission budget so the shared LivenessWatchdog idle-kill
+    governs it (a briefing actively streaming tool calls is never wall-clock killed).
+    The former GOAL_BRIEFING_TIMEOUT_SECONDS=900 clamp is retired."""
+    from universal_agent.vp.clients import claude_cli_client as _mod
+
+    # No goal_condition.txt → the briefing turn runs (then falls back to single-pass).
+    calls: list[dict[str, Any]] = []
+
+    async def mock_execute(**kwargs):
+        calls.append(kwargs)
+        return MissionOutcome(
+            status="completed", result_ref=f"workspace://{tmp_path}", message="ok",
+            payload={"exit_code": 0},
+        )
+
+    monkeypatch.setattr(_mod, "_execute_cli_session", mock_execute)
+    await _mod._run_goal_loop_mission(
+        objective="build a demo",
+        payload={},
+        workspace_dir=tmp_path,
+        timeout_seconds=6000,
+        enable_agent_teams=False,
+        mission_id="m-brief",
+        cody_mode="zai",
+        task_id="t-1",
+        skill_name="cody-implements-from-brief",
+    )
+
+    # The briefing turn is the call with task_id="" (PID/dispatch bookkeeping is
+    # the work turn's). It must carry the FULL budget, not the retired 900s clamp.
+    briefing = next(c for c in calls if c.get("task_id") == "")
+    assert briefing["timeout_seconds"] == 6000
+    # The hard-clamp constant is gone.
+    assert not hasattr(_mod, "GOAL_BRIEFING_TIMEOUT_SECONDS")

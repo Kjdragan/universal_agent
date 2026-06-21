@@ -339,18 +339,19 @@ class TestModelIdToTier:
 # ── resolve_goal_eval_model ──────────────────────────────────────────────────
 #
 # Upgrades the built-in Claude Code /goal completion evaluator off the
-# operator-locked weak haiku tier (glm-4.5-air) onto the sonnet tier
-# (glm-5-turbo) on ZAI — scoped per-subprocess by the CLI client, never a
-# global remap.
+# operator-locked weak haiku tier (glm-4.5-air) onto the opus tier (glm-5.2)
+# on ZAI — scoped per-subprocess by the CLI client, never a global remap.
+# (Default moved sonnet→opus on 2026-06-21: glm-5-turbo was stalling the
+# evaluator; glm-5.2 is the reliable flagship.)
 
 
 class TestResolveGoalEvalModel:
-    def test_zai_default_is_sonnet_tier(self, monkeypatch):
-        """Unset env on ZAI → the sonnet-tier model (glm-5-turbo)."""
+    def test_zai_default_is_opus_tier(self, monkeypatch):
+        """Unset env on ZAI → the opus-tier model (glm-5.2)."""
         monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
-        monkeypatch.delenv("ANTHROPIC_DEFAULT_SONNET_MODEL", raising=False)
-        assert resolve_goal_eval_model("zai") == "glm-5-turbo"
-        assert resolve_goal_eval_model() == "glm-5-turbo"  # default cody_mode
+        monkeypatch.delenv("ANTHROPIC_DEFAULT_OPUS_MODEL", raising=False)
+        assert resolve_goal_eval_model("zai") == "glm-5.2"
+        assert resolve_goal_eval_model() == "glm-5.2"  # default cody_mode
 
     def test_anthropic_mode_never_overrides(self, monkeypatch):
         """Anthropic-Max sessions keep the real Haiku evaluator — never inject

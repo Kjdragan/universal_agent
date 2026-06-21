@@ -548,11 +548,6 @@ async def _execute_cli_session(
     )
 
 
-# Briefing turn gets a bounded slice of the mission budget; the /goal loop
-# gets the full remaining wall-clock.
-GOAL_BRIEFING_TIMEOUT_SECONDS = 900
-
-
 async def _run_goal_loop_mission(
     *,
     objective: str,
@@ -591,7 +586,14 @@ async def _run_goal_loop_mission(
         briefing_outcome = await _execute_cli_session(
             prompt=briefing_prompt,
             workspace_dir=workspace_dir,
-            timeout_seconds=min(timeout_seconds, GOAL_BRIEFING_TIMEOUT_SECONDS),
+            # The briefing turn shares the full mission budget; the shared
+            # LivenessWatchdog idle-kill (vp_no_progress_kill_seconds, ~600s)
+            # governs it, not a bare wall-clock cap. A former hard 900s clamp here
+            # killed briefing turns that were actively streaming tool calls — the
+            # exact wall-clock anti-pattern banned in CLAUDE.md (idle/no-progress
+            # watchdog only). timeout_seconds remains the lane's high absolute
+            # backstop inside _monitor_cli_output.
+            timeout_seconds=timeout_seconds,
             enable_agent_teams=False,
             mission_id=mission_id,
             cody_mode=cody_mode,
