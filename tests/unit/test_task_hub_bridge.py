@@ -122,3 +122,76 @@ async def test_task_hub_create(monkeypatch, tmp_path):
         item = task_hub.get_item(conn, payload["task_id"])
     assert item is not None
     assert item["title"] == "New proactive task"
+
+
+@pytest.mark.asyncio
+async def test_reflection_create_dedups_near_identical_titles(monkeypatch, tmp_path):
+    """Two reflection creates with near-identical titles collapse to one task."""
+    db_path = str(tmp_path / "activity_state.db")
+    with _connect(db_path) as conn:
+        task_hub.ensure_schema(conn)
+
+    monkeypatch.setattr(task_hub_bridge, "get_activity_db_path", lambda: db_path)
+
+    first = _parse_tool_payload(
+        await task_hub_bridge._task_hub_create_impl(
+            {
+                "title": "Investigate the HackerNews ingestion gap",
+                "source_kind": "reflection",
+            }
+        )
+    )
+    # Differs only in casing, punctuation, and trailing whitespace.
+    second = _parse_tool_payload(
+        await task_hub_bridge._task_hub_create_impl(
+            {
+                "title": "  investigate the hackernews ingestion gap!!  ",
+                "source_kind": "reflection",
+            }
+        )
+    )
+
+    assert first["task_id"] == second["task_id"]
+    assert second.get("deduplicated") is True
+
+    # Only one reflection row was actually inserted.
+    with _connect(db_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS c FROM task_hub_items WHERE source_kind = 'reflection'"
+        ).fetchone()
+        first_row = task_hub.get_item(conn, first["task_id"])
+    assert int(count["c"]) == 1
+    assert first_row["incident_key"] == "reflection:investigate the hackernews ingestion gap"
+
+
+@pytest.mark.asyncio
+async def test_non_reflection_create_is_not_deduped(monkeypatch, tmp_path):
+    """A non-reflection source_kind never collapses — distinct task_ids, no incident_key."""
+    db_path = str(tmp_path / "activity_state.db")
+    with _connect(db_path) as conn:
+        task_hub.ensure_schema(conn)
+
+    monkeypatch.setattr(task_hub_bridge, "get_activity_db_path", lambda: db_path)
+
+    first = _parse_tool_payload(
+        await task_hub_bridge._task_hub_create_impl(
+            {"title": "Same proactive title", "source_kind": "proactive"}
+        )
+    )
+    second = _parse_tool_payload(
+        await task_hub_bridge._task_hub_create_impl(
+            {"title": "Same proactive title", "source_kind": "proactive"}
+        )
+    )
+
+    assert first["task_id"] != second["task_id"]
+    assert first.get("deduplicated") is None
+    assert second.get("deduplicated") is None
+
+    with _connect(db_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS c FROM task_hub_items WHERE source_kind = 'proactive'"
+        ).fetchone()
+        row = task_hub.get_item(conn, first["task_id"])
+    assert int(count["c"]) == 2
+    assert row["incident_key"] is None
