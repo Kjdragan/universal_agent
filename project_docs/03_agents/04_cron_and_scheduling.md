@@ -474,6 +474,28 @@ those into the operator-facing "completed" count. Two corrections live here:
   stay empty on that path (the jsonl carries no job metadata to classify by), but the
   count diagnostic is truthful.
 
+### Failure-notification severity (retry-queued is not a failure)
+
+`gateway_server.py::_emit_cron_event` classifies a run's terminal disposition
+into a notification kind + severity. Only `error`-severity rows route out-of-band
+(email/Telegram) via `_list_undelivered_high_severity_notifications`; `info` rows
+are dashboard/event-bus only. The branch order matters:
+
+- `cancelled` → `cron_run_cancelled`, **info** (deploy-restart collateral).
+- `retry_queued` → `cron_run_retry_queued`, **info**. A failed-but-retryable run
+  is emitted by `cron_service` as a `cron_run_completed` event carrying
+  `status="retry_queued"`; without an explicit branch it fell through to the
+  terminal-failure `else` and emailed an `[ERROR] Autonomous Task Failed` for
+  **every self-healing transient** — e.g. `claude_code_intel_sync` hitting the
+  X-API HTTP 402 cooldown (fails attempt 1, "succeeds" on the cooldown
+  short-circuit), or any job that fails attempt 1/N then succeeds. The dedicated
+  info-severity `cron_run_retry_queued` event is published separately; this branch
+  stops the duplicate error email.
+- terminal failure (retries exhausted → `status="failed"/"error"`) → `else` →
+  `autonomous_run_failed`/`cron_run_failed`, **error** (still alerts). The
+  `_should_suppress_upstream_outage_alert` dedup then collapses repeats of a known
+  transient-service signature within the dedup window.
+
 ## Hermes Phase F: Task Hub linking
 
 Unless `metadata.skip_task_hub_link` is set, every `!script` and LLM cron tick

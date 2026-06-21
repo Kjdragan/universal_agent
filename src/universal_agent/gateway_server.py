@@ -8095,6 +8095,22 @@ def _emit_cron_event(payload: dict) -> None:
             severity = "info"
             kind = "cron_run_cancelled"
             message = f"{command} | cancelled mid-run (likely deploy restart)"
+        elif run_status == "retry_queued":
+            # A failed attempt with a retry already queued is NOT a terminal
+            # failure. cron_service emits this state as a `cron_run_completed`
+            # event carrying status="retry_queued" (the dedicated info-severity
+            # `cron_run_retry_queued` event is published separately). Without
+            # this branch the run falls through to the `else` and emails an
+            # `[ERROR] Autonomous Task Failed` for every self-healing transient
+            # — e.g. the claude_code_intel X-API 402 cooldown, or any job that
+            # fails attempt 1/N then succeeds. Mirror the cancelled branch:
+            # info severity, no out-of-band (email/Telegram) delivery. Terminal
+            # failures (retries exhausted -> status="failed"/"error") still fall
+            # through to the `else` and keep their error severity + alert.
+            title = "Autonomous Task Retrying" if is_autonomous else "Chron Retry Queued"
+            severity = "info"
+            kind = "cron_run_retry_queued"
+            message = f"{command} | attempt failed, retry queued"
         else:
             title = "Autonomous Task Failed" if is_autonomous else "Chron Run Failed"
             severity = "error"
