@@ -117,6 +117,27 @@ def test_same_second_collision_gets_suffix(archiver, tmp_path):
     assert names == ["070707__dup__1__x.html", "070707__dup__x.html"]
 
 
+def test_ensure_index_empty_state(archiver, tmp_path):
+    """An empty archive must still produce a renderable index (a dir with no index.html
+    serves blank). ensure_index seeds an empty-state INDEX.md + index.html."""
+    root = tmp_path / "archive"
+    n = archiver.ensure_index(root)
+    assert n == 0
+    html = (root / "index.html").read_text(encoding="utf-8")
+    md = (root / "INDEX.md").read_text(encoding="utf-8")
+    assert "Artifact archive" in html
+    assert "No artifacts archived yet" in html
+    assert "No artifacts archived yet" in md
+
+
+def test_ensure_index_cli_without_src(archiver, tmp_path):
+    """--ensure-index works without --src/--slug (used by publish_scratch.sh --init)."""
+    root = tmp_path / "archive"
+    rc = archiver.main(["--ensure-index", "--root", str(root)])
+    assert rc == 0
+    assert (root / "index.html").is_file()
+
+
 def test_disabled_via_env(archiver, tmp_path, monkeypatch):
     monkeypatch.setenv("UA_SCRATCH_ARCHIVE_ENABLED", "0")
     src = _write(tmp_path / "r.html", "<title>Z</title>")

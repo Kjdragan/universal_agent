@@ -184,6 +184,10 @@ def _render_markdown_index(root: Path, records: list[dict]) -> str:
         f"> {len(records)} artifact(s) archived.",
         "",
     ]
+    if not records:
+        lines.append("_No artifacts archived yet — they appear here automatically after the next scratchpad publish._")
+        lines.append("")
+        return "\n".join(lines)
     current_day = None
     for rec in sorted(records, key=lambda r: r.get("ts", ""), reverse=True):
         day = rec.get("date", "")
@@ -227,6 +231,11 @@ _HTML_INDEX_JS = (
 
 def _render_html_index(root: Path, records: list[dict]) -> str:
     rows = []
+    if not records:
+        rows.append(
+            '<div class="row" data-k=""><span class="ti">No artifacts archived yet — '
+            "they appear here automatically after the next scratchpad publish.</span></div>"
+        )
     current_day = None
     for rec in sorted(records, key=lambda r: r.get("ts", ""), reverse=True):
         day = rec.get("date", "")
@@ -328,23 +337,53 @@ def archive_artifact(
     return record
 
 
+def ensure_index(root: Path) -> int:
+    """(Re)build ``INDEX.md`` + ``index.html`` from the current ledger, empty-state if none.
+
+    Idempotent. Used by ``publish_scratch.sh --init`` so the served ``/scratch-archive`` page
+    always renders a proper page (e.g. "no artifacts yet") even before the first artifact
+    lands — a directory with no ``index.html`` serves blank. Returns the artifact count.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    records = _read_ledger(root)
+    with _Lock(root / LOCK_NAME):
+        (root / MD_INDEX_NAME).write_text(_render_markdown_index(root, records), encoding="utf-8")
+        (root / HTML_INDEX_NAME).write_text(_render_html_index(root, records), encoding="utf-8")
+    return len(records)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Archive a scratchpad artifact (durable, dated, indexed).")
-    ap.add_argument("--src", required=True, help="the file or directory that was published")
-    ap.add_argument("--slug", required=True, help="the publish slug")
+    ap.add_argument("--src", help="the file or directory that was published")
+    ap.add_argument("--slug", help="the publish slug")
     ap.add_argument("--root", required=True, help="archive root dir (per-project or VPS permanent)")
     ap.add_argument("--dir", action="store_true", dest="is_dir", help="src is a directory (docset)")
     ap.add_argument("--url", default="", help="the live tailnet URL of the published artifact")
+    ap.add_argument(
+        "--ensure-index",
+        action="store_true",
+        dest="ensure_index",
+        help="(re)build the index files only (empty-state if no artifacts); used by --init",
+    )
     args = ap.parse_args(argv)
 
     if (os.getenv("UA_SCRATCH_ARCHIVE_ENABLED") or "1").strip() == "0":
         return 0
 
+    root = Path(args.root)
+
+    if args.ensure_index:
+        n = ensure_index(root)
+        print(f"index ensured ({n} artifact(s))")
+        return 0
+
+    if not args.src or not args.slug:
+        ap.error("--src and --slug are required unless --ensure-index is given")
+
     src = Path(args.src)
     if not src.exists():
         logger.warning("scratch archive skipped: %s does not exist", src)
         return 1
-    root = Path(args.root)
     root.mkdir(parents=True, exist_ok=True)
 
     rec = archive_artifact(
