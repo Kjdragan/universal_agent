@@ -505,6 +505,16 @@ def _detect_target_agent_by_name(subject: str, body_snippet: str) -> str | None:
     return None
 
 
+def _vp_stream_forward_enabled() -> bool:
+    """Whether to forward the VP status/intel FYI stream to the operator's gmail (H7)."""
+    return os.getenv("UA_VP_STREAM_FORWARD_ENABLED", "1").strip().lower() in _TRUTHY
+
+
+def _vp_stream_forward_to() -> str:
+    """Operator address that receives the forwarded VP status/intel stream."""
+    return os.getenv("UA_VP_STREAM_FORWARD_TO", "").strip() or "kevinjdragan@gmail.com"
+
+
 def _is_vp_fyi_cc(
     *,
     receiving_inbox: str,
@@ -928,6 +938,63 @@ class AgentMailService:
         logger.info("📧 Sent email to=%s subject=%r message_id=%s", to, subject, msg.message_id)
         # Email notifications suppressed — dedicated Mail page provides visibility.
         return {"status": "sent", "message_id": msg.message_id, "inbox": self._inbox_address}
+
+    async def _forward_vp_stream_to_operator(
+        self,
+        *,
+        sender: str,
+        subject: str,
+        text_body: str,
+        html_body: str,
+        message_id: str,
+    ) -> None:
+        """Forward a VP status/intel FYI email to the operator's gmail (H7).
+
+        The canonical VP outbound directive (``vp_email_directive``) already asks
+        each VP to email Kevin directly and CC Simone, but that LLM-composed send
+        is unreliable — Simone's inbox is the dependable interception point. This
+        deterministically forwards the VP status/intel stream so the operator sees
+        it regardless of whether the VP's direct send landed. Best-effort: a
+        forward failure never blocks inbound processing. Gated by
+        ``UA_VP_STREAM_FORWARD_ENABLED`` (default on); target
+        ``UA_VP_STREAM_FORWARD_TO`` (default ``kevinjdragan@gmail.com``).
+        """
+        if not _vp_stream_forward_enabled():
+            return
+        target = _vp_stream_forward_to()
+        if not target:
+            return
+        rule = "─" * 48
+        provenance = (
+            f"[Forwarded by Simone from {self._inbox_address} — VP status/intel stream]\n"
+            f"Original sender: {sender}\n"
+            f"{rule}\n\n"
+        )
+        fwd_text = provenance + (text_body or "(no text body)")
+        fwd_html = None
+        if html_body:
+            fwd_html = (
+                "<p style=\"color:#888;font-size:12px\">Forwarded by Simone from "
+                f"{self._inbox_address} — VP status/intel stream. Original sender: "
+                f"{sender}</p><hr>" + html_body
+            )
+        try:
+            await self.send_email(
+                to=target,
+                subject=subject,
+                text=fwd_text,
+                html=fwd_html,
+                force_send=True,
+            )
+            logger.info(
+                "📧➡️ Forwarded VP stream to operator: to=%s subject=%r orig_from=%s message_id=%s",
+                target, subject, sender, message_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "📧➡️ VP stream forward failed (non-fatal) to=%s subject=%r: %s",
+                target, subject, exc,
+            )
 
     async def _create_draft(
         self, *, to: str, subject: str, text: str,
@@ -1850,6 +1917,17 @@ class AgentMailService:
                     "📧📋 VP status CC received (FYI only, no task created): "
                     "from=%s subject=%r inbox=%s",
                     sender_email, subject, receiving_inbox,
+                )
+                # H7: forward the VP status/intel stream to the operator's gmail
+                # so Kevin reliably sees it (the VP's direct-to-Kevin send is
+                # LLM-composed and unreliable). Best-effort; never blocks the
+                # claim-seen below.
+                await self._forward_vp_stream_to_operator(
+                    sender=sender,
+                    subject=subject,
+                    text_body=text_body,
+                    html_body=html_body,
+                    message_id=message_id,
                 )
                 if message_id:
                     self._claim_seen_message_id(message_id)

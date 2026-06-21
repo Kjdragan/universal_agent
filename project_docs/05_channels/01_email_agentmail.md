@@ -88,7 +88,8 @@ flowchart TD
     H --> AUTO{automated / bounce / DSN?}
     AUTO -- yes --> DROP[claim seen id, return]
     AUTO -- no --> VPCC{VP status CC to Simone?}
-    VPCC -- yes --> DROP2[log FYI, return]
+    VPCC -- yes --> FWD[forward VP stream to operator gmail]
+    FWD --> DROP2[log FYI, claim seen, return]
     VPCC -- no --> SEEN{claim_seen_message_id}
     SEEN -- duplicate --> DROP3[skip]
     SEEN -- new --> EXTRACT[_extract_reply_text strips quotes]
@@ -119,7 +120,14 @@ order:
   Kevin and CCs Simone's inbox, the email is logged for awareness but no task
   is created. Detected by sender `vp.agents@agentmail.to` OR a `[VP Status]`
   subject prefix arriving at Simone's primary inbox. This prevents duplicate
-  task creation for work a VP is already handling.
+  task creation for work a VP is already handling. Before suppressing, the email
+  is **forwarded to the operator's gmail** (`_forward_vp_stream_to_operator`) so
+  Kevin reliably sees the VP status/intel stream: the canonical VP directive
+  (`vp_email_directive`) already asks each VP to email Kevin directly + CC Simone,
+  but that LLM-composed send is unreliable, so Simone's inbox is the dependable
+  interception point. Best-effort (a forward failure never blocks the inbound
+  pipeline); gated by `UA_VP_STREAM_FORWARD_ENABLED` (default on), target
+  `UA_VP_STREAM_FORWARD_TO` (default `kevinjdragan@gmail.com`).
 - **Dedup** (`_claim_seen_message_id`): atomic claim against the
   `agentmail_seen_messages` table; duplicates are skipped. On any later
   exception the claim is released (`_release_seen_message_id`) so the message
@@ -510,6 +518,8 @@ each getting its own `virtual_thread_id`/`virtual_message_id` and session key.
 | `UA_GMAIL_CLI_TIMEOUT_SECONDS` | `60` | gws subprocess timeout |
 | `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS` | `0` | LLM task splitting at ingress |
 | `UA_AGENTMAIL_FAILED_QUEUE_AUTO_CANCEL_DAYS` | `7` | Failed-queue auto-cancel |
+| `UA_VP_STREAM_FORWARD_ENABLED` | `1` | Forward VP status/intel FYI stream to the operator |
+| `UA_VP_STREAM_FORWARD_TO` | `kevinjdragan@gmail.com` | Forward target for the VP stream |
 | `UA_AGENTMAIL_READ_TIMEOUT_SECONDS` | `12` | Per-read timeout |
 | `UA_AGENTMAIL_API_TIMEOUT_SECONDS` | `30` | SDK client timeout |
 | `UA_AGENTMAIL_SLOW_READ_LOG_SECONDS` | `5` | Slow-read log threshold |
