@@ -21199,7 +21199,17 @@ def _ensure_csi_convergence_cron_job() -> None:
 
 
 def _claude_code_intel_cron_enabled() -> bool:
-    return os.getenv("UA_CLAUDE_CODE_INTEL_CRON_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+    # PAUSED 2026-06-21 by operator decision — this is intentional, NOT a bug.
+    # The X (Twitter) API account is out of credits: every poll of
+    # @ClaudeDevs / @bcherny returns HTTP 402 "CreditsDepleted", so the poller
+    # fetches nothing and produces only failure/retry noise (see
+    # services/claude_code_intel.py X-API 402 handling). Paused INDEFINITELY
+    # pending the operator's decision on whether to buy more X API credits.
+    # The default is flipped "1" -> "0" (not just an env override) so the pause
+    # SURVIVES deploys, which clobber .env. To RESUME: set the default back to
+    # "1" (or set UA_CLAUDE_CODE_INTEL_CRON_ENABLED=1 via env/Infisical) and
+    # restart the autonomous worker so the cron re-registers + re-enables.
+    return os.getenv("UA_CLAUDE_CODE_INTEL_CRON_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _csi_demo_triage_rank_cron_enabled() -> bool:
@@ -21294,9 +21304,24 @@ def _ensure_intel_auto_promoter_cron_job() -> Optional[dict[str, Any]]:
 
 
 def _ensure_claude_code_intel_cron_job() -> None:
-    if not _cron_service or not _claude_code_intel_cron_enabled():
+    if not _cron_service:
         return
     job_id = "claude_code_intel_sync"
+    if not _claude_code_intel_cron_enabled():
+        # Paused (see _claude_code_intel_cron_enabled). DURABLY disable any
+        # previously-registered live row instead of bare-returning — a plain
+        # early return leaves an existing cron_jobs.json row firing on every
+        # restart (the "disable-on-flip doesn't durably disable a live row"
+        # landmine). Keep the row (disabled), don't delete it, so the pause is
+        # a clean reversible toggle and the dashboard still shows it parked.
+        existing = _cron_service.get_job(job_id)
+        if existing is not None and existing.enabled:
+            _cron_service.update_job(job_id, {"enabled": False})
+            logger.info(
+                "claude_code_intel_sync cron PAUSED (disabled live row): X API "
+                "credits depleted (HTTP 402); operator decision pending."
+            )
+        return
     command = "!script universal_agent.scripts.claude_code_intel_run_report"
     cron_expr = os.getenv("UA_CLAUDE_CODE_INTEL_CRON_EXPR", "0 8,16,22 * * *").strip() or "0 8,16,22 * * *"
     timezone_name = os.getenv("UA_CLAUDE_CODE_INTEL_CRON_TIMEZONE", "America/Chicago").strip() or "America/Chicago"

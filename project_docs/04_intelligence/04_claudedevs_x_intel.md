@@ -13,10 +13,21 @@ code_paths:
   - src/universal_agent/scripts/claude_code_intel_sync.py
   - src/universal_agent/scripts/claude_code_intel_run_report.py
   - src/universal_agent/config/intel_lanes.yaml
-last_verified: 2026-06-14
+last_verified: 2026-06-21
 ---
 
 # ClaudeDevs X Intelligence
+
+> ⏸️ **PAUSED 2026-06-21 (operator decision) — intentional, not a fault.** The X
+> (Twitter) API account is **out of credits**: every poll returned HTTP 402
+> "CreditsDepleted", so the lane fetched nothing and only generated failure/retry
+> noise. The `claude_code_intel_sync` cron is paused **indefinitely** pending a
+> decision on buying more X API credits. The pause is in code, not just env:
+> `gateway_server.py::_claude_code_intel_cron_enabled` defaults to **off**, and
+> `gateway_server.py::_ensure_claude_code_intel_cron_job` actively **disables the
+> live cron row** when paused (so it survives deploys and doesn't keep firing).
+> **To resume:** flip that default back to `"1"` (or set
+> `UA_CLAUDE_CODE_INTEL_CRON_ENABLED=1`) and restart the autonomous worker.
 
 ## What it is
 
