@@ -49,7 +49,7 @@ jobs:
 
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Shallow history sized for "diff against base branch only."
           # The `Identify changed Python files` step below re-fetches the
