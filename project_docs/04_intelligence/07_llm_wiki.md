@@ -316,9 +316,9 @@ Anthropic client built by `_get_anthropic_client()`:
 - Model (2026-06-13): the bounded **extraction** stages `extract_entities` /
   `extract_concepts` pass `model=_extract_model()` → **sonnet** (`glm-5-turbo`,
   env-overridable via `UA_WIKI_EXTRACT_MODEL`); they previously fell through to
-  `_call_llm`'s `resolve_opus()` default (`glm-5.1`, the flagship / most
+  `_call_llm`'s `resolve_opus()` default (`glm-5.2`, the flagship / most
   Fair-Usage-throttled tier) unnecessarily for a structured bounded-output task.
-  `generate_summary` keeps the `resolve_opus()` default (`glm-5.1`) — it is generative
+  `generate_summary` keeps the `resolve_opus()` default (`glm-5.2`) — it is generative
   and quality-sensitive.
 - `max_tokens=2048`. Input text is truncated to the first 4000 chars.
 
