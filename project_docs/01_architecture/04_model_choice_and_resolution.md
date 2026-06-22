@@ -70,6 +70,8 @@ ZAI_MODEL_MAP = {
 - If that env var is set and non-empty, the env value wins. **Otherwise** it falls
   back to `ZAI_MODEL_MAP[tier]` (defaulting to the sonnet entry for unknown tiers).
 
+> **Tier vs. wire id — a bare `--model glm-5.2` is honored, not silently downgraded (verified 2026-06-22).** UA's own code goes through the tier resolver (opus→glm-5.2), but external tools (the `claude` CLI's `--model`, a raw Agent-SDK/`anthropic` `model=` arg) pass the literal string straight to the ZAI base. When you hand `claude -p --model glm-5.2` (or `messages.create(model="glm-5.2")`) on the `api.z.ai` base, ZAI **serves glm-5.2** — confirmed via the CLI's `modelUsage` (`{"glm-5.2": …}`) and the SDK's `resp.model == "glm-5.2"`. It is **not** coerced to the sonnet tier (`glm-5-turbo`). Don't conflate the *tier* (opus/sonnet/haiku) with the *wire id*: a direct `--model <wire-id>` bypasses tier mapping entirely. (Practical caveat: `glm-5.2` defaults thinking ON and is slow/expensive via `claude -p` — a trivial query measured ~62k input tokens / ~$0.32, and an agentic query timed out at 240s — so for cheap/fast script eval, a smaller tier or an Anthropic model is preferable even though glm-5.2 works.)
+
 **The reverse map — `model_resolution.py::model_id_to_tier` (added 2026-06-11):**
 given a WIRE-LEVEL model id (the string actually sent to the proxy), returns the ZAI
 rate-limiter's tier bucket (`opus`/`sonnet`/`mid`/`haiku`; `mid` covers the
