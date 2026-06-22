@@ -257,6 +257,21 @@ check_service() {
 
   local active_state
   active_state="$("$SYSTEMCTL_BIN" is-active "$service" 2>/dev/null || true)"
+  # `activating`/`deactivating`/`reloading` are TRANSIENT states a healthy unit
+  # passes through during a normal (re)start — e.g. the slow graceful drain on
+  # the autonomous-runtime + mission-control-sweeper workers, which can sit in
+  # `deactivating` for tens of seconds while in-flight work finishes. Treating
+  # them as "down" made the 30s watchdog catch a deploy-driven restart mid-flight
+  # and fire a redundant `systemctl restart` + a "[WARNING] Watchdog restarted"
+  # email every time (reason was always `inactive:deactivating`, never a real
+  # crash). Leave a transitioning unit alone; if it's genuinely stuck it settles
+  # into `failed`/`inactive` (Restart=always exhausted) and the next tick restarts
+  # it — so the dead-unit backstop is preserved, only the false-positive flap is
+  # suppressed.
+  if [[ "$active_state" == "activating" || "$active_state" == "deactivating" || "$active_state" == "reloading" ]]; then
+    log "service=$service state=transient:$active_state action=skip"
+    return
+  fi
   if [[ "$active_state" != "active" ]]; then
     restart_service "$service" "inactive:$active_state" || true
     reset_fail_count "$service"
