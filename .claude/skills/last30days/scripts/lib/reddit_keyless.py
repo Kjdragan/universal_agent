@@ -14,14 +14,13 @@ Returns ``[]`` (never raises) so ``pipeline.py`` can fall through to the
 ScrapeCreators backup when every keyless tier comes up empty.
 """
 
+from collections import Counter
 import concurrent.futures
-import sys
 from concurrent.futures import ThreadPoolExecutor
+import sys
 from typing import Any, Dict, List, Optional
 
-from collections import Counter
-
-from . import reddit_rss, reddit_shreddit, reddit_listing
+from . import reddit_listing, reddit_rss, reddit_shreddit
 
 ENRICH_LIMITS = reddit_shreddit.ENRICH_LIMITS
 ENRICH_BUDGET = 45  # seconds total across all enrichment threads

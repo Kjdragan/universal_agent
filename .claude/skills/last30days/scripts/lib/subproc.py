@@ -7,10 +7,10 @@ dance on timeout to avoid orphaning child processes.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 import signal
 import subprocess
-from dataclasses import dataclass
 from typing import Optional, Sequence
 
 

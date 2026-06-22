@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import sys
 import urllib.parse
-from datetime import datetime
 from urllib.parse import urlparse
 
 from . import dates, http
-
 
 # ---------------------------------------------------------------------------
 # Brave Search API

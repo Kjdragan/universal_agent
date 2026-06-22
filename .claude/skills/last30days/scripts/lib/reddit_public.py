@@ -22,11 +22,10 @@ import gzip
 import json
 import sys
 import time
+from typing import Any, Dict, List, Optional
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, List, Optional
-
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "

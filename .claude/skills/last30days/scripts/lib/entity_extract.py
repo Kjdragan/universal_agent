@@ -1,7 +1,7 @@
 """Entity extraction from initial search results for supplemental searches."""
 
-import re
 from collections import Counter
+import re
 from typing import Any, Dict, List
 
 # Handles that appear too frequently to be useful for targeted search.

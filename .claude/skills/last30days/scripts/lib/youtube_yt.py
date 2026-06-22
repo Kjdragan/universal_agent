@@ -6,19 +6,19 @@ transcript extraction. No API keys needed — just have yt-dlp installed.
 Inspired by Peter Steinberger's toolchain approach (yt-dlp + summarize CLI).
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import math
 import os
+from pathlib import Path
 import re
 import shlex
 import shutil
 import sys
 import tempfile
+from typing import Any, Dict, List, Optional, Set, Tuple
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Depth configurations: how many videos to search / transcribe
 DEPTH_CONFIG = {

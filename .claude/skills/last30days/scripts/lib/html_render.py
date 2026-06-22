@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import date
 import html
 import re
-from datetime import date
 
 from . import render, schema
-
 
 PROSE_LABELS = [
     ("What I learned:", "What I learned"),

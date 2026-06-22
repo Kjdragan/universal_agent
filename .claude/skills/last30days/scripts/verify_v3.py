@@ -6,12 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import statistics
 import subprocess
 import sys
 import time
-from pathlib import Path
-
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]

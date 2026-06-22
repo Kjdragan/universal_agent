@@ -5,17 +5,17 @@ per-item comment enrichment. Auth via GITHUB_TOKEN env var or
 `gh auth token` subprocess fallback.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import math
 import os
 import re
 import subprocess
 import sys
+from typing import Any, Dict, List, Optional
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
 
 from . import dates, log
 from .query import extract_core_subject

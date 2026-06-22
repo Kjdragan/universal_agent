@@ -18,14 +18,13 @@ top-ranked X posts to each cluster's ``posts`` field.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import shutil
-from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from . import log, subproc
 from .relevance import token_overlap_relevance
-
 
 CLI_BIN = "digg-pp-cli"
 

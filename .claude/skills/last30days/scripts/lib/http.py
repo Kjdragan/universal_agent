@@ -5,10 +5,10 @@ import re
 import socket
 import sys
 import time
-import urllib.error
-import urllib.request
 from typing import Any, Dict, Optional, Union
+import urllib.error
 from urllib.parse import urlencode
+import urllib.request
 
 from . import log as _log
 

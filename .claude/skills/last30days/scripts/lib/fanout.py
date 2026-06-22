@@ -13,8 +13,8 @@ config, depth, and overrides for each entity.
 
 from __future__ import annotations
 
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
 from typing import Callable
 
 from . import schema

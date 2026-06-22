@@ -14,14 +14,13 @@ Limitation: the comments endpoint carries the real comment count
 cannot be recovered keylessly here (ScrapeCreators backup still provides it).
 """
 
+from datetime import datetime
 import html as _html
 import re
 import sys
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from . import http
-from . import reddit_enrich
+from . import http, reddit_enrich
 
 # Up to N posts enriched per run, by depth (mirrors reddit_public.ENRICH_LIMITS).
 ENRICH_LIMITS = {

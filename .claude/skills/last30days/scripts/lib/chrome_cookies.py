@@ -12,11 +12,11 @@ This is NOT affected by Windows App-Bound Encryption (v20).
 
 import hashlib
 import logging
+from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
 import tempfile
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)

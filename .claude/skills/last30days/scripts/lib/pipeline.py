@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import sys
-import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from shutil import which
+import sys
+import threading
+import time
 from typing import Any
 
 from . import (

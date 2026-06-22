@@ -14,12 +14,12 @@ dicts match the normalized shape emitted by ``reddit_public._parse_posts`` so
 downstream code (pipeline, renderer) is unaffected.
 """
 
-import sys
-import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
+import sys
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
+import xml.etree.ElementTree as ET
 
 from . import http
 from .relevance import token_overlap_relevance

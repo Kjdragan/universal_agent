@@ -7,10 +7,10 @@ Requires SCRAPECREATORS_API_KEY in config. 100 free API calls, then PAYG.
 API docs: https://scrapecreators.com/docs
 """
 
+from datetime import datetime
 import os
 import re
 import sys
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 from . import dates, http, log

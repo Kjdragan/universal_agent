@@ -7,10 +7,10 @@ before the planner runs. This is the engine-side equivalent of SKILL.md Steps
 
 from __future__ import annotations
 
-import re
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+import re
+import sys
 from typing import Optional
 
 from . import categories, dates, grounding

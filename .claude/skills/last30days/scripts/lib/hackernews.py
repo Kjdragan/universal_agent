@@ -4,15 +4,14 @@ Uses hn.algolia.com/api/v1 for story discovery and comment enrichment.
 No API key needed - just HTTP calls via stdlib urllib.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 import html
 import math
+import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
-
-import re
 
 from . import http, log
 from .query import extract_core_subject

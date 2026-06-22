@@ -7,7 +7,6 @@ import re
 
 from . import http, providers, query, schema
 
-
 # Penalty applied when a candidate does not mention the primary entity
 # from the topic in its title or snippet. Picked empirically: a typical
 # score spread in the shortlist is 30-70, so 25 points reliably pushes

@@ -7,12 +7,13 @@ Requires SCRAPECREATORS_API_KEY in config (same key as TikTok + Instagram).
 API docs: https://scrapecreators.com/docs
 """
 
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait as futures_wait
 import re
 import sys
 import time
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait as futures_wait
 from typing import Any, Dict, List, Optional, Set
+
 
 def _first_of(*values, default=None):
     """Return first value that is not None."""

@@ -4,24 +4,22 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import math
 import os
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
-from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib import env as envlib
-from lib import schema
+from lib import env as envlib, schema
 from lib.providers import GEMINI_FLASH_LITE
-
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]

@@ -9,7 +9,7 @@ import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from . import http, dates
+from . import dates, http
 
 
 def extract_reddit_path(url: str) -> Optional[str]:

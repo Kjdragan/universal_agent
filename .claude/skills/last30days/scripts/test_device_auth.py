@@ -14,9 +14,9 @@ Flow:
 import json
 import sys
 import time
-import webbrowser
-from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+import webbrowser
 
 BASE = "https://api.scrapecreators.com/v1/github/device"
 

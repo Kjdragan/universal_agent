@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 
 from . import http, log
 
-
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 MODEL_SONAR_PRO = "perplexity/sonar-pro"

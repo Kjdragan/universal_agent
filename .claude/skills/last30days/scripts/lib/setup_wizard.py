@@ -7,10 +7,10 @@ presents it), but this module provides the detection and setup actions.
 
 import json
 import logging
+from pathlib import Path
 import shutil
 import subprocess
 import time
-from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen

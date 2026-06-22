@@ -6,7 +6,6 @@ a nudge message describing what the user missed and how to fix it.
 
 from typing import List
 
-
 # The 5 core sources
 CORE_SOURCES = ["hn", "polymarket", "x", "youtube", "reddit"]
 

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
-import pathlib
 from collections import Counter
 from datetime import date
+import json
+import pathlib
 from urllib.parse import urlparse
 
 from . import dates, schema, skill_meta

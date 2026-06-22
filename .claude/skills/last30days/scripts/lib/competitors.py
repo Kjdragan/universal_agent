@@ -12,10 +12,10 @@ the caller's requested count.
 
 from __future__ import annotations
 
-import re
-import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+import sys
 
 from . import dates, grounding
 from .resolve import _has_backend

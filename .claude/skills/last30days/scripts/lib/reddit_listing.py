@@ -13,11 +13,11 @@ ordinary connections (verified), so reddit_keyless uses it both as a scored
 discovery source and to backfill scores onto RSS-discovered posts.
 """
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from datetime import datetime, timezone
 import html as _html
 import re
 import sys
-from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List, Optional
 
 from . import http

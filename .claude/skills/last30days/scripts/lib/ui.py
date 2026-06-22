@@ -1,9 +1,9 @@
 """Terminal UI utilities for last30days skill."""
 
-import sys
-import time
-import threading
 import random
+import sys
+import threading
+import time
 from typing import Optional
 
 from .render import _skill_version

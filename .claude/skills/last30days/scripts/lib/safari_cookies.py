@@ -10,9 +10,9 @@ Reference: github.com/mdegrazia/Safari-Binary-Cookie-Parser
 from __future__ import annotations
 
 import io
+from pathlib import Path
 import struct
 import sys
-from pathlib import Path
 
 # Mac epoch: 2001-01-01 00:00:00 UTC (not used for filtering, but documented)
 _MAC_EPOCH_OFFSET = 978307200  # seconds between Unix epoch and Mac epoch

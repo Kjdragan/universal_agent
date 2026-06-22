@@ -4,11 +4,11 @@ Uses gamma-api.polymarket.com for event/market discovery.
 No API key needed - public read-only API with generous rate limits (15K req/10s).
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import math
 import re
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus, urlencode
 

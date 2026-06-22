@@ -12,10 +12,10 @@ Usage:
 """
 
 import argparse
-import json
-import sys
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
+import sys
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))

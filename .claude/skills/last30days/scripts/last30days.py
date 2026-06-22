@@ -9,11 +9,11 @@ import atexit
 import datetime
 import json
 import os
+from pathlib import Path
 import re
 import signal
 import sys
 import threading
-from pathlib import Path
 
 MIN_PYTHON = (3, 12)
 
@@ -764,8 +764,11 @@ def main() -> int:
             return r
 
         if comp_enabled:
-            from lib import competitors as competitors_mod
-            from lib import fanout, resolve as resolve_mod
+            from lib import (
+                competitors as competitors_mod,
+                fanout,
+                resolve as resolve_mod,
+            )
 
             if comp_explicit:
                 discovered = comp_explicit

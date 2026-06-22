@@ -5,17 +5,16 @@ via Twitter's GraphQL API. No external `bird` CLI binary needed - just Node.js.
 See scripts/lib/vendor/bird-search/package.json for authoritative version.
 """
 
+from datetime import datetime
 import json
 import os
+from pathlib import Path
 import shutil
 import sys
 import time
-from pathlib import Path
-
-from . import http, log, subproc
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import http, log, subproc
 from .relevance import token_overlap_relevance as _compute_relevance
 
 # How many times to retry the bird-search subprocess when stdout is non-JSON

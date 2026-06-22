@@ -4,8 +4,8 @@ Centralizes the version regex that previously lived in render.py and was
 duplicated in tests/test_plugin_contract.py and tests/test_version_consistency.py.
 """
 
-import re
 from pathlib import Path
+import re
 
 # Matches `version: "x.y.z"`, `version: 'x.y.z'`, or `version: x.y.z` in YAML
 # frontmatter. Multiline so the pattern can be applied to a full SKILL.md text.

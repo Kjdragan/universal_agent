@@ -11,11 +11,11 @@ Database location: ~/.local/share/last30days/research.db
 """
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 import sqlite3
 import sys
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 SCRIPT_DIR = Path(__file__).parent.resolve()

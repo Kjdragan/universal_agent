@@ -12,12 +12,12 @@ The createSession endpoint accepts main-account passwords too, but they're
 bad hygiene (no scope, can't revoke individually).
 """
 
+from datetime import datetime, timezone
 import math
 import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from . import http, log

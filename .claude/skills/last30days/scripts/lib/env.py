@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import base64
 import binascii
+from dataclasses import dataclass
 import json
 import os
+from pathlib import Path
 import sys
 import time
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal
 
 # Allow override via environment variable for testing
@@ -129,8 +129,8 @@ def _load_keychain(keys: list[str]) -> dict[str, str]:
     if not security:
         return {}
 
-    import subprocess
     import pwd
+    import subprocess
     # USER can be unset under sudo, in Docker without --env USER, or in some CI
     # runners; fall back to the OS user record so lookups still match items
     # stored by setup-keychain.sh (which uses $USER).
