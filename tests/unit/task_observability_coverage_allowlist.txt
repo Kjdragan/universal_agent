@@ -122,3 +122,12 @@ src/universal_agent/services/zai_activity_control.py
 # runs in the dispatched VP mission (already protocol-wired), not in this script.
 # (proactive-lane runaway protection, 2026-06-14)
 src/universal_agent/scripts/nightly_wiki_agent.py
+
+# proactive_activity_report.py [rationale (a) — not a task unit]: builds the proactive
+# report's activity inventory. Its ONLY subprocess use is a single ephemeral read-only
+# `systemctl list-timers --all --no-pager` to read systemd-timer last/next run times for
+# health classification — argv-only, no shell, no input. No long-running PID to classify
+# and no task_hub_items row to own — it is a diagnostic read, not a task-executing worker —
+# so the worker-exit/PID protocol does not apply. Mirrors the zai_activity_control.py
+# `systemctl show` read pattern. (proactive activity report, 2026-06-21)
+src/universal_agent/services/proactive_activity_report.py
