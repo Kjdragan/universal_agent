@@ -101,6 +101,10 @@ dependencies = [
 # F811: Redefinition of unused name (sometimes intentional for conditional imports)
 lint.extend-select = ["I"]
 lint.ignore = ["E402", "F401", "F811"]
+# Vendored third-party skill — tracks upstream (mvanhorn/last30days-skill), not our house style.
+# Excluded so repo-wide `ruff check` (and cleanup agents) don't flag/reformat it and create
+# cosmetic divergence from upstream. See PR #1142 (closed) for why we don't isort the vendor.
+extend-exclude = [".claude/skills/last30days"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
