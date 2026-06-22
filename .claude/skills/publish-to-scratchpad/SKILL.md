@@ -152,13 +152,22 @@ so there's a standing record of every exhibit — independent of the docs system
 pruned**. You do nothing extra; publish as usual.
 
 - **Interactive runs (desktop):** archived into a git-tracked `<repo>/scratch_archive/`
-  *inside whatever repo you're working in* — per-project, committed with that project.
+  *inside whatever repo you're working in* — per-project.
 - **Autonomous runs (VPS):** archived into `/home/ua/ua_scratch_archive/`, served read-only
   at `https://uaonvps.taildcc090.ts.net/scratch-archive/`.
 - Each archive root holds `INDEX.md` (newest-first, open this), `index.html` (searchable),
   `index.jsonl` (ledger), and dated `<YYYY-MM-DD>/<HHMMSS>__<slug>__<name>` copies.
 - Knobs: `UA_SCRATCH_ARCHIVE_ENABLED=0` disables it; `UA_SCRATCH_ARCHIVE_ROOT` overrides the
   root. Best-effort — archiving never fails a publish.
+
+> **MANDATORY final step for interactive (desktop) publishes — commit the archive entry.**
+> The archiver *writes* the durable copy + index but does **not** commit, so the artifact is
+> not "saved in the project" until you land it. After publishing, `git add scratch_archive/`
+> and ship it (branch → PR → auto-merge). `scratch_archive/**` is `paths-ignore`d in
+> `deploy.yml`, so committing it never restarts prod. This is the step most often skipped —
+> `publish_scratch.sh` now prints a stderr reminder when `scratch_archive/` is left
+> uncommitted; treat it as a required to-do, not a warning to dismiss. Commit **only your own**
+> new entry — don't sweep in another session's untracked artifacts (no cross-session commits).
 
 ## Two-way review (mark up → respond) — you ↔ Claude Code
 
