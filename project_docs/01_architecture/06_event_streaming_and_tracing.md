@@ -6,12 +6,13 @@ subsystem: arch-events-tracing
 code_paths:
   - src/universal_agent/agent_core.py
   - src/universal_agent/execution_engine.py
+  - src/universal_agent/timeout_policy.py
   - src/universal_agent/transcript_builder.py
   - src/universal_agent/api/events.py
   - src/universal_agent/api/process_turn_bridge.py
   - src/universal_agent/trace_utils.py
   - src/universal_agent/trace_catalog.py
-last_verified: 2026-06-21
+last_verified: 2026-06-22
 ---
 
 # Event Streaming & Tracing
@@ -276,17 +277,29 @@ flowchart TD
     TRACE -.trace_id.-> LOGFIRE[(Logfire deep-link)]
 ```
 
-## The relay loop and wall-clock cap
+## The relay loop and the liveness watchdog (NOT a hard wall-clock cap)
 
 `ProcessTurnAdapter.execute` runs `process_turn` inside an `asyncio` task (`run_engine`) that pushes events onto an `event_queue`; the outer generator drains that queue and `yield`s each `AgentEvent` to the client. Completion is signaled by a sentinel `STATUS` event with `data["status"] == "engine_complete"`.
 
-A **wall-clock cap** bounds each turn (resolved in priority order):
-1. Per-request `request_metadata["turn_timeout_seconds"]` (e.g. cron jobs with a generous `timeout_seconds`).
-2. `UA_PROCESS_TURN_TIMEOUT_SECONDS` (legacy global override).
-3. Tier-aware default keyed off the configured model (haiku ≈ 120s, sonnet ≈ 180s, opus ≈ 1800s).
-4. No cap (`0`).
+The relay loop is governed by an **idle / no-progress watchdog — explicitly NOT a hard wall-clock cap.** A bare wall-clock cap was banned after it killed live, still-working Simone turns (operator requirement, 2026-06-14): long coding/build turns can legitimately run for many minutes, so the turn is killed only when it shows no *sign of life*, never just because it ran long. The single shared policy lives in `timeout_policy.py::LivenessWatchdog` and is consumed by all three agent-execution lanes — the in-process adapter here (`execution_engine.py::ProcessTurnAdapter.execute`), the VP SDK consumer (`vp/clients/base.py::consume_adapter_events_with_idle_timeout`), and the `claude --print` subprocess (`vp/clients/claude_cli_client.py`). It is the canonical doc'd convention; see [Gateway Sessions & Execution](../02_execution_core/01_gateway_sessions_execution.md) § "Liveness / no-progress timeout".
 
-On timeout the engine cancels the task and emits an `ERROR` event (`"Execution timed out after Ns"`). The rationale (from inline comments): an unbounded turn parks a failing inference call on the wire for minutes, which blocks the dispatcher's stuck-assignment sweep from reopening the task. A clean cap lets the task abort, the stuck sweep catch it, and the next dispatch tick re-run it.
+Every event dequeued in the relay loop is a sign of life that calls `LivenessWatchdog.note_activity`. The watchdog kills the turn (`engine_task.cancel()` + an `ERROR` event `"Execution killed: <reason>"`) on exactly two conditions, checked each loop iteration via `LivenessWatchdog.overdue`:
+
+1. **Idle kill** — no event for `process_turn_idle_kill_seconds()` (`UA_PROCESS_TURN_IDLE_KILL_SECONDS`, default 600s / 10 min) **AND** no tool in flight. `TOOL_CALL`/`TOOL_RESULT` bracket tool-in-flight time, so a long build/test that emits no inference output between its `tool_call` and its `tool_result` is **exempt** from the idle kill (tools carry their own timeouts).
+2. **Absolute backstop** — a very high last-resort ceiling, `process_turn_absolute_backstop_seconds()` (`UA_PROCESS_TURN_ABSOLUTE_BACKSTOP_SECONDS`, default 7200s / 2h), to catch a fully-wedged process whose tool never returns and whose own tool timeout also failed (where the idle kill is suspended because a tool is "in flight" forever).
+
+An **optional** caller hard cap is still honored as an *additional* ceiling on top of the idle kill (not a replacement): a per-request `request_metadata["turn_timeout_seconds"]` budget, else the legacy `UA_PROCESS_TURN_TIMEOUT_SECONDS` env escape hatch (both default to `0` = no cap). The rationale for killing at all (from inline comments): a wedged turn parks a failing inference call on the wire, which blocks the dispatcher's stuck-assignment sweep from reopening the task — a clean kill lets the task abort, the stuck sweep catch it, and the next dispatch tick re-run it.
+
+```mermaid
+stateDiagram-v2
+    [*] --> running: relay loop draining event_queue
+    running --> running: AgentEvent dequeued → note_activity (sign of life)
+    running --> idle_kill: no event ≥ idle_kill_s AND no tool in flight
+    running --> absolute_backstop: elapsed ≥ backstop_s (fully wedged)
+    running --> [*]: engine_complete sentinel
+    idle_kill --> [*]: engine_task.cancel() + ERROR event
+    absolute_backstop --> [*]: engine_task.cancel() + ERROR event
+```
 
 `event_callback` defensively `setdefault("source", run_source)` on `STATUS` events so background runs (e.g. `run_source="heartbeat"`) don't trigger "ABORT"/redirect UX in the Web UI.
 
@@ -310,8 +323,10 @@ There is **no** server-side `hydrate()` step anymore. Per `viewer/__init__.py`, 
 | `LOGFIRE_TOKEN` / `LOGFIRE_WRITE_TOKEN` / `LOGFIRE_API_KEY` | Logfire write token (first present wins) | none |
 | `LOGFIRE_PROJECT_SLUG` | Slug used to build trace deep-links (honored in `trace_catalog.py`/`main.py`, NOT `transcript_builder.py`) | `Kjdragan/composio-claudemultiagent` |
 | `LANGSMITH_API_KEY` | Enables LangSmith→OTel→Logfire SDK trace bridge | none (bridge off) |
-| `turn_timeout_seconds` (per-request metadata) | Per-turn wall-clock cap, highest priority | 0 (none) |
-| `UA_PROCESS_TURN_TIMEOUT_SECONDS` | Legacy global per-turn wall-clock cap | 0 |
+| `UA_PROCESS_TURN_IDLE_KILL_SECONDS` | Idle / no-progress kill — primary control (`LivenessWatchdog`); kills only on no event AND no tool in flight | 600 (10 min) |
+| `UA_PROCESS_TURN_ABSOLUTE_BACKSTOP_SECONDS` | Last-resort ceiling for a fully-wedged turn (`0` disables) | 7200 (2 h) |
+| `turn_timeout_seconds` (per-request metadata) | **Optional** caller hard cap, layered *on top of* the idle kill | 0 (none) |
+| `UA_PROCESS_TURN_TIMEOUT_SECONDS` | Legacy optional global hard cap (additional ceiling, not the default control) | 0 |
 | `UA_GATEWAY_PROCESS_STDIO_REDIRECT` | Redirect subprocess stdio into `run.log` (read into the `USE_PROCESS_STDIO_REDIRECT` engine constant) | `false` |
 
 ## Gotchas (code-verified)

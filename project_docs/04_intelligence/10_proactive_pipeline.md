@@ -16,7 +16,9 @@ code_paths:
   - src/universal_agent/scripts/proactive_signal_card_sync.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-21
+  - src/universal_agent/services/ideation_report.py
+  - src/universal_agent/scripts/morning_ideation_report.py
+last_verified: 2026-06-22
 ---
 
 # Proactive Pipeline
@@ -42,6 +44,55 @@ raw records → durable knowledge blocks → bounded retrieval context → LLM s
 > "Signal curator (Track 1)" below.)
 > CSI/ClaudeDevs ingestion and Task Hub mechanics are separate subsystems; this
 > doc references where they feed in.
+>
+> For the canonical live/parked/paused/retired status of every job and lane named
+> here, see the [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md).
+
+---
+
+## Two distinct proactive tracks (do not conflate)
+
+There are **two separate proactive intelligence pipelines** in this subsystem.
+They share the LLM-Native design rule but have different inputs, different code
+owners, different schedulers, and different output stores. Conflating them is the
+single most common documentation error here.
+
+| | **Convergence pipeline** | **Simone ideation pipeline** |
+|---|---|---|
+| Input | YouTube transcripts (CSI `events JOIN rss_event_analysis WHERE source='youtube_channel_rss'`) | Simone's *own* state — recent completions, stalled brainstorms, open tasks, goal/mission memory (no external feed) |
+| Entry point | `proactive_convergence.py::sync_topic_signatures_from_csi` | `reflection_engine.py::build_reflection_context` → `::_format_reflection_prompt` (heartbeat-idle, in-process) + the `morning_ideation_report` cron |
+| Synthesizer | batched LLM cluster judge (Track A) + whole-corpus ideation sweep (Track B) | the heartbeat LLM, prompted with the reflection context |
+| Output | `convergence_candidates` rows → `write_convergence_candidate` → Atlas `evaluate-and-author-intel-brief` missions | `source_kind='reflection'` Task Hub items in a **holding state** (`agent_ready=False`) → the morning ideation report email/scratchpad → one-click promote |
+| Scheduler | `csi_convergence_sync` (hourly systemd timer, migrated) | `reflection_engine` runs in the heartbeat idle path; `morning_ideation_report` is an in-process cron (06:30 CT) |
+
+```mermaid
+flowchart TD
+    subgraph CONV[Convergence pipeline]
+        YT[(CSI youtube_channel_rss<br/>transcripts)]
+        SYNC[sync_topic_signatures_from_csi]
+        SIG[(proactive_topic_signatures)]
+        CAND[(convergence_candidates)]
+        ATLAS[Atlas: evaluate-and-author-intel-brief]
+        YT -->|csi_convergence_sync timer| SYNC --> SIG --> CAND
+        CAND -->|write_convergence_candidate + triage ship| ATLAS
+    end
+
+    subgraph IDEA[Simone ideation pipeline]
+        SELF[Simone state:<br/>completions, stalled brainstorms,<br/>open tasks, goal/mission memory]
+        CTX[build_reflection_context ->_format_reflection_prompt]
+        HOLD[(Task Hub: source_kind=reflection<br/>HOLDING agent_ready=False)]
+        REPORT[morning_ideation_report cron<br/>-> deliver_ideation_report]
+        SELF -->|heartbeat idle| CTX --> HOLD
+        HOLD -->|6:30 CT| REPORT
+        REPORT -->|one-click promote| LIVE[live Task Hub work]
+    end
+```
+
+The two tracks **never merge**. Convergence candidates flow to Atlas as intel
+briefs; reflection proposals flow to the operator's morning report for a
+human-in-the-loop promote. The sections below describe each in detail
+(convergence under "Convergence + ideation"; ideation under "Reflection engine"
+and the "History (2026-06-20)" note).
 
 ---
 
@@ -163,7 +214,20 @@ America/Chicago, overridable via `UA_CSI_CONVERGENCE_CRON_EXPR`) runs
 `proactive_convergence.sync_topic_signatures_from_csi`. The cron command is
 `!script universal_agent.scripts.csi_convergence_sync`; registration is in
 `gateway_server.py` (`job_id = "csi_convergence_sync"`) and is gated by
-`UA_CSI_CONVERGENCE_CRON_ENABLED` (default `1`). The cron runs as a
+`UA_CSI_CONVERGENCE_CRON_ENABLED` (default `1`).
+
+> **Scheduler note — migrated to a systemd timer.** `csi_convergence_sync` is one
+> of the jobs migrated off the in-process `CronService` to a systemd timer
+> (`universal-agent-csi-convergence-sync.timer`, hourly). It appears in
+> `cron_jobs.json` with `enabled:false` — that is the **migration artifact, not
+> "off"** (the timer is the sole firer; `systemd_migrated_jobs.py::is_migrated_to_systemd`
+> is the predicate). The same applies to the proactive-report, intel-digest,
+> artifact-digest, intel-auto-promoter and other proactive/CSI jobs named in this
+> doc. Do not re-list the inventory here — see the
+> [Platform Status Registry § 4](../00_PLATFORM_STATUS_REGISTRY.md) (the
+> two-scheduler inventory) for the authoritative timer-vs-in-process table.
+
+The cron runs as a
 `lightweight=True` `!script` subprocess (no heavyweight Claude-agent bootstrap,
 no Composio tool-router), but it is **not** pure-SQL: it does SQL sync **plus**
 bounded LLM clustering, an ideation sweep, and per-candidate triage via the SDK
@@ -607,11 +671,20 @@ signal exists, the task passes (benefit of the doubt). On any error the gate
 `has_daily_budget` checks against `UA_PROACTIVE_DAILY_BUDGET` (default 10),
 counting only `source_kind in ('proactive_signal','reflection')`.
 Cron/`system_command` tasks are never counted. Counter resets at the UTC date
-boundary. (Note: the convergence path's `queue_proactive_task` does not itself
-decrement this budget; the budget is enforced explicitly by the reflection
-caller. The `proactive_signal` source_kind stays in the count for any legacy
-rows, but the curation lane that produced them is decommissioned — see
-"Signal curator (Track 1)".)
+boundary.
+
+> **The daily budget governs ONLY the Simone ideation track now.** The
+> `proactive_signal` half of this counter is **legacy** — the signal-curation
+> lane that produced `source_kind='proactive_signal'` Task Hub items was
+> decommissioned 2026-06 (see "Signal curator (Track 1)"), so in practice the
+> budget paces only `source_kind='reflection'` ideation proposals. **The
+> convergence path does NOT use this budget at all.** `write_convergence_candidate`'s
+> `queue_proactive_task` neither checks nor decrements it; convergence throughput
+> is bounded instead by the per-candidate triage verdict, the `convergence_candidates`
+> write-once semantics, and downstream VP-mission capacity (Atlas
+> `evaluate-and-author-intel-brief`). The older "signal-card budget / daily cap on
+> auto-surfaced cards" framing is **superseded** by the
+> `convergence_candidates` → triage → Atlas-mission path.
 
 ---
 

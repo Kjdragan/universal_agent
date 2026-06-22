@@ -11,10 +11,15 @@ code_paths:
   - deployment/systemd/
   - scripts/install_vps_phase_a_batch1_timers.sh
   - scripts/install_vps_phase_a_batch2_timers.sh
-last_verified: 2026-06-21
+last_verified: 2026-06-22
 ---
 
 # Cron & Scheduling
+
+> **Live status / inventory:** the canonical two-scheduler inventory (which jobs
+> run as systemd timers vs in-process, and which are tombstones) lives in the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) § 4. This doc
+> documents the *mechanism*; the registry is the *roster*.
 
 The cron subsystem is an in-process scheduler that runs inside the gateway
 process. It owns three kinds of work: **LLM crons** (a Claude session runs a
@@ -46,21 +51,33 @@ For slot-critical deterministic jobs that is unacceptable, so they run as
 (`OnCalendar` wall-clock anchor; a monotonic timer would go
 `NextElapse=infinity`).
 
-**Migrated so far:**
-- **Batch 1** (maintenance/audit): `scratch_pruning`, `vault_lint_contradictions`,
-  `architecture_canvas_drift`, `vp_coder_workspace_pruning`
-  (`scripts/install_vps_phase_a_batch1_timers.sh`). `insight_scoring_health`
-  was **retired 2026-06-21** (zombie monitor; its producer `hourly_insight_email`
-  was deregistered in #745, so it emailed a false "0 briefs scored / 0 delivered"
-  every Sunday off a frozen `proactive_brief_scoring_log` — units + registration
-  removed).
-- **Batch 2** (content dailies): the 3 `proactive_report_*` slots (sharing one
-  `universal-agent-proactive-report.service` driven by 3 timers),
-  `proactive_artifact_digest`, `intel_auto_promoter`, `codie_proactive_cleanup`
-  (`scripts/install_vps_phase_a_batch2_timers.sh`).
+**The migrated set is the
+`systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS` frozenset — the single
+SOURCE OF TRUTH** (currently **20 jobs**, batched 1 → A4: maintenance/audit,
+content dailies, hourly active-window producers, and the secret-bearing
+YouTube/OAuth/briefing jobs). Do **not** maintain a hand-list here — it drifts
+against the frozenset. The full enumerated roster (with per-job gate mechanism
+and status) is in the
+[Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) § 4a; the predicate
+that resolves a job against it is `systemd_migrated_jobs.py::is_migrated_to_systemd`.
+`insight_scoring_health` was **retired 2026-06-21** (zombie monitor; its producer
+`hourly_insight_email` was deregistered in #745, so it emailed a false "0 briefs
+scored / 0 delivered" every Sunday off a frozen `proactive_brief_scoring_log` —
+units + registration removed, dropped from the frozenset).
+
+**Still in-process (NOT migrated):** the minute/15m/30m loops and live-agent
+prompt jobs stay on the gateway tick. Of the persisted `cron_jobs.json` roster,
+exactly **4 are enabled and genuinely fire in-process** (the rest are migration
+tombstones, see § 4c): `simone_chat_auto_complete` (`*/1`, housekeeping),
+`vp_mission_pr_reconciler` (`*/15` active-window, housekeeping),
+`paper_to_podcast_daily` (`0 21 * * *` CT, `UA_PAPER_TO_PODCAST_ENABLED`), and
+`morning_ideation_report` (`30 6 * * *` CT, `UA_IDEATION_REPORT_ENABLED`). See
+[Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) § 4b.
 
 Units are `deployment/systemd/universal-agent-<job>.{timer,service}`; the
-installers are wired into `scripts/deploy/remote_deploy.sh`.
+installers (`scripts/install_vps_phase_a_batch1_timers.sh` /
+`scripts/install_vps_phase_a_batch2_timers.sh`) are wired into
+`scripts/deploy/remote_deploy.sh`.
 
 **No double-fire.** A migrated job's in-process registration is forced disabled
 so the timer is the sole firer. `gateway_server.py::_is_migrated_to_systemd`

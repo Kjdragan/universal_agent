@@ -998,6 +998,41 @@
       ],
       "legacy_refs": [],
       "scope": "Desktop-local Stop hook that reflects on each session and drafts CLAUDE.md improvement proposals for review. Scope/safety design, env knobs, review+troubleshooting runbook."
+    },
+    {
+      "id": "plat-resumable-external-jobs",
+      "tier": 2,
+      "category": "06_platform",
+      "filename": "06_platform/13_resumable_external_jobs_adr.md",
+      "title": "ADR: Resumable External Jobs (the requeue must have something to adopt)",
+      "code_paths": [
+        ".claude/skills/paper-to-podcast-tf/SKILL.md",
+        "src/universal_agent/gateway_server.py",
+        "src/universal_agent/cron_service.py",
+        "tests/gateway/test_cron_ensure_jobs.py"
+      ],
+      "legacy_refs": [],
+      "scope": "ADR (accepted 2026-06-16): resumable external jobs so a requeue has a durable record to adopt; implemented for paper_to_podcast."
+    },
+    {
+      "id": "ops-proactive-runaway-protection",
+      "tier": 2,
+      "category": "08_operations",
+      "filename": "08_operations/07_proactive_lane_runaway_protection.md",
+      "title": "Proactive-Lane Runaway Protection",
+      "code_paths": [
+        "src/universal_agent/services/invariants/proactive_pipeline_invariants.py",
+        "src/universal_agent/services/pipeline_invariants.py",
+        "src/universal_agent/services/proactive_health.py",
+        "src/universal_agent/scripts/nightly_wiki_agent.py",
+        "src/universal_agent/services/wiki_rescue_driver.py",
+        "src/universal_agent/services/wiki_rescue_policy.py",
+        "src/universal_agent/services/vp_failure_rescue.py",
+        "src/universal_agent/vp/dispatcher.py",
+        "src/universal_agent/tools/vp_orchestration.py"
+      ],
+      "legacy_refs": [],
+      "scope": "Fan-out/volume/rescue-storm anomaly invariants that catch a proactive lane going LOUD (the 2026-06-14 nightly-wiki runaway), plus the deferred universal-dispatch-guardrail design."
     }
   ]
 }

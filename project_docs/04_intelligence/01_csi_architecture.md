@@ -11,7 +11,8 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/config/intel_lanes.yaml
   - src/universal_agent/services/llm_classifier.py
-last_verified: 2026-06-13
+  - src/universal_agent/services/invariants/csi_source_liveness.py
+last_verified: 2026-06-22
 ---
 
 # CSI Architecture
@@ -52,7 +53,7 @@ the LLM decides what is meaningful"), but they are otherwise independent.
 flowchart TB
     subgraph Vault["Vault intelligence pass (per-packet)"]
         A1["packet actions.json<br/>(ClaudeDevs/bcherny tweets)"] --> A2["apply_memex_pass<br/>(claude_code_intel_replay.py)"]
-        A2 -->|"per tier≥2 action"| A3["analyze_action<br/>(csi_intelligence_pass.py)<br/>GLM-5.1 tool_use → VaultDelta"]
+        A2 -->|"per tier≥2 action"| A3["analyze_action<br/>(csi_intelligence_pass.py)<br/>opus-tier (glm-5.2) tool_use → VaultDelta"]
         A3 --> A4["apply_vault_delta_to_vault<br/>(csi_intelligence_persistence.py)"]
         A4 --> A5["memex_apply_action<br/>entities/*.md, concepts/*.md"]
         A4 --> A6["relations.jsonl + posts.jsonl"]
@@ -89,9 +90,13 @@ meaningful**.
 structured LLM call and returns a validated `VaultDelta`. Key facts verified in
 code:
 
-- **Model:** `resolve_opus()`, which maps to **GLM-5.1 via the ZAI proxy**. The
-  module docstring is emphatic: GLM-5.1 has no thinking mode — do **not** pass
-  `thinking={...}` or `reasoning_effort`. Quality comes from the prompt +
+- **Model:** `resolve_opus()`, which maps to the **opus-tier ZAI model** —
+  `glm-5.2` via the ZAI proxy as of the 2026-06-13 5.1→5.2 migration
+  (`utils/model_resolution.py::resolve_opus`, `ZAI_MODEL_MAP["opus"]`;
+  overridable by Infisical `ANTHROPIC_DEFAULT_OPUS_MODEL`). The
+  `csi_intelligence_pass.py` module docstring still narrates the older GLM-5.1
+  "no thinking mode" guidance — that text is stale relative to the resolver and
+  should not be trusted for the model id. Quality comes from the prompt +
   context + structured `tool_use` output, not a reasoning knob.
 - **Structured output via tool_use:** `_build_vault_delta_tool()` wraps
   `VaultDelta.model_json_schema()` in an Anthropic tool envelope; the call sets
@@ -201,6 +206,18 @@ This pipeline answers a different question: *across independent channels, what
 story is everyone telling, and what non-obvious pattern is emerging?* Its input
 is YouTube channel RSS transcript analyses, not tweets.
 
+> **Convergence reads YouTube transcripts only.**
+> `sync_topic_signatures_from_csi` reads exactly one source —
+> `csi.db events WHERE source='youtube_channel_rss'` joined to
+> `rss_event_analysis` (the transcript analyses). It is the **only live
+> intel-production path out of CSI**. **Discord is NOT a CSI/convergence feed:**
+> the `discord_intelligence.daemon` (and the CRUD watchlist at
+> `api/routers/csi_discord_watchlist.py`) is a standalone monitor — there are no
+> Discord references in `proactive_convergence.py`. The Simone **ideation
+> report** (`morning_ideation_report` in-process cron → reflection engine) is a
+> separate pipeline and is distinct from convergence. Live per-source status:
+> [Platform Status Registry §5](../00_PLATFORM_STATUS_REGISTRY.md).
+
 ### 3.1 Signature sync
 
 `sync_topic_signatures_from_csi(conn, csi_db_path, ...)` reads
@@ -287,6 +304,15 @@ The legacy per-signature firehose (`detect_and_queue_convergence` /
 
 ### 3.5 Cron registration
 
+> **Migrated to a systemd timer.** `csi_convergence_sync` is in
+> `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`, so on the VPS it is
+> **fired by a systemd timer (`csi-convergence-sync.timer`, hourly), not by the
+> in-process cron scheduler.** The in-process registration below still runs (it
+> seeds the job row), but it shows `enabled:false` in `cron_jobs.json` as a
+> migration artifact — the timer is the sole firer. See
+> `05_youtube_csi_flow.md` § "Systemd-timer migration" and the
+> [Platform Status Registry §4](../00_PLATFORM_STATUS_REGISTRY.md).
+
 The gateway registers a fixed system cron `csi_convergence_sync`
 (`gateway_server.py::_ensure_csi_convergence_cron_job`) when
 `UA_CSI_CONVERGENCE_CRON_ENABLED=1` (default). It runs the lightweight
@@ -295,7 +321,8 @@ tool router, no agent session, to avoid the 2026-05-23 Vercel-edge 429 storm).
 
 - Schedule: `UA_CSI_CONVERGENCE_CRON_EXPR`, default `0 6-21 * * *` (top of every
   active-window hour, 06:00–21:00 America/Chicago — respects content-generation
-  dormancy, no overnight runs).
+  dormancy, no overnight runs). The deployed `csi-convergence-sync.timer` fires
+  hourly; the timer cadence is what governs in production.
 - Timeout: `UA_CSI_CONVERGENCE_CRON_TIMEOUT_SECONDS`, default 900.
 
 There is also a separate background "proactive signal sync" in the gateway
@@ -303,17 +330,34 @@ There is also a separate background "proactive signal sync" in the gateway
 with `csi_db_path=_csi_default_db_path()` to feed dashboard cards; cooldown
 `UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS` (default 300, clamped 30–3600).
 
-### 3.6 The `csi_analytics` source — synthetic cross-source intelligence
+### 3.6 The `csi_analytics` source — **RETIRED (PR #990)**
 
-`csi_analytics` is not a raw data adapter (no HTTP collector, no external API poller).
-It is a **synthetic source** — a pipeline that transforms raw CSI signal into
-structured cross-source intelligence briefings, then emits those briefings as events
-back into the `csi.db` event stream. It is the **UA-facing digest production system**
-for proactive convergence and trend intelligence.
+> **Status: RETIRED.** `csi_analytics` is **no longer a live intelligence
+> path**. The three trend-report timers that produced it were retired in
+> **PR #990** — its aggregation summarized the same YouTube RSS stream the
+> **convergence pipeline (§3)** already mines, so it was superseded by
+> convergence and turned off as a tidiness decision (it ran as designed; this
+> was not a defect). It is removed outright from the
+> `csi_source_liveness.py::SOURCE_THRESHOLDS_HOURS` monitored set (retired
+> adapters are deleted from the table, not given an unreachable threshold —
+> see `effective_source_thresholds`), so it neither runs nor alerts. Existing
+> `trend_reports` / `global_trend_briefs` rows still render on the dashboard;
+> no new ones are produced. Reversible only by re-adding the units. The live
+> per-source status is the code table in §3.7 / the
+> [Platform Status Registry §5](../00_PLATFORM_STATUS_REGISTRY.md). The
+> remainder of this section is preserved as a **historical** description of how
+> `csi_analytics` worked while it was live.
 
-**What emits it:**
+`csi_analytics` was not a raw data adapter (no HTTP collector, no external API poller).
+It was a **synthetic source** — a pipeline that transformed raw CSI signal into
+structured cross-source intelligence briefings, then emitted those briefings as events
+back into the `csi.db` event stream. While live it acted as a UA-facing digest
+production path for trend intelligence — a role now wholly owned by the convergence
+pipeline (§3).
 
-Three **CSI Ingester oneshot scripts** (each runs on a systemd timer, not a daemon loop):
+**What emitted it (historical):**
+
+Three **CSI Ingester oneshot scripts** (each ran on a systemd timer, not a daemon loop):
 
 - `CSI_Ingester/development/scripts/csi_rss_trend_report.py::main()` —
   `rss_trend_report` event (3×/day at digest windows: 7 AM, 1 PM, 7 PM CT). Aggregates
@@ -323,8 +367,10 @@ Three **CSI Ingester oneshot scripts** (each runs on a systemd timer, not a daem
   Threads adapters are parked as of 2026-06-03). Aggregates `threads_event_analysis`
   rows when Threads collection resumes.
 - `CSI_Ingester/development/scripts/csi_global_trend_brief.py::main()` —
-  `global_trend_brief_ready` event (3×/day at digest windows). Synthesizes cross-source
-  narrative using Claude 3.5 via ZAI/GLM, combining RSS trends + insights + prior briefs.
+  `global_trend_brief_ready` event (3×/day at digest windows). Synthesized cross-source
+  narrative by POSTing `model=claude-3-5-haiku-latest` to the Anthropic-compatible
+  endpoint, which in UA prod resolves to **GLM via the ZAI proxy** (the model string is
+  cosmetic), combining RSS trends + insights + prior briefs.
 
 **Event types emitted:**
 
@@ -388,38 +434,41 @@ gateway's `ua_signals_ingest` endpoint (`CSI_UA_ENDPOINT` env var).
 
 ---
 
-### 3.7 Registered CSI sources (adapter registry snapshot)
+### 3.7 Registered CSI sources — code-authoritative status
 
-The live CSI source registry is the `sources` dict in
-`CSI_Ingester/development/config/config.yaml`. Below is the **canonical** registration
-status as of the current codebase, grounded against adapter presence and enabled flags:
+> **Source of truth.** The authoritative live / parked / retired status of each
+> CSI source is the code, **not** this table: the per-source max-silence map
+> `csi_source_liveness.py::SOURCE_THRESHOLDS_HOURS` plus
+> `csi_source_liveness.py::effective_source_thresholds`, which drops parked
+> sources whose flag is off and from which retired adapters are removed
+> outright. Read those (and the
+> [Platform Status Registry §5](../00_PLATFORM_STATUS_REGISTRY.md), which is
+> generated from the same code) before trusting any hand-maintained list. The
+> table below is a 2026-06-22 snapshot of what those functions yield — keep it in
+> sync with the code, do not let it drift into a parallel registry.
 
-| adapter | status | config_enabled | cadence | event_types | entry |
-|---|---|---|---|---|---|
-| **youtube_channel_rss** | active | `true` | every 30 min (6 AM–8 PM + 2 AM CT, per schedule; actual fetch every 1.5 hours) | `channel_new_upload` | `config.yaml::sources.youtube_channel_rss` |
-| **youtube_playlist** | parked | `false` | (disabled) | (none) | `config.yaml::sources.youtube_playlist` |
-| **threads_owned** | parked | `false` (as of 2026-06-03 commit 094717cc) | (disabled; was 15 min) | (none while disabled) | `config.yaml::sources.threads_owned` |
-| **threads_trends_seeded** | parked | `false` (as of 2026-06-03 commit 094717cc) | (disabled; was 15 min) | (none while disabled) | `config.yaml::sources.threads_trends_seeded` |
-| **threads_trends_broad** | parked | `false` (as of 2026-06-03 commit 094717cc) | (disabled; was 30 min) | (none while disabled) | `config.yaml::sources.threads_trends_broad` |
-| **csi_analytics** | active | N/A (synthetic, not an adapter) | 3×/day (digest windows: 7 AM, 1 PM, 7 PM CT) | `rss_trend_report`, `threads_trend_report`, `global_trend_brief_ready` | `scripts/csi_rss_trend_report.py`, `scripts/csi_global_trend_brief.py`, `scripts/csi_threads_trend_report.py` |
-| **hackernews** | active (event-gated)† | N/A (UA-side gateway emitter, not a CSI adapter; lives in csi.db) | on-demand; emits only on material movers (status `new` / `\|delta\|≥3` / dropped score ≥200), so long silences are by design, not breakage (last event 2026-06-06 ~01:42Z) | `hackernews_movers_signal` | UA-side in-process emitter; `*/30m` snapshot cron parked per #734, snapshots produced during convergence |
-| **reddit** | removed | N/A | (removed 2026-06-06 PR #707) | (none) | legacy `reddit_discovery` adapter deleted |
+| source | status | gate (default) | code anchor | notes |
+|---|---|---|---|---|
+| **youtube_channel_rss** | **LIVE** ✅ | none | `csi_source_liveness.py::SOURCE_THRESHOLDS_HOURS` | Sole convergence feed; ~444-channel watchlist; 12h liveness threshold. |
+| **threads_owned** / **threads_trends_seeded** / **threads_trends_broad** | **PARKED** ⏸️ | `UA_CSI_THREADS_LANES_ENABLED`=0 | `csi_source_liveness.py::_threads_lanes_enabled` | Experimental; adapters `enabled: false` in the ingester config and no-op without Threads creds. Excluded from `effective_source_thresholds` while parked. Removal in flight on a separate branch (not on `origin/main`). |
+| **hackernews** | **PARKED** ⏸️ | `UA_HACKERNEWS_SNAPSHOT_ENABLED`=0 | `csi_source_liveness.py::_hackernews_snapshot_enabled` | No automatic CSI-event producer — the `hackernews_snapshot` cron is its only producer (`POST /api/v1/hackernews/refresh` has zero internal callers). Re-parked 2026-06-21 (#1116); excluded from `effective_source_thresholds` while off. |
+| **csi_analytics** | **RETIRED** 🌑 | n/a | `csi_source_liveness.py::effective_source_thresholds` docstring | PR #990; superseded by the convergence pipeline (§3). Removed from `SOURCE_THRESHOLDS_HOURS` outright — neither runs nor alerts. See §3.6. |
+| **youtube_playlist** | **RETIRED** 🌑 | n/a | `csi_source_liveness.py::effective_source_thresholds` docstring | PR #438; daily digest is the canonical YouTube trigger. Removed from the table outright. |
+| **reddit** | **removed** | n/a | — | Legacy `reddit_discovery` adapter deleted 2026-06-06 (PR #707). Listed for historical context only. |
 
 **Status definitions:**
 
-- **active** — enabled (config `enabled: true` or synthetic script running) and firing events in the last 72 hours.
-- **parked** — disabled in config (`enabled: false`) + credentials/feature unprovisioned. Re-enable in config + provision creds (THREADS_USER_ID, THREADS_ACCESS_TOKEN) + set `UA_CSI_THREADS_LANES_ENABLED=1` to restore.
-- **STALE** — present in the event stream but no new events in >24 hours. Indicates collection has stopped or is blocked.
-- **removed** — not present in code or config; deleted from the codebase. Listed for historical context.
+- **LIVE** — present in `effective_source_thresholds()` with no parking flag suppressing it; actively monitored for staleness.
+- **PARKED** — kept in `SOURCE_THRESHOLDS_HOURS` (a one-flag flip re-enables it) but **dropped from `effective_source_thresholds()`** while its gate is off, so it neither runs nor alerts. Restore by setting the gate flag (+ provisioning creds for Threads: THREADS_USER_ID / THREADS_ACCESS_TOKEN).
+- **RETIRED** — removed from `SOURCE_THRESHOLDS_HOURS` outright (retired adapters are deleted from the table, not given an unreachable threshold). No producer remains.
+- **removed** — deleted from code and config entirely. Historical context only.
 
-> †**Event-gated sources** (e.g. hackernews) emit only on material movement, so an extended gap is expected behaviour rather than a stalled collector. Liveness should be judged against the source's emit condition, not a fixed staleness clock: hackernews is produced in-process on the UA side (it is not a CSI adapter and has no `config.yaml` entry), and was quiet — not broken — when last reviewed (2026-06-07).
+**How to verify this table (code-first):**
 
-**How to verify this table:**
-
-1. **Adapter presence:** grep `CSI_Ingester/development/csi_ingester/adapters/*.py` for the class definition (e.g., `class YouTubeChannelRSSAdapter`).
-2. **Config enabled flag:** read `config.yaml` `sources.<name>.enabled` value.
-3. **Live event stream:** query live `/api/v1/dashboard/csi/health` endpoint (see 5.1 gotcha for canonical path).
-4. **Cron registration:** check `CSI_Ingester/development/deployment/systemd/*.timer` for the three `csi_*_trend_*.timer` units.
+1. **Authoritative monitored set:** `python -c "from universal_agent.services.invariants.csi_source_liveness import effective_source_thresholds; print(effective_source_thresholds())"` — the live LIVE/PARKED set after flags.
+2. **Parking flags:** `_threads_lanes_enabled` / `_hackernews_snapshot_enabled` in `csi_source_liveness.py`.
+3. **Adapter presence (ingester side):** grep `CSI_Ingester/development/csi_ingester/adapters/*.py` for the adapter class; config flag in `CSI_Ingester/development/config/config.yaml`.
+4. **Live event stream:** query the `/api/v1/dashboard/csi/health` endpoint (see §5.1 for the canonical DB path).
 
 ---
 

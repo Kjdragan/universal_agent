@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - tests/unit/test_cron_dormancy_defaults.py
   - tests/unit/test_dormancy_schedule_consistency.py
-last_verified: 2026-06-15
+last_verified: 2026-06-22
 ---
 
 # Dormancy & Operating Hours
@@ -321,15 +321,31 @@ Further always-on behaviors are not crons but are explicitly dormancy-exempt:
   deploy) are event-driven (`push`/`pull_request`/`workflow_run`), so dormancy never
   applies mechanically.
 
-## Exhibit — current cron dormancy settings
+## How dormancy classifies each schedule shape
 
-Point-in-time snapshot (2026-06-09) of every registered scheduled job and how
-dormancy applies to it. Authoritative source: the `default_cron=` registrations
-in `gateway_server.py` plus the systemd timers under `deployment/systemd/`; the
-guard tests in `tests/unit/test_cron_dormancy_defaults.py` keep this honest.
+This doc owns the **dormancy policy** — which schedule shapes the window applies
+to and how to flip a job to 24/7. It does **not** own the live job inventory: the
+authoritative, current list of every scheduled job (which timer fires it, whether
+it's live/parked/retired) is the two-scheduler inventory in the
+[Platform Status Registry § 4](../00_PLATFORM_STATUS_REGISTRY.md) — that registry
+is re-verified against `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`,
+the in-process `cron_jobs.json`, and the live `systemctl list-timers`, and is the
+single source of truth for *what runs*. Read it for the inventory; read the tables
+below only for *how dormancy treats each shape*.
+
+> A prior version of this section carried a frozen point-in-time cron snapshot
+> (dated 2026-06-09) that listed only a subset of jobs and went stale as ~9 live
+> timers were added since — it has been replaced by the registry pointer above so
+> the inventory stays authoritative in one place.
+
+The tables below illustrate the **classification rule** (interval → windowed/24-7;
+fixed-time → runs as scheduled) with representative jobs. The `default_cron=`
+registrations in `gateway_server.py` plus the systemd timers under
+`deployment/systemd/` are the per-job authority; the guard tests in
+`tests/unit/test_cron_dormancy_defaults.py` keep the *interval-cron window* honest.
 **All times America/Chicago (Houston). Active window: 6 AM – 10 PM.**
 
-### Interval crons — dormancy applies
+### Interval crons — dormancy applies (representative)
 
 | Job | Schedule | Treatment | 24/7 lever |
 |---|---|---|---|
@@ -342,7 +358,10 @@ guard tests in `tests/unit/test_cron_dormancy_defaults.py` keep this honest.
 | ~~`atlas_direct_dispatch`~~ | — | **RETIRED (M3, 2026-06-15)** — no longer registers a `*/1` schedule; its ensure-function deletes the row, so it is no longer a dormancy-exception interval cron (see the retirement note above) | — |
 | `simone_chat_auto_complete` | `*/1 * * * *` | **24/7** — documented exception (operator-facing state). Since M4 its `*/1` fires are **no longer a heartbeat-coupling source** (excluded by the default-deny allowlist), so its high rate no longer drives Simone wakes | always 24/7 |
 
-### Fixed-time crons — run as scheduled (dormancy does not apply)
+### Fixed-time crons — run as scheduled (dormancy does not apply) (representative)
+
+> Not an exhaustive inventory — see the [Platform Status Registry § 4](../00_PLATFORM_STATUS_REGISTRY.md)
+> for the full, current list of fixed-time timers. These rows illustrate the rule.
 
 | Job | Schedule |
 |---|---|
@@ -515,11 +534,11 @@ the doc row (or vice versa) leaves the policy half-documented; the test asserts 
 doc exists but does not cross-check individual exception rows, so this is a
 discipline requirement, not an enforced one.
 
-> [VERIFY: the guard test references the legacy path
-> `docs/operations/operating_hours_dormancy.md` for `test_dormancy_doc_exists`. If
-> that legacy doc is removed during the refactor, the test will fail — either keep a
-> stub at that path, or update `DORMANCY_DOC` in the test and the `CLAUDE.md`
-> link before deleting it.]
+> **Resolved 2026-06-22.** `tests/unit/test_cron_dormancy_defaults.py` now points
+> `DORMANCY_DOC` at this canonical doc (`project_docs/08_operations/03_dormancy_and_operating_hours.md`),
+> not the archived `docs/` stub — so the archived stub can be removed without breaking
+> the guard test. `test_dormancy_doc_exists` asserts this file contains the "6:00 AM"/"10:00 PM"
+> window strings, and `test_claude_md_links_to_dormancy_doc` guards the `CLAUDE.md` link.
 
 ## Gotchas
 

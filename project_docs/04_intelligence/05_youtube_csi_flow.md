@@ -16,7 +16,8 @@ code_paths:
   - src/universal_agent/proactive_signals.py
   - src/universal_agent/services/scratch_publish.py
   - src/universal_agent/services/proactive_tutorial_builds.py
-last_verified: 2026-06-15
+  - src/universal_agent/systemd_migrated_jobs.py
+last_verified: 2026-06-22
 ---
 
 # YouTube CSI Flow
@@ -51,6 +52,46 @@ implementation phased).
 
 ---
 
+## Systemd-timer migration (read before "cron registration" claims)
+
+On the VPS the recurring YouTube/CSI jobs in this doc are **fired by systemd
+timers, NOT by the in-process cron scheduler.** The authoritative set is
+`systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS` (a `frozenset`); the
+predicate is `systemd_migrated_jobs.py::is_migrated_to_systemd`. The jobs from
+this doc that are in that frozenset:
+
+| job_id (in-process key) | systemd timer | cadence |
+|---|---|---|
+| `csi_convergence_sync` | `csi-convergence-sync.timer` | hourly |
+| `youtube_daily_digest` | `youtube-daily-digest.timer` | daily ~06:00 CT |
+| `youtube_gold_channel_poller` | `youtube-gold-channel-poller.timer` | daily ~05:30 CT |
+| `youtube_oauth_watchdog` | `youtube-oauth-watchdog.timer` | daily ~07:00 CT |
+| `csi_demo_triage_rank` | `csi-demo-triage-rank.timer` | 2×/day |
+| `intel_auto_promoter` | `intel-auto-promoter.timer` | 2×/day |
+
+**Why the sections below still say "registered at gateway boot":** the
+`gateway_server._ensure_*_cron_job` calls still run at startup — they **seed the
+job row** (schedule, secrets, kill-switch wiring) so the config stays the source
+of truth — but a migrated job shows **`enabled:false` in `cron_jobs.json`**,
+which is a **migration artifact, NOT "off"**: the timer is the sole firer. Do
+not "fix" an `enabled:false` migrated job by re-enabling it in the in-process
+scheduler — that would double-fire it. Global rollback to in-process scheduling
+is `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1`. The per-job env kill-switches
+(`UA_YOUTUBE_DAILY_DIGEST_ENABLED`, etc.) still gate whether the work runs at
+all. Full inventory + the two-scheduler reality:
+[Platform Status Registry §4](../00_PLATFORM_STATUS_REGISTRY.md).
+
+> The experimental **Threads CSI lanes** (`threads_owned`,
+> `threads_trends_seeded`, `threads_trends_broad`) are **PARKED**, not live —
+> their adapters are `enabled: false` in the ingester config, they no-op without
+> Threads creds, and they are excluded from
+> `csi_source_liveness.py::effective_source_thresholds` until
+> `UA_CSI_THREADS_LANES_ENABLED=1`. A **removal** of these lanes is in flight on
+> a separate branch (not yet on `origin/main`); treat them as PARKED today. Live
+> per-source status: [Platform Status Registry §5](../00_PLATFORM_STATUS_REGISTRY.md).
+
+---
+
 ## Pipeline A — Daily YouTube Digest
 
 The flagship flow. The operator queues videos throughout the day into a
@@ -73,6 +114,11 @@ Tuesday 06:00 run. A `--day MONDAY` override uses the literal value with no
 shift, so manual reruns target an exact day.
 
 ### A.2 Cron registration
+
+> **Fired by `youtube-daily-digest.timer` in prod** (`youtube_daily_digest` ∈
+> `SYSTEMD_MIGRATED_SYSTEM_JOBS`). The gateway-boot registration below seeds the
+> job row but does not fire it; the in-process entry shows `enabled:false` as a
+> migration artifact. See § "Systemd-timer migration".
 
 Registered idempotently at gateway boot
 (`gateway_server.py::_ensure_youtube_daily_digest_cron_job`):
@@ -523,7 +569,9 @@ ingester config while parked, so they neither run nor alert until re-enabled wit
 2026-06-21): it has no automatic CSI-event producer — the `hackernews_snapshot` cron is
 its only producer, and `POST /api/v1/hackernews/refresh` has zero internal callers (only
 the manual dashboard button hits it), so with the cron off it is intentionally silent
-and must not alert. Re-arming the cron re-arms the detector.
+and must not alert. Re-arming the cron re-arms the detector. The full code-authoritative
+per-source status (LIVE / PARKED / RETIRED) is `effective_source_thresholds` itself and
+the [Platform Status Registry §5](../00_PLATFORM_STATUS_REGISTRY.md).
 
 ### B.5 Dead-channel auto-deactivation
 
@@ -543,7 +591,10 @@ dead feed drops out of `get_active_youtube_channels` and is no longer polled.
 
 `services/youtube_gold_channel_poller.py::poll_gold_channels` runs ~30 min
 before the digest (cron `youtube_gold_channel_poller`, default `30 5 * * *`,
-`UA_YOUTUBE_GOLD_POLLER_ENABLED` default ON). It bridges channel RSS into the
+`UA_YOUTUBE_GOLD_POLLER_ENABLED` default ON). **In prod it is fired by
+`youtube-gold-channel-poller.timer`** (`youtube_gold_channel_poller` ∈
+`SYSTEMD_MIGRATED_SYSTEM_JOBS`); the in-process registration only seeds the row
+(shows `enabled:false` as a migration artifact). It bridges channel RSS into the
 operator's manual-curation playlists:
 
 1. Loads `channels_watchlist.json` (`UA_YOUTUBE_CHANNELS_WATCHLIST_PATH`, default
@@ -593,7 +644,10 @@ The Google OAuth app is in **"Testing" mode**, so the refresh token expires
 fail silently. Three components manage this (`services/youtube_oauth_health.py`):
 
 - **Watchdog** (`scripts/youtube_oauth_watchdog.py`, cron
-  `youtube_oauth_watchdog`, `0 7 * * *`): actively tests the refresh token
+  `youtube_oauth_watchdog`, `0 7 * * *`; **fired by
+  `youtube-oauth-watchdog.timer` in prod** — `youtube_oauth_watchdog` ∈
+  `SYSTEMD_MIGRATED_SYSTEM_JOBS`, in-process row shows `enabled:false` as a
+  migration artifact): actively tests the refresh token
   (`test_refresh_token`) and computes age from the
   `YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT` stamp. State is `dead` (invalid_grant),
   `expiring` (age ≥ `UA_YOUTUBE_OAUTH_WARN_AGE_DAYS`, default 5d), or `healthy`.

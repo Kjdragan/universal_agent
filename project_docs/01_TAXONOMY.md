@@ -4,7 +4,7 @@ status: active
 canonical: true
 subsystem: meta-documentation
 code_paths: []
-last_verified: 2026-05-29
+last_verified: 2026-06-22
 ---
 
 # Documentation Taxonomy & Canonical Doc Set
@@ -15,7 +15,10 @@ last_verified: 2026-05-29
 
 ## What changed vs the legacy structure
 
-- **214 legacy files → 48 canonical docs.** The rest is consolidated, archived, or disposed.
+- **214 legacy files → one governed canonical set.** The rest is consolidated, archived, or disposed.
+  (The canonical set has grown since the Phase-1 rebuild — **do not trust a hand-count here; the live
+  count is whatever the generated `README.md` lists** from `_meta/doc_manifest.json`, which is the
+  machine source of truth.)
 - **No numbered-directory collisions, no parallel ungoverned hierarchies.** One scheme, eight categories.
 - **One index** (`README.md`), not two mega-indexes. `Documentation_Status.md` is retired; "last updated"
   lives in each doc's `last_verified` frontmatter.
@@ -25,24 +28,28 @@ last_verified: 2026-05-29
 
 ```
 project_docs/
-├── README.md                     # single index (Phase 4)
-├── CLAUDE.md                     # scoped governance — lazy-loads under project_docs/ (Phase 3)
-├── GLOSSARY.md                   # project-specific terms (Phase 4)
+├── README.md                     # single GENERATED index — authoritative live doc count per category
+├── CLAUDE.md                     # scoped governance — lazy-loads under project_docs/
+├── GLOSSARY.md                   # project-specific terms
 ├── 00_DOCUMENTATION_REFACTOR_PLAN.md
+├── 00_PLATFORM_STATUS_REGISTRY.md # platform-wide live/parked/paused/retired status table
 ├── 01_TAXONOMY.md                # this file
 ├── 02_GOTCHA_INVENTORY.md        # preserved operational/rationale facts
-├── 01_architecture/   (6 docs)   # system-level design & cross-cutting models
-├── 02_execution_core/ (5 docs)   # gateway, sessions, task hub, durable, URW, workspaces
-├── 03_agents/         (6 docs)   # VP workers, Simone, heartbeat, cron, idle/goal, agent college
-├── 04_intelligence/  (12 docs)   # CSI, URL judging, wiki, memory, proactive pipeline, discord intel
-├── 05_channels/       (5 docs)   # email, webhooks, telegram, discord ops, web-ui
-├── 06_platform/       (6 docs)   # secrets, runtime, identity/auth, deploy/CI, environments, networking
-├── 07_tools/          (3 docs)   # MCP server, SDK, skills
-├── 08_operations/     (5 docs)   # playbook, verification, dormancy, VPS recovery, incidents
-└── _meta/doc_manifest.json       # machine-readable work-list
+├── 01_architecture/              # system-level design & cross-cutting models
+├── 02_execution_core/            # gateway, sessions, task hub, durable, URW, workspaces
+├── 03_agents/                    # VP workers, Simone, heartbeat, cron, idle/goal
+├── 04_intelligence/              # CSI, URL judging, wiki, memory, proactive pipeline, discord intel
+├── 05_channels/                  # email, webhooks, telegram, discord ops, web-ui
+├── 06_platform/                  # secrets, runtime, identity/auth, deploy/CI, environments, networking
+├── 07_tools/                     # MCP server, SDK, skills
+├── 08_operations/                # playbook, verification, dormancy, VPS recovery, incidents
+└── _meta/doc_manifest.json       # machine-readable work-list (THE source of truth for the doc set)
 ```
 
-Tier mix (drives Phase 2 effort allocation): **22 tier-1** (load-bearing), **23 tier-2**, **3 tier-3**.
+> **Per-category doc counts are deliberately NOT listed here** — they rot on every doc add/remove.
+> The canonical set has grown well past the original Phase-1 numbers (the manifest now drives a larger
+> set than the 48-doc rebuild target). For the **current** count per category, read the generated
+> `README.md` (built by `scripts/gen_doc_index.py` from `_meta/doc_manifest.json`).
 
 ## Naming & placement rules (enforced in Phase 3 by `CLAUDE.md` + CI)
 

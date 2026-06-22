@@ -16,7 +16,7 @@ code_paths:
   - deployment/systemd/universal-agent-oom-alert.service
   - deployment/systemd/universal-agent-oom-alert.timer
   - deployment/systemd/templates/universal-agent-gateway.service.template
-last_verified: 2026-06-19
+last_verified: 2026-06-22
 ---
 
 # VPS Recovery & Security
@@ -440,19 +440,37 @@ Rotate immediately if leaked, then restart the core services:
 
 ---
 
-## SSH host: `ua@uaonvps` vs `root@uaonvps`
+## VPS access posture — `ua@uaonvps` and passwordless sudo (single source of truth)
+
+> This section is the canonical statement of how the production VPS is reached and
+> what `ua` can do. Other operations docs (e.g.
+> [Incident Response Patterns](05_incident_response_patterns.md)) defer here; if any
+> doc still claims `ua` "lacks passwordless sudo" / "ask an operator to `sudo`",
+> that text is **stale** — this is the authority.
 
 Interactive and most operator commands use **`ua@uaonvps`** (the VPS service
 user; `/home/kjdragan/...` paths resolve via SSHFS over Tailscale). Legacy
 runbooks 24/26 used `root@uaonvps` / a raw public IP — treat those as historical.
-`root` is still needed for the watchdog installer (`EUID==0` enforced) and host
-hardening (sshd/ufw/fail2ban), but as `ua` you do not have passwordless sudo, so
-service restarts that need sudo must go through a deploy or be run by an operator
-with root.
+
+**`ua` HAS passwordless sudo (since 2026-06-01).** `/etc/sudoers.d/ua-nopasswd`
+grants `ua ALL=(ALL) NOPASSWD: ALL`, so `sudo` works **non-interactively** over
+`ssh ua@uaonvps`. The watchdog/OOM installers (`EUID==0` enforced) and host
+hardening (sshd/ufw/fail2ban) all run directly as `ua` via `sudo` — e.g.
+`sudo systemctl restart universal-agent-gateway`,
+`sudo bash scripts/install_vps_service_watchdog.sh`,
+`sudo nginx -t && sudo systemctl reload nginx`,
+`sudo tailscale serve …`. There is **no** need to route a sudo-requiring restart
+through a deploy or to hand it to a separate root operator. Standing guardrails
+still hold: confirm before destructive, outward-facing, or secret-leaking
+operations.
 
 Tailscale note: the box has two hostnames — raw OS `srv1360701` (Hostinger) and
 MagicDNS `uaonvps`. SSH/preflight scripts use `uaonvps`; the device-roles admin
 API indexes by the raw hostname.
+
+> Live/parked/retired status of every scheduled job, lane, and service that this
+> recovery machinery monitors is tracked in the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md).
 
 ---
 

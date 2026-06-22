@@ -9,10 +9,14 @@ code_paths:
   - src/universal_agent/services/email_task_bridge.py
   - src/universal_agent/services/email_tags.py
   - src/universal_agent/services/vp_email_directive.py
-last_verified: 2026-06-21
+last_verified: 2026-06-22
 ---
 
 # Email / AgentMail
+
+> **Status at a glance:** Email / AgentMail is **LIVE**. Cross-channel status,
+> the backend process/port map, and the channel inventory live in the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) §1 / §7.
 
 Email is one of Universal Agent's inbound/outbound channels. Simone owns an
 [AgentMail](https://agentmail.to) inbox; inbound mail flows in over a WebSocket
@@ -439,7 +443,12 @@ Auth is the #1 time-sink for the gws path; this is the verified mechanism (don't
   1. `unset GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE GOOGLE_WORKSPACE_CLI_TOKEN GOOGLE_WORKSPACE_CLI_IMPERSONATED_USER` (empty values are a footgun — gws treats `""` as a real path and dies with "points to , but file does not exist").
   2. `npx -y @googleworkspace/cli auth login --scopes https://www.googleapis.com/auth/gmail.modify` (covers read + modify-labels + send). Approve in browser; click through "Google hasn't verified this app".
   3. Push the 4 files into Infisical (values via shell vars so they never hit the transcript; **`KEY=@file` is NOT supported** — it stores the literal path): `A=$(base64 -w0 ~/.config/gws/credentials.enc); infisical secrets set "GWS_CREDENTIALS_ENC_B64=$A" --token "$TOK" --projectId="$INFISICAL_PROJECT_ID" --env=production --silent` (repeat for `token_cache.json`→`GWS_TOKEN_CACHE_B64`, `.encryption_key`→`GWS_ENCRYPTION_KEY_B64`, `client_secret.json`→`GWS_CLIENT_SECRET_JSON_B64`). Verify with a SHA-256 round-trip before restarting prod.
-  4. **Restart needs sudo (no passwordless sudo as `ua`):** either ship any service-code change (deploy.yml restarts `universal-agent-gateway` + `ua-discord-intelligence`) or ask Kevin to `sudo systemctl restart` them. New Infisical secrets load only at process start.
+  4. **Restart to pick up new secrets:** `ua` has passwordless sudo (since
+     2026-06-01, `/etc/sudoers.d/ua-nopasswd`), so just
+     `sudo systemctl restart universal-agent-gateway ua-discord-intelligence`
+     over `ssh ua@uaonvps` yourself — new Infisical secrets load only at process
+     start. (Shipping any service-code change also restarts them via the deploy
+     pipeline.)
 - **Headless verification from a non-interactive shell** (a background-job shell can't unlock the OS keyring): set `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file` so gws reads `.encryption_key` from disk, then `npx -y @googleworkspace/cli gmail users labels list --params '{"userId":"me"}'`. `--dry-run` still auth-checks first, so it can't validate args while the token is dead.
 
 ### Internal MCP send tool (agent-facing)
@@ -567,8 +576,8 @@ each getting its own `virtual_thread_id`/`virtual_message_id` and session key.
 
 - **The Cody label is `agent-codie`, not `agent-cody`.** `_AGENT_LABEL_MAP`
   maps `vp.coder.primary` → `agent-codie`. Querying for `agent-cody` returns
-  nothing. The legacy email doc (82_Email_Architecture...) repeatedly says
-  `agent-cody` — that doc is **wrong**; the code is authoritative.
+  nothing. The retired legacy email doc repeatedly said `agent-cody` — that doc
+  was **wrong**; the code (`_AGENT_LABEL_MAP`) is authoritative.
 - **Webhook ingress is deprecated.** `webhook_transforms/agentmail_transform.py`
   exists but the WebSocket (+ polling fallback) is the only maintained inbound
   path. If webhooks are ever reactivated they would need reply-extraction parity
@@ -587,8 +596,8 @@ each getting its own `virtual_thread_id`/`virtual_message_id` and session key.
 - **gws OAuth tokens expire ~weekly** while the OAuth app is in Google
   "Testing" mode (refresh tokens expire after ~7 days). When the fallback
   starts failing with `invalid_grant`, creds need refreshing (or the app
-  published to production). See the gws auth runbook in the project CLAUDE.md and
-  `docs/03_Operations/82_Email_Architecture...`.
+  published to production). See the **gws CLI auth on the VPS (runbook)** section
+  above and the project `CLAUDE.md`.
 - **`_houston_now_iso` is misnamed.** It returns a Houston-local human string
   (e.g. `5:05 PM Wed May 20 CDT`), not ISO. The name is kept for backward
   compatibility.

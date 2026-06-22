@@ -23,7 +23,7 @@ from universal_agent.services import dormancy
 
 GATEWAY_SERVER = Path("src/universal_agent/gateway_server.py")
 DOC_NIGHTLY = Path(".github/workflows/doc-nightly.yml")
-DORMANCY_DOC = Path("docs/operations/operating_hours_dormancy.md")
+DORMANCY_DOC = Path("project_docs/08_operations/03_dormancy_and_operating_hours.md")
 POST_MERGE_DEPLOY = Path(".github/workflows/post-merge-deploy.yml")
 CI_FAILURE_ISSUE = Path(".github/workflows/ci-failure-issue.yml")
 

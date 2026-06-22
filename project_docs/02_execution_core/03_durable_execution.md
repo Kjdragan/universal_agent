@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/durable/db.py
   - src/universal_agent/durable/tool_policies.yaml
   - src/universal_agent/durable/worker_pool.py
-last_verified: 2026-06-15
+last_verified: 2026-06-22
 ---
 
 # Durable Execution
@@ -28,7 +28,10 @@ external actions (sending email, uploading files) while still replaying read-onl
 
 This package is *infrastructure* — it does not itself drive the agent loop. The orchestration that
 *uses* it lives in `main.py` (the PreToolUse/PostToolUse ledger hooks), `agent_core.py`
-(checkpoint write/restore), and `worker.py` (lease-based claim of queued runs).
+(checkpoint write/restore), and `worker.py` (lease-based claim of queued **runs** — an
+operator-invoked CLI, **not** a production daemon; see Gotchas). The VP mission queue has its own
+separate claiming loop (`vp/worker_loop.py::VpWorkerLoop`) and its own DB (`vp_state.db`) — see
+the VP-orchestration tables note below.
 
 ## What's in the package
 
@@ -81,10 +84,17 @@ Core execution tables:
   before the ledger row is marked succeeded; later "promoted").
 - **`checkpoints`** — state snapshots + optional `corpus_data` blob for sub-agent context restore.
 
-VP orchestration tables (also live in this schema because they share `runtime_state.db`):
-`vp_sessions`, `vp_missions`, `vp_session_events`, `vp_events`, `vp_mission_backlog_history`,
-`vp_bridge_cursors`. These back the VP/mission queue (see the VP subsystem doc); the durable-state
-functions for them (`claim_next_vp_mission`, `finalize_vp_mission`, leases) live in `state.py`.
+VP orchestration tables — `vp_sessions`, `vp_missions`, `vp_session_events`, `vp_events`,
+`vp_mission_backlog_history`, `vp_bridge_cursors` — are defined by the same `migrations.py` schema,
+but **live VP mission state is in `vp_state.db`, not `runtime_state.db`.** Every production VP
+consumer opens its connection through `db.py::get_vp_db_path` (`vp_state.db` default) — the worker
+claiming loop (`vp/worker_main.py::main` → `VpWorkerLoop`), the dispatch capacity check
+(`services/priority_dispatcher.py`), the VP-mission tool (`tools/vp_orchestration.py`), the
+gateway (`gateway.py`), and the activity inventory (`services/proactive_activity_report.py`).
+These tables back the VP/mission queue (see the VP subsystem doc); the durable-state functions for
+them (`state.py::claim_next_vp_mission`, `state.py::finalize_vp_mission`, the VP session leases)
+take a connection argument and run against whichever DB the caller opens — in production that is
+always `vp_state.db`.
 
 ## Database paths and connection settings (`db.py`)
 
@@ -262,8 +272,9 @@ to call repeatedly to mutate a run without clobbering already-set fields. Status
 conditional `UPDATE` — it only succeeds (`rowcount == 1`) if the run is `queued`/`running` and the
 existing lease is null or expired; it also flips `queued`→`running` in the same statement.
 `heartbeat_run_lease` extends the lease only for the current owner; `release_run_lease` clears it.
-This is what lets `worker.py` claim a queued run, hold it for `lease_ttl`, and lets another worker
-take over after the TTL lapses if the holder dies.
+This is what lets the `worker.py` CLI claim a queued **run**, hold it for `lease_ttl`, and lets
+another worker take over after the TTL lapses if the holder dies. (The VP **mission** queue uses a
+parallel claim/lease API — see below — driven by the live `VpWorkerLoop`, not by `worker.py`.)
 
 `_RUN_SUCCESS_STATUSES = {succeeded, completed, success}` and
 `_RUN_TERMINAL_STATUSES = success ∪ {failed, cancelled, needs_review}` gate when attempt pointers
@@ -271,12 +282,15 @@ take over after the TTL lapses if the holder dies.
 `create_run_attempt` / `update_run_attempt`.
 
 VP sessions/missions have a parallel lease + claim API in the same module
-(`acquire_vp_session_lease`, `claim_next_vp_mission`, `finalize_vp_mission`, …). `claim_next_vp_mission`
+(`acquire_vp_session_lease`, `claim_next_vp_mission`, `finalize_vp_mission`, …), invoked in
+production by `vp/worker_loop.py::VpWorkerLoop` against `vp_state.db`. `claim_next_vp_mission`
 uses `BEGIN IMMEDIATE` + a priority-tier-ordered `SELECT … LIMIT 1` then a conditional `UPDATE` to
 atomically claim the highest-priority queued (or lease-expired running) mission; tier order is
 `operator_daily(0) < operator_signal(1) < maintenance(2) < background(3)`, then numeric `priority`
 ASC, then `created_at` ASC. `finalize_vp_mission` best-effort surfaces failures to Simone via
-`services.vp_failure_rescue.surface_failure_to_simone`.
+`services.vp_failure_rescue.surface_failure_to_simone`. For the live/parked status of each VP
+(CODIE/ATLAS/HOMER) and the VP worker units, see the
+[Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) § 3.
 
 ## Checkpointing (`checkpointing.py`)
 
@@ -318,11 +332,18 @@ the idempotency key is stable regardless of key ordering or whitespace in the to
 - **`worker_pool.py` is scaffolding, not the production execution path.** A repo-wide grep finds no
   external caller of `run_worker_pool` / `WorkerPoolManager` / `queue_run` outside the package and
   its tests. Its `PoolConfig.db_path` defaults to the relative `"runtime.db"` (not the canonical
-  `runtime_state.db`). The live worker that claims runs is `src/universal_agent/worker.py`, which uses
-  `acquire_run_lease` / `heartbeat_run_lease` directly. Treat `worker_pool.py` as a Stage-6
-  distributed-execution prototype.
+  `runtime_state.db`). Treat `worker_pool.py` as a Stage-6 distributed-execution prototype.
   > [VERIFY: if a separate process launches `run_worker_pool` via CLI/entrypoint outside `src/`, it
   > would not show in the `src/` grep. No such entrypoint was found, but confirm before deleting.]
+- **`worker.py` is an operator/manual CLI, not a deployed daemon.** The top-level
+  `src/universal_agent/worker.py` is an `argparse` entrypoint (`worker.py::main`, run via
+  `python -m universal_agent.worker --poll/--once`) that claims queued **runs** with
+  `acquire_run_lease` / `heartbeat_run_lease` and relaunches them via `universal_agent.main
+  --resume`. It has **no production caller** — no systemd unit and no in-process invoker reference it.
+  The deployed VP worker units (`universal-agent-vp-worker@<vp_id>.service` → `scripts/start_vp_worker.sh`
+  → `python -m universal_agent.vp.worker_main`) drive the **live** claiming loop
+  `vp/worker_loop.py::VpWorkerLoop`, which claims VP **missions** (not `runs`) from `vp_state.db`.
+  Don't conflate the two: `worker.py` = manual run-resume CLI; `VpWorkerLoop` = the live mission worker.
 - **Phantom receipts hide tool calls.** The FK-violation branch in `prepare_tool_call` returns a
   `status="phantom"` receipt and lets the tool run *without a durable ledger row*. This is by design
   (stability over auditability during shutdown/prefetch), but it means a small fraction of executed

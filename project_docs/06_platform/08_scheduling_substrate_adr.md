@@ -7,6 +7,8 @@ code_paths:
   - src/universal_agent/cron_service.py
   - src/universal_agent/heartbeat_service.py
   - src/universal_agent/gateway_server.py
+  - src/universal_agent/loop_control.py
+  - src/universal_agent/systemd_migrated_jobs.py
   - src/universal_agent/services/mission_control_intelligence_sweeper.py
   - src/universal_agent/services/proactive_health.py
   - src/universal_agent/services/proactive_health_notifier.py
@@ -19,20 +21,46 @@ code_paths:
   - src/universal_agent/durable/db.py
   - scripts/deploy/remote_deploy.sh
   - deployment/systemd/
-last_verified: 2026-06-21
+last_verified: 2026-06-22
 ---
 
 # ADR: Scheduling Substrate Redesign
 
-> **ADR status: PARTIALLY IMPLEMENTED.** Phases **B** (Mission Control sweeper
-> service, #749) and **C** (proactive-health timer + delivery contract) have
-> **shipped** — see their **As-built** notes in Decision 2 / Decision 3 and the
-> migration-phases section. Phase **A** (deterministic jobs → timers) is now
-> **partially implemented**: **batch 1** (5 maintenance/audit jobs) and **batch 2**
-> (the 6 content-daily jobs — 3 `proactive_report_*` slots sharing one service,
-> `proactive_artifact_digest`, `intel_auto_promoter`, `codie_proactive_cleanup`)
-> have **shipped** — see the **As-built** notes under Phase A. Phase A batches 3–4
-> remain **PROPOSED**, gated on the operator decision points in the final section.
+> **ADR status: SUBSTANTIALLY IMPLEMENTED (re-verified 2026-06-22).** The
+> migration this ADR proposed is **effectively complete**: all **20** slot-critical
+> deterministic jobs in `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`
+> now run as `OnCalendar`+`Persistent` timers (all `active waiting`, none failed),
+> and the in-process daily footprint has collapsed to the handful of jobs that
+> genuinely need the agent runtime. Phases **B** (Mission Control sweeper service,
+> #749) and **C** (proactive-health timer + delivery contract) **shipped** — see
+> their **As-built** notes in Decision 2 / Decision 3. Phase **A** (deterministic
+> jobs → timers) **shipped across batches 1 + 2** (the 11 jobs called out below)
+> plus the additional slot-critical jobs (`hourly_intel_digest`,
+> `csi_convergence_sync`, the YouTube/briefing daily set) that round out the 20 in
+> the frozenset; the originally-deferred "batches 3–4 PROPOSED" framing is **no
+> longer accurate** — there is no meaningful unmigrated slot-critical residue left.
+>
+> **Live scheduling inventory is NOT hand-maintained here.** The canonical,
+> code-verified list of what fires and where lives in the **Platform Status
+> Registry § 4** ([`../00_PLATFORM_STATUS_REGISTRY.md`](../00_PLATFORM_STATUS_REGISTRY.md)),
+> sourced directly from `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`
+> and a live `systemctl list-timers`. The per-job table in Decision 1 below is a
+> **point-in-time design snapshot** (`cron_jobs.json @ e05b62fb`) kept for the
+> rationale, not a live inventory — when it disagrees with the registry, the
+> registry wins. Hand-maintained job lists rot; the registry is the anti-rot
+> source of truth.
+>
+> **The serving/scheduling split shipped 2026-06-19 (autonomous-runtime split).**
+> The in-process schedulers this ADR worries about (heartbeat, cron, MC sweeper,
+> health) no longer share the public gateway's HTTP event loop. In `split` mode
+> (`loop_control.py::autonomous_runtime_mode` → `"split"`, live in prod) only the
+> dedicated autonomous worker (`UA_GATEWAY_ROLE=autonomous_worker`, port 8092,
+> unit `deployment/systemd/universal-agent-autonomous-runtime.service`) hosts the
+> loops; the public gateway sheds them via
+> `loop_control.py::should_host_autonomous_runtime` (gated in the lifespan as
+> `_run_autonomous_loops_here`). See the sibling
+> [`12_deploy_restart_resilience_adr.md`](12_deploy_restart_resilience_adr.md).
+>
 > Phase **D** (canonical-store hygiene) **shipped 2026-06-05** — root-caused to a
 > **skill placeholder DB path** (`evaluate-and-author-intel-brief/SKILL.md`), not
 > the originally-hypothesized stray relative-cwd *source* writer; see its
@@ -61,12 +89,25 @@ last_verified: 2026-06-21
 
 ## 1. Context
 
+> **As-built note (2026-06-22).** This Context describes the *pre-redesign*
+> situation that motivated the ADR. Two structural changes have since landed: (a)
+> **20 slot-critical jobs migrated to systemd timers** (Phase A, the bulk of the
+> in-process cron risk below is now off the gateway), and (b) the **2026-06-19
+> autonomous-runtime split** moved the heartbeat, the surviving in-process crons,
+> and the MC sweeper out of the public gateway's HTTP loop into the dedicated
+> `universal-agent-autonomous-runtime.service` worker. The "single process funnels
+> everything and dies on every deploy" framing below is therefore **historical** —
+> the autonomous worker still restarts on deploy, but it no longer co-tenants the
+> public HTTP loop. The live inventory is the Platform Status Registry § 4
+> ([`../00_PLATFORM_STATUS_REGISTRY.md`](../00_PLATFORM_STATUS_REGISTRY.md)).
+
 Universal Agent's recurring work is driven by **six independent schedulers** with
-very different restart-survival properties, and most of them funnel through a
-single process — the gateway — that restarts roughly **19 times per day** (one per
-`deploy.yml` run; each merge to `main` runs `scripts/deploy/remote_deploy.sh`,
-which does `git reset --hard origin/main` then `sudo systemctl restart
-universal-agent-gateway …`). The consequences:
+very different restart-survival properties. Before the redesign, most of them
+funneled through a single process — the gateway — that restarts roughly **19 times
+per day** (one per `deploy.yml` run; each merge to `main` runs
+`scripts/deploy/remote_deploy.sh`, which does `git reset --hard origin/main` then
+`sudo systemctl restart universal-agent-gateway …`). The consequences this ADR
+set out to fix:
 
 1. **In-process cron drops slots.** The gateway cron (`cron_service.py::CronService._scheduler_loop`,
    a fixed 1-second poll) runs with restart-backfill **gated OFF by default**
@@ -112,27 +153,33 @@ deploy-independent, (b) makes health findings reach the operator and Simone
 independent of LLM/heartbeat availability, and (c) makes Mission Control a
 read-only consumer that can neither starve nor be starved.
 
-### 1.1 The six schedulers today (re-verified live)
+### 1.1 The six schedulers (original framing + as-built status)
 
-| # | Substrate | Driver | Restart-survival | Role |
+The table below is the **as-designed** picture. The "Restart-survival" column has
+since changed for A/B/C: after the 2026-06-19 autonomous-runtime split they run in
+the dedicated `universal-agent-autonomous-runtime.service` worker, not the public
+gateway HTTP loop — see the as-built column.
+
+| # | Substrate | Driver | As-designed restart-survival | As-built (2026-06-22) |
 |---|---|---|---|---|
-| A | Asyncio heartbeat | `heartbeat_service.py::HeartbeatService._scheduler_loop` (1–30 s tick, ~11 min real cadence) | **Dies on deploy** (gateway loop) | Simone orchestration + health tick |
-| B | In-process cron | `cron_service.py::CronService._scheduler_loop` (1 s poll, 31 jobs) | **Dies on deploy; drops missed slots** | All registered crons |
-| C | Mission Control sweeper | `services/mission_control_intelligence_sweeper.py::run_sweeper_loop` (60 s) | **Dies on deploy** (gateway loop) | Observational cards + readout |
-| D | systemd timers | 15 UA units under `deployment/systemd/` + CSI | **Deploy-independent** (OS PID-1) | CSI lane + maintenance |
-| E | OS crontab (`ua`) | `cron.service` (2 legacy noop jobs) | Deploy-independent | none real (S4 removing) |
+| A | Asyncio heartbeat | `heartbeat_service.py::HeartbeatService._scheduler_loop` (1–30 s tick, ~11 min real cadence) | Died on deploy (gateway loop) | Runs in the autonomous worker (split); graceful SIGTERM drain on restart (see [`12_deploy_restart_resilience_adr.md`](12_deploy_restart_resilience_adr.md)) |
+| B | In-process cron | `cron_service.py::CronService._scheduler_loop` (1 s poll) | Died on deploy; dropped missed slots | **20 slot-critical jobs migrated to systemd timers**; the surviving ~4 in-process jobs now run in the autonomous worker |
+| C | Mission Control sweeper | `services/mission_control_intelligence_sweeper.py::run_sweeper_loop` (60 s) | Died on deploy (gateway loop) | **Extracted** to `universal-agent-mission-control-sweeper.service` (Phase B) |
+| D | systemd timers | UA units under `deployment/systemd/` + CSI | **Deploy-independent** (OS PID-1) | The dependable model; now hosts the migrated 20 + infra/CSI timers (registry § 4) |
+| E | OS crontab (`ua`) | `cron.service` (2 legacy noop jobs) | Deploy-independent | none real |
 | F | GitHub Actions | `deploy.yml` etc. (off-VPS) | Off-process | **Causes** the restarts |
 
-Substrate **D is the dependable model.** But it has its own failure mode (see
-§3.1): the dead units (`universal-agent-service-watchdog.timer`,
-`universal-agent-oom-alert.timer`, `universal-agent-youtube-playlist-poller.timer`)
-all use **monotonic-only** scheduling (`OnBootSec`/`OnUnitActiveSec`, **no**
-`OnCalendar`) where `Persistent=true` is a no-op — once the self-chaining
-`OnUnitActiveSec` loop breaks there is no wall-clock anchor to re-arm, and
-`NextElapse` goes to `infinity`. Every **healthy** UA timer (the 11 `csi-*` units +
-`universal-agent-uv-cache-prune.timer`) uses **`OnCalendar` + `Persistent=true`**,
-which gives free OS-level catch-up after downtime. **The target substrate is
-specifically `OnCalendar` + `Persistent`, never monotonic-only.**
+Substrate **D is the dependable model**, and the redesign moved the slot-critical
+work onto it. Its one historical failure mode — **monotonic-only**
+scheduling (`OnBootSec`/`OnUnitActiveSec`, **no** `OnCalendar`, where
+`Persistent=true` is a no-op) — has been **remediated**: the units that used it
+(`universal-agent-service-watchdog.timer`, `universal-agent-oom-alert.timer`,
+`universal-agent-youtube-playlist-poller.timer`) were converted to
+**`OnCalendar` + `Persistent=true`** (the watchdog and oom-alert timers are **LIVE
+and `active waiting`** today; the playlist poller's timer is also `OnCalendar`,
+though its underlying `youtube_playlist` source is RETIRED — see registry § 5).
+**The target substrate is specifically `OnCalendar` + `Persistent`, never
+monotonic-only**, and every live UA timer now follows it.
 
 ## 2. The five decisions
 
@@ -177,7 +224,16 @@ the gateway. The slot-criticality axis is what makes `Persistent=true` matter:
 it is the mechanism that closes the "daily slot lost in a deploy window" gap
 (Decision 5) for migrated jobs.
 
-#### Per-job target-substrate table (all 31 live jobs, `cron_jobs.json` @ `e05b62fb`)
+#### Per-job target-substrate table (point-in-time design snapshot, `cron_jobs.json` @ `e05b62fb`)
+
+> **This table is a design-era snapshot, not the live inventory.** It records the
+> per-job *rationale* (which axis put each job on which substrate). For what is
+> actually firing today — the 20 migrated jobs, the surviving in-process jobs, and
+> the tombstones — read **Platform Status Registry § 4**
+> ([`../00_PLATFORM_STATUS_REGISTRY.md`](../00_PLATFORM_STATUS_REGISTRY.md)), which
+> reads the authoritative `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`
+> frozenset and a live `systemctl list-timers`. Where the two disagree, the
+> registry wins.
 
 Legend — **Substrate**: `systemd` = `OnCalendar`+`Persistent` timer (migrate);
 `in-proc` = stay in `cron_service`; `in-proc?` = optional/low-priority migrate;
@@ -755,6 +811,13 @@ complementary independent of it:
   deferred.
 
 ## 4. Operator decision points (only Kevin can decide)
+
+> **Mostly settled (2026-06-22).** Decisions 1–4 are **implemented** — the
+> two-axis policy was adopted, the 20-job migration shipped, the MC sweeper and
+> proactive-health timer were extracted, and the operator chose to **keep all 3
+> daily reports**. The questions below are preserved for the decision record; the
+> live state is in Platform Status Registry § 4
+> ([`../00_PLATFORM_STATUS_REGISTRY.md`](../00_PLATFORM_STATUS_REGISTRY.md)).
 
 1. **Substrate policy (Decision 1).** Approve the two-axis rule: deterministic
    `!script` + slot-critical (daily/weekly/monthly + content-hourly) → systemd

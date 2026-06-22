@@ -4,7 +4,7 @@ status: active
 canonical: true
 subsystem: meta-documentation
 code_paths: []
-last_verified: 2026-05-29
+last_verified: 2026-06-22
 ---
 
 # Glossary
@@ -13,23 +13,31 @@ Project-specific terms for `universal_agent`. Generic programming vocabulary is 
 Each definition is grounded in current code; `file::symbol` pointers reference the implementation
 (no line numbers — they drift). Verified against the codebase on the date in the frontmatter.
 
+> **Status vocabulary.** When a term below carries a lifecycle status, it uses the platform-wide
+> vocabulary: **LIVE** (running in prod), **PARKED** (intentionally off, e.g. behind a default-off flag,
+> kept for later), **PAUSED** (operator-/credit-suspended, expected to resume), **RETIRED** (removed,
+> superseded), **SCAFFOLDING** (template/placeholder, never wired). The authoritative per-subsystem status
+> table is the [Platform Status Registry](00_PLATFORM_STATUS_REGISTRY.md).
+
 | Term | Definition |
 | --- | --- |
 | **activity_state.db** | The canonical Task Hub database, resolved at runtime via `durable/db.py::get_activity_db_path`. NOT `task_hub.db` (a stale relic). Holds task rows, assignments, execution runs, and dispatch ledger. |
 | **agent_router** | The Simone-first routing layer. The legacy `qualify_agent*` functions are decommissioned; today routing is just `services/agent_router.py::route_all_to_simone` — every claimed task is handed to Simone. |
 | **Anthropic-native** | An execution profile that talks to real Anthropic Claude (Opus/Sonnet/Haiku) over OAuth (Max plan), as opposed to the ZAI/GLM proxy. Used by interactive coding and, since 2026-05-11 PM, by Cody missions by default. In demo workspaces the endpoint marker is `anthropic_native` (`services/demo_workspace.py::ENDPOINT_PROFILE_ANTHROPIC`). |
-| **Antigravity Remote** | Kevin's desktop IDE (a VS Code fork) used over Remote-SSH; editor runs on desktop, workspace/terminal/Claude Code run on the VPS. Now a fallback to local `just dev`. |
+| **Antigravity / desktop cockpit** | Kevin's desktop is the **interactive development cockpit only** — he develops by running Claude Code on the desktop via `claudereal` (`scripts/claude_with_mcp_env.sh`) and `just dev`. The legacy "Antigravity Remote-SSH into `ua@uaonvps` as the dev box" workflow is **RETIRED** (doc-asserted only, no code anchor): `universal_agent` *runs* on the VPS; nothing operational runs on the desktop. The SSHFS bridge resolves cross-machine paths, so developing locally never requires SSHing the VPS. |
 | **artifacts dir** | Durable output location resolved by `artifacts.py::resolve_artifacts_dir` (default `<repo-root>/artifacts`, NOT `AGENT_RUN_WORKSPACES`). Diagnostics must read the resolver, not guess. |
 | **ATLAS** | The VP General Agent (`vp.general.primary`). Handles deep research, analysis, content generation, proactive intelligence (`operator_signal` tier). Distinct from CODIE. Identity injected from `prompt_assets/ATLAS_SOUL.md`. |
 | **attempt** | One execution try within a run; retries create additional attempts under the same run. |
+| **autonomous-runtime split** | **LIVE** (`UA_AUTONOMOUS_RUNTIME_MODE=split` in prod). All autonomous loops (Simone heartbeat, daemon sessions, todo/idle dispatch, cron, startup recovery) run in a **second** `gateway_server` process (`UA_GATEWAY_ROLE=autonomous_worker`, port `UA_AUTONOMOUS_WORKER_PORT`=8092, unit `universal-agent-autonomous-runtime.service`), off the public gateway's HTTP loop so long in-process LLM turns can't starve uvicorn. `loop_control.py::autonomous_runtime_mode` (`in_process`\|`split`) + `loop_control.py::should_host_autonomous_runtime` gate which process hosts the loops — mutually exclusive, exactly one runs them. Rollback: `mode=in_process` + restart. (PRs #1084/#1085/#1088/#1091.) |
 | **background (tier)** | Lowest VP mission priority and the safe default when no tier is mapped (`vp/mission_priority.py::DEFAULT_TIER`). Opportunistic work. |
 | **brain transplant** | Injecting global memory/identity files into a fresh session workspace at startup so the agent boots with continuity. |
 | **CODIE** | The VP Coder Agent (`vp.coder.primary`). Handles code implementation, refactoring, doc maintenance, standalone builds. The email label for coder-targeted mail is `agent-codie` (note: NOT `agent-cody`). |
 | **Cody** | The per-task CLI executor persona that runs downstream of Simone via Task Hub (`services/cody_dispatch.py` enqueues a `cody_demo_task`). Each task carries a `cody_mode` (`zai`/`anthropic`) resolved by `services/cody_mode.py::resolve_cody_mode`. Cody is the executor; CODIE is the VP coder lane identity. |
 | **cody_mode** | Per-task field selecting Cody's inference backend: `"zai"` (GLM proxy) or `"anthropic"` (real Claude). Hardcoded fallback flipped from `zai`→`anthropic` on 2026-05-11 (`services/cody_mode.py::_HARDCODED_FALLBACK_MODE`). |
-| **convergence** | Cross-channel semantic clustering of proactive signals into actionable matches with a 1–10 signal_strength (`services/proactive_convergence.py`). The core of the CSI insight engine; an LLM precision layer refines clusters. |
+| **convergence** | Semantic clustering of proactive signals into actionable matches with a 1–10 signal_strength (`services/proactive_convergence.py::sync_topic_signatures_from_csi` → `::write_convergence_candidate`). The core of the CSI insight engine; an LLM precision layer refines clusters. Its **sole input is `youtube_channel_rss`** (the SQL reads `csi.db events JOIN rss_event_analysis WHERE source='youtube_channel_rss'`) — **Discord is NOT a convergence/CSI feed** (zero discord refs in `proactive_convergence.py`; see the Discord Intelligence entry). |
+| **Discord Intelligence** | A passive monitoring daemon (`discord_intelligence/daemon.py`, `ua-discord-intelligence.service`) + a command-and-control bot (`discord_intelligence/cc_bot.py`, `ua-discord-cc-bot.service`). It is its **own** intelligence surface with a CRUD watchlist (`api/routers/csi_discord_watchlist.py`) — **not** a CSI ingestion source and **not** wired into convergence. |
 | **cron service** | System-job scheduler. Registration goes through `gateway_server::_register_system_cron_job` (handles catch-up, secrets, update-vs-create) — do not hand-roll cron registration. |
-| **CSI** | Creator/Convergence Signal Intelligence — the pipeline that ingests external creator signals (YouTube RSS, X/@ClaudeDevs, HN), runs a vault intelligence pass, and detects convergence (`services/csi_intelligence_pass.py`, `csi_intelligence_persistence.py`). DB resolved via `_csi_default_db_path` (split-brain hazard). |
+| **CSI** | Creator/Convergence Signal Intelligence — the pipeline that ingests external creator signals, runs a vault intelligence pass, and detects convergence (`services/csi_intelligence_pass.py`, `csi_intelligence_persistence.py`). The per-source liveness/status table is `services/invariants/csi_source_liveness.py::SOURCE_THRESHOLDS_HOURS`: **`youtube_channel_rss` is the ONLY LIVE convergence feed** (444-channel watchlist); `hackernews` and the `threads_*` lanes are **PARKED** (default-off flags), the X `claude_code_intel` (@ClaudeDevs/@bcherny) lane is **PAUSED** (X API credits depleted, #1136), and `csi_analytics` / `youtube_playlist` are **RETIRED**. DB resolved via `_csi_default_db_path` (split-brain hazard). |
 | **demo triage** | Ranking and gating of CSI demo candidates for build-worthiness (`services/csi_demo_triage.py`, `csi_demo_triage_ranker.py`, `csi_demo_triage_policy.py`). |
 | **demo workspace** | A clean per-demo dir at `/opt/ua_demos/<id>/` provisioned by `services/demo_workspace.py::provision_demo_workspace` with a vanilla scaffold, giving Cody an isolated Anthropic-native environment. Endpoint profile written as a marker file. |
 | **dispatch sweep** | The heartbeat-driven loop (`services/dispatch_service.py::dispatch_sweep`) that calls `task_hub.py::claim_next_dispatch_tasks(limit=N)` to atomically claim queued tasks and route them to Simone. |
@@ -47,6 +55,7 @@ Each definition is grounded in current code; `file::symbol` pointers reference t
 | **gotcha inventory** | `02_GOTCHA_INVENTORY.md` — preserved non-code-shaped facts harvested from the legacy corpus, classed as **operational** (judged for current validity) vs **rationale** (the why, carried as asserted context). 68 code-behavior gotchas are re-derived from code instead. |
 | **gws** | The Google Workspace CLI backing Gmail send/label, Calendar sync, and the AgentMail 429→Gmail fallback. Creds materialized on the VPS from four base64 Infisical secrets; uses `file` keyring backend. OAuth "Testing" mode expires refresh tokens ~weekly. |
 | **headquarters** | The factory role for the primary/control machine (`FactoryRole.HEADQUARTERS`), contrasted with `LOCAL_WORKER`. |
+| **HOMER** | The opportunistic **third** VP (`vp.general.secondary`, `vp/profiles.py::resolve_vp_profiles`) — an ATLAS **capacity twin**: same generalist client, shares `prompt_assets/ATLAS_SOUL.md`, runs on ZAI/GLM. **Disabled by default** (`feature_flags.py::vp_enabled_ids` default tuple = coder + general.primary only); enabled in prod via `UA_VP_ENABLED_IDS`. Provides a 2nd general slot only while CODIE is idle (bidirectional CODIE/HOMER exclusion → peak ≤ 2 running). (PR #1094.) |
 | **heartbeat** | The autonomic loop (`heartbeat_service.py`) that triggers periodic agent turns for health supervision and proactive checks, capped by `max_proactive_per_cycle`. It does NOT execute trusted-email missions — that routes through Task Hub. Directives live in `memory/HEARTBEAT.md`. |
 | **idle dispatch** | The nudge mechanism (`services/idle_dispatch_loop.py`) that prompts a worker to claim work when otherwise idle. |
 | **insight brief** | A synthesized proactive-intelligence work product produced from convergence/knowledge blocks, evaluated and authored for operator delivery; funneled toward gated Task Hub candidates. |

@@ -6,10 +6,11 @@ subsystem: arch-task-lifecycle
 code_paths:
   - src/universal_agent/task_hub.py
   - src/universal_agent/services/dispatch_service.py
+  - src/universal_agent/services/priority_dispatcher.py
   - src/universal_agent/services/todo_dispatch_service.py
   - src/universal_agent/services/execution_run_service.py
   - src/universal_agent/durable/db.py
-last_verified: 2026-06-15
+last_verified: 2026-06-22
 ---
 
 # Task Lifecycle End-to-End
@@ -63,7 +64,15 @@ TASK_STATUS_CANCELLED = "cancelled"
 TASK_STATUS_DELEGATED = "delegated"            # VP is actively working this
 TASK_STATUS_PENDING_REVIEW = "pending_review"  # VP done, Simone sign-off needed
 TASK_STATUS_SCHEDULED = "scheduled"            # cron trigger fires at due_at
+TASK_STATUS_WAITING_ON_REPLY = "waiting-on-reply"  # outbound email sent, awaiting human
 ```
+
+`TASK_STATUS_WAITING_ON_REPLY` is the held state for a task that has already sent
+its outbound email and is parked waiting on a human response — finalize purges it
+from the dispatch-queue snapshot alongside `completed`/`needs_review` (see §6) so a
+stale build can't re-serve a task whose work is genuinely done pending a reply. For
+the live/parked/held status vocabulary across the platform, see the
+[Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md).
 
 - `TERMINAL_STATUSES = {completed, parked, cancelled}` — excluded from queue rebuilds.
 - `ACTIVE_STATUSES` — everything else, eligible to appear on the board.
@@ -184,16 +193,38 @@ sweep.
 ## 4. Dispatch Entry Points — `dispatch_service.py`
 
 `dispatch_service` is the centralized layer that wraps `claim_next_dispatch_tasks`
-and enriches every claimed task with Simone-first routing metadata
-(`_enrich_with_routing` → `route_all_to_simone`). Four entry points:
+and enriches every claimed task with routing metadata (`_enrich_with_routing`). The
+**claim path is identical** regardless of routing engine; only post-claim routing
+differs. Four entry points:
 
-> **D3 (default-OFF, `UA_PRIORITY_DISPATCHER_ENABLED`):** when the Pythonic priority
-> dispatcher is enabled, `_enrich_with_routing` skips the Simone-first stamp and routing is
-> owned by `services/priority_dispatcher.py`. The **claim path is unchanged** — only post-claim
-> routing differs: VP-bound tasks are dispatched directly via `dispatch_vp_mission` and the
-> source row transitions `in_progress → delegated` (`task_hub.py::perform_task_action`,
-> `action="delegate"`) instead of riding Simone's heartbeat turn. See
-> [Simone-First Orchestration § D3](../03_agents/02_simone_first_orchestration.md).
+> **Live routing — the priority dispatcher is DEFAULT-ON (since 2026-06-16).**
+> `services/priority_dispatcher.py::priority_dispatcher_enabled()` returns **True by
+> default** (`UA_PRIORITY_DISPATCHER_ENABLED` is a kill-switch — only an explicit
+> `0`/`false`/`off` disables it). When it is on, `_enrich_with_routing` returns early
+> and **skips** the legacy Simone-first stamp (`agent_router.route_all_to_simone`);
+> routing is owned by the Pythonic priority dispatcher instead. Simone-first is now the
+> *disabled-fallback* path, not the default. The live routing decision is deterministic
+> (`priority_dispatcher.py::classify_task`, priority-ordered) then dispatched
+> (`::dispatch_claimed`):
+>
+> - Explicit `target_agent` → CODIE/ATLAS/Simone; chat sources (`chat_panel`/`simone_chat`)
+>   → Simone; coding work (a `code_change` manifest or a coder-lane `source_kind`) → CODIE.
+> - `metadata.preferred_vp` → CODIE direct; `preferred_vp == vp.general.primary` → ATLAS
+>   **only if** `UA_DISPATCHER_PREFER_ATLAS` is on (default **OFF**), else Simone-first
+>   fallback. The ambiguous tail is resolved by `classify_agent_route` (the only LLM touch);
+>   a `general` result goes to Simone unless prefer-ATLAS is on.
+> - VP-direct dispatch goes through `tools.vp_orchestration.dispatch_vp_mission`, gated by
+>   `CapacityGovernor.can_dispatch()` + per-agent caps. With no free slot the task is marked
+>   `deferred` and left in Simone's residue. A VP-bound task that *is* dispatched transitions
+>   `in_progress → delegated` (`task_hub.py::perform_task_action`, `action="delegate"`)
+>   instead of riding Simone's heartbeat turn.
+>
+> **Net live behavior:** VP-direct for tagged/classified VP work with a free slot;
+> Simone-first fallback for general (prefer-ATLAS off), chat, ambiguous, and
+> capacity-deferred work. For the canonical live/parked/retired status of this and every
+> orchestration component, see the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md). Routing details:
+> [Simone-First Orchestration](../03_agents/02_simone_first_orchestration.md).
 
 | Function | Trigger | Notes |
 |---|---|---|
@@ -228,7 +259,7 @@ sequenceDiagram
     DS->>TH: claim_next_dispatch_tasks
     TH->>TH: rebuild_dispatch_queue
     TH-->>DS: claimed[] (status=in_progress, assignment_id)
-    DS->>DS: route_all_to_simone (_enrich_with_routing)
+    DS->>DS: _enrich_with_routing → priority_dispatcher (default-ON)<br/>VP-direct dispatch; Simone-first only as disabled fallback
     HB->>RUN: allocate_execution_run (per task workspace)
     HB->>TH: update_assignment_lineage(run_id, workspace_dir)
     HB->>GW: execution_callback(prompt, await_completion)
