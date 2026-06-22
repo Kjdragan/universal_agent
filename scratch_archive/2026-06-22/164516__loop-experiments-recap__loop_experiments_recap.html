@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>loop_experiments — the loop-it lab</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1c2330; --muted:#5b6675; --line:#e3e7ee;
+    --accent:#2f6df6; --good:#1d8a4e; --good-bg:#e7f6ee; --warn:#9a6a00; --warn-bg:#fdf4dd;
+    --code:#0f1b2d; --code-bg:#f0f3f8; --chip:#eef2fb;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-text-size-adjust:100%}
+  .wrap{max-width:920px;margin:0 auto;padding:28px 18px 64px}
+  header h1{font-size:27px;margin:0 0 4px;letter-spacing:-.2px}
+  header p{margin:0;color:var(--muted)}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px 20px;margin:18px 0;box-shadow:0 1px 2px rgba(20,30,50,.04)}
+  h2{font-size:19px;margin:2px 0 12px}
+  h3{font-size:15px;margin:18px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  p{margin:8px 0}
+  code{background:var(--code-bg);color:var(--code);padding:1px 6px;border-radius:6px;
+    font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.4px}
+  tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+  .pill.good{background:var(--good-bg);color:var(--good)}
+  .pill.eng{background:var(--chip);color:var(--accent)}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0 2px}
+  .step{background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:7px 12px;
+    font-size:13.5px;font-weight:600}
+  .arrow{color:var(--muted);font-weight:700}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  .callout{border-left:4px solid var(--warn);background:var(--warn-bg);border-radius:0 10px 10px 0;
+    padding:12px 16px;margin:12px 0}
+  .callout b{color:var(--warn)}
+  .mono{font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--code);
+    background:var(--code-bg);border-radius:10px;padding:12px 14px;overflow-x:auto;white-space:pre}
+  .lede{font-size:17px;color:var(--ink)}
+  .muted{color:var(--muted)}
+  .kpi{display:flex;gap:18px;flex-wrap:wrap;margin-top:6px}
+  .kpi div{flex:1;min-width:130px;background:var(--chip);border-radius:12px;padding:12px 14px}
+  .kpi b{display:block;font-size:22px;line-height:1.2}
+  .kpi span{font-size:12.5px;color:var(--muted)}
+  footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>loop_experiments &mdash; the <code>loop-it</code> lab</h1>
+  <p>A skill that turns a request into a bounded, self-terminating agent loop &mdash; and four live loops that prove it.</p>
+</header>
+
+<div class="card">
+  <p class="lede">An agent loop is <b>a task with a check</b>: do one bounded action, run the fixed
+  check, record evidence, then continue or stop. <code>loop-it</code> is the thin glue that
+  <b>selects</b> the right loop design from the <a href="https://signals.forwardfuture.ai/loop-library/">Forward&nbsp;Future Loop&nbsp;Library</a>,
+  <b>composes</b> a structured prompt, and <b>runs</b> it.</p>
+  <div class="flow">
+    <span class="step">request</span><span class="arrow">&rarr;</span>
+    <span class="step">match catalog (50 loops)</span><span class="arrow">&rarr;</span>
+    <span class="step">compose loop prompt</span><span class="arrow">&rarr;</span>
+    <span class="step">run: fast &#124; durable</span><span class="arrow">&rarr;</span>
+    <span class="step">check &rarr; stop</span>
+  </div>
+  <div class="kpi">
+    <div><b>4 / 4</b><span>loops converged &amp; self-terminated</span></div>
+    <div><b>2</b><span>engines proven (fast + durable)</span></div>
+    <div><b>50</b><span>catalog loop designs vendored</span></div>
+    <div><b>0</b><span>loops that ran past their budget</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>The two primitives <code>loop-it</code> sits between</h2>
+  <table>
+    <tr><th></th><th>Loop Library (Forward Future)</th><th>Native <code>/loop</code> (Claude Code)</th></tr>
+    <tr><td><b>What</b></td><td>catalog of ~50 loop <i>designs</i></td><td>the <i>execution</i> primitive</td></tr>
+    <tr><td><b>Gives</b></td><td>goal + fixed check + stop condition per task type</td><td>scheduling: self-paced (<code>ScheduleWakeup</code>) or interval (cron)</td></tr>
+    <tr><td><b><code>loop-it</code> uses for</b></td><td>selecting + composing the loop</td><td>running the durable variant</td></tr>
+  </table>
+  <h3>loop_kit (the deterministic spine)</h3>
+  <table>
+    <tr><th>Piece</th><th>Job</th></tr>
+    <tr><td><code>catalog.py</code></td><td>read / index / show / refresh the vendored 50-loop catalog (no Python scoring &mdash; the agent reasons over a lean index)</td></tr>
+    <tr><td><code>state.py</code></td><td>budget guard: <code>start / record / status</code>. <code>status</code> exits <b>3</b> once the check passes <i>or</i> the iteration cap <i>or</i> the wall-clock budget is hit. The guard &mdash; not the agent's opinion &mdash; stops the loop.</td></tr>
+    <tr><td><code>judge.py</code></td><td>an <b>LLM-judged</b> check: an independent GLM model scores an artifact against a rubric, run N times, <b>majority verdict</b> wins.</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Two engines</h2>
+  <div class="grid2">
+    <div>
+      <h3>fast</h3>
+      <p class="muted">Iterate back-to-back in one session, no waits. Best when the check runs in seconds and the task converges in a few steps. (small / medium / stretch demos)</p>
+    </div>
+    <div>
+      <h3>durable</h3>
+      <p class="muted">Native <code>/loop</code> self-paced: each iteration schedules the next via <code>ScheduleWakeup</code> (60s&ndash;1hr apart), state persists on disk, ends by <i>not</i> rescheduling once the check passes. Survives an idle session. (durable demo)</p>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>The four loops &mdash; evidence</h2>
+
+  <h3>1 &middot; small_calc <span class="pill eng">fast</span> <span class="pill good">converged</span></h3>
+  <p class="muted">Loop <b>#027 autonomy-loop builder-reviewer</b> (adapted) &mdash; implement code until a frozen pytest suite goes green. The pytest suite <i>is</i> the gate.</p>
+  <table>
+    <tr><th>iter</th><th>bounded change</th><th>check</th></tr>
+    <tr><td>0</td><td>stub (bare number)</td><td>7 failed, 3 passed</td></tr>
+    <tr><td>1</td><td>tokenizer + additive (<code>+ -</code>)</td><td>6 failed, 4 passed</td></tr>
+    <tr><td>2</td><td>precedence (<code>* /</code>), unary, &divide;-by-zero</td><td>2 failed, 8 passed</td></tr>
+    <tr><td>3</td><td>parentheses</td><td><b>10 passed, 0 failed</b> &rarr; STOP</td></tr>
+  </table>
+
+  <h3>2 &middot; medium_coverage <span class="pill eng">fast</span> <span class="pill good">converged</span></h3>
+  <p class="muted">Loop <b>#005 the 100% test coverage loop</b> &mdash; here the loop adds <i>tests</i> to close a frozen module's branches (the mirror image of #1, which added code). Gate: <code>--cov-fail-under=100</code>.</p>
+  <table>
+    <tr><th>iter</th><th>tests added</th><th>branch coverage</th></tr>
+    <tr><td>0</td><td>thin happy-path suite</td><td>79%</td></tr>
+    <tr><td>1</td><td><code>to_roman</code> error branches</td><td>87%</td></tr>
+    <tr><td>2</td><td><code>from_roman</code> errors + round-trip</td><td><b>100%</b> &rarr; STOP</td></tr>
+  </table>
+
+  <h3>3 &middot; stretch_pitch <span class="pill eng">fast</span> <span class="pill good">converged</span> &middot; <b>non-deterministic check</b></h3>
+  <p class="muted">Loop <b>#034 multi-LLM convergence</b> &mdash; author = Claude, judge = an independent GLM. The check is a <i>judgment</i>, not an exit code. Rewrite a weak pitch until the judge approves it on a rubric.</p>
+  <table>
+    <tr><th>step</th><th>artifact</th><th>judge (3 votes)</th><th>gate</th></tr>
+    <tr><td>0</td><td>buzzword soup</td><td>fail/fail/fail &middot; totals 6/4/5</td><td>majority <b>fail</b></td></tr>
+    <tr><td>1</td><td>concrete rewrite (named user, problem, mechanism)</td><td>pass/pass/pass &middot; 20/20/20</td><td>majority <b>pass</b></td></tr>
+    <tr><td>1c</td><td>(same text, independent round)</td><td>pass/pass/pass</td><td>streak <b>confirmed</b> &rarr; STOP</td></tr>
+  </table>
+  <p><b>How a fuzzy check is made usable:</b> (1) majority-of-N absorbs per-run variance, (2) a confirmation streak before declaring done, (3) a hard cap that <b>escalates</b> instead of spinning.</p>
+  <div class="callout">
+    <b>Honest finding.</b> 6/4/5 &rarr; 20/20/20 in one step is <i>too</i> clean &mdash; <code>glm-5-turbo</code>
+    rubber-stamped a perfect score the moment the buzzwords left. A weak judge passes the gate too early.
+    Non-deterministic loops work <b>only</b> if you vote, require a streak, and keep a hard cap &mdash; and the
+    judge's quality, not the loop, becomes the thing to invest in (stronger model, anti-gaming rubric, held-out cases).
+  </div>
+
+  <h3>4 &middot; durable_build <span class="pill eng">durable</span> <span class="pill good">converged across a real wakeup</span></h3>
+  <p class="muted">Loop <b>#030 five-minute repository maintainer</b> (closest fit) &mdash; assemble a file one section per wakeup, proving the native <code>/loop</code> self-paced mechanism.</p>
+  <table>
+    <tr><th>iter</th><th>when</th><th>change</th><th>check</th><th>decision</th></tr>
+    <tr><td>1</td><td>turn N</td><td>wrote <code>## Fast engine</code></td><td>1/2</td><td>fail &rarr; <b>ScheduleWakeup(60s)</b></td></tr>
+    <tr><td>2</td><td>turn N+1 (wakeup)</td><td>wrote <code>## Durable engine</code></td><td>2/2</td><td>pass &rarr; <b>STOP, no reschedule</b></td></tr>
+  </table>
+  <p>Termination is the <i>absence</i> of the next <code>ScheduleWakeup</code> &mdash; bounded by the same <code>state.py</code> guard as the fast engine. One stop policy, two engines.</p>
+</div>
+
+<div class="card">
+  <h2>Try it</h2>
+  <div class="mono">git clone https://github.com/Kjdragan/loop_experiments
+cd loop_experiments &amp;&amp; uv sync
+uv run pytest test_loop_kit.py -q                 # helpers green
+uv run python loop_kit/catalog.py index test       # find a loop
+# then invoke the loop-it skill with a goal that has a real check</div>
+  <p class="muted">Repo: <a href="https://github.com/Kjdragan/loop_experiments">github.com/Kjdragan/loop_experiments</a> (private).
+  Each demo's <code>LOOP.md</code> carries its full selection rationale + run evidence; <code>.loop_state/*.json</code> is the machine record.</p>
+</div>
+
+<footer>loop_experiments &middot; built on the Forward Future Loop Library + native Claude Code <code>/loop</code></footer>
+</div>
+</body>
+</html>
