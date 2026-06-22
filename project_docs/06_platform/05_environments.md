@@ -340,6 +340,48 @@ committed to a settings file). This is why both transports exist.
 > Central night). It can serve as an emergency override for a phase-boundary
 > backfill that must run during ZAI peak — at the cost of real Anthropic billing.
 
+### Running inference from a script (outside an interactive session)
+
+When a Python tool or script needs to call a model **on its own** (not the
+operator's live `claude` session), the auth path depends entirely on *which
+client it uses* — and this is a recurring footgun (it bit the skill-creator
+description-optimizer on 2026-06-22):
+
+- **`claude` CLI (`claude -p`) and the Claude Agent SDK (`claude_agent_sdk.query`)
+  ride the subscription.** They authenticate via the workspace OAuth session /
+  `CLAUDE_CODE_OAUTH_TOKEN`, so the **Max subscription works with no API key** —
+  and they invoke skills natively. This is the preferred path for script-driven
+  inference that should use the Max plan.
+- **The raw `anthropic` SDK (`from anthropic import Anthropic`) CANNOT use the
+  subscription.** `Anthropic()` only authenticates with `ANTHROPIC_API_KEY`
+  (x-api-key) or `ANTHROPIC_AUTH_TOKEN` (Bearer), and it **errors if both are set**
+  ("Could not resolve authentication method… or one of the X-Api-Key / Authorization
+  headers explicitly omitted"). It will *not* consume a `CLAUDE_CODE_OAUTH_TOKEN`.
+  So a raw-SDK script on a pure-Max/OAuth session fails outright unless you give it
+  a real key.
+- **Headless Max:** mint a long-lived token with `claude setup-token` and export
+  `CLAUDE_CODE_OAUTH_TOKEN` (the CLI/Agent-SDK path reads it). **Do not** map it to
+  `ANTHROPIC_API_KEY` — Claude Code rejects an API key where it expects the OAuth
+  token, and the raw SDK won't accept the OAuth token.
+- **A subprocess inherits the launching session's env.** A `claude -p` (or Agent
+  SDK) call spawned from a `claudereal` session → Max OAuth; spawned from a `zai`
+  session → ZAI/GLM. **A script that runs inference must explicitly set the auth env
+  it intends** rather than relying on the alias that launched the session: pop
+  `ANTHROPIC_*` to force Max OAuth, or inject `ANTHROPIC_BASE_URL`+`ANTHROPIC_AUTH_TOKEN`
+  (ZAI, popping `ANTHROPIC_API_KEY`) to force GLM.
+
+> **Worked example — the skill-creator optimizer (2026-06-22).** Its bundled
+> `improve_description.py` / `run_loop.py` construct the raw `anthropic.Anthropic()`
+> → crashed under a pure-Max session. Two valid fixes: (a) use the **`claude -p`**
+> path (the upstream/marketplace skill-creator copy already does this — it rides
+> the subscription, no key); or (b) inject ZAI creds and run on `glm-5.2`. **Corrected
+> misassumption:** the GLM run's "0 skill triggers" was **not** GLM being skill-blind —
+> it was the test harness registering a `.claude/commands/` *command* (not a real
+> skill) and probing via `claude -p`. GLM invokes real skills fine via the Agent SDK
+> with `skills="all"`. See [`07_tools/03_skills_system.md`](../07_tools/03_skills_system.md)
+> § Gotchas and [`01_architecture/04_model_choice_and_resolution.md`](../01_architecture/04_model_choice_and_resolution.md)
+> § 1 (a bare `--model glm-5.2` is honored, not downgraded).
+
 ---
 
 ## Local development — `just dev`
