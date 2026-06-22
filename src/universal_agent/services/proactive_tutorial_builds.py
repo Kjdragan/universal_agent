@@ -1314,14 +1314,14 @@ async def _send_gpu_demo_approval_email(
 
     # The approve link must reach the always-on gateway AND be clickable on the
     # operator's devices. UA_PUBLIC_BASE_URL/FRONTEND_URL are not staged in prod
-    # Infisical, so default to the tailnet gateway host (same host the scratchpad
-    # uses): it serves the /api/v1/gpu_demo route and resolves on every operator
-    # device. Override with UA_GPU_DEMO_APPROVAL_BASE_URL when needed.
+    # Infisical, so default to the tailnet gateway on :8443 — `tailscale serve`
+    # maps :8443 -> the gateway (:8002), whereas the bare host maps to :8000 and
+    # does NOT proxy /api/v1. Override with UA_GPU_DEMO_APPROVAL_BASE_URL.
     base = (
         os.getenv("UA_GPU_DEMO_APPROVAL_BASE_URL", "")
         or os.getenv("UA_PUBLIC_BASE_URL", "")
         or os.getenv("FRONTEND_URL", "")
-        or "https://uaonvps.taildcc090.ts.net"
+        or "https://uaonvps.taildcc090.ts.net:8443"
     ).strip().rstrip("/")
 
     approve_token = sign_gpu_demo_token(task_id, "approve") if base else ""

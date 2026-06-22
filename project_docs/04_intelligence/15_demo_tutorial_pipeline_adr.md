@@ -282,9 +282,11 @@ task-status enum — unknown statuses fall through every eligibility gate):
    `metadata.endpoint_required="ollama_local"` + `gpu_approval={state:"pending",…}`,
    and sends the operator an email via
    `proactive_tutorial_builds.py::_send_gpu_demo_approval_email`. The approve link
-   base defaults to the **tailnet gateway** (`https://uaonvps.taildcc090.ts.net`,
-   override `UA_GPU_DEMO_APPROVAL_BASE_URL`) so it both reaches the always-on
-   gateway and is clickable on the operator's devices.
+   base defaults to the **tailnet gateway on :8443**
+   (`https://uaonvps.taildcc090.ts.net:8443`, override `UA_GPU_DEMO_APPROVAL_BASE_URL`)
+   — `tailscale serve` maps :8443 → the gateway (:8002), while the bare host maps
+   to :8000 and does not proxy `/api/v1`. It reaches the always-on gateway and is
+   clickable on the operator's tailnet devices.
 3. **Approve** — the email's HMAC-signed link hits
    `gateway_server.py::gpu_demo_approve_get` (`GET /api/v1/gpu_demo/{task_id}/approve`,
    404 when the flag is off). The HMAC token **is** the auth (a mail-client click
