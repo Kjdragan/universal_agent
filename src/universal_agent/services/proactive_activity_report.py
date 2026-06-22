@@ -17,8 +17,13 @@ lies):
     + ``cron_runs.jsonl``. ``claude_code_intel_sync`` is DELIBERATELY paused by
     the operator (X API credits depleted) — report it ⏸️ paused, not broken.
   * **lanes** are not crons at all — their health is DB freshness (convergence
-    candidates, CSI events per source, VP missions). ``hackernews`` and
-    ``claude_code_intel`` are intentionally parked.
+    candidates, CSI events per source, VP missions, proactive artifacts).
+    ``hackernews`` and ``claude_code_intel`` are intentionally ⏸️ parked.
+    Decommissioned CSI producers (``csi_analytics``, ``youtube_playlist``, the
+    ``threads_*`` lanes — see ``_RETIRED_LANE_SOURCES``) are OMITTED from the
+    inventory entirely rather than reported 🌑 dark; a one-line note records the
+    count. The ``proactive_artifacts`` lane reads the runtime ``activity_state.db``
+    (the report's own ``conn``), where the rows actually live — NOT ``csi.db``.
 
 Design contract: pure-Python, deterministic, and ``build_activity_inventory``
 NEVER raises — every source is wrapped so a missing systemctl (dev box), a
@@ -72,6 +77,26 @@ _OPERATOR_PAUSED_CRONS = {
 # Lanes that are intentionally parked — fresh data is NOT expected, so absence
 # is reported ⏸️/parked rather than 🌑/dark.
 _PARKED_LANE_SOURCES = {"hackernews", "claude_code_intel"}
+
+# CSI lane sources whose producers were DECOMMISSIONED (not merely parked).
+# These will never emit again, so a stale `csi.db` row for them must NOT be
+# reported as 🌑 dark — it is expected debris from a retired producer. They are
+# OMITTED from the inventory entirely (a one-line note records the count):
+#   * csi_analytics       — three trend-report timers retired in PR #990
+#                           (output duplicated the convergence pipeline).
+#   * youtube_playlist     — youtube_playlist_watcher retired in PR #438
+#                           (daily digest is the canonical trigger).
+#   * threads_owned / threads_trends_seeded / threads_trends_broad — experimental
+#                           Threads lanes decommissioned 2026-06-22 (no live
+#                           ingestion adapter, X-API-dependent, redundant with the
+#                           @ClaudeDevs/@bcherny lane).
+_RETIRED_LANE_SOURCES = {
+    "csi_analytics",
+    "youtube_playlist",
+    "threads_owned",
+    "threads_trends_seeded",
+    "threads_trends_broad",
+}
 
 # Expected cadence (seconds) for systemd timers whose period cannot be inferred
 # from a single NEXT-LAST observation (e.g. weekly/monthly units, or units that
@@ -674,8 +699,14 @@ def _collect_lane_activities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                     "detail": "no CSI events found",
                 }
             )
+        retired_seen = 0
         for r in rows:
             source = str(r["source"] or "unknown")
+            # Decommissioned producers leave stale csi.db rows behind. Omit them
+            # entirely (record a count note) so they never false-flag as dark.
+            if source.strip().lower() in _RETIRED_LANE_SOURCES:
+                retired_seen += 1
+                continue
             last_dt = _parse_iso(r["m"])
             parked = any(p in source.lower() for p in _PARKED_LANE_SOURCES)
             status, detail = _lane_status(last_dt, fresh_window_secs=6 * 3600, parked=parked)
@@ -690,23 +721,33 @@ def _collect_lane_activities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                     "detail": detail,
                 }
             )
+        if retired_seen:
+            activities.append(
+                {
+                    "name": "CSI · retired lanes",
+                    "category": "Lanes",
+                    "scheduler": "lane",
+                    "cadence": "n/a",
+                    "last_run_iso": None,
+                    "status": STATUS_PARKED,
+                    "detail": f"{retired_seen} retired lane(s) excluded (decommissioned producers)",
+                }
+            )
     except Exception as exc:
         activities.append(_unknown_lane("CSI events", exc))
 
-    # --- Proactive artifacts flow (csi.db proactive_artifacts) ---
+    # --- Proactive artifacts flow (activity_state.db proactive_artifacts) ---
+    # The proactive_artifacts table is written into the runtime activity DB
+    # (see services.proactive_artifacts.upsert_artifact callers, which connect via
+    # durable.db.connect_runtime_db(get_activity_db_path())), NOT csi.db. This
+    # report's own `conn` is that same activity_state.db connection (the report
+    # agent opens it with get_activity_db_path), so read it directly. An earlier
+    # version read a stale csi.db copy and always reported this lane dark.
     try:
-        from universal_agent.services.transcript_corpus import resolve_csi_db_path
-
-        csi_path = resolve_csi_db_path()
-        a_conn = sqlite3.connect(f"file:{csi_path}?mode=ro", uri=True, timeout=5)
-        a_conn.row_factory = sqlite3.Row
-        try:
-            row = a_conn.execute(
-                "SELECT MAX(COALESCE(created_at, '')) AS m, COUNT(*) AS c FROM proactive_artifacts"
-            ).fetchone()
-        finally:
-            a_conn.close()
-        last_dt = _parse_iso(row["m"] if row else None)
+        row = conn.execute(
+            "SELECT MAX(COALESCE(created_at, '')) AS m, COUNT(*) AS c FROM proactive_artifacts"
+        ).fetchone()
+        last_dt = _parse_iso((row["m"] if row else None) or None)
         status, detail = _lane_status(last_dt, fresh_window_secs=48 * 3600, parked=False)
         activities.append(
             {

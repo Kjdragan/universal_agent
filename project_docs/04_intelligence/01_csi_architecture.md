@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/config/intel_lanes.yaml
   - src/universal_agent/services/llm_classifier.py
-last_verified: 2026-06-13
+last_verified: 2026-06-22
 ---
 
 # CSI Architecture
@@ -331,7 +331,7 @@ Three **CSI Ingester oneshot scripts** (each runs on a systemd timer, not a daem
 | event_type | Emission script | Cadence | Payload |
 |---|---|---|---|
 | `rss_trend_report` | `csi_rss_trend_report.py` | 3×/day (7 AM, 1 PM, 7 PM CT) | Top channels, themes, narratives from YouTube RSS; report_markdown summary |
-| `threads_trend_report` | `csi_threads_trend_report.py` | 3×/day (parked: 0 events while threads adapters disabled) | Top buckets, sources, categories, themes from Threads; currently STALE |
+| `threads_trend_report` | `csi_threads_trend_report.py` | retired 2026-06-13; Threads lanes decommissioned 2026-06-22 (0 events) | Top buckets, sources, categories, themes from Threads; dead (no producer) |
 | `global_trend_brief_ready` | `csi_global_trend_brief.py` | 3×/day (7 AM, 1 PM, 7 PM CT) | LLM-synthesized cross-source brief; full_report_markdown includes narratives + contradictions + why-it-matters |
 
 **Operational status (as of 2026-06-13 — three trend timers intentionally retired):**
@@ -398,12 +398,14 @@ status as of the current codebase, grounded against adapter presence and enabled
 |---|---|---|---|---|---|
 | **youtube_channel_rss** | active | `true` | every 30 min (6 AM–8 PM + 2 AM CT, per schedule; actual fetch every 1.5 hours) | `channel_new_upload` | `config.yaml::sources.youtube_channel_rss` |
 | **youtube_playlist** | parked | `false` | (disabled) | (none) | `config.yaml::sources.youtube_playlist` |
-| **threads_owned** | parked | `false` (as of 2026-06-03 commit 094717cc) | (disabled; was 15 min) | (none while disabled) | `config.yaml::sources.threads_owned` |
-| **threads_trends_seeded** | parked | `false` (as of 2026-06-03 commit 094717cc) | (disabled; was 15 min) | (none while disabled) | `config.yaml::sources.threads_trends_seeded` |
-| **threads_trends_broad** | parked | `false` (as of 2026-06-03 commit 094717cc) | (disabled; was 30 min) | (none while disabled) | `config.yaml::sources.threads_trends_broad` |
+| **threads_owned** | decommissioned (2026-06-22)‡ | `false` (as of 2026-06-03 commit 094717cc) | (disabled; was 15 min) | (none) | `config.yaml::sources.threads_owned` |
+| **threads_trends_seeded** | decommissioned (2026-06-22)‡ | `false` (as of 2026-06-03 commit 094717cc) | (disabled; was 15 min) | (none) | `config.yaml::sources.threads_trends_seeded` |
+| **threads_trends_broad** | decommissioned (2026-06-22)‡ | `false` (as of 2026-06-03 commit 094717cc) | (disabled; was 30 min) | (none) | `config.yaml::sources.threads_trends_broad` |
 | **csi_analytics** | active | N/A (synthetic, not an adapter) | 3×/day (digest windows: 7 AM, 1 PM, 7 PM CT) | `rss_trend_report`, `threads_trend_report`, `global_trend_brief_ready` | `scripts/csi_rss_trend_report.py`, `scripts/csi_global_trend_brief.py`, `scripts/csi_threads_trend_report.py` |
 | **hackernews** | active (event-gated)† | N/A (UA-side gateway emitter, not a CSI adapter; lives in csi.db) | on-demand; emits only on material movers (status `new` / `\|delta\|≥3` / dropped score ≥200), so long silences are by design, not breakage (last event 2026-06-06 ~01:42Z) | `hackernews_movers_signal` | UA-side in-process emitter; `*/30m` snapshot cron parked per #734, snapshots produced during convergence |
-| **reddit** | removed | N/A | (removed 2026-06-06 PR #707) | (none) | legacy `reddit_discovery` adapter deleted |
+
+
+> ‡ **Threads lanes decommissioned 2026-06-22.** The experimental `threads_owned` / `threads_trends_seeded` / `threads_trends_broad` lanes were removed from all UA-side monitoring and source lists (`csi_source_liveness`, `tools/csi_bridge.py`, `gateway_server.py`) — they never had a live ingestion adapter, are X-API-dependent (the same 402 wall), and are redundant with the @ClaudeDevs/@bcherny lane. The `csi_source_liveness` invariant no longer tracks them (the `UA_CSI_THREADS_LANES_ENABLED` flag and `_THREADS_SOURCES` helper were deleted), and the proactive activity report omits them as retired rather than flagging dark. The stale `config.yaml::sources.threads_*` entries upstream are inert (`enabled: false`).| **reddit** | removed | N/A | (removed 2026-06-06 PR #707) | (none) | legacy `reddit_discovery` adapter deleted |
 
 **Status definitions:**
 
