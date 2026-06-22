@@ -1,5 +1,9 @@
 # Phase 4 Consolidation Notes — Salvage Inventory
 
+> **HISTORICAL — 2026-05-29 rebuild artifact (archived 2026-06-22).** A point-in-time salvage
+> inventory from the doc rebuild; retained for context, not a live reference. Current status lives
+> in [`../00_PLATFORM_STATUS_REGISTRY.md`](../00_PLATFORM_STATUS_REGISTRY.md).
+
 **Purpose.** Before the legacy `docs/` corpus (214 files) is archived, this note inventories
 still-valuable, still-true knowledge that is **not** already captured by a canonical doc's
 `legacy_refs`. Each row states the fact, cites the legacy source, names the canonical doc that

@@ -18,7 +18,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_GATEWAY_URL = "http://127.0.0.1:8080"
+_DEFAULT_GATEWAY_URL = "http://127.0.0.1:8002"  # UA gateway HTTP port (:8080 was filebrowser); prod overrides via UA_GATEWAY_URL
 _DEFAULT_TIMEOUT = 15.0
 
 

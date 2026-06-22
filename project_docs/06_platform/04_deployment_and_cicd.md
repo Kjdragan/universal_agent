@@ -24,7 +24,7 @@ code_paths:
   - scripts/install_vps_session_reaper_timer.sh
   - deployment/systemd/universal-agent-session-reaper.service
   - deployment/systemd/universal-agent-session-reaper.timer
-last_verified: 2026-06-17
+last_verified: 2026-06-22
 ---
 
 # Deployment & CI/CD
@@ -115,6 +115,41 @@ flowchart TD
     Z -->|live SHA == deployed| Z1[Telegram ✅ confirmed]
     Z -->|mismatch / down| Z2[Telegram ⚠️ look now]
     Z -->|deploy failed| Z3[Telegram ❌]
+```
+
+The same path as a ship-then-verify sequence — branch off `origin/main` → CI gate → PAT-merge fires Deploy → VPS install/restart/health-gate → live `/api/v1/version` SHA confirmation:
+
+```mermaid
+sequenceDiagram
+    actor Dev as Dev / Agent
+    participant PR as GitHub PR (→ main)
+    participant Val as pr-validate.yml
+    participant AM as pr-auto-merge.yml<br/>(AUTO_MERGE_PAT)
+    participant Dep as deploy.yml
+    participant VPS as VPS (remote_deploy.sh)
+    participant Health as Health gate
+    participant Ver as /api/v1/version
+
+    Dev->>PR: branch off origin/main, open PR
+    PR->>Val: pull_request → main
+    Val->>Val: py_compile + ruff + pytest + tripwires + shellcheck
+    alt gates fail
+        Val-->>PR: ci-failure-issue.yml files issue
+    else gates pass & non-draft
+        AM->>PR: gh pr merge --auto --squash (via AUTO_MERGE_PAT)
+        PR->>Dep: squash-merge → push to main fires Deploy<br/>(concurrency: deploy-production, cancel-in-progress: false)
+        Dep->>VPS: SSH-pipe remote_deploy.sh (gh api @ GITHUB_SHA)
+        VPS->>VPS: fetch + reset --hard origin/main + checkout main
+        VPS->>VPS: preflight → install systemd units + restart services
+        VPS->>Health: parallel gateway/api/webui checks
+        alt unhealthy / crashloop
+            Health-->>Dep: journald + exit 1 (deploy fails)
+        else healthy
+            Health-->>Dep: deploy complete
+        end
+        Dep->>Ver: deploy-notify.yml curls live /api/v1/version
+        Ver-->>Dev: Telegram ✅ when live short_sha == origin/main (Rule A)
+    end
 ```
 
 ## The deploy job (`deploy.yml`)

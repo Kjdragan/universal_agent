@@ -1,15 +1,20 @@
 ---
 title: Documentation Refactor Plan
-status: active
+status: archived
 owner: Claude (autonomous, delegated 2026-05-29)
 created: 2026-05-29
-canonical: true
+canonical: false
 subsystem: meta-documentation
 code_paths: []
-last_verified: 2026-05-29
+last_verified: 2026-06-22
 ---
 
 # Documentation Refactor Plan
+
+> **HISTORICAL — 2026-05-29 rebuild artifact (archived 2026-06-22).** This is a point-in-time
+> record of *how* the docs were rebuilt; it is **not** a live reference. For current "what's here
+> and is it live?" status, see the [Platform Status Registry](00_PLATFORM_STATUS_REGISTRY.md); for
+> the current doc set, see the generated [README](README.md).
 
 > **This is the canonical, reviewable plan for the complete rebuild of Universal Agent's
 > documentation.** It is the first artifact in `project_docs/` — the new home for the rebuilt

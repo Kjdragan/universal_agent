@@ -11,7 +11,7 @@ drift from disk. Editing rules live in [`CLAUDE.md`](CLAUDE.md) and are enforced
 ## Meta
 
 - [00_PLATFORM_STATUS_REGISTRY.md](00_PLATFORM_STATUS_REGISTRY.md) — **START HERE** — the single "what do we have and is it live?" index (subsystems, crons/timers, intel sources, VPs, MCP servers, channels) with code-sourced status.
-- [00_DOCUMENTATION_REFACTOR_PLAN.md](00_DOCUMENTATION_REFACTOR_PLAN.md) — How and why the docs were rebuilt (code-first).
+- [00_DOCUMENTATION_REFACTOR_PLAN.md](00_DOCUMENTATION_REFACTOR_PLAN.md) — _(historical 2026-05-29 rebuild artifact)_ — how and why the docs were rebuilt (code-first).
 - [01_TAXONOMY.md](01_TAXONOMY.md) — Category structure and the canonical doc set.
 - [02_GOTCHA_INVENTORY.md](02_GOTCHA_INVENTORY.md) — Preserved operational/rationale facts not visible in code.
 - [GLOSSARY.md](GLOSSARY.md) — Project-specific terminology.
@@ -60,16 +60,16 @@ _CSI, intel lanes, research, wiki, memory, proactive pipeline, mission control, 
 - **[Intel Lanes Configuration](04_intelligence/03_intel_lanes_config.md)** — Lane config schema, cron schedule (3x daily 08/16/22 CT), research_allowlist semantics. _(verified 2026-06-16)_
 - **[ClaudeDevs X Intelligence](04_intelligence/04_claudedevs_x_intel.md)** — @ClaudeDevs polling lane, packet outputs, vault-as-canonical-product. _(verified 2026-06-21)_
 - **[YouTube CSI Flow](04_intelligence/05_youtube_csi_flow.md)** — YouTube feeds topology, dual-pipeline (UA-native playlist watcher vs CSI RSS feed — separate DBs), residential proxy ingestion. _(verified 2026-06-22)_
-- **[Demo Triage](04_intelligence/06_demo_triage.md)** — Demo candidate store, ranking, triage policy. _(verified 2026-06-17)_
+- **[Demo Triage](04_intelligence/06_demo_triage.md)** — Demo candidate store, ranking, triage policy. _(verified 2026-06-22)_
 - **[LLM Wiki System](04_intelligence/07_llm_wiki.md)** — Vault management, internal sync/projection, query, LLM extraction, kb registry. _(verified 2026-06-22)_
 - **[Memory System](04_intelligence/08_memory_system.md)** — Tiered memory, memory store/index, vector backends (Chroma/Lance), orchestrator, feature flags. _(verified 2026-06-17)_
 - **[Lossless Memory](04_intelligence/09_lossless_memory.md)** — DAG compression & SQLite history. _(verified 2026-06-18)_
 - **[Proactive Pipeline](04_intelligence/10_proactive_pipeline.md)** — raw→knowledge blocks→bounded retrieval→LLM synthesis→gated action. _(verified 2026-06-22)_
-- **[Mission Control Intelligence](04_intelligence/11_mission_control_intelligence.md)** — Operator intelligence surface, supervisor snapshots (note: Operator Brief panel removed Phase 8). _(verified 2026-06-12)_
+- **[Mission Control Intelligence](04_intelligence/11_mission_control_intelligence.md)** — Operator intelligence surface, supervisor snapshots (note: Operator Brief panel removed Phase 8). _(verified 2026-06-22)_
 - **[Discord Intelligence](04_intelligence/12_discord_intelligence.md)** — Discord message pipeline, triage, calendar sync (gws materialization). _(verified 2026-06-12)_
-- **[Insight Pipeline Build Plan (Phases 0.5/4/5/6)](04_intelligence/13_insight_pipeline_build_plan.md)** — Living build/status plan: close the brief->digest email gap, digest dedup+template, feedback/index verify, gated legacy deletion. _(verified 2026-06-22)_
+- **[Insight Pipeline Build Plan (Phases 0.5/4/5/6)](04_intelligence/13_insight_pipeline_build_plan.md)** `[archived]` — Living build/status plan: close the brief->digest email gap, digest dedup+template, feedback/index verify, gated legacy deletion. _(verified 2026-06-22)_
 - **[Intelligence Model Tiering by Process](04_intelligence/14_model_tiering_by_process.md)** — Per-process registry of which GLM tier each inference call uses and why (air/turbo/flagship), the decision rubric, and the 2026-06-10 429-burst remediation. _(verified 2026-06-14)_
-- **["ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign"](04_intelligence/15_demo_tutorial_pipeline_adr.md)** — Brief→Tutorial→Demo ladder; demo = runnable mini-app of the video's capability (native stack or Claude Agent SDK); gated auto-build (~10/day) _(verified 2026-06-15)_
+- **["ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign"](04_intelligence/15_demo_tutorial_pipeline_adr.md)** `[draft]` — Brief→Tutorial→Demo ladder; demo = runnable mini-app of the video's capability (native stack or Claude Agent SDK); gated auto-build (~10/day) _(verified 2026-06-15)_
 
 ## 05_channels
 
@@ -86,9 +86,9 @@ _Email/AgentMail, webhooks, telegram, discord ops, web-ui communication_
 _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environments, networking_
 
 - **[Secrets & Infisical](06_platform/01_secrets_and_infisical.md)** — Infisical as SSOT, initialize_runtime_secrets, bootstrap-identity-key immutability (overwrite=True but identity preserved), env rendering, dev mirrors prod. _(verified 2026-06-17)_
-- **[Runtime Bootstrap & Profiles](06_platform/02_runtime_bootstrap_and_profiles.md)** — Runtime stage resolution {development,staging,local,production}, deployment profiles, factory role policy, machine identity. _(verified 2026-06-15)_
-- **[Identity & Auth](06_platform/03_identity_and_auth.md)** — Identity registry/resolver, email recipient resolution, ops auth (JWT + legacy token), dashboard auth (cookie+HMAC), three trust surfaces. _(verified 2026-06-15)_
-- **[Deployment & CI/CD](06_platform/04_deployment_and_cicd.md)** — Branch model (any→PR→main→deploy; develop retired; feature/latest2 retired), pr-validate gates, auto-merge allowlist + PAT, concurrency guard, healthcheck gates, paths-ignore, crashloop abort. _(verified 2026-06-17)_
+- **[Runtime Bootstrap & Profiles](06_platform/02_runtime_bootstrap_and_profiles.md)** — Runtime stage resolution {development,staging,local,production}, deployment profiles, factory role policy, machine identity. _(verified 2026-06-22)_
+- **[Identity & Auth](06_platform/03_identity_and_auth.md)** — Identity registry/resolver, email recipient resolution, ops auth (JWT + legacy token), dashboard auth (cookie+HMAC), three trust surfaces. _(verified 2026-06-22)_
+- **[Deployment & CI/CD](06_platform/04_deployment_and_cicd.md)** — Branch model (any→PR→main→deploy; develop retired; feature/latest2 retired), pr-validate gates, auto-merge allowlist + PAT, concurrency guard, healthcheck gates, paths-ignore, crashloop abort. _(verified 2026-06-22)_
 - **[Execution Environments](06_platform/05_environments.md)** — Three Claude execution profiles (interactive Max / autonomous ZAI / Cody Anthropic-default-since-2026-05-11), local dev (just dev), demo execution, model routing. _(verified 2026-06-16)_
 - **["Networking: Tailscale, Residential Proxy, SSHFS"](06_platform/06_networking_tailscale_proxy_sshfs.md)** — Tailscale (uaonvps MagicDNS vs srv1360701 raw hostname), residential proxy (DataImpulse default/Webshare failover, VPS-only), SSHFS cross-machine mount. _(verified 2026-06-21)_
 - **[Claude Max OAuth Credentials (CLAUDE_CODE_OAUTH_TOKEN)](06_platform/07_claude_max_oauth_credentials.md)** — CLAUDE_CODE_OAUTH_TOKEN in Infisical is the SSOT for Cody-on-Anthropic / demo builds; refresh runbook + gotchas. _(verified 2026-06-11)_
@@ -118,7 +118,7 @@ _Operating playbook, verification rules, dormancy, VPS recovery, incident patter
 - **[VPS Recovery & Security](08_operations/04_vps_recovery_and_security.md)** — Watchdog/timers, service recovery, host hardening, daily ops. _(verified 2026-06-22)_
 - **[Incident Response Patterns](08_operations/05_incident_response_patterns.md)** — Recurring incident classes + recovery: rogue autonomous branch, .venv corruption, gateway wedge, event-loop starvation. _(verified 2026-06-22)_
 - **[Self-Improving CLAUDE.md Stop Hook](08_operations/06_self_improving_claude_md_hook.md)** — Desktop-local Stop hook that reflects on each session and drafts CLAUDE.md improvement proposals for review. _(verified 2026-06-19)_
-- **[Proactive-Lane Runaway Protection](08_operations/07_proactive_lane_runaway_protection.md)** — Fan-out/volume/rescue-storm anomaly invariants that catch a proactive lane going LOUD (the 2026-06-14 nightly-wiki runaway), plus the deferred universal-dispatch-guardrail design. _(verified 2026-06-14)_
+- **[Proactive-Lane Runaway Protection](08_operations/07_proactive_lane_runaway_protection.md)** — Fan-out/volume/rescue-storm anomaly invariants that catch a proactive lane going LOUD (the 2026-06-14 nightly-wiki runaway), plus the deferred universal-dispatch-guardrail design. _(verified 2026-06-22)_
 
 ---
 

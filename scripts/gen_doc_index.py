@@ -29,7 +29,7 @@ META_ORDER = [
     ("00_PLATFORM_STATUS_REGISTRY.md",
      "**START HERE** — the single \"what do we have and is it live?\" index "
      "(subsystems, crons/timers, intel sources, VPs, MCP servers, channels) with code-sourced status."),
-    ("00_DOCUMENTATION_REFACTOR_PLAN.md", "How and why the docs were rebuilt (code-first)."),
+    ("00_DOCUMENTATION_REFACTOR_PLAN.md", "_(historical 2026-05-29 rebuild artifact)_ — how and why the docs were rebuilt (code-first)."),
     ("01_TAXONOMY.md", "Category structure and the canonical doc set."),
     ("02_GOTCHA_INVENTORY.md", "Preserved operational/rationale facts not visible in code."),
     ("GLOSSARY.md", "Project-specific terminology."),
@@ -96,11 +96,16 @@ def build_index() -> str:
             rel = d["filename"]
             title = fm.get("title", d["title"])
             lv = fm.get("last_verified", "")
+            # Surface non-active doc lifecycle (archived/draft) so the index doesn't
+            # read as if every doc is equally current. Per-subsystem LIVE/PARKED/RETIRED
+            # status lives in 00_PLATFORM_STATUS_REGISTRY.md (the START-HERE entry).
+            status = fm.get("status", "")
+            status_tag = f" `[{status}]`" if status and status != "active" else ""
             scope = d.get("scope", "")
             # trim scope to one line
             scope = re.split(r"(?<=[.)])\s", scope)[0] if scope else ""
             suffix = f" _(verified {lv})_" if lv else ""
-            lines.append(f"- **[{title}]({rel})** — {scope}{suffix}")
+            lines.append(f"- **[{title}]({rel})**{status_tag} — {scope}{suffix}")
         lines.append("")
 
     lines.append("---")

@@ -65,6 +65,35 @@ The routing gate lives in `priority_dispatcher.py::_pick_general_target` +
 [Simone-First Orchestration](02_simone_first_orchestration.md) for the dispatch
 matrix.
 
+The concurrency model below: ATLAS holds its own slot (per-instance cap 1) and
+the **second slot is shared** between CODIE and HOMER under a mutual exclusion,
+so at most two VP missions run at once.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    state "Slot 1 — ATLAS (vp.general.primary)" as A {
+        [*] --> Atlas_idle
+        Atlas_idle --> Atlas_running: general pool / ATLAS pin
+        Atlas_running --> Atlas_idle: finalize
+    }
+    state "Slot 2 — shared (mutually exclusive)" as B {
+        [*] --> Slot2_idle
+        Slot2_idle --> Codie_running: CODIE work\n(defers if HOMER running)
+        Slot2_idle --> Homer_running: pool overflow\nONLY if ATLAS full AND CODIE idle
+        Codie_running --> Slot2_idle: finalize
+        Homer_running --> Slot2_idle: finalize
+    }
+    note right of B
+        Caps: UA_MAX_CONCURRENT_VP_GENERAL=2 (pool), per-instance 1;
+        UA_MAX_CONCURRENT_VP_CODER=1.
+        Gate keys on LIVE vp_missions RUNNING counts
+        (_live_vp_active_counts), not the assignment snapshot.
+        CODIE defers when homer_used>0; HOMER spills only when
+        coder_used==0 ⇒ peak ≤ 2 running.
+    end note
+```
+
 The lifecycle is a durable, SQLite-backed work queue (`vp_missions` table in
 `vp_state.db`). A producer (Simone via an agent tool, the dashboard, the Redis
 bridge, or `CoderVPRuntime`) **queues** a mission row; a long-running

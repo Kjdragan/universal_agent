@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/scripts/csi_demo_triage_apply_policy.py
   - src/universal_agent/scripts/intel_auto_promoter_cron.py
   - src/universal_agent/services/claude_code_intel_replay.py
-last_verified: 2026-06-17
+last_verified: 2026-06-22
 ---
 
 # Demo Triage
@@ -24,6 +24,26 @@ Demo triage is the **single source of truth for every Claude Code intel (CSI) ac
 The core invariant, stated in `csi_demo_triage.py`'s module docstring: after this subsystem landed, the **only** sanctioned path from "a tweet was identified as tier ≥ 3" to "a Cody/Atlas task was created" is either the operator's Approve click in the dashboard flyout, or the auto-promoter cron (a controlled, capped, opt-out automation of that same click).
 
 Candidates have three states: `pending`, `approved`, `dismissed` (`csi_demo_triage.py::STATE_PENDING` / `STATE_APPROVED` / `STATE_DISMISSED`).
+
+The funnel — from a raw CSI signal down to a Cody build — narrows at every stage; the only forward edge through the approval gate is `csi_demo_triage.py::approve_candidate`, driven either by the operator's click or by the capped auto-promoter:
+
+```mermaid
+flowchart TD
+    A["CSI replay packet<br/>(actions_refined.json)"] --> B{"tier &gt;= 3?"}
+    B -->|no| X1["dropped at discovery"]
+    B -->|yes| C[("demo_triage_candidates<br/>state=pending")]
+    C --> D["ranker cron: run_ranking()<br/>GLM score 0-10"]
+    D --> E[("pending + ranking_score")]
+    E --> G{"approval gate<br/>approve_candidate()"}
+    E -.->|"operator click /triage/dismiss<br/>or stale-tier-3 auto-policy"| X2["state=dismissed"]
+    F["operator: Approve click<br/>POST /triage/{id}/approve"] --> G
+    H["intel_auto_promoter cron<br/>score &gt;= 7.5, daily cap 2"] --> G
+    G --> I[("state=approved + task_id")]
+    I --> J["task_hub.upsert_item()<br/>_build_followup_task_payload<br/>(cody_scaffold_request / Atlas)"]
+    J --> K["Cody / Atlas build"]
+```
+
+> This funnel is the tier-3+ X/CSI-intel lane. The separate `tutorial_build` lane (YouTube videos → `proactive_tutorial_builds.py::queue_tutorial_build_task`, gated by its own `UA_DEMO_BUILD_DAILY_CEILING` and `approve_pending_tutorial_build`) also terminates in a Cody demo build, but it does **not** flow through `approve_candidate` or the triage store — see `15_demo_tutorial_pipeline_adr.md`.
 
 ## Storage
 

@@ -23,8 +23,10 @@ Phase plan:
   docs/proactive_signals/csi_intelligence_pass_implementation_plan_2026-05-07.md
 
 Hard rules:
-  - Model: GLM-5.1 via ``resolve_opus()``. GLM-5.1 has no thinking mode;
-    do NOT pass ``thinking={...}`` or ``reasoning_effort``.
+  - Model: opus-tier (``glm-5.2`` since 2026-06-16) via ``resolve_opus()``. glm-5.2
+    defaults thinking ON (10-24x the tokens), so the structured call explicitly passes
+    ``thinking={"type": "disabled"}`` to keep this cheap pass cheap; do NOT pass
+    ``reasoning_effort``.
   - Quality comes from prompt + context + structured output via tool_use,
     NOT from a reasoning parameter.
   - Code never makes meaning decisions. Stopword filters / URL-fragment
@@ -311,7 +313,7 @@ def _call_llm_structured(
     max_retries: int = 2,
     max_output_tokens: int = 4096,
 ) -> dict[str, Any]:
-    """Call GLM-5.1 via the Anthropic SDK with tool_use for structured output.
+    """Call the opus-tier model (glm-5.2) via the Anthropic SDK with tool_use for structured output.
 
     Returns the tool's input dict (the VaultDelta JSON the model emitted).
     Mirrors ``csi_url_judge._call_llm_structured`` but allows a larger
@@ -341,12 +343,15 @@ def _call_llm_structured(
     for attempt in range(max_retries):
         try:
             response = client.messages.create(
-                model=resolve_opus(),  # → glm-5.1 via ZAI map
+                model=resolve_opus(),  # → glm-5.2 (opus tier) via ZAI map
                 max_tokens=max_output_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user}],
                 tools=[tool],
                 tool_choice={"type": "tool", "name": tool["name"]},
+                # glm-5.2 defaults thinking ON (10-24x tokens); this is a cheap
+                # structured-output pass with forced tool_choice, so keep it disabled.
+                thinking={"type": "disabled"},
             )
             for block in response.content:
                 if hasattr(block, "type") and block.type == "tool_use":

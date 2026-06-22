@@ -112,6 +112,37 @@ flowchart TD
     WAKE --> LOOP[_process_due_queue_items: admission dispatch + triage routing]
 ```
 
+The lifecycle of a single inbound message — from arrival through pre-triage,
+trust classification, task materialization, and final routing — moves through
+these states:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Inbound : WS event / poll
+    Inbound --> PreTriage : _handle_inbound_email
+    state "PreTriage<br/>(Gate 0/1 origin + Gate 2 injection scan)" as PreTriage
+    PreTriage --> Quarantined : gate hit (blocklist / unknown @agentmail.to / injection)
+    PreTriage --> Trusted : clean
+    state "Trusted / ingested<br/>(trusted_operator | self_send | external)" as Trusted
+    Quarantined --> [*] : _pre_triage_quarantine (held, no dispatch)
+    Trusted --> TaskMaterialized : EmailTaskBridge.materialize (source_kind=email, one task/thread)
+    state "TaskMaterialized<br/>(status open, agent-codie label if VP target)" as TaskMaterialized
+    TaskMaterialized --> TrustedInboxQueue : _queue_insert_inbound (agentmail_inbox_queue)
+    state "TrustedInboxQueue<br/>(_process_due_queue_items: admission + triage routing)" as TrustedInboxQueue
+    TrustedInboxQueue --> DispatchedToTodo : trusted + actionable (priority dispatch into ToDo lane)
+    TrustedInboxQueue --> ReviewRequired : untrusted + clean (Simone must approve)
+    TrustedInboxQueue --> CompletedNonAction : trusted + fyi/social/status_update
+    TrustedInboxQueue --> QueueQuarantined : triage routing_decision = quarantine
+    DispatchedToTodo --> [*]
+    ReviewRequired --> [*]
+    CompletedNonAction --> [*]
+    QueueQuarantined --> [*]
+```
+
+> Outbound sends (digests, reports, replies) are a separate path; when AgentMail
+> returns HTTP 429 the [Gmail (gws CLI) 429 fallback](#gmail-gws-cli-429-fallback)
+> retransmits via the gws-authenticated account.
+
 ### 1. Ingress (`_handle_inbound_email`)
 
 Both the WebSocket (`_ws_connect_and_listen` → on `MessageReceivedEvent`) and

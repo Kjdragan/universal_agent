@@ -147,6 +147,42 @@ def _get_watchdog_block_or_empty() -> str:
         return ""
 
 
+def _get_activity_inventory_block_or_empty() -> str:
+    """Return the fleet activity/utilization block, or "" on kill switch / failure.
+
+    Folds the retired ``6df`` "24 Hour Update" daily cron's intent (last-24h
+    activity / utilization / opportunities) into the briefing, sourced from the
+    canonical fleet-liveness inventory
+    (``services/proactive_activity_report.build_activity_inventory``) that also
+    leads the 3x-daily proactive report. Kill switch:
+    ``UA_BRIEFING_ACTIVITY_BLOCK_ENABLED=0``. Any failure is swallowed — the
+    briefing must never break because this query did.
+    """
+    if os.getenv("UA_BRIEFING_ACTIVITY_BLOCK_ENABLED", "1").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return ""
+    try:
+        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+        from universal_agent.services.proactive_activity_report import (
+            build_activity_inventory,
+            render_activity_section,
+        )
+
+        with connect_runtime_db(get_activity_db_path()) as conn:
+            inventory = build_activity_inventory(conn)
+        section = render_activity_section(inventory)
+        if not section.strip():
+            return ""
+        return "## Fleet Activity & Utilization (last 24h)\n\n" + section
+    except Exception as exc:  # noqa: BLE001 — never let this break the briefing
+        logger.warning("Activity-inventory briefing block helper crashed: %s", exc)
+        return ""
+
+
 def _build_atlas_briefs_block(briefs: list[dict[str, str]]) -> str:
     """Render the markdown block for the morning briefing.
 
@@ -369,6 +405,7 @@ def _build_objective(
     today: str,
     triage_block: str = "",
     watchdog_block: str = "",
+    activity_block: str = "",
     atlas_block: str = "",
     pending_artifacts_block: str = "",
     hourly_recap_block: str = "",
@@ -413,6 +450,22 @@ def _build_objective(
             "name the recovered finding-id(s) and note they are no longer active. If the watchdog "
             "reports `overall: ok`, the backlog is empty, AND no in-window-recovered criticals are "
             "listed, say so in one line and move on."
+        )
+
+    # 2026-06-22: folds the retired `6df` "24 Hour Update" daily cron's intent
+    # (last-24h activity / utilization / opportunities) into the briefing, via the
+    # canonical fleet-liveness inventory (proactive_activity_report).
+    activity_section = ""
+    activity_instructions = ""
+    if activity_block:
+        activity_section = f"\n\n{activity_block}\n"
+        activity_instructions = (
+            "\n- **Include a 'Fleet Activity & Utilization' section** from the activity-inventory "
+            "block: summarize what ran across the fleet in the last 24h and call out anything "
+            "⚠️ degraded / ⏸️ paused / 🌑 dark as the utilization gaps. Then name 1-2 concrete "
+            "opportunities where idle capacity or a stalled lane suggests an action for Kevin. "
+            "This replaces the retired daily '24 Hour Update' report — keep it to a tight scan, "
+            "not an exhaustive dump."
         )
 
     atlas_section = ""
@@ -483,13 +536,13 @@ Here is the external Nightly Wiki Proactive Generation output (if any):
 ```markdown
 {wiki_content}
 ```
-{watchdog_section}{triage_section}{atlas_section}{hourly_recap_section}{honorable_mention_section}{pending_artifacts_section}{hn_section}
+{watchdog_section}{activity_section}{triage_section}{atlas_section}{hourly_recap_section}{honorable_mention_section}{pending_artifacts_section}{hn_section}
 Instructions:
 - Summarize tasks completed, attempted, and failed.
 - Include links/paths to any artifacts produced.
 - MUST explicitly include a "Latest Proactive Knowledge Base Additions" section referencing the Nightly Wiki external paths and files if any are provided.
 - Highlight any items requiring user decisions.
-- If there are data quality warnings, mention them.{watchdog_instructions}{triage_instructions}{atlas_instructions}{pending_artifacts_instructions}{hn_instructions}
+- If there are data quality warnings, mention them.{watchdog_instructions}{activity_instructions}{triage_instructions}{atlas_instructions}{pending_artifacts_instructions}{hn_instructions}
 
 Write a concise markdown report to '{artifacts_dir}/autonomous-briefings/{today}/DAILY_BRIEFING.md'.
 Make sure to provide a short completion message suitable for a dashboard notification.
@@ -814,6 +867,14 @@ async def main():
     else:
         logger.info("Watchdog briefing block omitted (kill switch / healthy state / no findings)")
 
+    # Fleet activity & utilization (2026-06-22): folds the retired `6df` "24 Hour
+    # Update" daily report into the briefing via the canonical activity inventory.
+    activity_block = _get_activity_inventory_block_or_empty()
+    if activity_block:
+        logger.info("Activity-inventory briefing block included (~%d chars)", len(activity_block))
+    else:
+        logger.info("Activity-inventory briefing block omitted (kill switch / unavailable)")
+
     # ATLAS insight briefs (2026-05-22): surface the parked insight_brief_task
     # artifacts so the operator can decide whether to promote, deepen, or close
     # them. Marks each brief delivery_state='digest_queued' so it isn't re-listed
@@ -871,6 +932,7 @@ async def main():
         today=today,
         triage_block=triage_block,
         watchdog_block=watchdog_block,
+        activity_block=activity_block,
         atlas_block=atlas_block,
         pending_artifacts_block=pending_artifacts_block,
         hourly_recap_block=hourly_recap_block,
