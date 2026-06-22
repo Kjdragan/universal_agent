@@ -20,7 +20,7 @@ def _fake_systemctl(tmp_path: Path, restart_log: Path) -> Path:
     fake.write_text(
         "#!/usr/bin/env bash\n"
         'case "$1" in\n'
-        "  is-active) echo inactive; exit 0;;\n"
+        '  is-active) echo "${ACTIVE_STATE:-inactive}"; exit 0;;\n'
         '  is-enabled) echo "${ENABLED_STATE:-enabled}"; exit 0;;\n'
         '  restart) echo "$2" >> "$RESTART_LOG"; exit 0;;\n'
         "  reset-failed) exit 0;;\n"
@@ -32,7 +32,7 @@ def _fake_systemctl(tmp_path: Path, restart_log: Path) -> Path:
     return fake
 
 
-def _run_cycle(tmp_path: Path, state_dir: Path, fake_systemctl: Path, restart_log: Path, max_per_hour: int, enabled_state: str = "enabled"):
+def _run_cycle(tmp_path: Path, state_dir: Path, fake_systemctl: Path, restart_log: Path, max_per_hour: int, enabled_state: str = "enabled", active_state: str = "inactive"):
     env = dict(os.environ)
     env.update(
         {
@@ -44,6 +44,7 @@ def _run_cycle(tmp_path: Path, state_dir: Path, fake_systemctl: Path, restart_lo
             "UA_WATCHDOG_MAX_RESTARTS_PER_HOUR": str(max_per_hour),
             "RESTART_LOG": str(restart_log),
             "ENABLED_STATE": enabled_state,
+            "ACTIVE_STATE": active_state,
         }
     )
     return subprocess.run(
@@ -71,6 +72,34 @@ def test_watchdog_skips_disabled_unit(tmp_path):
     assert proc2.returncode == 0, proc2.stderr
     restarts2 = [ln for ln in restart_log.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert restarts2 == ["fakesvc"], f"enabled inactive unit must be restarted, got {restarts2}"
+
+
+def test_watchdog_skips_transient_states(tmp_path):
+    """A unit caught mid-(re)start in a TRANSIENT state (`deactivating`,
+    `activating`, `reloading`) is left alone — not force-restarted. This was the
+    root cause of the recurring "[WARNING] Watchdog restarted" emails: the 30s
+    watchdog kept catching the autonomous-runtime/sweeper workers during their
+    slow graceful drain (`deactivating`) on deploy restarts and redundantly
+    restarting them (reason was always `inactive:deactivating`)."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    restart_log = tmp_path / "restarts.log"
+    restart_log.write_text("", encoding="utf-8")
+    fake = _fake_systemctl(tmp_path, restart_log)
+
+    for transient in ("deactivating", "activating", "reloading"):
+        proc = _run_cycle(tmp_path, state_dir, fake, restart_log, max_per_hour=6, active_state=transient)
+        assert proc.returncode == 0, proc.stderr
+        restarts = [ln for ln in restart_log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        assert restarts == [], f"transient state {transient!r} must NOT trigger a restart, got {restarts}"
+        assert f"state=transient:{transient} action=skip" in proc.stdout
+
+    # Sanity: a genuinely-down unit (`failed`) IS still restarted — the dead-unit
+    # backstop is preserved, only the transient flap is suppressed.
+    proc = _run_cycle(tmp_path, state_dir, fake, restart_log, max_per_hour=6, active_state="failed")
+    assert proc.returncode == 0, proc.stderr
+    restarts = [ln for ln in restart_log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert restarts == ["fakesvc"], f"failed unit must be restarted, got {restarts}"
 
 
 def test_watchdog_rate_limits_restarts_and_backs_off(tmp_path):

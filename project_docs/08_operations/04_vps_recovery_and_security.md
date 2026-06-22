@@ -103,9 +103,22 @@ Per cycle, for each configured service (`check_service`):
    e.g. an autonomous-runtime-split rollback `stop`+`disable`s the worker, and
    resurrecting it would re-enter split mode. All always-on monitored units report
    `enabled`, so this only ever skips a deliberately-off unit.
-1. **Active-state check** — `systemctl is-active`. If not `active`, restart
-   immediately (`restart_service`) and reset the fail counter. No threshold for
-   the inactive case.
+1. **Active-state check** — `systemctl is-active`.
+   - **Transient states are skipped.** `activating`, `deactivating`, and
+     `reloading` are states a *healthy* unit passes through during a normal
+     (re)start, so the watchdog leaves the unit alone (logs
+     `state=transient:<state> action=skip`). This is the fix for the recurring
+     `[WARNING] Watchdog restarted: …` flap (2026-06-22): the 30s watchdog kept
+     catching the `autonomous-runtime` and `mission-control-sweeper` workers
+     mid-**graceful-drain** (they can sit in `deactivating` for tens of seconds —
+     the sweeper was seen taking ~62s) on the frequent deploy restarts, and
+     redundantly `systemctl restart`-ing them — every alert's reason was
+     `inactive:deactivating`, never a real crash. A genuinely-stuck unit still
+     settles into `failed`/`inactive` (after `Restart=always` is exhausted) and
+     gets restarted on the next tick, so the dead-unit backstop is preserved.
+   - Otherwise, if not `active` (i.e. `failed`/`inactive`/`unknown`), restart
+     immediately (`restart_service`) and reset the fail counter. No threshold for
+     the inactive case.
 2. **Heartbeat-file check (preferred)** — if a heartbeat file is configured, the
    watchdog reads its freshness (`is_heartbeat_fresh`). Fresh → reset counter.
    Stale → increment a per-service consecutive-failure counter; restart once it
