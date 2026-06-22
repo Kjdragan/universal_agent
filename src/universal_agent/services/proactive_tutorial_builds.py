@@ -1254,9 +1254,11 @@ def classify_and_gate_gpu_demo(
             task_hub.upsert_item(conn, updated)
             conn.commit()
 
-        # Fire-and-forget approval email (async helper run in a new event loop)
+        # Send the approval email. Run the coroutine to completion whether or not
+        # the caller is already inside an event loop (the sweep runs from sync
+        # script contexts today, but be robust to an async caller too).
         try:
-            asyncio.get_event_loop().run_until_complete(
+            _run_coro_blocking(
                 _send_gpu_demo_approval_email(
                     task_id=task_id,
                     candidate=candidate,
@@ -1271,6 +1273,23 @@ def classify_and_gate_gpu_demo(
             )
 
     return result
+
+
+def _run_coro_blocking(coro):
+    """Run a coroutine to completion regardless of the caller's loop context.
+
+    No running loop (the sync sweep-script case) -> asyncio.run. Already inside a
+    running loop -> run in a dedicated worker thread so we never hit
+    'event loop is already running'.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(lambda: asyncio.run(coro)).result()
 
 
 async def _send_gpu_demo_approval_email(
@@ -1293,9 +1312,16 @@ async def _send_gpu_demo_approval_email(
         _acquire_agentmail_service,
     )
 
+    # The approve link must reach the always-on gateway AND be clickable on the
+    # operator's devices. UA_PUBLIC_BASE_URL/FRONTEND_URL are not staged in prod
+    # Infisical, so default to the tailnet gateway host (same host the scratchpad
+    # uses): it serves the /api/v1/gpu_demo route and resolves on every operator
+    # device. Override with UA_GPU_DEMO_APPROVAL_BASE_URL when needed.
     base = (
-        os.getenv("UA_PUBLIC_BASE_URL", "")
+        os.getenv("UA_GPU_DEMO_APPROVAL_BASE_URL", "")
+        or os.getenv("UA_PUBLIC_BASE_URL", "")
         or os.getenv("FRONTEND_URL", "")
+        or "https://uaonvps.taildcc090.ts.net"
     ).strip().rstrip("/")
 
     approve_token = sign_gpu_demo_token(task_id, "approve") if base else ""
