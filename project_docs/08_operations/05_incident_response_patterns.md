@@ -15,7 +15,8 @@ code_paths:
   - "scripts/deploy_validate_runtime.sh"
   - "scripts/check_crashloop.sh"
   - "scripts/check_heartbeat_liveness.py"
-last_verified: 2026-06-13
+  - "src/universal_agent/loop_control.py"
+last_verified: 2026-06-22
 ---
 
 # Incident Response Patterns
@@ -93,8 +94,11 @@ same tree, bypassing the PR + `pr-validate.yml` gate.
 
 ### Recovery sequence (gates matter — each one prevented a real failure)
 
-This recovery is **operator-driven** for the `sudo` steps. The Claude session cannot run
-`sudo` non-interactively. Do the phases strictly in order.
+An agent session **can** run every step here itself: `ua` has passwordless sudo over
+`ssh ua@uaonvps` (`/etc/sudoers.d/ua-nopasswd`, since 2026-06-01 — see the VPS access
+posture section of [VPS Recovery & Security](04_vps_recovery_and_security.md)), so the
+`sudo systemctl …` steps below do not require a separate root operator. Do the phases
+strictly in order regardless of who runs them.
 
 1. **Capture before reset.** Push the rogue branch and commit any uncommitted agent edits to
    the remote *first*, so the work is recoverable via a normal PR later. If you reset first,
@@ -112,7 +116,7 @@ This recovery is **operator-driven** for the `sudo` steps. The Claude session ca
    reconciler.
 
    ```bash
-   sudo systemctl stop universal-agent-gateway     # operator, real TTY
+   sudo systemctl stop universal-agent-gateway     # runs directly as ua (passwordless sudo)
    ```
 
 3. **Park (not cancel) the mission row, with services down.** See the gotcha below — `cancel`
@@ -132,8 +136,9 @@ This recovery is **operator-driven** for the `sudo` steps. The Claude session ca
    python3 -c "import ast; [ast.parse(open(f).read()) for f in [...cron-path files...]]"
    ```
 
-5. **Operator restarts services; then fix the branch label and verify.** The local `main` ref
-   can be far behind `origin/main` (was 97 commits behind in the 2026-05-07 incident).
+5. **Restart services (`sudo systemctl restart …`, directly as `ua`); then fix the branch
+   label and verify.** The local `main` ref can be far behind `origin/main` (was 97 commits
+   behind in the 2026-05-07 incident).
 
    ```bash
    git checkout main && git pull --ff-only
@@ -355,11 +360,30 @@ return should_run_loop("daemon_sessions", prod_default=heartbeat_enabled)
 - Default daemon agent is **Simone only** (`DEFAULT_DAEMON_AGENTS = ("simone",)`); Atlas and
   Cody are on-demand, no proactive polling. Override with `UA_DAEMON_SESSION_AGENTS`.
 
+### The durable fix — autonomous-runtime split (LIVE since 2026-06-19)
+
+The kill switch is incident mitigation, not steady state — and the proper fix ("move SDK
+iteration off the public HTTP loop") **has now shipped**. In production
+`UA_AUTONOMOUS_RUNTIME_MODE=split` (`loop_control.py::autonomous_runtime_mode`), and a
+**second `gateway_server` process** — the autonomous worker, `UA_GATEWAY_ROLE=autonomous_worker`
+on `:8092` (default `UA_AUTONOMOUS_WORKER_PORT`), unit
+`deployment/systemd/universal-agent-autonomous-runtime.service` — hosts **all** the autonomous
+loops (heartbeat / daemon sessions / todo-dispatch / cron / idle-dispatch / startup recovery).
+`loop_control.py::should_host_autonomous_runtime` makes the two processes mutually exclusive:
+in split mode the public gateway sheds the loops and only the worker runs them, so a long
+in-process Claude SDK iteration can no longer starve the HTTP event loop that serves the
+dashboard. The public `:8002` gateway stayed unstarved across the cutover. PRs #1084 / #1085 /
+#1088 / #1091. Rollback: set `UA_AUTONOMOUS_RUNTIME_MODE=in_process`, restart the gateway, and
+stop the worker (its watchdog spec is `active-state only` precisely so it isn't false-restarted
+into split mode — see
+[VPS Recovery & Security](04_vps_recovery_and_security.md)).
+
 ### Gotcha
 
-The proper fix is to move SDK iteration out-of-process (or off the loop), not to leave the
-kill switch flipped. Disabling daemon sessions stops Simone's autonomous heartbeat work, so
-it's an incident-mitigation lever, not a steady state.
+Disabling daemon sessions (`UA_DAEMON_SESSIONS_ENABLED=0`) stops Simone's autonomous heartbeat
+work entirely, so it is an incident-mitigation lever, not a steady state — with the split live,
+the kill switch should rarely be needed for starvation. Live/paused status of every autonomous
+loop and lane is tracked in the [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md).
 
 ### Detecting a silent heartbeat
 
@@ -553,5 +577,5 @@ above) instead of falling back to the shared `daemon_simone_todo` session id.
 4. If wedged: check `/proc/$pid/environ` for `SESSION_API_TOKEN`; check lifespan sweep logs.
 5. If recovering Task Hub state: **park, never cancel**; stop the gateway first.
 6. Capture agent work before any `git reset --hard`.
-7. After recovery: parse-check, restart (operator/sudo), then a **real** verification fire —
-   not just a passing parse check.
+7. After recovery: parse-check, restart (`sudo systemctl restart …`, directly as `ua`), then
+   a **real** verification fire — not just a passing parse check.

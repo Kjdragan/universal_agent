@@ -1,6 +1,6 @@
 ---
 title: Insight Pipeline Build Plan (Phases 0.5/4/5/6)
-status: active
+status: archived
 canonical: false
 subsystem: intel-proactive
 code_paths:
@@ -8,8 +8,14 @@ code_paths:
   - src/universal_agent/scripts/hourly_intel_digest_cron.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/services/proactive_convergence.py
-last_verified: 2026-06-18
+last_verified: 2026-06-22
 ---
+
+> **COMPLETED — historical build plan, retained for context.** Phases 0.5 / 4 / 5
+> shipped + deployed; Phase 6 (legacy deletion) was cleared and executed. This is
+> a point-in-time plan, **not** a description of current behavior — for the live
+> system see the canonical [Proactive Pipeline](10_proactive_pipeline.md) doc and
+> the [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md).
 
 # Build Plan — Insight Pipeline Phases 0.5 / 4 / 5 / 6
 
@@ -294,18 +300,25 @@ briefs authoring, digest emailing (Phase 0.5 closed), no event-loop regressions.
 >    docstring remains. Nothing to delete.
 > 2. `proactive_brief_scoring_log` is **NOT dead** — written by the Phase-5
 >    feedback endpoint (`gateway_server.py::briefs_feedback_get`), owned by
->    `proactive_scoring_log.py`, read by the (enabled) `insight_scoring_health`
->    weekly email + `briefings_agent`. **Do not drop.**
+>    `proactive_scoring_log.py`, read by `briefings_agent`. **Do not drop.**
+>    (It was *also* read by the `insight_scoring_health` weekly email, now
+>    **RETIRED** — see the note below.)
 >    `insight_brief_task` / `convergence_brief_task` are **artifact_type strings**,
 >    not tables. The "two gateway hand-trigger endpoints" no longer exist on main.
 >
 > **DONE (this PR):** dropped the genuinely-dead `proactive_convergence_events`
 > table — removed its `CREATE TABLE`/index from `proactive_convergence.py::ensure_schema`,
 > archived the prod table (2,525 historical rows, zero writers/readers) to a dump,
-> and `DROP`-ped it. **DEFERRED (separate, operator-scoped):** retiring the legacy
-> per-insight scorer cluster — `hourly_insight_email` (disabled) + `insight_scoring_health`
-> (ENABLED weekly email) + the `briefings_agent` "ATLAS insight briefs" block +
-> the legacy artifact_type strings. **NEVER:** `track_b_ideation_synthesis`,
+> and `DROP`-ped it.
+>
+> **UPDATE (2026-06-21, PR #1131): `insight_scoring_health` RETIRED.** The deferred
+> per-insight scorer cluster has since been partly cleaned up: `insight_scoring_health`
+> was a **zombie monitor** — its producer `hourly_insight_email` was deregistered in
+> #745, so it emailed a false "0 scored" every Sunday off a frozen scoring log. It was
+> removed from the migrated frozenset (`systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`),
+> its in-process registration deleted, and its timer + service units deleted from
+> `deployment/systemd/`. Still **DEFERRED:** the `briefings_agent` "ATLAS insight briefs"
+> block + the legacy artifact_type strings. **NEVER:** `track_b_ideation_synthesis`,
 > `proactive_brief_scoring_log`.
 
 **⚠️ VERIFY-EACH-SYMBOL-STILL-DEAD on origin/main before planning deletion** —
@@ -319,7 +332,7 @@ each before deleting. Candidate targets (confirm dead first):
 | `_detect_and_queue_convergence_async`, `create_convergence_brief_task`, `create_insight_brief_task` | `proactive_convergence.py` | grep callers |
 | two gateway hand-trigger endpoints | `gateway_server.py` | grep web-ui + curl callers |
 | ~~`proactive_convergence_events`~~ table | DB | ✅ **DROPPED 2026-06-03** (archived 2,525 rows first; zero writers/readers). `insight_brief_task`/`convergence_brief_task` = artifact_type strings, not tables. `proactive_brief_scoring_log` = **NOT dead, keep** (Phase-5 writer + enabled readers). |
-| dead surfaces: `hourly_insight_email` cron, `insight_scoring_health` weekly email, `briefings_agent` "ATLAS insight briefs" block | various | confirm unscheduled/unreferenced |
+| dead surfaces: `hourly_insight_email` cron, ~~`insight_scoring_health` weekly email~~ (**RETIRED 2026-06-21, PR #1131** — frozenset entry + units deleted), `briefings_agent` "ATLAS insight briefs" block | various | confirm unscheduled/unreferenced |
 
 | Field | Value |
 |---|---|

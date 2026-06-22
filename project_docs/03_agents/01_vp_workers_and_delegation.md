@@ -13,27 +13,37 @@ code_paths:
   - src/universal_agent/services/vp_failure_rescue.py
   - src/universal_agent/services/wiki_rescue_policy.py
   - src/universal_agent/services/wiki_rescue_driver.py
-last_verified: 2026-06-19
+last_verified: 2026-06-22
 ---
 
 # VP Workers & Delegation
+
+> **Live status:** the canonical per-component status (LIVE / parked / retired)
+> for all three VPs is tracked in the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) § 3.
 
 ## What this subsystem is
 
 A "VP" (Vice President) is an autonomous worker agent that executes a discrete
 **mission** in its own isolated workspace, separate from the Simone orchestrator
-that dispatched it. Two VPs are enabled by default; a third (HOMER) is
-opt-in:
+that dispatched it. **All three VPs are LIVE in production** — but only two are
+enabled by the *code default*; HOMER runs because it is explicitly opted in via
+`UA_VP_ENABLED_IDS`:
 
-| Registry ID | Display name | `client_kind` | `inference_mode` | Soul file | Workspace |
-|---|---|---|---|---|---|
-| `vp.coder.primary` | **CODIE** (a.k.a. "Cody") | `claude_code` | `anthropic` (Max) | `CODIE_SOUL.md` | per-mission, often a git worktree |
-| `vp.general.primary` | **ATLAS** | `claude_generalist` | `zai` | `ATLAS_SOUL.md` | per-mission directory |
-| `vp.general.secondary` | **HOMER** (opt-in) | `claude_generalist` | `zai` | `ATLAS_SOUL.md` (shared) | per-mission directory |
+| Registry ID | Display name | `client_kind` | `inference_mode` | Soul file | Workspace | Status |
+|---|---|---|---|---|---|---|
+| `vp.coder.primary` | **CODIE** (a.k.a. "Cody") | `claude_code` | `anthropic` (Max) | `CODIE_SOUL.md` | per-mission, often a git worktree | LIVE (default on) |
+| `vp.general.primary` | **ATLAS** | `claude_generalist` | `zai` | `ATLAS_SOUL.md` | per-mission directory | LIVE (default on) |
+| `vp.general.secondary` | **HOMER** | `claude_generalist` | `zai` | `ATLAS_SOUL.md` (shared) | per-mission directory | **LIVE in prod** (code default OFF; enabled via `UA_VP_ENABLED_IDS`) |
 
 These are defined in `vp/profiles.py::resolve_vp_profiles`. The enabled set is
-controlled by `UA_VP_ENABLED_IDS` (default `vp.coder.primary,vp.general.primary`);
-disabling one removes it from the dict so dispatch and the worker loop refuse it.
+controlled by `UA_VP_ENABLED_IDS`, read by `feature_flags.py::vp_enabled_ids`
+(code default tuple `vp.coder.primary,vp.general.primary` — HOMER is **not** in
+the default); disabling an id removes it from the dict so dispatch and the worker
+loop refuse it. **HOMER's `vp.general.secondary` is added to `UA_VP_ENABLED_IDS`
+in prod (Infisical/.env), so a third worker instance
+`universal-agent-vp-worker@vp.general.secondary` is currently running** even
+though it would be off on a bare code default.
 
 **HOMER** is an opportunistic SECOND general worker — a *capacity twin* of ATLAS
 (same `client_kind`, **shared `ATLAS_SOUL.md`**, ZAI inference), not a new

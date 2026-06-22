@@ -10,10 +10,15 @@ code_paths:
   - src/universal_agent/services/vp_failure_rescue.py
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/durable/state.py
-last_verified: 2026-06-14
+last_verified: 2026-06-22
 ---
 
 # Idle Dispatch & Goal Loop
+
+> **Live status:** the `/goal` two-phase runner is **wired and live** for
+> goal-eligible missions (gated by `UA_VP_GOAL_ENABLED`, default OFF, with a
+> per-task override). Canonical feature status is in the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md).
 
 This doc covers three related-but-distinct mechanisms that govern how
 autonomous work gets *started*, how a VP mission's *completion* is verified,
@@ -235,21 +240,40 @@ The authoritative end-to-end description lives in the demo-pipeline ADR
 the `/goal` evaluator model is documented in
 [`01_architecture/04_model_choice_and_resolution.md`](../01_architecture/04_model_choice_and_resolution.md).
 
-> [VERIFY: if a future PR wires `build_self_briefing_prompt` /
-> `read_goal_condition` into `worker_loop._execute_mission_logic` (a real
-> two-subprocess flow), update this section — the functions exist precisely
-> so that wiring is a small change.]
+**Wiring status (code-verified 2026-06-22).** The two-phase flow is **live** and
+branches inside the **CLI client**, not `worker_loop`:
+`claude_cli_client.py::run_mission` computes
+`goal_eligible = is_goal_eligible_mission(mission)` and, when eligible, dispatches
+to `claude_cli_client.py::_run_goal_loop_mission` instead of the single-pass
+`_execute_cli_session`. That runner calls **both**
+`self_briefing.py::build_self_briefing_prompt` (briefing turn) and
+`self_briefing.py::read_goal_condition` (work turn) — so the two functions are
+live-called, not docstring-only. `worker_loop.py::_execute_mission_logic` stays
+single-call into `run_mission`; the two subprocesses live one level down in the
+CLI client, and the worker's `COMPLETION.md` attestation guard is the final
+post-`run_mission` enforcement.
 
 ```mermaid
 sequenceDiagram
     participant WL as worker_loop._execute_mission_logic
     participant CLI as ClaudeCodeCLIClient.run_mission
+    participant GL as _run_goal_loop_mission
     participant Sub as claude CLI subprocess
     participant SB as self_briefing
     WL->>CLI: run_mission(mission, workspace_root)
-    CLI->>CLI: _build_cli_prompt (inlines self-brief + attest directives if goal_enabled)
-    CLI->>Sub: _execute_cli_session (single prompt, retry loop)
-    Sub-->>CLI: outcome(completed)
+    CLI->>SB: is_goal_eligible_mission(mission)?
+    alt goal-eligible (two-phase)
+        CLI->>GL: _run_goal_loop_mission
+        GL->>SB: build_self_briefing_prompt
+        GL->>Sub: briefing turn (write BRIEF/ACCEPTANCE/goal_condition.txt)
+        GL->>SB: read_goal_condition
+        GL->>Sub: work turn  claude -p "/goal <condition>"
+        Sub-->>GL: outcome(completed)
+        GL-->>CLI: outcome
+    else not eligible (single-pass)
+        CLI->>Sub: _execute_cli_session (single prompt, retry loop)
+        Sub-->>CLI: outcome(completed)
+    end
     CLI-->>WL: outcome
     WL->>SB: is_goal_eligible_mission(mission)?
     alt eligible

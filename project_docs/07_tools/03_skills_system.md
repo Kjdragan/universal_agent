@@ -10,12 +10,12 @@ code_paths:
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/gateway_server.py
   - .claude/skills/**/SKILL.md
-last_verified: 2026-06-21
+last_verified: 2026-06-22
 ---
 
 # Skills System
 
-Skills are **Standard Operating Procedures (SOPs)** packaged as a folder under `.claude/skills/<name>/` containing a `SKILL.md` (the canonical contract for that skill) plus any helper scripts/assets. There are ~84 skills checked into the repo today. A skill encodes "the optimized way to do task X" — for example, fetching a YouTube transcript, sending email through Simone's inbox, running the ClaudeDevs intel lane, or scaffolding a project.
+Skills are **Standard Operating Procedures (SOPs)** packaged as a folder under `.claude/skills/<name>/` containing a `SKILL.md` (the canonical contract for that skill) plus any helper scripts/assets. There are **94** skills checked into `.claude/skills/` today (`ls -d .claude/skills/*/ | wc -l` against this checkout). A skill encodes "the optimized way to do task X" — for example, fetching a YouTube transcript, sending email through Simone's inbox, running the ClaudeDevs intel lane, or scaffolding a project. The count is a moving number; see the [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) for live-status semantics and re-verify the count from disk rather than trusting any written figure.
 
 **The single most important rule: the per-skill `SKILL.md` is canonical.** Nothing in this doc, in `HEARTBEAT.md`, or in any prompt re-documents the steps a skill performs. The system only *advertises* skills and tells the model to read the `SKILL.md` before executing.
 

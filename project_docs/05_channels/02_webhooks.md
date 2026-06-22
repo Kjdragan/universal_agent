@@ -7,16 +7,22 @@ code_paths:
   - src/universal_agent/gateway_server.py
   - src/universal_agent/hooks_service.py
   - src/universal_agent/signals_ingest.py
-last_verified: 2026-06-14
+last_verified: 2026-06-22
 ---
 
 # Webhook Architecture
+
+> **Status at a glance:** the webhook ingress is **LIVE**. Cross-channel status
+> and the full channel inventory live in the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) §1 / §7.
 
 Inbound webhooks let external producers (Composio triggers, manual YouTube URL
 ingestion, the CSI signals fan-in) push events into the Universal Agent runtime,
 where they are matched against configured mappings, authenticated, transformed
 into agent prompts, and dispatched to a Claude agent route. The implementation
-lives entirely in-process inside the FastAPI gateway.
+lives entirely in-process inside the FastAPI gateway. A separate, dedicated route
+(`/api/v1/hooks/ci-failure`) drives the autonomous CI-failure auto-fix loop — it
+is deliberately **not** part of the generic mapping engine (see below).
 
 ## Endpoints
 
@@ -26,6 +32,7 @@ gateway lifespan setup).
 
 | Method | Path | Handler | Auth | Purpose |
 |---|---|---|---|---|
+| `POST` | `/api/v1/hooks/ci-failure` | `gateway_server.py::ci_failure_hook_endpoint` | `_require_ops_auth` (ops token) | **Autonomous CI-failure auto-fix loop.** Dedicated route (NOT the mapping engine); declared *before* the catch-all so it wins routing. Schedules a durable grace-recheck timer. |
 | `POST` | `/api/v1/hooks/{subpath:path}` | `gateway_server.py::hooks_endpoint` → `HooksService.handle_request` | Per-mapping (token / `composio_hmac` / none) | Generic external webhook ingress. `subpath` is the routing key matched against mappings. |
 | `GET` | `/api/v1/hooks/readyz` | `gateway_server.py::hooks_readyz` → `HooksService.readiness_status` | **None** (deliberately auth-free for health probes) | Readiness + config introspection. |
 | `POST` | `/api/v1/signals/ingest` | `gateway_server.py::signals_ingest_endpoint` | Handled inside `signals_ingest.process_signals_ingest_payload` | CSI / creator-signal fan-in. Routes YouTube events through hooks, captures non-YouTube events as CSI digests. |
@@ -185,6 +192,33 @@ exposes:
 
 These are used by the signals-ingest fan-in (below) and by other gateway code
 that wants to reuse hook transforms and the agent-dispatch machinery.
+
+## CI-failure auto-fix path (`/api/v1/hooks/ci-failure`)
+
+A **dedicated, deterministic** route (`gateway_server.py::ci_failure_hook_endpoint`),
+intentionally *not* part of the generic mapping/transform engine — it is declared
+**before** the `/api/v1/hooks/{subpath}` catch-all so it wins routing, and CI triage
+never enters Simone's agent loop.
+
+- **Producer:** the GitHub Actions workflow `.github/workflows/ci-failure-issue.yml`
+  POSTs on a `workflow_run: completed` event where `conclusion == failure`.
+- **Auth:** `_require_ops_auth` (ops token), unlike the per-mapping auth on the
+  generic hooks route.
+- **Kill-switch:** `UA_CI_AUTOFIX_ENABLED` (default `1`/on). When off, the
+  endpoint returns `200 {"disabled": true}` and does nothing.
+- **It does NOT act immediately.** A session almost always fix-forwards its own
+  CI failure within minutes, so the handler schedules a **durable one-shot grace
+  timer** (`UA_CI_AUTOFIX_GRACE_SECONDS`, default `900` = ~15 min, floored at 60s)
+  as a persisted `run_at` cron job — so the timer survives the gateway restart a
+  deploy triggers. When it fires, `universal_agent.scripts.ci_failure_grace_recheck`
+  (the `!script` command) re-verifies the failure and acts **only** on a genuinely
+  orphaned, still-red run.
+- **Dedup:** one pending grace timer per failure identity
+  (`idempotency_key = "{pr_number|branch}:{workflow}:{head_sha}"`). A duplicate
+  POST while a timer is pending returns `200 {"deduped": true}`.
+- **Status codes:** `400` invalid JSON / non-object payload / missing
+  `workflow`+`run_id`; `503` when the cron service is unavailable; `500` on a
+  schedule failure; `200` on accept/dedup/disabled.
 
 ## Signals ingest (`/api/v1/signals/ingest`)
 

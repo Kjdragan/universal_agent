@@ -11,13 +11,33 @@ code_paths:
   - src/universal_agent/startup_timing.py
   - src/universal_agent/heartbeat_service.py
   - src/universal_agent/graceful_drain.py
+  - src/universal_agent/loop_control.py
   - src/universal_agent/vp/worker_loop.py
   - deployment/systemd/
   - deploy/nginx/universal-agent-app
-last_verified: 2026-06-12
+last_verified: 2026-06-22
 ---
 
 # ADR: Deploy-Restart Resilience for the Gateway
+
+> **SUPERSEDED 2026-06-19 — the heartbeat/daemon extraction SHIPPED via the
+> autonomous-runtime split.** The C2 "graceful drain instead of extraction"
+> decision below (and the "full extraction deferred / even less justified"
+> framing) was overtaken by events: on **2026-06-19** the **autonomous-runtime
+> split** went live in production (`UA_AUTONOMOUS_RUNTIME_MODE=split`,
+> `loop_control.py::autonomous_runtime_mode`). All autonomous loops — the Simone
+> heartbeat, daemon sessions, todo/idle dispatch, in-process cron, startup
+> recovery — now run in a **second gateway process** (`UA_GATEWAY_ROLE=autonomous_worker`,
+> port 8092, unit `deployment/systemd/universal-agent-autonomous-runtime.service`),
+> off the public gateway's HTTP event loop. The public gateway sheds them via
+> `loop_control.py::should_host_autonomous_runtime` (gated in the lifespan as
+> `_run_autonomous_loops_here`). **This IS the Lever-C2 extraction this ADR
+> deferred** — it removes H2 from the public gateway at the source (a public
+> gateway restart no longer SIGTERMs autonomous Simone work; that work lives in a
+> separate unit). The graceful-drain mechanism below still applies to the
+> autonomous worker's own restarts. PRs #1084 / #1085 / #1088 / #1091. Live
+> scheduling inventory + the split's process map: Platform Status Registry §§ 1, 4
+> ([`../00_PLATFORM_STATUS_REGISTRY.md`](../00_PLATFORM_STATUS_REGISTRY.md)).
 
 > **ADR status: ACCEPTED — phased implementation.** The operator approved the
 > hybrid recommendation **B → C1 → C2, defer A** (2026-06-11). Phases land as
@@ -34,14 +54,19 @@ last_verified: 2026-06-12
 >   (2026-05-16 incident). Nothing left to slim, so the reorder is **moot**;
 >   `startup_timing.py::StartupPhaseTimer` stays as a permanent guardrail. H1 (dead
 >   `:8002` window) is therefore minor (~1.5s lifespan + import). See §4 **As-built**.
-> - **Phase C2 (decouple in-process Simone heartbeat): ✅ IMPLEMENTED — graceful drain.**
->   The C1 measurement deflated H1, and a full heartbeat→own-service *extraction* proved
->   deeply coupled to gateway-resident session state (the `InProcessGateway`, the
->   WebSocket manager, the in-memory session/adapter registry — see §4 **As-built**), so
->   C2 ships as the cheaper, equally-H2-killing **graceful SIGTERM drain**: the gateway
->   shutdown now *awaits* an in-flight heartbeat iteration within a bounded budget before
->   exit, instead of cancelling it mid-flight. Full extraction is **deferred** (now even
->   less justified). See §4 **As-built**.
+> - **Phase C2 (decouple in-process Simone heartbeat): ✅ IMPLEMENTED — graceful drain,
+>   then SUPERSEDED by the full extraction (2026-06-19).** C2 first shipped as the cheaper,
+>   equally-H2-killing **graceful SIGTERM drain** (the gateway shutdown *awaits* an in-flight
+>   heartbeat iteration within a bounded budget before exit instead of cancelling it
+>   mid-flight) because, at the time, a full heartbeat→own-service *extraction* proved deeply
+>   coupled to gateway-resident session state (the `InProcessGateway`, the WebSocket manager,
+>   the in-memory session/adapter registry — see §4 **As-built**). That coupling was
+>   subsequently resolved and the **full extraction SHIPPED on 2026-06-19 as the
+>   autonomous-runtime split** (`loop_control.py::autonomous_runtime_mode` → `"split"`,
+>   live in prod; the heartbeat and all autonomous loops moved to
+>   `universal-agent-autonomous-runtime.service`). So the "extraction is deferred" status is
+>   **no longer true** — see the SUPERSEDED banner above. The drain still protects the
+>   autonomous worker's own restarts. See §4 **As-built**.
 > - **Lever A (zero-downtime): DEFERRED** — effectively unjustified once C1 showed H1 is ~1.5s.
 >
 > Deploy handling is 24/7 P0 infra (exempt from dormancy). This ADR is a sibling to
@@ -260,9 +285,19 @@ So a blind reorder is poorly justified — **measure before optimizing.**
   left worth slimming. The instrumentation stays as a permanent guardrail (so a future
   regression that re-fattens the lifespan is visible), and we proceeded directly to C2.
 
-### Phase C2 — As-built (graceful heartbeat drain, not extraction)
+### Phase C2 — As-built (graceful heartbeat drain, then full extraction)
 
-**Decision.** The literal ADR C2 was "extract the daemon Simone heartbeat into its own
+> **Update 2026-06-19 — the full extraction shipped.** The decision below records
+> why C2 *first* shipped as a graceful drain rather than an extraction (the heartbeat
+> was deeply gateway-resident at the time). That coupling was later resolved and the
+> heartbeat + all autonomous loops were extracted into the
+> `universal-agent-autonomous-runtime.service` worker via the **autonomous-runtime
+> split** (`loop_control.py::autonomous_runtime_mode` → `"split"`,
+> `loop_control.py::should_host_autonomous_runtime`). The "extraction unjustified /
+> deferred" conclusion below is therefore historical — see the SUPERSEDED banner at
+> the top of this ADR. The graceful drain still applies to the worker's restarts.
+
+**Decision (as of 2026-06-12).** The literal ADR C2 was "extract the daemon Simone heartbeat into its own
 systemd service" (mirroring the Mission Control sweeper). A coupling map of the
 heartbeat↔gateway call graph (2026-06-12) showed that, unlike the self-contained sweeper
 `tick()`, the heartbeat is **deeply gateway-resident**: `HeartbeatService` holds the live

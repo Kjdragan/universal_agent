@@ -15,7 +15,8 @@ code_paths:
   - src/universal_agent/task_hub.py
   - src/universal_agent/durable/state.py
   - src/universal_agent/services/proactive_health_notifier.py
-last_verified: 2026-06-16
+  - src/universal_agent/durable/db.py
+last_verified: 2026-06-22
 ---
 
 # Agent Operating Playbook
@@ -449,25 +450,23 @@ test live in `08_operations/03_dormancy_and_operating_hours.md`.
 
 ---
 
-## 11. Known directive/code drift (flagged, not silently inherited)
+## 11. Task Hub DB path — the canonical store (drift resolved)
 
-The live `memory/HEARTBEAT.md` System Health Check still instructs querying
-**`task_hub.db`**:
+The canonical live Task Hub store is **`activity_state.db`**, not the stale
+`task_hub.db`. All Task Hub connections in code resolve
+`durable/db.py::get_activity_db_path()` (→ `AGENT_RUN_WORKSPACES/activity_state.db`;
+used by `worker_loop` and `dispatch_service`). `AGENT_RUN_WORKSPACES/task_hub.db`
+is a stale orphan (last meaningful mtime ~2026-05-01) and returns NOT FOUND for
+current tasks.
 
-```
-sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/task_hub.db "SELECT status, COUNT(*) ..."
-```
-
-> **CONFIRMED DRIFT — the canonical Task Hub DB is `activity_state.db`, not
-> `task_hub.db`.** All Task Hub connections in code resolve
-> `durable/db.get_activity_db_path()` (verified in `worker_loop` and
-> `dispatch_service`). `AGENT_RUN_WORKSPACES/task_hub.db` is stale (last
-> meaningful mtime ~2026-05-01); prior handoff docs named the wrong path. The
-> HEARTBEAT directive's `task_hub.db` health query is therefore likely reading
-> an empty/legacy DB and reporting misleading pressure counts. This is a
-> **directive bug to correct in `HEARTBEAT.md`**, not a code bug — but it
-> distorts operator-visible health reporting. Fix: point the health query at
-> `AGENT_RUN_WORKSPACES/activity_state.db`.
+> **RESOLVED — no longer a directive/code drift.** The live
+> `memory/HEARTBEAT.md` System Health Check now queries `activity_state.db`
+> directly (the "Task Hub pressure" item explicitly notes the old `task_hub.db`
+> is a stale orphan). The directive and the code agree; the earlier mismatch,
+> where the health query pointed at the legacy DB and reported misleading
+> pressure counts, has been corrected. Status of the live Task Hub lanes and
+> services is tracked in the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md).
 
 The directive also pins specific mission-control tile thresholds
 (`mission_control_tiles.py` `task_hub_pressure`): `in_progress > 10` OR

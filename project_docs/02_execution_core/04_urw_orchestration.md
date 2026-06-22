@@ -5,7 +5,7 @@ canonical: true
 subsystem: exec-urw
 code_paths:
   - src/universal_agent/urw/*.py
-last_verified: 2026-06-16
+last_verified: 2026-06-22
 ---
 
 # URW Orchestration
@@ -15,13 +15,23 @@ subsystem. It decomposes a large request into a graph of atomic tasks, groups th
 tasks into execution phases, drives each phase through the agent, and gates phase
 completion behind a multi-strategy evaluator with retry/repair loops.
 
+> **Production status: operator-CLI-only — dormant on prod, not retired.** Both URW
+> orchestrators are invoked **only** from `main.py` CLI commands; there is no
+> heartbeat/cron/daemon/Task-Hub caller (see "Where it is invoked"). On the deployed VPS
+> neither path runs autonomously — there are **no `harness_*` session dirs and no `.urw/`
+> state dirs** under `AGENT_RUN_WORKSPACES`. URW is a real, intact **interactive** capability
+> the operator drives by hand; it is simply not part of the autonomous runtime. Don't read
+> "live" below as "running on prod" — it means "the maintained/preferred path *when URW is
+> invoked*." See the [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) § 3 for how
+> URW relates to the live VP/runtime surfaces.
+
 The package lives entirely under `src/universal_agent/urw/`. There are **two distinct
 orchestrators** in this package, and conflating them is the single biggest source of
 confusion:
 
-| Orchestrator | File | How it runs the agent | Live entrypoint | State backing |
+| Orchestrator | File | How it runs the agent | Entrypoint (operator CLI only) | State backing |
 |---|---|---|---|---|
-| **`HarnessOrchestrator`** (the live one) | `harness_orchestrator.py` | `process_turn` callback or in-process/external **Gateway** | `/harness` CLI command in `main.py` → `run_harness(...)` | Pydantic `Plan` + JSON/SQLite via `plan_persistence.py`; phase work products on disk |
+| **`HarnessOrchestrator`** (the maintained path) | `harness_orchestrator.py` | `process_turn` callback or in-process/external **Gateway** | `/harness` CLI command in `main.py` → `run_harness(...)` | Pydantic `Plan` + JSON/SQLite via `plan_persistence.py`; phase work products on disk |
 | **`URWOrchestrator`** (classic engine) | `orchestrator.py` | an `AgentLoopInterface` adapter (`integration.py`) | CLI-only `--urw-request` → `_run_urw_from_cli(...)` | `URWStateManager` SQLite DB at `<workspace>/.urw/state.db` |
 
 Both share the same **evaluator** (`evaluator.CompositeEvaluator`) and the same
@@ -39,13 +49,16 @@ Only `urw` symbols imported from outside the package are in `main.py`:
 - `--interview-auto` arg → `interview.set_auto_answers`
 - `_run_urw_from_cli` (the `--urw-request` path) → `URWConfig`, `URWOrchestrator`, `integration.{MockAgentAdapter,UniversalAgentAdapter}`
 
-There is **no** heartbeat/cron/daemon caller. URW is operator-invoked from the CLI.
-That makes the classic `URWOrchestrator` path effectively a dev/CLI engine; the
-production-facing surface is the `/harness` flow.
+There is **no** heartbeat/cron/daemon/Task-Hub caller — both paths are operator-invoked
+from the CLI, so **neither runs on the autonomous prod runtime** (no `harness_*`/`.urw/`
+dirs on the deployed VPS). Of the two, `/harness` (`HarnessOrchestrator`) is the
+maintained/preferred path when URW *is* invoked; the classic `URWOrchestrator`
+(`--urw-request`) is the older dev/CLI engine. Both are dormant-on-prod but **not retired** —
+they remain a usable interactive capability.
 
 ---
 
-## Live flow: `HarnessOrchestrator`
+## Primary flow: `HarnessOrchestrator` (operator CLI)
 
 ```mermaid
 flowchart TD
@@ -351,7 +364,7 @@ means Anthropic Opus.
 
 | File | Role |
 |---|---|
-| `harness_orchestrator.py` | Live `/harness` orchestrator: interview→plan→phase sessions→evaluate→retry |
+| `harness_orchestrator.py` | Operator-CLI `/harness` orchestrator (dormant on prod): interview→plan→phase sessions→evaluate→retry |
 | `orchestrator.py` | Classic `URWOrchestrator` outer loop (CLI `--urw-request`) |
 | `decomposer.py` | Templates + `TemplateDecomposer`/`LLMDecomposer`/`HybridDecomposer`/`SubAgentDecomposer`, `PlanManager` |
 | `phase_planner.py` | Groups atomic tasks into phases (heuristic + optional LLM) |

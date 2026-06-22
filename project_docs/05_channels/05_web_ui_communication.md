@@ -14,10 +14,16 @@ code_paths:
   - web-ui/lib/dashboardAuth.ts
   - web-ui/app/api/dashboard/auth/login/route.ts
   - web-ui/app/api/dashboard/gateway/[...path]/route.ts
-last_verified: 2026-06-14
+last_verified: 2026-06-22
 ---
 
 # Web UI Communication
+
+> **Status at a glance:** the Web UI / dashboard channel is **LIVE**: next-server
+> `:3000` ↔ gateway `:8002` (WS / AG-UI), with the API server on `:8001`. For the
+> canonical backend process/port map and the cross-channel inventory, see the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) §1 / §7. (`:8080`
+> is filebrowser, NOT a UA component.)
 
 This doc covers how the **Next.js Web UI** (`web-ui/`) talks to the Python backend:
 the **chat panel** (live agent conversation over WebSocket), the **activity log /
@@ -286,7 +292,9 @@ auth path (cookie at the Next proxy, ops token injected to the gateway).
 > panel is slow, the fix is *never* to raise the Next.js proxy timeout
 > (`UA_DASHBOARD_GATEWAY_PROXY_TOTAL_TIMEOUT_MS`) — that masks an inline recompute that
 > belongs on a writer path. Full rationale:
-> `03_Operations/113_Task_Hub_Dashboard_Read_Path_Performance_2026-04-16.md`.
+> [`02_execution_core/02_task_hub.md`](../02_execution_core/02_task_hub.md)
+> (read-path invariant) and
+> [`08_operations/05_incident_response_patterns.md`](../08_operations/05_incident_response_patterns.md).
 
 ## Auth surface
 

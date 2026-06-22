@@ -8,11 +8,15 @@ code_paths:
   - src/universal_agent/services/telegram_send.py
   - src/universal_agent/runtime_role.py
   - src/universal_agent/timeout_policy.py
-  - deployment/systemd-user/universal-agent-telegram.service
-last_verified: 2026-06-14
+  - deployment/systemd/templates/universal-agent-telegram.service.template
+last_verified: 2026-06-22
 ---
 
 # Telegram Channel
+
+> **Status at a glance:** the Telegram channel is **LIVE** (polling bot, not a
+> webhook). Cross-channel status and the channel inventory live in the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) §1 / §7.
 
 The Telegram channel is a **long-polling bot** (not a webhook) that lets an allowlisted human chat with the Universal Agent (Simone) over Telegram DM. It is implemented as a small middleware framework around `python-telegram-bot` (PTB) under `src/universal_agent/bot/`, runs as its own process, and reaches the agent through the same Gateway abstraction the rest of the system uses.
 

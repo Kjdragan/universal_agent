@@ -8,18 +8,83 @@ code_paths:
   - src/universal_agent/tools/internal_registry.py
   - src/universal_agent/tools/*.py
   - src/universal_agent/agent_setup.py
+  - src/universal_agent/main.py
   - src/universal_agent/arxiv_runtime.py
   - src/universal_agent/notebooklm_runtime.py
+  - src/universal_agent/tools/link_bridge.py
   - src/universal_agent/utils/composio_discovery.py
   - src/universal_agent/constants.py
-last_verified: 2026-06-20
+last_verified: 2026-06-22
 ---
 
 # MCP Server & Tools
 
 This subsystem is how Universal Agent exposes custom (non-built-in) tools to its
-Claude agents. There are two physically distinct surfaces that share a lot of
-code, and conflating them is the single most common mistake here:
+Claude agents. **Two orthogonal axes** govern what an agent actually gets, and
+conflating either one is the single most common mistake here:
+
+- **Axis 1 — which build path assembles the MCP-server dict.** There are two
+  surfaces, and *they expose different servers*. The **autonomous / production
+  surface** is `main.py::setup_session` (reached at runtime via
+  `execution_engine.py::ProcessTurnAdapter`, which calls `setup_session` to get
+  identical initialization). The **interactive / CLI / URW surface** is
+  `agent_setup.py::AgentSetup._build_mcp_servers`. The matrix below is the
+  authoritative per-server × per-surface table — read it before claiming any
+  server is "on" or "disabled," because several servers are live on one surface
+  and absent on the other. See also the
+  [Platform Status Registry §6](../00_PLATFORM_STATUS_REGISTRY.md) for the same
+  matrix cross-linked to its other subsystems.
+- **Axis 2 — in-process vs. stdio subprocess** for an individual server's
+  transport. The `internal` SDK server runs in-process via
+  `create_sdk_mcp_server(...)` (no subprocess, no stdio); the standalone FastMCP
+  module (`src/mcp_server.py`) is **not** spawned as a subprocess in production —
+  its tool *implementation functions* are imported directly by the in-process
+  bridge wrappers and run in-process, so the `@mcp.tool()` decorations on those
+  functions are effectively dormant in the production wiring.
+
+## MCP server status matrix — surface × server (read this first)
+
+Each server is either present (✅) or absent (✗) **per build path**. The
+autonomous (`setup_session`) column is the production-relevant one: it is what
+Simone and the VPs actually run. A doc that describes only `_build_mcp_servers`
+(the interactive path) gets this wrong — it omits the LINK/Stripe payments server
+entirely and wrongly calls `edgartools` / `video_audio` / `youtube` "disabled"
+(they are commented out **only** in `_build_mcp_servers`; all three are active in
+`main.py::setup_session`).
+
+| Server | Interactive (`_build_mcp_servers`) | Autonomous (`setup_session`) | Gate |
+|---|---|---|---|
+| `composio` (http) | ✅ | ✅ | `COMPOSIO_API_KEY` |
+| `internal` (in-proc SDK) | ✅ | ✅ | always; memory toggle `enable_memory` |
+| `zai_vision` (stdio `@z_ai/mcp-server`) | ✅ | ✅ | needs ZAI key |
+| `telegram` | ✅ | **✗** | interactive-only |
+| `gws` | ✅ (gated) | **✗** | interactive-only |
+| `notebooklm-mcp` | ✅ | ✅ | feature-gated, default off |
+| `arxiv-mcp-server` | ✅ | ✅ | `UA_ENABLE_ARXIV_MCP`, default off (**on in prod**) |
+| `agentmail` | ✅ | ✅ | `UA_AGENTMAIL_MCP_ENABLED`, default on |
+| **`link` (Stripe/payments)** | **✗** | **✅ LIVE** | `UA_ENABLE_LINK=1` (**prod ON**); live-spend needs `UA_ENABLE_LINK_LIVE=1` AND `UA_LINK_TEST_MODE=0` |
+| `edgartools` | **✗ (commented out)** | ✅ | autonomous-only |
+| `video_audio` | **✗ (commented out)** | ✅ | autonomous-only |
+| `youtube` | **✗ (commented out)** | ✅ | autonomous-only |
+
+`telegram` and `gws` are **interactive-only** (built into `_build_mcp_servers`,
+never into `setup_session`). The **LINK** server is the inverse — **autonomous-only**:
+`main.py::setup_session` calls `tools/link_bridge.py::build_link_mcp_server_config`
+(which returns `None` unless `feature_flags.py::link_enabled()` is true) and then
+runs `services/link_health.py::run_link_health_probe` on startup. Its gating is
+two-tier: `UA_ENABLE_LINK=1` registers the server (prod ON), but actual live
+spend requires **both** `UA_ENABLE_LINK_LIVE=1` AND `UA_LINK_TEST_MODE=0`
+(`feature_flags.py::link_live_mode_active`). The `edgartools`, `video_audio`, and
+`youtube` servers are registered in `setup_session` but appear commented out in
+`_build_mcp_servers` — so they are live for autonomous work and absent for
+interactive sessions, the opposite of what the interactive-only view suggests.
+
+For status semantics (live / parked / paused / retired) across every subsystem,
+see the [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md).
+
+## The in-process `internal` server vs the standalone FastMCP module
+
+Within both build paths, the `internal` SDK MCP server is the workhorse:
 
 1. **The in-process `internal` SDK MCP server** — the production path. Tools are
    registered directly inside the agent process via the Claude Agent SDK's
@@ -51,10 +116,16 @@ see `mcp__local_toolkit__...` anywhere live, it is dead/forbidden.
 
 ## High-level topology
 
+The diagram below shows the `internal` server assembly and the external server
+config dicts. Note the build path differs by surface: the **autonomous** dict is
+assembled by `main.py::setup_session` and the **interactive** dict by
+`agent_setup.py::_build_mcp_servers` (see the matrix above for which servers each
+includes). The `internal` registration is identical on both.
+
 ```mermaid
 flowchart TD
     subgraph AgentProc["Agent process (in-process)"]
-        AS["agent_setup.py\n_build_mcp_servers()"]
+        AS["main.py::setup_session (autonomous)\nor agent_setup.py::_build_mcp_servers (interactive)"]
         REG["tools/internal_registry.py\nget_all_internal_tools()"]
         SDK["create_sdk_mcp_server(name='internal')"]
         AS --> SDK
@@ -67,12 +138,14 @@ flowchart TD
     SDK -->|exposed as mcp__internal__*| AGENT["Claude agent"]
 
     subgraph External["External MCP servers (config dicts)"]
-        COMPOSIO["composio (http)"]
-        TG["telegram (stdio subprocess)"]
-        ZAI["zai_vision (stdio npx)"]
-        GWS["gws (stdio, feature-gated)"]
-        NLM["notebooklm-mcp (stdio, feature-gated)"]
-        AM["agentmail (feature-gated)"]
+        COMPOSIO["composio (http) — both"]
+        TG["telegram (stdio) — interactive-only"]
+        ZAI["zai_vision (stdio npx) — both"]
+        GWS["gws (stdio, gated) — interactive-only"]
+        NLM["notebooklm-mcp (stdio, gated) — both"]
+        AM["agentmail (gated) — both"]
+        LINK["link / Stripe (gated) — autonomous-only"]
+        AUTO["edgartools / video_audio / youtube — autonomous-only"]
     end
 
     AS --> COMPOSIO
@@ -81,8 +154,11 @@ flowchart TD
     AS --> GWS
     AS --> NLM
     AS --> AM
+    AS --> LINK
+    AS --> AUTO
     COMPOSIO -->|mcp__composio__*| AGENT
     TG -->|mcp__telegram__*| AGENT
+    LINK -->|mcp__link__*| AGENT
 ```
 
 ## The `internal` server: how tools get registered
@@ -231,9 +307,25 @@ or connects to:
   the in-process `agentmail_send_with_local_attachments` helper, which exists to
   attach local files (the official server can't read local disk).
 
-Several entries in `_build_mcp_servers` are commented out (`edgartools`,
-`video_audio`, `youtube`) and the comment `# local_toolkit subprocess disabled in
-favor of in-process tools` documents the migration described above.
+### Servers on the autonomous path that are NOT on the interactive path
+
+The entries above describe `_build_mcp_servers` (the **interactive** surface).
+The production-relevant **autonomous** surface, `main.py::setup_session`, differs
+(see the matrix at the top):
+
+- **`link`** (Stripe/payments) — **autonomous-only**. `setup_session` calls
+  `tools/link_bridge.py::build_link_mcp_server_config` (returns `None` unless
+  `feature_flags.py::link_enabled()`) and then `services/link_health.py::run_link_health_probe`
+  on startup. Registered in prod (`UA_ENABLE_LINK=1`); live spend additionally
+  requires `UA_ENABLE_LINK_LIVE=1` AND `UA_LINK_TEST_MODE=0`
+  (`feature_flags.py::link_live_mode_active`). It is **not** built into
+  `_build_mcp_servers` at all.
+- **`edgartools`, `video_audio`, `youtube`** — **autonomous-only**. They are
+  active in `main.py::setup_session` but commented out in `_build_mcp_servers`
+  (alongside the comment `# local_toolkit subprocess disabled in favor of
+  in-process tools`, which documents the in-process migration described above).
+  Their presence in the interactive surface's source as comments is what makes
+  the interactive-only view wrongly report them "disabled."
 
 ## Tool gating: deny-list, not allow-list
 

@@ -10,6 +10,8 @@ code_paths:
   - src/universal_agent/services/todo_dispatch_service.py
   - src/universal_agent/services/dispatch_service.py
   - src/universal_agent/services/agent_router.py
+  - src/universal_agent/services/priority_dispatcher.py
+  - src/universal_agent/loop_control.py
   - src/universal_agent/services/daemon_sessions.py
   - src/universal_agent/task_hub.py
   - src/universal_agent/vp/profiles.py
@@ -19,7 +21,7 @@ code_paths:
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/api/server.py
   - src/universal_agent/api/gateway_bridge.py
-last_verified: 2026-06-15
+last_verified: 2026-06-22
 ---
 
 # System Architecture Overview
@@ -29,18 +31,30 @@ runs where), the **principals** (the named agents that do work), and the **what-
 data flow that carries a unit of work from ingress to delivery. Deeper subsystem docs
 (Task Hub, VP delegation, heartbeat, gateway/sessions) are linked at the end.
 
+> **Live status, in one place:** for what is *currently* live / parked / paused / retired
+> across processes, routing, VPs, crons, and CSI sources — and the env flags that gate each —
+> read the **[Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md)**. This overview
+> describes the *shape* of the system; the registry is the authoritative state snapshot.
+
 ## The one-paragraph mental model
 
 Universal Agent is a set of long-lived Python services on a single VPS. The **gateway**
-(`gateway_server.py`, port 8002) is the brain: it owns an in-process execution engine
-(`InProcessGateway`) and runs **Simone** — the primary orchestrator — as always-on
-in-process *daemon sessions*. Work of every kind (email, chat, webhooks, cron, proactive
-intelligence) is normalized into rows in a shared SQLite **Task Hub** (`activity_state.db`).
-Simone's heartbeat sweeps that queue, claims the top tasks, and either executes them
-herself or **delegates** them to one of two on-demand **VP workers** — **CODIE** (coding)
-and **ATLAS** (general) — which run as *separate subprocess services* polling a VP-mission
-DB. Everything is gated by deterministic code (concurrency, dedup, safety) but the
-*reasoning* (triage, synthesis, delegation decisions) is done by LLMs.
+(`gateway_server.py`) is the brain. In production it runs as **two** `gateway_server`
+processes (the *autonomous-runtime split*, live since 2026-06-19): a **public HTTP gateway**
+on port 8002 that owns the in-process execution engine (`InProcessGateway`) and serves
+WS/dashboard traffic, and a **second `gateway_server` process** (`role=autonomous_worker`,
+port 8092) that hosts every autonomous loop — **Simone**'s always-on *daemon sessions*, the
+heartbeat, todo-dispatch, cron, and idle-dispatch. The two are mutually exclusive
+(`loop_control.py::should_host_autonomous_runtime`): exactly one process runs the loops.
+Work of every kind (email, chat, webhooks, cron, proactive intelligence) is normalized into
+rows in a shared SQLite **Task Hub** (`activity_state.db`). The heartbeat sweeps that queue
+and claims the top tasks; a **priority dispatcher** (default-ON) deterministically routes
+each claimed task — VP-bound work goes **directly** to one of the on-demand **VP workers**
+(**CODIE** for coding, **ATLAS** for general, plus opt-in **HOMER**), and only general /
+chat / ambiguous / capacity-deferred residue falls back to **Simone**, who executes it or
+delegates. VP workers run as *separate subprocess services* polling a VP-mission DB.
+Everything is gated by deterministic code (concurrency, dedup, safety) but the *reasoning*
+(triage, synthesis, delegation decisions) is done by LLMs.
 
 ## Principals vs. sub-agents (read this first — it is the #1 source of confusion)
 
@@ -72,8 +86,10 @@ principal's presence by checking daemon/worker session state, not by listing sub
 > resolves only when `vp.general.secondary` ∈ `UA_VP_ENABLED_IDS`. See
 > [VP Workers & Delegation](../03_agents/01_vp_workers_and_delegation.md).
 
-- **Simone** — the primary executor/orchestrator. Always-on. Runs *inside* the gateway
-  process. Takes the next task and works it directly, or delegates.
+- **Simone** — the primary executor/orchestrator. Always-on. Runs in-process inside a
+  `gateway_server` process — in production the **autonomous-runtime** instance (`:8092`),
+  not the public HTTP gateway (see the split below). Takes the next task and works it
+  directly, or delegates.
 - **CODIE** (`vp.coder.primary`) — the coding VP. On-demand only; spawns a real `claude`
   CLI subprocess per mission (`vp/clients/claude_cli_client.py`).
 - **ATLAS** (`vp.general.primary`) — the general VP. On-demand only; the generalist client.
@@ -98,8 +114,10 @@ workflow (`.github/workflows/deploy.yml`):
 
 | Service | Module / port | Role |
 |---|---|---|
-| `universal-agent-gateway` | `gateway_server.py` — **port 8002** | The brain. InProcessGateway + execution engine + heartbeat + daemon Simone + cron + Task Hub dispatch. Health: `/api/v1/health`. |
+| `universal-agent-gateway` | `gateway_server.py` (HTTP) — **port 8002** | The public brain. InProcessGateway + execution engine, WS streaming, dashboard backend. In **split** mode it sheds the autonomous loops. Health: `/api/v1/health`. |
+| `universal-agent-autonomous-runtime` | `gateway_server.py` (`role=autonomous_worker`) — **port 8092** | The autonomous runtime (split off the HTTP loop, 2026-06-19). Hosts heartbeat + daemon Simone + todo-dispatch + cron + idle-dispatch. Unit hardcodes role + port. |
 | `universal-agent-api` | `api/server.py` — **port 8001** | Web UI REST/WebSocket API. Proxies execution to the gateway via `api/gateway_bridge.py`. |
+| `universal-agent-mission-control-sweeper` | mission-control sweeper | Housekeeping sweeper service. |
 | `universal-agent-webui` | `web-ui/` | The dashboard frontend. |
 | `universal-agent-telegram` | `bot/` | Telegram polling bot (separate channel). |
 | `ua-discord-cc-bot` | Discord control-channel bot. |
@@ -107,9 +125,41 @@ workflow (`.github/workflows/deploy.yml`):
 | `universal-agent-vp-worker@vp.coder.primary` | `vp/worker_main.py` | CODIE worker subprocess. Polls VP-mission DB. |
 | `universal-agent-vp-worker@vp.general.primary` | `vp/worker_main.py` | ATLAS worker subprocess. Polls VP-mission DB. |
 
+> The recurring proactive / briefing / CSI / digest timers are **not** listed here — see the
+> [Platform Status Registry § 4](../00_PLATFORM_STATUS_REGISTRY.md) for the full two-scheduler
+> inventory (20 systemd timers + 4 live in-process crons) and what gates each.
+
 The VP workers are systemd *template instances* (`@vp.coder.primary`,
 `@vp.general.primary`). They run as the system user `ua`, and so does the gateway/discord
 daemon — they share `HOME=/home/ua` so gws/Infisical-materialized creds are visible to all.
+
+### The autonomous-runtime split (production topology)
+
+In production `UA_AUTONOMOUS_RUNTIME_MODE=split`, so **two** `gateway_server` processes run.
+`loop_control.py::autonomous_runtime_mode` reads that flag (`in_process` is the code default
+on a fresh checkout; prod is `split`), and `loop_control.py::should_host_autonomous_runtime`
+keys off `UA_GATEWAY_ROLE` so only the `autonomous_worker` instance hosts the loops while
+the public HTTP gateway sheds them. The two are mutually exclusive — exactly one process runs
+heartbeat / daemon Simone / todo-dispatch / cron / idle-dispatch. nginx routes public traffic
+to :8002; :8092 is a private port with no public route. This split is what resolved the
+event-loop starvation described below.
+
+```mermaid
+flowchart LR
+    nginx[nginx :443] --> http
+    subgraph http[universal-agent-gateway :8002]
+      ipg[InProcessGateway<br/>WS / dashboard / HTTP exec]
+      shed["autonomous loops SHED<br/>(should_host_autonomous_runtime=False)"]
+    end
+    subgraph auto[universal-agent-autonomous-runtime :8092<br/>role=autonomous_worker]
+      hb[HeartbeatService]
+      simone[(daemon Simone)]
+      todo[ToDoDispatchService]
+      croninit[CronService]
+    end
+    http <-->|activity_state.db| th[(Task Hub)]
+    auto <-->|activity_state.db| th
+```
 
 ```mermaid
 flowchart TB
@@ -121,8 +171,11 @@ flowchart TB
       cron[Cron / proactive lanes]
     end
 
-    subgraph gw[universal-agent-gateway :8002]
+    subgraph gw[universal-agent-gateway :8002<br/>public HTTP]
       ipg[InProcessGateway<br/>ProcessTurnAdapter]
+    end
+
+    subgraph auto[universal-agent-autonomous-runtime :8092<br/>role=autonomous_worker]
       hb[HeartbeatService]
       todo[ToDoDispatchService]
       simone[(daemon_simone_heartbeat<br/>daemon_simone_todo)]
@@ -137,6 +190,7 @@ flowchart TB
 
     th[(activity_state.db<br/>Task Hub)]
     gw <--> th
+    auto <--> th
     hb --> todo --> simone
     simone -->|vp_dispatch_mission| vpdb[(vp ledger DB)]
 
@@ -176,7 +230,10 @@ flowchart TB
 
 ### Gateway lifespan / startup wiring
 
-`gateway_server.py::lifespan` is where the whole runtime is assembled, in order:
+`gateway_server.py::lifespan` is where the whole runtime is assembled, in order. Note that
+steps 3–6 (the autonomous loops) only run when `loop_control.py::should_host_autonomous_runtime`
+returns true — so in the production **split**, they are assembled only in the
+`autonomous_worker` instance (:8092), while the public HTTP gateway (:8002) skips them:
 
 1. `bootstrap_runtime_environment(profile=...)` resolves Infisical secrets and `.env`,
    then re-reads `UA_DEPLOYMENT_PROFILE` (because the module-level read runs before `.env`
@@ -197,10 +254,15 @@ flowchart TB
 > `_run_after_deployment_window(...)` when `_deployment_window_active()` is true. This
 > suppresses restart-noise alerts during a deploy. See the Cron doc for mechanics.
 
-> **Gotcha — event-loop starvation:** Simone's daemon heartbeat runs Claude SDK iterations
-> *in-process*. When the gateway has a valid `ANTHROPIC_API_KEY`, those iterations can
-> starve the asyncio loop for 15–20s at a time, making HTTP requests stall. The kill switch
-> is `UA_DAEMON_SESSIONS_ENABLED=0`. This is an architectural property, not a transient bug.
+> **Resolved — event-loop starvation:** Simone's daemon heartbeat runs Claude SDK
+> iterations *in-process*. Historically, when those ran on the **same** process as the HTTP
+> gateway they starved the asyncio loop for 15–20s at a time and HTTP requests stalled. The
+> **autonomous-runtime split** (above; `UA_AUTONOMOUS_RUNTIME_MODE=split`, live 2026-06-19)
+> is the structural fix — the loops now run in the separate `autonomous_worker` process, off
+> the public HTTP loop. The old `UA_DAEMON_SESSIONS_ENABLED=0` kill switch still exists as a
+> backstop, but the split is the resolution. See
+> [08_operations/05_incident_response_patterns.md](../08_operations/05_incident_response_patterns.md)
+> and the [Platform Status Registry § Autonomous-runtime split](../00_PLATFORM_STATUS_REGISTRY.md).
 
 > **Gotcha — socket bind:** `main()` binds an explicit socket with `SO_REUSEPORT` and hands
 > the fd to `uvicorn.Config(app, fd=sock.fileno())`. This was the fix for a 2026-05-16
@@ -256,13 +318,21 @@ heartbeat dispatches them. The Simone-execution path:
 3. **Claim + route.** Dispatch is the `dispatch_sweep` pattern
    (`services/dispatch_service.py::dispatch_sweep`): a stale-release pass, then
    `task_hub.claim_next_dispatch_tasks(conn, limit=N, ...)` atomically claims the top tasks,
-   then `_enrich_with_routing`. **Routing is Simone-first by default:**
-   `services/agent_router.py::route_all_to_simone` assigns *every* claimed task
-   `agent_id="simone"`. The system does not pre-route to VPs — Simone decides delegation.
-   **D3 (default-OFF, `UA_PRIORITY_DISPATCHER_ENABLED`):** when enabled,
-   `services/priority_dispatcher.py` deterministically routes claimed tasks and dispatches
-   VP-bound work directly (no Simone turn), leaving only the Simone-bound residue for step 4.
-   See [Simone-First Orchestration § D3](../03_agents/02_simone_first_orchestration.md).
+   then `_enrich_with_routing`. **The priority dispatcher is the live router, DEFAULT-ON
+   since 2026-06-16** (PR #1034/#1038): `services/priority_dispatcher.py::priority_dispatcher_enabled`
+   returns `True` by default (`UA_PRIORITY_DISPATCHER_ENABLED` is a kill switch — only an
+   explicit `0`/`false`/`off` disables it). When it is on,
+   `services/dispatch_service.py::_enrich_with_routing` **skips**
+   `services/agent_router.py::route_all_to_simone` and instead lets
+   `priority_dispatcher.py::classify_task` deterministically route each claimed task,
+   dispatching VP-bound work **directly** (no Simone turn). Simone-first
+   (`route_all_to_simone` assigning *every* task `agent_id="simone"`) is now the **disabled
+   fallback**, not the default. **Nuance:** `UA_DISPATCHER_PREFER_ATLAS` is default-**OFF**
+   (`priority_dispatcher.py::prefer_atlas_enabled`), so general / chat / ambiguous /
+   capacity-deferred work still falls back to Simone — only tagged or classified VP work with
+   a free slot is dispatched directly. See
+   [Simone-First Orchestration](../03_agents/02_simone_first_orchestration.md) and the
+   [Platform Status Registry § 2 (Routing)](../00_PLATFORM_STATUS_REGISTRY.md).
 4. **Execute (Simone).** `ToDoDispatchService` builds a To-Do prompt of the claimed items
    and feeds them to Simone's session via the gateway's `execution_callback`. Simone works
    each item with her full toolset/skills/sub-agents.
@@ -288,18 +358,36 @@ sequenceDiagram
 
     Ch->>TH: materialize task row
     HB->>TH: get_dispatch_queue + claim_next_dispatch_tasks
-    HB->>HB: route_all_to_simone (agent_id="simone")
-    HB->>TD: hand claimed items
-    TD->>S: To-Do prompt via execution_callback
-    alt Simone executes directly
-        S->>TH: task_hub_task_action(complete)
-    else Simone delegates
-        S->>VPDB: vp_dispatch_mission
-        S->>TH: task_hub_task_action(redirect_to, note=vp_id)
+    HB->>HB: _enrich_with_routing → priority_dispatcher.classify_task (DEFAULT-ON)
+    alt VP-bound work (tagged/classified) with a free slot
+        HB->>VPDB: dispatch_vp_mission (direct, no Simone turn)
         W->>VPDB: claim_next_vp_mission (poll loop)
         W->>W: run mission (claude CLI subprocess)
         W->>TH: close source task on completion
+    else general / chat / ambiguous / capacity-deferred → Simone residue
+        HB->>TD: hand claimed items
+        TD->>S: To-Do prompt via execution_callback
+        alt Simone executes directly
+            S->>TH: task_hub_task_action(complete)
+        else Simone delegates
+            S->>VPDB: vp_dispatch_mission
+            S->>TH: task_hub_task_action(redirect_to, note=vp_id)
+            W->>VPDB: claim_next_vp_mission (poll loop)
+            W->>W: run mission (claude CLI subprocess)
+            W->>TH: close source task on completion
+        end
     end
+```
+
+```mermaid
+flowchart TD
+    claimed[claim_next_dispatch_tasks] --> enrich[_enrich_with_routing]
+    enrich --> on{priority_dispatcher_enabled?<br/>DEFAULT True}
+    on -- "off (fallback)" --> rs[route_all_to_simone<br/>every task → Simone]
+    on -- "on (live)" --> classify[classify_task]
+    classify --> vpbound{VP-bound + free slot?<br/>prefer-ATLAS default OFF}
+    vpbound -- yes --> vp[dispatch VP mission directly]
+    vpbound -- "no (general/chat/ambiguous/deferred)" --> simone[Simone residue → ToDoDispatchService]
 ```
 
 ## VP delegation & worker subprocesses

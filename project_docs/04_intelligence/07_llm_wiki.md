@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/tools/wiki_bridge.py
   - src/universal_agent/tools/kb_bridge.py
   - src/universal_agent/services/csi_intelligence_persistence.py
-last_verified: 2026-06-14
+last_verified: 2026-06-22
 ---
 
 # LLM Wiki System
@@ -64,36 +64,46 @@ Every managed page carries this required frontmatter (`REQUIRED_FRONTMATTER_FIEL
 confidence, status`. `_write_page` fills missing fields with empty defaults and always
 stamps `updated_at` to "now". List-typed fields default to `[]`.
 
-### Where the vault actually lives — and the `resolve_vault_path` collapse
+### Where the vault actually lives — per-slug nesting
 
-`resolve_vault_path(vault_kind, vault_slug, root_override=None)` (`wiki/core.py`)
-validates `vault_kind` ∈ {`internal`, `external`} and slugifies `vault_slug`, but then:
+`resolve_vault_path(vault_kind, vault_slug, root_override=None)`
+(`wiki/core.py::resolve_vault_path`) validates `vault_kind` ∈ {`internal`, `external`},
+slugifies `vault_slug` (`wiki/core.py::_slugify`), and then **nests every vault under its
+own slug directory** so distinct KBs/topics never share one vault dir:
 
 ```python
+slug = _slugify(vault_slug, fallback="default")
 if root_override:
-    return Path(root_override).expanduser().resolve()
-return Path(resolve_shared_memory_workspace()) / "memory" / "wiki"
+    base = Path(root_override).expanduser().resolve()
+    # idempotent: if root_override already ends in the slug, don't double-nest
+    if base.name == slug:
+        return base
+    return base / slug
+return Path(resolve_shared_memory_workspace()) / "memory" / "wiki" / slug
 ```
 
-Confirmed in current code (`wiki/core.py::resolve_vault_path`): **the
-returned path ignores both `vault_kind` and `vault_slug` unless `root_override` is
-supplied.** Every `ensure_vault`/`query_vault`/`lint_vault`/`sync_internal_memory_vault`
-call without an explicit `root_override` resolves to the **single shared path**
-`<shared-memory-workspace>/memory/wiki`. An "internal" and an "external" vault, and
-any two different slugs, all collide onto the same directory. The slug/kind are still
-used to *select which subdirectories get created* and to validate input, but they do
-NOT partition storage. Callers that need isolation MUST pass `root_override`.
+Confirmed in current code (`wiki/core.py::resolve_vault_path`): **the slug partitions
+storage in every path.**
+
+- **No `root_override`:** resolves to `<shared-memory-workspace>/memory/wiki/<slug>`.
+  Two different slugs land in two different directories; "internal" and "external"
+  vaults with distinct slugs do not collide.
+- **With `root_override`:** returns `<root_override>/<slug>` — *except* when
+  `root_override` already ends in the slug, in which case it is returned as-is and never
+  double-nests. This idempotent branch is the CSI replay pattern, where the caller
+  already points `root_override` at `.../knowledge-vaults/<slug>` (so the last path
+  component already *is* the slug).
 
 The shared memory workspace root is `resolve_shared_memory_workspace()`
-(`memory/paths.py`): default `<repo-root>/Memory_System/ua_shared_workspace`,
-overridable via `UA_SHARED_MEMORY_DIR`.
+(`memory/paths.py::resolve_shared_memory_workspace`): default
+`<repo-root>/Memory_System/ua_shared_workspace`, overridable via `UA_SHARED_MEMORY_DIR`.
 
-Consequence in practice: the CSI persistence path (the real production writer) does
-NOT route through `resolve_vault_path` at all — it passes an explicit `vault_path: Path`
+Consequence in practice: the CSI persistence path (the real production writer) does NOT
+route through `resolve_vault_path` at all — it passes an explicit `vault_path: Path`
 straight into the memex primitives (`csi_intelligence_persistence.apply_vault_delta_to_vault`).
-So the collapse primarily affects the SDK-tool surface (`wiki_init_vault`, `wiki_query`,
-`wiki_lint`, `wiki_sync_internal_memory`), where omitting `root_override` silently
-funnels every vault to the same directory.
+The SDK-tool surface (`wiki_init_vault`, `wiki_query`, `wiki_lint`,
+`wiki_sync_internal_memory`) now gets per-slug isolation for free even when
+`root_override` is omitted.
 
 ### External vaults live under `knowledge-vaults/` — but only via `root_override`
 
@@ -113,8 +123,9 @@ the memex primitives). For example, CSI ingest calls
 > `UA_LLM_WIKI_ROOT/<slug>/` or `UA_ARTIFACTS_DIR/knowledge-vaults/<slug>/` automatically.
 > `UA_LLM_WIKI_ROOT` is **not referenced anywhere in the current code**, and the
 > `knowledge-vaults/<slug>/` convention is enforced by the *callers*, not by
-> `resolve_vault_path`. The wiki engine itself has no default external-vault location
-> other than the collapsed `<shared-memory>/memory/wiki`.
+> `resolve_vault_path`. The wiki engine's own default vault location is the per-slug
+> `<shared-memory>/memory/wiki/<slug>` (see the per-slug-nesting section above) — not
+> a `knowledge-vaults/` path.
 
 ## External ingest flow
 
@@ -385,21 +396,26 @@ in-process rather than as durable/remote operations.
   is the operator/agent entry point: triggers on "wiki", "knowledge base/vault",
   "build a wiki about", "what does our wiki say about", etc. It orchestrates the
   NotebookLM-backed flow (notebook → research → register KB → ingest into vault).
-- **Nightly Wiki cron** — `src/universal_agent/scripts/schedule_nightly_wiki.py`
+- **Nightly Wiki job** — `src/universal_agent/scripts/schedule_nightly_wiki.py`
   registers job `nightly_wiki` (`WIKI_JOB_ID`) with cron expr `15 3 * * *` (3:15 AM
   Houston) whose command is `!script universal_agent.scripts.nightly_wiki_agent`
   (`src/universal_agent/scripts/nightly_wiki_agent.py`), which selects proactive-signal
   cards, builds NLM-backed KBs, and writes `nightly_wiki_<date>.md` under
   `<artifacts>/nightly_wikis/` for the morning briefing. (The same script also registers
-  the morning-briefing job at `30 6 * * *`.)
+  the morning-briefing job at `30 6 * * *`.) In production this job is fired by the
+  systemd `nightly-wiki` timer (a systemd-migrated job), not the in-process cron loop —
+  see the Gotchas note and the
+  [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md).
 - The legacy-referenced `wiki-maintainer` sub-agent **no longer exists** in
   `.claude/agents/` — do not expect it.
 
 ## Gotchas
 
-- **`resolve_vault_path` ignores kind+slug without `root_override`.** See the dedicated
-  section above. The single most important behavior to internalize: SDK-tool vault calls
-  without `root_override` all collide onto `<shared-memory>/memory/wiki`.
+- **`resolve_vault_path` nests every vault under its own slug.** See the dedicated
+  section above. Without `root_override` a vault resolves to
+  `<shared-memory>/memory/wiki/<slug>`; with `root_override` it resolves to
+  `<root_override>/<slug>` (returned as-is when `root_override` already ends in the slug,
+  the idempotent CSI replay case). Distinct slugs no longer collide.
 - **`memex_create_page` raises on an existing page**; `memex_extend_page` raises on a
   missing one. Callers must check `memex_page_exists` first (the CSI bridge does).
 - **REVISE requires a non-empty `reason`** or it raises `ValueError`. `memex_apply_action`
@@ -418,9 +434,11 @@ in-process rather than as durable/remote operations.
   truncated, not chunked.
 - **`feature_flags` kill switches don't gate the projection auto-sync path** — that path
   reads env vars directly. See the auto-sync note above.
-- **The nightly_wiki cron may not be in the live runtime store.** A 2026-04-18 audit
-  found the runtime cron store (`AGENT_RUN_WORKSPACES/cron_jobs.json`) differs from
-  `schedule_nightly_wiki.py`'s default workspaces dir, so the nightly wiki / proactive
-  reports were not registered in the live runtime store.
-  > [VERIFY: confirm against the live VPS cron store; this is a historical operational
-  > finding, not a code-verified guarantee.]
+- **The `nightly_wiki` job is LIVE — owned by a systemd timer, not the in-process cron
+  store.** It is one of the systemd-migrated jobs; the `nightly-wiki` timer (daily) is its
+  sole firer. A migrated job showing `enabled:false` in the in-process `cron_jobs.json` is
+  a migration artifact, NOT "off" — the timer fires it regardless. (Older docs claimed the
+  nightly wiki was not registered in the live runtime store; that finding predates the
+  systemd-timer migration and no longer applies.) See
+  [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) for the canonical
+  live/parked/retired status of this and the other scheduled jobs.

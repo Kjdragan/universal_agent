@@ -15,10 +15,17 @@ code_paths:
   - "discord_intelligence/inventory/discord_inventory.py"
   - "deployment/systemd/templates/ua-discord-*.service.template"
   - "src/universal_agent/api/routers/csi_discord_watchlist.py"
-last_verified: 2026-06-15
+last_verified: 2026-06-22
 ---
 
 # Discord Operations
+
+> **Status at a glance:** Discord ops + intel are **LIVE** (standalone daemon +
+> C2 bot, two tokens). For the canonical backend process/port map and the
+> cross-channel inventory, see the
+> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) §1 / §7. **The UA
+> gateway runs on `:8002`** (`:8080` is filebrowser, NOT a UA component — see the
+> port note below).
 
 Operator-facing reference for the Universal Agent Discord subsystem. This describes
 how UA connects to Discord, what it ingests, what runs on a schedule, the slash
@@ -74,7 +81,7 @@ flowchart TB
       CALSYNC["auto_sync_calendar_events → gws CLI → Google Calendar"]
     end
 
-    GATEWAY["UA Gateway REST API (127.0.0.1:8080)"]
+    GATEWAY["UA Gateway REST API (127.0.0.1:8002 in prod)"]
     TASKHUB[(Task Hub<br/>activity_state.db)]
 
     MSG --> ON_MSG --> DB
@@ -118,7 +125,16 @@ the keyword interest list used by signal detection, and the scheduling intervals
 | `UA_DISCORD_CALENDAR_SYNC_RETRY_FAILED_AFTER_HOURS` | `6` | `cc_bot.py` | How long before retrying a failed calendar sync. |
 | `UA_DISCORD_BRIEFINGS_DIR` | `<repo>/kb/briefings` | `cc_bot.py` | Directory the briefings poller watches for new `*.md` files. |
 | `UA_DISCORD_CALENDAR_ID` | `primary` | `calendar_sync.py` | Target Google Calendar id. |
-| `UA_GATEWAY_URL` | `http://127.0.0.1:8080` | `integration/gateway_client.py` | UA gateway base URL for review/approval calls. |
+| `UA_GATEWAY_URL` | `http://127.0.0.1:8080` (code default — **stale**, see note) | `integration/gateway_client.py` | UA gateway base URL for review/approval calls. |
+
+> **Port note (verified 2026-06-22):** the code default in
+> `gateway_client.py::_DEFAULT_GATEWAY_URL` is `http://127.0.0.1:8080`, but
+> **`:8080` is filebrowser, not the UA gateway** — the canonical UA gateway runs
+> on **`:8002`** (see the [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) §1
+> process/port map). In production `UA_GATEWAY_URL` is set explicitly (to the
+> `:8002` gateway), so the stale default never bites; a bare run with the env var
+> unset, however, would point review/approval calls at the wrong port. Correcting
+> the code default is a follow-up.
 | `UA_INTERNAL_API_TOKEN` / `UA_OPS_TOKEN` | — | `integration/gateway_client.py` | Internal service token sent as `x-ua-internal-token`. |
 
 The default-OFF posture on `AUTO_CREATE_RELEASE_TASKS` and `SEND_SIMONE_ALERTS` is the
@@ -296,8 +312,8 @@ same gws auth machinery used elsewhere in UA:
 
 > gws auth is the #1 operational time-sink in UA. If calendar sync fails with
 > `invalid_grant`, the OAuth refresh token has expired (Google "Testing" mode → ~7-day
-> expiry). See the gws runbook in the project `CLAUDE.md` and
-> `docs/03_Operations/82_Email_Architecture...`.
+> expiry). See the gws runbook in the project `CLAUDE.md` and the **gws CLI auth on
+> the VPS (runbook)** section of [`01_email_agentmail.md`](01_email_agentmail.md).
 
 ## Deployment
 

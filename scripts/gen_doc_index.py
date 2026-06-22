@@ -26,6 +26,9 @@ MANIFEST = DOCS / "_meta" / "doc_manifest.json"
 README = DOCS / "README.md"
 
 META_ORDER = [
+    ("00_PLATFORM_STATUS_REGISTRY.md",
+     "**START HERE** — the single \"what do we have and is it live?\" index "
+     "(subsystems, crons/timers, intel sources, VPs, MCP servers, channels) with code-sourced status."),
     ("00_DOCUMENTATION_REFACTOR_PLAN.md", "How and why the docs were rebuilt (code-first)."),
     ("01_TAXONOMY.md", "Category structure and the canonical doc set."),
     ("02_GOTCHA_INVENTORY.md", "Preserved operational/rationale facts not visible in code."),
