@@ -2,11 +2,12 @@
 
 > Durable, dated copy of every artifact published to the tailnet scratchpad.
 > Newest first. Auto-generated from `index.jsonl` — do not edit by hand.
-> 3 artifact(s) archived.
+> 4 artifact(s) archived.
 
 
 ## 2026-06-22
 
+- **14:47:30** — [Desktop GPU for Local-Ollama Demos](2026-06-22/144730__gpu-demos-desktop__gpu_demos_exhibit.html) · slug `gpu-demos-desktop` · [live](https://uaonvps.taildcc090.ts.net/scratch/gpu-demos-desktop/gpu_demos_exhibit.html)
 - **12:07:48** — [HANDOFF — Investigate the red/yellow items from the 2026-06-22 Simone-email triage](2026-06-22/120748__red-yellow-triage-handoff__HANDOFF_2026-06-22_red_yellow_triage.md) · slug `red-yellow-triage-handoff` · [live](https://uaonvps.taildcc090.ts.net/scratch/red-yellow-triage-handoff/HANDOFF_2026-06-22_red_yellow_triage.md)
 - **12:07:41** — [Universal Agent — Greatest Hits (10-minute snapshot)](2026-06-22/120741__ua-greatest-hits__ua_greatest_hits.html) · slug `ua-greatest-hits` · [live](https://uaonvps.taildcc090.ts.net/scratch/ua-greatest-hits/ua_greatest_hits.html)
 
