@@ -1,0 +1,22 @@
+[
+  {"query": "i want to test that ollama tutorial demo on my desktop — can you get a model running on the gpu and actually run it through", "should_trigger": true},
+  {"query": "set up a local model i can hit at localhost:11434 for this little benchmark script i'm writing", "should_trigger": true},
+  {"query": "the demo needs to call a local llama model on my machine, not the anthropic api. can you make that work", "should_trigger": true},
+  {"query": "pull a small coding model that'll actually fit my 6gb card and wire the demo to it", "should_trigger": true},
+  {"query": "spin up ollama and grab whatever our standard demo model is so i can run this thing locally", "should_trigger": true},
+  {"query": "i need an offline llm running on the gpu to verify this, no api calls at all", "should_trigger": true},
+  {"query": "which local model should we use for demos that fit the 1660 ti, and can you provision it for me", "should_trigger": true},
+  {"query": "this youtube tutorial uses a local llama-server. get it running on the desktop so we can build the demo", "should_trigger": true},
+  {"query": "install ollama on this box, pull qwen2.5-coder, and tell me the endpoint to use", "should_trigger": true},
+  {"query": "run the ponytail demo against a local model on the gpu and show me the comparison", "should_trigger": true},
+  {"query": "switch this agent over to the anthropic opus model instead of glm for the next run", "should_trigger": false},
+  {"query": "the ollama container on the vps is pegging cpu, can you check why and restart it", "should_trigger": false},
+  {"query": "what's the actual quality difference between qwen2.5-coder:7b and the 3b for python codegen", "should_trigger": false},
+  {"query": "my gpu fans are screaming and nvidia-smi shows 80C, is something wrong with the card", "should_trigger": false},
+  {"query": "write me a python client that calls the openai chat api and streams tokens back", "should_trigger": false},
+  {"query": "set up a local postgres instance for this project and seed it with test data", "should_trigger": false},
+  {"query": "the demo build on the vps keeps dying on the no-progress watchdog, can you fix the timeout", "should_trigger": false},
+  {"query": "explain how the gpu-demo desktop approval email flow works end to end", "should_trigger": false},
+  {"query": "install the cuda toolkit and fix torch so 'import torch' stops failing on the desktop", "should_trigger": false},
+  {"query": "download a model from huggingface and run inference with the transformers library on the gpu", "should_trigger": false}
+]

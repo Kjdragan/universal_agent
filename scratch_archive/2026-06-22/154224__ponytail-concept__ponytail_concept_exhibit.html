@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Over-bloated vs naive cuts vs the Ponytail ladder</title>
+<style>
+  :root{
+    --bg:#f6f8fa;--card:#fff;--ink:#1b1f24;--muted:#5b6675;--line:#e3e8ee;
+    --base:#cf222e;--cave:#9a6700;--pony:#1a7f37;--blue:#0969da;--chip:#eef2f6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:940px;margin:0 auto;padding:28px 20px 64px}
+  h1{font-size:26px;line-height:1.2;margin:0 0 6px}
+  .sub{color:var(--muted);margin:0 0 22px;font-size:15px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  h2{font-size:18px;margin:2px 0 12px}
+  p{margin:8px 0}.muted{color:var(--muted)}
+  code{background:var(--chip);padding:1px 6px;border-radius:5px;font-size:13.5px;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .setup{background:#eef5ff;border:1px solid #cfe2ff;border-radius:10px;padding:14px 16px;font-size:14.5px}
+  .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:720px){.three{grid-template-columns:1fr}}
+  .ap{border:1px solid var(--line);border-radius:11px;padding:14px;border-top:4px solid var(--line)}
+  .ap.base{border-top-color:var(--base)}.ap.cave{border-top-color:var(--cave)}.ap.pony{border-top-color:var(--pony)}
+  .ap h3{margin:0 0 2px;font-size:15px}
+  .tag{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+  .tag.base{color:var(--base)}.tag.cave{color:var(--cave)}.tag.pony{color:var(--pony)}
+  .ap .says{font-style:italic;color:var(--muted);font-size:13px;margin:6px 0 10px;min-height:34px}
+  .ap .what{font-size:13.5px;margin:8px 0}
+  .stat{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px dashed var(--line)}
+  .stat b{font-variant-numeric:tabular-nums}
+  .chartcard h2{margin-bottom:14px}
+  .barrow{display:grid;grid-template-columns:96px 1fr 92px;align-items:center;gap:10px;margin:9px 0}
+  .barrow .lbl{font-size:12.5px;font-weight:600;text-align:right}
+  .track{background:#f0f3f6;border-radius:7px;height:26px;overflow:hidden}
+  .bar{height:100%;border-radius:7px;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;color:#fff;font-size:12px;font-weight:700;min-width:34px}
+  .bar.base{background:var(--base)}.bar.cave{background:var(--cave)}.bar.pony{background:var(--pony)}
+  .barrow .val{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .insight{background:#f0faf3;border:1px solid #bce7c8;border-radius:11px;padding:16px 18px}
+  .insight h2{color:var(--pony)}
+  .kbig{font-size:15px}
+  .foot{color:var(--muted);font-size:13px;margin-top:24px}
+  .win{display:inline-block;background:#e6f4ea;color:var(--pony);font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;margin-left:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Bloat vs a blind cut vs a smart cut</h1>
+  <p class="sub">The same over-loaded coding request, asked three ways, run on a local model on the desktop GPU (qwen2.5-coder:7b) &middot; 2026-06-22</p>
+
+  <div class="card">
+    <h2>The experiment</h2>
+    <p class="setup">One deliberately over-stuffed request is sent <b>three times</b> — identical task, three different system prompts — and we measure what each produces. The task tempts the model to over-build: <em>"a config loader with hot-reload, YAML/JSON/TOML/INI, env overrides, schema validation, and a remote etcd sync client."</em> Most of that is speculative — a real service just needs to read config at startup.</p>
+  </div>
+
+  <div class="three">
+    <div class="ap base">
+      <div class="tag base">1 · Over-bloat</div>
+      <h3>BASELINE</h3>
+      <div class="says">"Build it all, professionally. Don't omit anything."</div>
+      <div class="what">No pressure to restrain. The model dutifully builds <b>every</b> requested subsystem plus scaffolding it imagines it needs. This is the 20K-token over-build the whole pattern exists to prevent.</div>
+      <div class="stat"><span>tokens</span><b>1,662</b></div>
+      <div class="stat"><span>lines of code</span><b>197</b></div>
+      <div class="stat"><span>time</span><b>187 s</b></div>
+    </div>
+    <div class="ap cave">
+      <div class="tag cave">2 · Naive cut</div>
+      <h3>CAVEMAN</h3>
+      <div class="says">"Be brief. Short. As few tokens as possible."</div>
+      <div class="what">Brevity with <b>no judgment</b>. It slashes output hardest — but it's <em>truncation</em>, not design: it compresses and drops things blindly, with no reasoning about what's actually needed. Cheapest, but you can't trust <em>what</em> it cut.</div>
+      <div class="stat"><span>tokens</span><b>562 &nbsp;<span style="color:var(--cave)">(−66%)</span></b></div>
+      <div class="stat"><span>lines of code</span><b>65</b></div>
+      <div class="stat"><span>time</span><b>41 s</b></div>
+    </div>
+    <div class="ap pony">
+      <div class="tag pony">3 · Smart cut</div>
+      <h3>PONYTAIL LADDER</h3>
+      <div class="says">"For each feature: needed? does stdlib do it? what's the minimum?"</div>
+      <div class="what">Forces <b>reasoning before code</b>. It "spends" tokens thinking out loud — so it's not the fewest tokens — but it justifies every cut and emits the <b>tightest, most defensible code of all three.</b></div>
+      <div class="stat"><span>tokens</span><b>1,084 &nbsp;<span style="color:var(--pony)">(−35%)</span></b></div>
+      <div class="stat"><span>lines of code</span><b>63 <span class="win">fewest</span></b></div>
+      <div class="stat"><span>time</span><b>72 s</b></div>
+    </div>
+  </div>
+
+  <div class="card chartcard">
+    <h2>Tokens spent — CAVEMAN looks like the "winner"</h2>
+    <div class="barrow"><div class="lbl">BASELINE</div><div class="track"><div class="bar base" style="width:100%">1,662</div></div><div class="val">over-built</div></div>
+    <div class="barrow"><div class="lbl">CAVEMAN</div><div class="track"><div class="bar cave" style="width:33.8%">562</div></div><div class="val">−66%</div></div>
+    <div class="barrow"><div class="lbl">PONYTAIL</div><div class="track"><div class="bar pony" style="width:65.2%">1,084</div></div><div class="val">−35%</div></div>
+    <p class="muted" style="font-size:13px">By raw token count, the naive "just be brief" prompt cuts the most. If tokens were the only metric, you'd stop here — and ship whatever it happened to leave out.</p>
+  </div>
+
+  <div class="card chartcard">
+    <h2>Lines of actual code — PONYTAIL is tightest</h2>
+    <div class="barrow"><div class="lbl">BASELINE</div><div class="track"><div class="bar base" style="width:100%">197</div></div><div class="val">bloated</div></div>
+    <div class="barrow"><div class="lbl">CAVEMAN</div><div class="track"><div class="bar cave" style="width:33%">65</div></div><div class="val">blindly brief</div></div>
+    <div class="barrow"><div class="lbl">PONYTAIL</div><div class="track"><div class="bar pony" style="width:32%">63</div></div><div class="val">disciplined</div></div>
+    <p class="muted" style="font-size:13px">Flip to the thing that matters — the size of the code you have to own and read at 3am — and PONYTAIL produces the <b>least</b> of all three, even though it used nearly 2&times; CAVEMAN's tokens. It reasoned its way to the minimum instead of truncating into it.</p>
+  </div>
+
+  <div class="card insight">
+    <h2>The point</h2>
+    <p class="kbig">Fewest tokens is <b>not</b> the goal — the <b>right minimal code</b> is.</p>
+    <p><b>Over-bloat (BASELINE)</b> builds everything you named, needed or not. <b>A naive cut (CAVEMAN)</b> just makes the answer shorter — it's cheap but blind, and you can't trust what it quietly dropped. <b>The ladder (PONYTAIL)</b> pays a little extra to <em>reason</em> first — necessity, then "does the standard library already do this," then the minimum — and lands on the tightest, most defensible code.</p>
+    <p class="muted">That's the lazy-senior-engineer move: not "write less," but "decide what genuinely needs to exist, then write only that." The few hundred extra tokens of reasoning are the cheapest insurance you can buy against either over-building or silently under-building.</p>
+  </div>
+
+  <p class="foot">Numbers are from a live local-GPU run (qwen2.5-coder:7b on a GTX 1660 Ti) — deltas are vs BASELINE. The exact ratios shift by model and run; the shape — bloat &gt; smart-cut &gt; blind-cut on code size — is the durable lesson.</p>
+
+</div>
+</body>
+</html>
