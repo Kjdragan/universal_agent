@@ -23,7 +23,11 @@ code_paths:
   - deployment/systemd/
   - web-ui/app/dashboard/tutorials/
   - web-ui/app/dashboard/claude-code-intel/
-last_verified: 2026-06-15
+  - src/universal_agent/feature_flags.py
+  - src/universal_agent/services/cron_artifact_notifier.py
+  - .claude/skills/provision-local-gpu-ollama/
+  - .claude/commands/gpu-demo-build.md
+last_verified: 2026-06-22
 ---
 
 # ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign
@@ -250,6 +254,64 @@ deterministic finalize step that lands every completed build on the dashboard de
   `task_hub_bridge.py::task_hub_task_action` rejects; pinned by
   `tests/unit/test_todo_dispatch_prompt_actions.py`.
 
+### GPU-bound demos — desktop-build approval gate (P7, implemented; ENABLED in prod 2026-06-22)
+
+Some demos are **GPU-bound**: their runnable form drives a *local* LLM (an Ollama
+server) rather than a hosted API. The VPS has **no GPU** (Hostinger VM), so those
+passes run on CPU at ~7 tok/s — a multi-pass run exceeds the 600s no-progress
+watchdog (`timeout_policy.py::LivenessWatchdog`) and the build can never be
+verified there (this is exactly what stalled the `ponytail-yagni-ladder-ollama`
+demo on 2026-06-22). The only GPU in the system is **Kevin's desktop GTX 1660 Ti
+(6GB)**. Per the runtime contract, **nothing runs autonomously on the desktop** —
+so GPU-bound demos take a human-in-the-loop branch: the VPS detects them, parks
+them, and emails Kevin a one-click approval; the build itself only ever runs when
+Kevin drives it interactively on the desktop.
+
+Lifecycle (state lives in `task_hub_items.metadata.gpu_approval.state`, **not** a
+task-status enum — unknown statuses fall through every eligibility gate):
+
+1. **Classify** — `proactive_tutorial_builds.py::gpu_bound_from_candidate` is a
+   deterministic keyword pre-filter (`ollama`, `llama.cpp`, `llama-server`,
+   `gguf`, `vllm`, `lm studio`, `localhost:11434`, `local llm`/`local model`,
+   `run locally`) over the candidate title + extraction plan. (v1 is keyword-only;
+   an LLM judge is a deferred follow-up.)
+2. **Park + notify** — `proactive_tutorial_builds.py::classify_and_gate_gpu_demo`
+   (wired at the top of `proactive_tutorial_builds.py::queue_tutorial_builds_with_ceiling`)
+   queues the `tutorial_build` row with `agent_ready=False` (the existing
+   pending-approval mechanism, so CODIE on the VPS never auto-claims it), stamps
+   `metadata.endpoint_required="ollama_local"` + `gpu_approval={state:"pending",…}`,
+   and sends the operator an email via
+   `proactive_tutorial_builds.py::_send_gpu_demo_approval_email`. The approve link
+   base defaults to the **tailnet gateway** (`https://uaonvps.taildcc090.ts.net`,
+   override `UA_GPU_DEMO_APPROVAL_BASE_URL`) so it both reaches the always-on
+   gateway and is clickable on the operator's devices.
+3. **Approve** — the email's HMAC-signed link hits
+   `gateway_server.py::gpu_demo_approve_get` (`GET /api/v1/gpu_demo/{task_id}/approve`,
+   404 when the flag is off). The HMAC token **is** the auth (a mail-client click
+   carries no bearer header), reusing the same secret as the other signed email
+   links via `cron_artifact_notifier.py::sign_gpu_demo_token` /
+   `cron_artifact_notifier.py::verify_gpu_demo_token` (no new rotation surface).
+   On approve it normalizes the verb to `gpu_approval.state="approved"` and returns
+   a landing page printing the exact desktop command. It records approval only — it
+   does **not** auto-dispatch (the VPS has no GPU to build on).
+4. **Build on the desktop** — Kevin runs `/gpu-demo-build <task_id>`
+   (`.claude/commands/gpu-demo-build.md`) interactively. It re-checks the approved
+   state, provisions Ollama + the standard model via the
+   `provision-local-gpu-ollama` skill (`qwen2.5-coder:7b`, ≤5GB / ≤3-model guards —
+   see [`../06_platform/05_environments.md`](../06_platform/05_environments.md)
+   § "Desktop GPU"), builds the demo wired to the local endpoint, then calls
+   `proactive_tutorial_builds.py::finalize_desktop_gpu_demo` to stamp
+   `state="built"` + `demo_finalize.ok` and complete the source task.
+
+Gated by `feature_flags.py::gpu_demo_desktop_approval_enabled`
+(`UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED`). It defaults OFF in code; it was **set to
+`1` in Infisical production on 2026-06-22** to enable the gate live. When OFF,
+`classify_and_gate_gpu_demo` returns `None` and every candidate flows through the
+unchanged ceiling path. **Contract-safety:** the only desktop artifacts are inert
+files (a slash command + the skill) that do nothing until Kevin runs them — no
+daemon, poller, timer, or systemd unit; all autonomous behavior (classify, park,
+email, the approve route) lives on the always-on VPS gateway/worker.
+
 ### Out of scope (parked)
 
 - The Claude-Code-education **X-intel** demo track (`cody_scaffold_request` + `cody_demo_task`) stays as-is
@@ -275,6 +337,8 @@ deterministic finalize step that lands every completed build on the dashboard de
 | **P4** | **done** | Rewrite the Demo build contract | `proactive_tutorial_builds.py::DEMO_BUILD_CONTRACT` (framework-per-video rule + functional-completeness acceptance + ZAI inference wiring) embedded in every `tutorial_build` BRIEF via `proactive_tutorial_builds.py::_build_task_description`; same contract mirrored in `.claude/skills/cody-implements-from-brief/` (stale scrub/endpoint guidance fixed); `templates/ua_demos_scaffold/` README env-wiring invariant; `vp/profiles.py` stale-comment fix |
 | **P5** | **done** | Session link (3-panel view) | `hooks_service.py::_stamp_tutorial_manifest_build_session` (tutorial manifests, success + recovered validation paths in `_dispatch_action`); `vp/worker_loop.py::_stamp_demo_manifest_build_session` (demo manifests at mission terminal, CLI + SDK lanes); `gateway_server.py::_list_tutorial_runs` + `gateway_server.py::_claude_code_intel_demos` + `gateway_server.py::_session_viewer_url` surface `session_id`/`run_id`/`session_url`; Tutorial Backlog tab + Demos panel render the link |
 | **P6** | **done** | Real /goal build loop on ZAI + deterministic finalize | `proactive_tutorial_builds.py::queue_tutorial_build_task` (stamps `use_goal_loop`) + `proactive_tutorial_builds.py::DEMO_BUILD_CONTRACT` (runnable + manifest requirements); `vp_orchestration.py::_vp_dispatch_mission_impl` (goal-eligible → `execution_mode="cli"` on ZAI); `claude_cli_client.py::_run_goal_loop_mission` (briefing turn → `claude -p "/goal <condition>"` argv turn); `tutorial_demo_finalize.py::finalize_tutorial_build_demo` (manifest synthesis + mechanical checks + `UA_DEMOS_ROOT` symlink) wired in `vp/worker_loop.py::_execute_mission_logic`; `todo_dispatch_service.py::TODO_DISPATCH_PROMPT` `redirect_to`→`delegate` fix; self-brief-and-attest "Card mode" |
+
+| **P7** | **done** (PR #1152 + #1153; ENABLED in prod 2026-06-22) | GPU-bound demos gated to the desktop GPU via operator email approval (default-OFF flag, contract-safe) | `feature_flags.py::gpu_demo_desktop_approval_enabled`; `proactive_tutorial_builds.py::gpu_bound_from_candidate` + `::classify_and_gate_gpu_demo` (wired in `::queue_tutorial_builds_with_ceiling`) + `::_send_gpu_demo_approval_email` + `::finalize_desktop_gpu_demo`; `cron_artifact_notifier.py::sign_gpu_demo_token`/`::verify_gpu_demo_token`; `gateway_server.py::gpu_demo_approve_get`; `.claude/skills/provision-local-gpu-ollama/` + `.claude/commands/gpu-demo-build.md`. See § "GPU-bound demos — desktop-build approval gate". |
 
 **Post-P2 tuning (operator-required):** validate the worthiness scoring produces the right *volume* (not too
 few, not a flood) and the right *type* of candidates; tune the threshold/judge to surface the demos the
