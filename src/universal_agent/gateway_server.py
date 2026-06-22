@@ -22576,7 +22576,14 @@ async def gpu_demo_approve_get(task_id: str, a: str = "", t: str = ""):
             gpu_approval = meta.get("gpu_approval")
             if not isinstance(gpu_approval, dict):
                 gpu_approval = {}
-            gpu_approval["state"] = action  # "approve" or "reject"
+            # Map the click action to the canonical lifecycle state. The desktop
+            # build path (finalize_desktop_gpu_demo) and the /gpu-demo-build
+            # command both gate on state == "approved" / "rejected" — NOT the raw
+            # action "approve"/"reject", so the verb must be normalized here.
+            from datetime import datetime as _dt, timezone as _tz
+            gpu_approval["state"] = "approved" if action == "approve" else "rejected"
+            gpu_approval["approved_by"] = "kevin"
+            gpu_approval["approved_at"] = _dt.now(_tz.utc).isoformat(timespec="seconds")
             meta["gpu_approval"] = gpu_approval
             updated_item = dict(item)
             updated_item["metadata"] = meta
