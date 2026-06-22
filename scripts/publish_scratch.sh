@@ -55,6 +55,44 @@ REMOTE_INDEX_BUILDER="/opt/universal_agent/scripts/build_scratch_index.py"
 # Runs locally on the publishing machine; the src file is still present at archive time.
 ARCHIVER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scratch_archive.py"
 ARCHIVE_ENABLED="${UA_SCRATCH_ARCHIVE_ENABLED:-1}"
+
+# --- Markdown auto-render --------------------------------------------------------------
+# The shell transports files VERBATIM, so a published `.md` shows as raw source in the
+# browser instead of a rendered page. Delegate markdown inputs (a single `.md`, or a
+# `--dir` containing any `.md`) to the Python renderers (`publish_markdown_to_scratch` /
+# `publish_docset_to_scratch`), which produce styled, light-mode HTML and then call back
+# here with `.html` to transport. `UA_SCRATCH_RENDERING=1` is exported for that inner call
+# so this guard is skipped on the way back down — no recursion, even if a stray `.md`
+# survives in the rendered tree. Falls back to raw transport if Python is unavailable.
+UA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+UA_PY="$UA_ROOT/.venv/bin/python"
+[[ -x "$UA_PY" ]] || UA_PY="$(command -v python3 || true)"
+
+_is_md_file() { [[ "${1,,}" =~ \.(md|markdown|mdown|mkd)$ ]]; }
+_dir_has_md() {
+  find "$1" -type f \( -iname '*.md' -o -iname '*.markdown' -o -iname '*.mdown' -o -iname '*.mkd' \) \
+    -print -quit 2>/dev/null | grep -q .
+}
+# $1=mode(file|dir) $2=src $3=slug → prints the rendered https:// URL on success, else nothing.
+_render_md() {
+  [[ -n "$UA_PY" && -x "$UA_PY" ]] || return 1
+  UA_SCRATCH_RENDERING=1 PYTHONPATH="$UA_ROOT/src" "$UA_PY" - "$1" "$2" "${3:-}" 2>/dev/null <<'PYEOF'
+import sys
+mode, src, slug = sys.argv[1], sys.argv[2], (sys.argv[3] or None)
+try:
+    from universal_agent.services.scratch_publish import (
+        publish_docset_to_scratch,
+        publish_markdown_to_scratch,
+    )
+    if mode == "file":
+        url = publish_markdown_to_scratch(open(src, encoding="utf-8").read(), slug=slug)
+    else:
+        url = publish_docset_to_scratch(src, slug=slug)
+except Exception:
+    url = None
+print(url or "", end="")
+PYEOF
+}
 # Permanent archive store on the VPS for autonomous (robot) runs. A SIBLING of
 # SCRATCH_ROOT — never under it — so prune_scratch.py can never reach it. Retention is
 # unlimited by design; nothing prunes the archive.
@@ -99,6 +137,18 @@ cmd_publish() {
   local slug="${2:-}"
   [[ -f "$src" ]] || die "no such file: $src"
 
+  # Markdown → render to a styled HTML page (a raw `.md` shows as source in a browser).
+  if [[ -z "${UA_SCRATCH_RENDERING:-}" ]] && _is_md_file "$src"; then
+    local rendered_url
+    rendered_url="$(_render_md file "$src" "$slug")"
+    if [[ -n "$rendered_url" ]]; then
+      err "Published rendered markdown (tailnet-only, private to your devices):"
+      printf '%s\n' "$rendered_url"
+      return 0
+    fi
+    err "warning: markdown render unavailable (no UA venv?); publishing raw source"
+  fi
+
   # Default to a random, unguessable slug. Good hygiene (the URL is unlisted),
   # though tailnet membership — not the slug — is the real security boundary.
   if [[ -z "$slug" ]]; then
@@ -133,6 +183,20 @@ cmd_publish_dir() {
   local src="$1"
   local slug="${2:-}"
   [[ -d "$src" ]] || die "no such directory: $src"
+
+  # A tree containing markdown → render it into a cross-linked HTML site (otherwise each
+  # `.md` serves as raw source). Non-markdown trees (HTML/images/PDFs) fall through to the
+  # verbatim copy below.
+  if [[ -z "${UA_SCRATCH_RENDERING:-}" ]] && _dir_has_md "$src"; then
+    local rendered_url
+    rendered_url="$(_render_md dir "$src" "$slug")"
+    if [[ -n "$rendered_url" ]]; then
+      err "Published rendered markdown docset (tailnet-only, private to your devices):"
+      printf '%s\n' "$rendered_url"
+      return 0
+    fi
+    err "warning: markdown render unavailable (no UA venv?); publishing raw tree"
+  fi
 
   if [[ -z "$slug" ]]; then
     slug="$(openssl rand -hex 6 2>/dev/null || head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"

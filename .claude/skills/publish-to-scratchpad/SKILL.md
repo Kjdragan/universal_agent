@@ -64,6 +64,12 @@ URL=$(scripts/publish_scratch.sh report.html my-analysis)
 # rendered, cross-linked doc set — prints the base URL .../scratch/<slug>/.
 BASE=$(scripts/publish_scratch.sh --dir ./rendered_site my-docs)
 
+# Markdown AUTO-RENDERS (since 2026-06-22). Hand the shell a raw .md (or a --dir of
+# them) and it publishes a styled, cross-linked HTML page — NOT raw source. So
+# "show me this .md on the scratchpad" is just: URL=$(scripts/publish_scratch.sh doc.md)
+URL=$(scripts/publish_scratch.sh notes.md)              # -> rendered HTML page
+BASE=$(scripts/publish_scratch.sh --dir ./my_md_docs)   # -> rendered, cross-linked site
+
 # Rebuild the browsable artifact index (also auto-runs after every publish + on a timer).
 scripts/publish_scratch.sh --reindex
 
