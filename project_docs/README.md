@@ -99,6 +99,7 @@ _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environment
 - **["ADR: Autonomous doc-drift issue triage & fix — three delivery options"](06_platform/11_autonomous_doc_triage_options_adr.md)** — Options for an autonomous Opus agent that triages/fixes the nightly doc-drift issues: (a) _(verified 2026-06-16)_
 - **["ADR: Deploy-Restart Resilience for the Gateway (cut the churn, protect in-process work)"](06_platform/12_deploy_restart_resilience_adr.md)** — ADR: cut deploy-restart churn + protect in-process work across gateway restarts (coalesce queued deploys, drain/handoff in-flight turns). _(verified 2026-06-22)_
 - **["ADR: Resumable External Jobs (the requeue must have something to adopt)"](06_platform/13_resumable_external_jobs_adr.md)** — ADR (accepted 2026-06-16): resumable external jobs so a requeue has a durable record to adopt; implemented for paper_to_podcast. _(verified 2026-06-16)_
+- **[Local LLM Inference (Ollama on the Desktop GPU)](06_platform/14_local_llm_inference.md)** — Running an LLM locally on the desktop GPU via Ollama: the desktop-vs-VPS GPU split, user-local (no-root) install, the standard model `qwen2.5-coder:7b` + the 6GB guards (≤5GB/model, ≤3 on disk), the `provision-local-gpu-ollama` skill, and the GPU-bound-demo desktop-build approval gate. _(verified 2026-06-22)_
 
 ## 07_tools
 
