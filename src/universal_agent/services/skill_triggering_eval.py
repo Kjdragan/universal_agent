@@ -60,17 +60,31 @@ async def _invoked_once(
         max_turns=2,
         env=env,
     )
+    # Drive the SDK generator explicitly and aclose() it in finally. Returning from
+    # *inside* the `async for` (or cancelling it via wait_for) leaves the generator's
+    # internal task running and the GC then prints
+    # "aclose(): asynchronous generator is already running". Break out, then close it
+    # ourselves under a clean asyncio.timeout boundary instead.
+    agen = query(prompt=prompt, options=opts)
+    found = False
     try:
-        async def _run() -> bool:
-            async for msg in query(prompt=prompt, options=opts):
-                for block in getattr(msg, "content", None) or []:
-                    if getattr(block, "name", None) == "Skill":
-                        return True
-            return False
-        return await asyncio.wait_for(_run(), timeout=timeout_s)
-    except (asyncio.TimeoutError, Exception):
+        async with asyncio.timeout(timeout_s):
+            async for msg in agen:
+                if any(
+                    getattr(block, "name", None) == "Skill"
+                    for block in (getattr(msg, "content", None) or [])
+                ):
+                    found = True
+                    break
+    except Exception:
         # Timeout or harness error == "did not trigger" (e.g. glm-5.2 too slow).
-        return False
+        pass
+    finally:
+        try:
+            await agen.aclose()
+        except Exception:
+            pass
+    return found
 
 
 async def evaluate_triggering(
