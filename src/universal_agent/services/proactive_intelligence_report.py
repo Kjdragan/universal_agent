@@ -220,7 +220,12 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
 # 2. LLM Reasoning Pass
 # ---------------------------------------------------------------------------
 
-async def _call_reasoning_llm(stats: dict[str, Any], period: str) -> str:
+async def _call_reasoning_llm(
+    stats: dict[str, Any],
+    period: str,
+    *,
+    activity_inventory: dict[str, Any] | None = None,
+) -> str:
     """Call an LLM to interpret pipeline stats and provide actionable analysis.
 
     The "colleague, not a dashboard" reasoning pass. Routes through the central
@@ -233,33 +238,42 @@ async def _call_reasoning_llm(stats: dict[str, Any], period: str) -> str:
     back to a deterministic templated summary so the report always ships.
     """
     stats_json = json.dumps(stats, indent=2, default=str)
+    inventory = activity_inventory or {}
+    inventory_json = json.dumps(inventory, indent=2, default=str)
     system = (
-        "You are Simone, Kevin's AI chief of staff, briefing him on the "
-        "autonomous proactive pipeline. Write a concise, conversational analysis "
-        "(2-4 paragraphs, under 300 words):\n"
-        "1. What happened: summarize proactive task activity — what was created, "
-        "completed, or failed.\n"
-        "2. System health: comment on budget utilization and system load — is the "
-        "system being used enough, or is it stressed?\n"
-        "3. What to do next: give 1-3 actionable recommendations. Think like a "
-        "colleague, not a dashboard — if tasks failed, suggest investigation "
-        "priorities; if under-utilized, suggest work to explore; if over-utilized, "
-        "suggest throttling.\n"
-        "Be specific and reference the actual numbers you are given. GROUNDING "
-        "RULE (strict): every fact must be derivable from the JSON below. Only "
-        "name source kinds that appear in 'by_source'. The JSON does NOT explain "
-        "WHY anything failed — so never state or invent a failure cause/category "
-        "(e.g. a specific error type, 'protocol violations', a task type that "
-        "isn't in by_source). If failures occurred, say they need investigation "
-        "without naming a cause you cannot see. Do not hedge on the numbers; do "
-        "hedge on anything the data doesn't show."
+        "You are Simone, Kevin's AI chief of staff, briefing him on the health of "
+        "his AUTONOMOUS PROACTIVE ACTIVITIES. The lead question is always: are all "
+        "the proactive processes running, or is something broken/dark/paused that "
+        "Kevin can't see? Write a concise, conversational analysis (2-4 paragraphs, "
+        "under 300 words):\n"
+        "1. Overall health: from the ACTIVITY INVENTORY, state whether the proactive "
+        "fleet is healthy. Call out BY NAME every activity whose status is "
+        "'degraded', 'dark', or 'unknown' — these are the ones that may have broken "
+        "silently. Note 'paused'/'parked' activities are off by design (e.g. "
+        "claude_code_intel_sync is operator-paused) and are NOT failures.\n"
+        "2. Pipeline activity: briefly summarize the secondary task stats "
+        "(created/completed/failed, budget) for context.\n"
+        "3. What to do next: 1-3 actionable recommendations — prioritize "
+        "investigating any degraded/dark activity by name; if everything is "
+        "healthy, say so plainly.\n"
+        "GROUNDING RULE (strict): every fact must be derivable from the JSON below. "
+        "Use each activity's 'status' and 'detail' fields verbatim, and for the "
+        "secondary stats only name source kinds that appear in 'by_source'. The "
+        "data carries failure/overdue COUNTS and statuses but no failure REASONS, "
+        "so never state or invent a failure cause/category (e.g. a specific error "
+        "type, 'protocol violations', or a task type not present) — a "
+        "'dark'/'degraded' status means no recent output / overdue, NOT a "
+        "diagnosed root cause. Do not hedge on the status/numbers; do hedge on "
+        "anything the data doesn't explain."
     )
     user = (
-        f"This is the {period} briefing. Note: proactive_tasks counts are ACTIVITY "
-        f"over the trailing 24h (NOT cumulative) — 0 means an idle window, not a "
-        f"failure spike; 'total_all_time' is the lifetime count for context. Budget "
-        f"and utilization are windowed as labeled:\n\n"
-        f"```json\n{stats_json}\n```"
+        f"This is the {period} briefing.\n\n"
+        f"PRIMARY — autonomous activity inventory (lead on this; status/detail "
+        f"are authoritative):\n```json\n{inventory_json}\n```\n\n"
+        f"SECONDARY — proactive task pipeline stats. Note: proactive_tasks counts "
+        f"are ACTIVITY over the trailing 24h (NOT cumulative) — 0 means an idle "
+        f"window, not a failure spike; 'total_all_time' is the lifetime count. "
+        f"Budget and utilization are windowed as labeled:\n```json\n{stats_json}\n```"
     )
 
     try:
@@ -312,11 +326,34 @@ async def compose_intelligence_report(
     effective_period = period or stats.get("period", "unknown")
     stats["period"] = effective_period
 
-    analysis = await _call_reasoning_llm(stats, effective_period)
+    # ── Activity inventory (the LEAD of the report) ─────────────────
+    # Enumerate every autonomous proactive activity across systemd timers,
+    # in-app crons, and lanes, and confirm each is healthy vs broken/dark/paused.
+    # Best-effort: never let it block the report.
+    activity_inventory: dict[str, Any] = {}
+    activity_section = ""
+    try:
+        from universal_agent.services.proactive_activity_report import (
+            build_activity_inventory,
+            render_activity_section,
+        )
+
+        activity_inventory = build_activity_inventory(conn)
+        activity_section = render_activity_section(activity_inventory)
+    except Exception as exc:  # noqa: BLE001 — inventory must never break delivery
+        logger.warning("Failed to build activity inventory: %s", exc)
+        activity_inventory = {}
+        activity_section = ""
+
+    analysis = await _call_reasoning_llm(
+        stats, effective_period, activity_inventory=activity_inventory
+    )
 
     return {
         "stats": stats,
         "analysis": analysis,
+        "activity_inventory": activity_inventory,
+        "activity_section": activity_section,
         "period": effective_period,
         "timestamp": stats["timestamp"],
     }
@@ -328,7 +365,7 @@ def format_report_email(report: dict[str, Any]) -> tuple[str, str, str]:
     period_label = period.capitalize() if period else "Update"
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    subject = f"[UA Proactive] {period_label} Intelligence Report — {today}"
+    subject = f"[UA Proactive] {period_label} Activity Report — {today}"
 
     stats = report.get("stats", {})
     tasks = stats.get("proactive_tasks", {})
@@ -336,11 +373,25 @@ def format_report_email(report: dict[str, Any]) -> tuple[str, str, str]:
     signals = stats.get("signal_cards", {})
     utilization = stats.get("utilization", {})
     analysis = report.get("analysis", "")
+    activity_section = str(report.get("activity_section") or "").strip()
 
     lines = [
         f"Proactive Pipeline — {period_label} Report",
         f"Generated: {report.get('timestamp', today)}",
         "",
+    ]
+
+    # LEAD with the autonomous-activity inventory when available, so Kevin sees
+    # at a glance whether every proactive process is healthy vs broken/dark/paused.
+    if activity_section:
+        lines.extend([
+            "═══ Proactive Activity Status ═══",
+            "",
+            activity_section,
+            "",
+        ])
+
+    lines.extend([
         f"═══ Pipeline Activity (last {tasks.get('window_hours', 24)}h) ═══",
         f"  Open tasks:      {tasks.get('open', 0)}",
         f"  Completed:       {tasks.get('completed', 0)}",
@@ -356,7 +407,7 @@ def format_report_email(report: dict[str, Any]) -> tuple[str, str, str]:
         f"  Pending:   {signals.get('pending', 0)}",
         f"  Promoted:  {signals.get('promoted', 0)}",
         "",
-    ]
+    ])
 
     if utilization.get("sample_count", 0) > 0:
         lines.extend([
@@ -407,6 +458,21 @@ async def deliver_intelligence_report(
     """
     ensure_report_schema(conn)
     report = await compose_intelligence_report(conn, period=period)
+
+    # Land the activity inventory in Simone's durable shared memory so
+    # build_file_memory_context surfaces fleet health in future sessions.
+    # Best-effort — never let memory plumbing break delivery.
+    try:
+        from universal_agent.services.proactive_activity_report import (
+            capture_activity_report_to_memory,
+        )
+
+        capture_activity_report_to_memory(
+            report.get("activity_inventory") or {},
+            report.get("activity_section") or "",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("activity-report memory capture failed: %s", exc)
 
     subject, text_body, html_body = format_report_email(report)
     report_id = f"rpt-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{report.get('period', 'x')}-{uuid.uuid4().hex[:8]}"
