@@ -186,6 +186,36 @@ This skill publishes HTML — it doesn't author it. To produce a polished page, 
 tables) or render your own markdown→HTML. Whatever produces the HTML, this skill is the
 last step: publish it and hand over the link.
 
+## Mermaid that renders (avoid these syntax errors)
+
+Mermaid diagrams fail **silently** in these artifacts: a syntax error shows only as a red
+"Syntax error in text" box in the browser — it does **not** fail CI, the publish, or any
+lint, so you won't notice unless you look. Broken diagrams are the single most common way
+an otherwise-good page ships flawed. Follow these rules (mermaid 10.x), then **re-open the
+published page — or have the operator confirm — to verify every diagram actually rendered.**
+
+1. **No `;` inside a node / edge / message label.** Mermaid treats `;` as a statement
+   separator, so a `;` in label text splits the line mid-text and throws. This is the exact
+   bug that broke a `sequenceDiagram` message `(AUTO_MERGE_PAT; excludes …)`. Use a comma
+   or "—" instead. (A trailing `classDef …;` / `class …;` line is fine — there the `;` is a
+   real terminator, not label text.)
+2. **Quote every label that contains a special character.** Write node labels as `id["…"]`,
+   decisions as `id{"…"}`, and edge labels as `-->|"…"|` whenever the text contains any of
+   `( ) / : + # & > < , .` or `<br/>`. Unquoted special chars are the #1 parse failure.
+3. **Never put a raw `&` in a label** — mermaid reads it as the start of an HTML entity.
+   Write "and".
+4. **Prefer `flowchart` / `stateDiagram-v2` / a plain HTML table over `sequenceDiagram`.**
+   Sequence diagrams are the most fragile (participant aliases *and* message text both parse
+   special chars) and break most often. If you must use one: no `;`, avoid `()` and `/` in
+   message text, keep `as` aliases simple, and use "and" not `&`.
+5. **Keep node ids alphanumeric** (no spaces / dots / slashes in the id itself — put those
+   in the quoted label), and **balance everything**: every `subgraph` has an `end`; brackets,
+   quotes, and `|…|` pairs all matched.
+6. **Validate before you hand over the link.** If `mmdc` (`@mermaid-js/mermaid-cli`) is on
+   PATH, render each diagram with it; otherwise eyeball every mermaid block against rules
+   1–5. The fix loop is cheap: edit the source, re-publish with the **same slug** (it
+   overwrites the same URL), and reload the page.
+
 ## Light mode is mandatory
 
 Operator reports must render in **light mode**, regardless of the device's dark-mode

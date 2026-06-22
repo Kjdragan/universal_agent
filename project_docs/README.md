@@ -11,6 +11,7 @@ drift from disk. Editing rules live in [`CLAUDE.md`](CLAUDE.md) and are enforced
 ## Meta
 
 - [00_PLATFORM_STATUS_REGISTRY.md](00_PLATFORM_STATUS_REGISTRY.md) — **START HERE** — the single "what do we have and is it live?" index (subsystems, crons/timers, intel sources, VPs, MCP servers, channels) with code-sourced status.
+- [00_PROJECT_AT_A_GLANCE.md](00_PROJECT_AT_A_GLANCE.md) — **10-minute onboarding snapshot** — the 12 "greatest hits" (topology, task flow, schedulers, CSI pipeline, VPs, model routing, deploy) as diagrams + tables, each linking its canonical doc.
 - [00_DOCUMENTATION_REFACTOR_PLAN.md](00_DOCUMENTATION_REFACTOR_PLAN.md) — _(historical 2026-05-29 rebuild artifact)_ — how and why the docs were rebuilt (code-first).
 - [01_TAXONOMY.md](01_TAXONOMY.md) — Category structure and the canonical doc set.
 - [02_GOTCHA_INVENTORY.md](02_GOTCHA_INVENTORY.md) — Preserved operational/rationale facts not visible in code.
