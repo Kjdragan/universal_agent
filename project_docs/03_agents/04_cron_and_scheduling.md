@@ -8,6 +8,8 @@ code_paths:
   - src/universal_agent/gateway_server.py
   - src/universal_agent/systemd_migrated_jobs.py
   - src/universal_agent/task_hub.py
+  - src/universal_agent/services/paper_to_podcast_guard.py
+  - src/universal_agent/arxiv_runtime.py
   - deployment/systemd/
   - scripts/install_vps_phase_a_batch1_timers.sh
   - scripts/install_vps_phase_a_batch2_timers.sh
@@ -328,6 +330,38 @@ The rate-limit carve-out exists because the 3-attempt retry tripled the call
 rate into Composio's edge during a 429 window on 2026-05-23 — exactly the wrong
 behavior. Matching is on the error **body text**, because the upstream SDK
 discards the HTTP 429 status code.
+
+### Per-job post-run fail-loud guard (paper_to_podcast_daily)
+
+Some cron runs can return rc=0 (the LLM coroutine completed and closed its task
+normally) while producing zero useful work — the classic silent no-op. The
+``paper_to_podcast_daily`` cron hit this on 2026-06-22: every ``download_paper``
+either errored or was mis-checked, the agent's LLM narrative gracefully
+concluded "cache empty", and the run exited ``clean_exit_zero / status=success``
+in 5 minutes with no email and no podcast. The email-gap watchdog only caught
+it ~32h later.
+
+The mechanical fix lives in ``cron_service.py`` in the Phase F.1 close block
+(right after ``_f_rc_equiv_llm`` is computed): for a job whose
+``metadata.system_job == "paper_to_podcast_daily"`` and whose rc_equiv is 0,
+``services/paper_to_podcast_guard.py::evaluate_paper_to_podcast_run`` inspects
+the run's ``work_products/paper_to_podcast/`` artifacts for evidence of >=1
+usable paper (``manifest.json`` with a non-empty ``papers`` list, or
+``papers_metadata.json`` with >=1 entry). If zero usable papers are evidenced
+(or the skill's explicit ``FAILURE.txt`` sentinel is present), the guard flips
+``_f_rc_equiv_llm`` from 0 to 1 and stamps a descriptive error on the run
+record — so the ``cron_consecutive_failures`` invariant, the dashboard, and
+journalctl all surface a real failure instead of a silent no-op. The guard is
+gated on the ``paper_to_podcast_daily`` system_job id and is best-effort (any
+guard exception is swallowed so it cannot mask the original outcome); a
+timeout/cancel/exception keeps its real classification.
+
+The cache-path half of the same RCA was fixed in
+``arxiv_runtime.py::canonical_arxiv_storage_path`` /
+``arxiv_runtime.py::is_paper_cached``, which resolve the ONE directory the
+arxiv-mcp-server writes ``.md`` files to (HTML-source AND PDF-source; the
+server converts PDFs to markdown and deletes the intermediate PDF, so the
+pipeline cache check must look for ``.md``, never ``.pdf``).
 
 ## Deploy-window detection (suppress restart noise)
 

@@ -298,6 +298,15 @@ or connects to:
   Required by the `paper-to-podcast-tf` skill / `paper_to_podcast_daily` cron — the
   server enforces arXiv's 3-second rate limit automatically, which is what stops
   the raw-`arxiv`-library HTTP 429 storms that previously failed the nightly run.
+  Storage-path contract: `build_arxiv_mcp_server_config()` ALWAYS passes
+  `--storage-path` pointing at `arxiv_runtime.canonical_arxiv_storage_path()`
+  (env override `UA_ARXIV_MCP_STORAGE_PATH`; default
+  `~/.arxiv-mcp-server/papers` so existing cached papers remain reachable). The
+  server writes EVERY downloaded paper — HTML-source or PDF-source — as
+  `<arxiv_id>.md` (PDFs are converted to markdown and the intermediate `.pdf` is
+  deleted). The pipeline's cache check uses `arxiv_runtime.is_paper_cached`, which
+  resolves to the same `<id>.md` path — never `.pdf`. This alignment is the fix
+  for the 2026-06-22 silent no-op (write-path vs read-path mismatch).
   Registered in **both** `agent_setup.py::_build_mcp_servers` (legacy bridge path)
   and `main.py::setup_session` (the live execution-engine path the cron uses).
 - **`agentmail`** — the *official* AgentMail MCP server, built by
