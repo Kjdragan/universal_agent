@@ -1,15 +1,17 @@
 ---
 name: project-scaffolder
 description: >
-  Scaffold a fully-provisioned VPS project with FastAPI backend, Vite+React frontend,
-  PostgreSQL, Claude Agent SDK, Infisical secrets, GitHub CI/CD, MkDocs documentation,
-  and curated agent skills. Creates everything needed to start building immediately.
-  Use this skill whenever the user asks to scaffold, create, spin up, bootstrap, or
-  start a new project — even if they just say "new project" or "make me an app called X".
-  Also use when they mention wanting a new codebase, a new service, a new web application,
-  or anything that implies standing up a fresh FastAPI/React stack on the VPS. Do NOT
-  improvise project setup manually (e.g. uv init, mkdir) — always use this skill's
-  scaffold.py script for consistency and completeness.
+  Scaffold a FULL production web APPLICATION deployed as live services on the VPS:
+  FastAPI backend + Vite/React frontend + PostgreSQL + Alembic migrations, each run
+  as a systemd service behind Nginx + Let's Encrypt SSL on a dedicated subdomain,
+  with GitHub Actions CI/CD and its own auto-created Infisical project. Use this ONLY
+  when the user explicitly wants to stand up and DEPLOY a production, database-backed
+  web app or public HTTPS service. Do NOT use it for a lightweight repo, experiment,
+  lab, sandbox, prototype, script, or a plain "new project / new repo" — those go to
+  the new-repo skill (dragan:new-repo), which makes a shared-uv-venv experiment repo
+  with no web stack, database, Nginx, or systemd. If there is no explicit need for a
+  deployed database-backed web service, prefer new-repo. Within this skill, always use
+  its scaffold.py script rather than improvising project setup.
 ---
 
 # Project Scaffolder
