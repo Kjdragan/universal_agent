@@ -2,11 +2,16 @@
 
 Background: prior to P1a, only `youtube_channel_rss` had invariant coverage
 (via the two YouTube-specific invariants in PR #367). Other CSI
-adapters — youtube_playlist, threads_owned, threads_trends_seeded,
-threads_trends_broad — were entirely invisible to the watchdog. Live data
-on 2026-05-20 showed several of them dead (40h+ no events) with zero
-alerts. P1a adds one invariant that covers all monitored adapters by
-checking max(occurred_at) per source vs. an expected-cadence threshold.
+adapters were entirely invisible to the watchdog. Live data on 2026-05-20
+showed several of them dead (40h+ no events) with zero alerts. P1a adds one
+invariant that covers all monitored adapters by checking max(occurred_at)
+per source vs. an expected-cadence threshold.
+
+The experimental threads_* lanes (threads_owned, threads_trends_seeded,
+threads_trends_broad) were decommissioned 2026-06-22 (no live ingestion
+adapter, X-API-dependent, redundant with the @ClaudeDevs/@bcherny lane), so
+youtube_channel_rss is now the only continuously-live CSI source; hackernews
+is parked behind UA_HACKERNEWS_SNAPSHOT_ENABLED.
 """
 
 from __future__ import annotations
@@ -123,9 +128,9 @@ def test_multiple_stale_sources_listed_in_one_finding(tmp_path: Path, monkeypatc
     seeded fresh so we can assert the finding contains only the stale set.
     Built from the effective (parking-aware) monitored set so it stays correct
     as lanes are added/removed. UA_HACKERNEWS_SNAPSHOT_ENABLED is armed here so
-    hackernews joins the effective set — without it (and with Threads parked),
-    only youtube_channel_rss would be monitored and the multi-source premise
-    wouldn't hold."""
+    hackernews joins the effective set — without it, only youtube_channel_rss
+    would be monitored (the threads_* lanes were decommissioned 2026-06-22) and
+    the multi-source premise wouldn't hold."""
     monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")
     from universal_agent.services.invariants.csi_source_liveness import (
         effective_source_thresholds,
@@ -148,46 +153,36 @@ def test_multiple_stale_sources_listed_in_one_finding(tmp_path: Path, monkeypatc
     assert stale_actual == stale_sources_expected
 
 
-def test_threads_lanes_parked_by_default(tmp_path: Path, monkeypatch) -> None:
-    """Threads lanes are experimental + parked: even with zero threads events
-    they must NOT appear as stale while UA_CSI_THREADS_LANES_ENABLED is off."""
-    monkeypatch.delenv("UA_CSI_THREADS_LANES_ENABLED", raising=False)
-    from universal_agent.services.invariants.csi_source_liveness import (
-        _THREADS_SOURCES,
-        effective_source_thresholds,
-    )
-    # No threads source is in the effective set while parked.
-    assert not (_THREADS_SOURCES & set(effective_source_thresholds()))
-    db = tmp_path / "csi.db"
-    # Seed every NON-threads source fresh; threads get nothing.
-    _seed_events(db, [(s, _hours_ago(0.5)) for s in effective_source_thresholds()])
-    findings = run_invariants({"csi_db_path": db})
-    matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
-    assert matches == []
-
-
-def test_threads_lanes_monitored_when_flag_enabled(tmp_path: Path, monkeypatch) -> None:
-    """Flipping UA_CSI_THREADS_LANES_ENABLED=1 re-activates threads monitoring,
-    so a dark threads lane fires again."""
+def test_threads_lanes_decommissioned_not_monitored(tmp_path: Path, monkeypatch) -> None:
+    """The experimental threads_* lanes were decommissioned 2026-06-22 (no live
+    ingestion adapter, X-API-dependent, redundant with the @ClaudeDevs lane).
+    They must NOT be in the threshold table or the effective set, and stale
+    threads_* rows in the DB must NOT produce a finding — even if the old
+    UA_CSI_THREADS_LANES_ENABLED flag is set (it is now inert). Mirrors the
+    csi_analytics/#990 + youtube_playlist/#438 retirement precedent."""
+    # The old gating flag is gone; setting it must NOT resurrect the lanes.
     monkeypatch.setenv("UA_CSI_THREADS_LANES_ENABLED", "1")
+    from universal_agent.services.invariants import csi_source_liveness as mod
     from universal_agent.services.invariants.csi_source_liveness import (
-        _THREADS_SOURCES,
+        SOURCE_THRESHOLDS_HOURS,
         effective_source_thresholds,
     )
-    assert _THREADS_SOURCES <= set(effective_source_thresholds())
+    threads_lanes = {"threads_owned", "threads_trends_seeded", "threads_trends_broad"}
+    # No threads source is monitored, the gating helper is gone, and the
+    # threshold table no longer carries them.
+    assert not (threads_lanes & set(SOURCE_THRESHOLDS_HOURS))
+    assert not (threads_lanes & set(effective_source_thresholds()))
+    assert not hasattr(mod, "_THREADS_SOURCES")
+    assert not hasattr(mod, "_threads_lanes_enabled")
+
     db = tmp_path / "csi.db"
-    # All non-threads sources fresh; threads_owned never seeded → never_seen.
-    rows = [
-        (s, _hours_ago(0.5))
-        for s in effective_source_thresholds()
-        if s != "threads_owned"
-    ]
+    # Every still-monitored source is fresh; stale threads_* rows must be ignored.
+    rows = [(s, _hours_ago(0.5)) for s in effective_source_thresholds()]
+    rows += [(s, _hours_ago(200)) for s in threads_lanes]  # would be stale if monitored
     _seed_events(db, rows)
     findings = run_invariants({"csi_db_path": db})
     matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
-    assert len(matches) == 1
-    stale = {s["source"] for s in (matches[0].observed_value or {}).get("stale_sources") or []}
-    assert "threads_owned" in stale
+    assert matches == []
 
 
 def test_hackernews_parked_when_snapshot_flag_off(

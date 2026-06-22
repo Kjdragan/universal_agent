@@ -1,13 +1,18 @@
 """Universal CSI source liveness invariant.
 
 One probe that watches every active CSI adapter (youtube_channel_rss,
-threads_owned, threads_trends_seeded, threads_trends_broad, hackernews) by
-checking `max(occurred_at)` per source in csi.db's `events` table against a
-per-source expected-max-silence threshold.
+hackernews) by checking `max(occurred_at)` per source in csi.db's `events`
+table against a per-source expected-max-silence threshold.
 
 `youtube_playlist` was dropped from monitoring 2026-06-03: the
 youtube_playlist_watcher was retired in PR #438 (daily digest is the
 canonical trigger), so it is intentionally silent and must not alert.
+
+The threads_* lanes (threads_owned, threads_trends_seeded, threads_trends_broad)
+were removed from monitoring 2026-06-22: the experimental Threads adapters were
+decommissioned (never had a live ingestion adapter, X-API-dependent behind the
+same 402 wall, redundant with the @ClaudeDevs/@bcherny lane). No active producer
+remains, so they are gone from the table outright rather than parked.
 
 `csi_analytics` was dropped from monitoring 2026-06-15: the three trend-report
 timers (csi-rss-trend-report, csi-global-trend-brief, csi-threads-trend-report)
@@ -50,35 +55,14 @@ from universal_agent.services.pipeline_invariants import invariant
 logger = logging.getLogger(__name__)
 
 
-# Threads CSI lanes are EXPERIMENTAL and parked by default (2026-06-03). The
-# adapters skip every cycle when THREADS_USER_ID / THREADS_ACCESS_TOKEN are
-# unset, so monitoring them produces a perpetual stale/never_seen alert that
-# adds noise and can mask real outages in other lanes. They stay in
-# SOURCE_THRESHOLDS_HOURS (so re-enabling is a one-flag flip) but are excluded
-# from evaluation while parked. Set UA_CSI_THREADS_LANES_ENABLED=1 AND provision
-# the Threads credentials to re-activate monitoring.
-_THREADS_SOURCES = frozenset(
-    {"threads_owned", "threads_trends_seeded", "threads_trends_broad"}
-)
-
-
-def _threads_lanes_enabled() -> bool:
-    return os.getenv("UA_CSI_THREADS_LANES_ENABLED", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 # hackernews is parked behind the SAME flag that arms its only producer — the
 # `hackernews_snapshot` cron (gateway_server.py::_ensure_hackernews_snapshot_cron_job,
 # enabled=_proactive_cron_enabled("UA_HACKERNEWS_SNAPSHOT_ENABLED")). HN has NO
 # automatic CSI-event producer otherwise: POST /api/v1/hackernews/refresh exists
 # but has zero internal callers (verified by grep 2026-06-21 — only the manual
 # dashboard refresh button hits it). So when the snapshot cron is off, HN is
-# intentionally silent and must not alert — same shape as the Threads parking
-# above. Re-arming the cron (UA_HACKERNEWS_SNAPSHOT_ENABLED=1) re-arms the detector.
+# intentionally silent and must not alert. Re-arming the cron
+# (UA_HACKERNEWS_SNAPSHOT_ENABLED=1) re-arms the detector.
 _HACKERNEWS_SOURCES = frozenset({"hackernews"})
 
 
@@ -96,8 +80,6 @@ def effective_source_thresholds() -> Dict[str, float]:
 
     Parked lanes are excluded so they neither alert nor mask other adapters'
     real outages:
-      - Threads lanes while UA_CSI_THREADS_LANES_ENABLED is off (experimental,
-        creds unprovisioned).
       - hackernews while UA_HACKERNEWS_SNAPSHOT_ENABLED is off. HN has no
         automatic CSI-event producer: the `hackernews_snapshot` cron is its
         only producer, and POST /api/v1/hackernews/refresh has zero internal
@@ -106,15 +88,13 @@ def effective_source_thresholds() -> Dict[str, float]:
         not alert. The 2026-06-06 un-park assumed an "overnight convergence
         /refresh producer" that does not exist (disproven by the same grep +
         0-events/48h live data); it is reverted here on 2026-06-21.
-    A retired adapter (e.g. youtube_playlist #438, csi_analytics #990) is removed
-    from the table outright; a *disabled-but-resumable* source is parked behind its flag here.
+    A retired adapter (e.g. youtube_playlist #438, csi_analytics #990, the
+    threads_* lanes #2026-06-22) is removed from the table outright; a
+    *disabled-but-resumable* source is parked behind its flag here.
     """
-    threads_on = _threads_lanes_enabled()
     hackernews_on = _hackernews_snapshot_enabled()
     out: Dict[str, float] = {}
     for source, hours in SOURCE_THRESHOLDS_HOURS.items():
-        if source in _THREADS_SOURCES and not threads_on:
-            continue
         if source in _HACKERNEWS_SOURCES and not hackernews_on:
             continue
         out[source] = hours
@@ -122,17 +102,13 @@ def effective_source_thresholds() -> Dict[str, float]:
 
 
 # Per-source expected max silence in hours. Conservative defaults: leave
-# breathing room for low-cadence sources (threads_trends_*) while still
-# catching the 40h+ failure mode that prompted P1a. Tune via follow-up PR
-# once we have a few weeks of operational data — never silence an ACTIVE
-# source entirely (retired adapters should be removed from this table, not
-# given an unreachable threshold).
+# breathing room for low-cadence sources while still catching the 40h+ failure
+# mode that prompted P1a. Tune via follow-up PR once we have a few weeks of
+# operational data — never silence an ACTIVE source entirely (retired adapters
+# should be removed from this table, not given an unreachable threshold).
 SOURCE_THRESHOLDS_HOURS: Dict[str, float] = {
     "hackernews": 120.0,                 # only evaluated when UA_HACKERNEWS_SNAPSHOT_ENABLED arms the snapshot cron (HN has no other producer — POST /api/v1/hackernews/refresh has zero internal callers, verified 2026-06-21). Threshold retained from the 2026-06-10 widening so a re-armed cron still catches a real ≥5-day outage without false-flagging normal HN cadence: 30d live data showed a legitimate-but-quiet 94h max gap (next-largest 27.6h) that the old 36h false-flagged; 120h clears it with margin.
     "youtube_channel_rss": 12.0,         # 444-channel watchlist, hourly-ish per channel
-    "threads_owned": 12.0,               # owned-handle polling
-    "threads_trends_seeded": 24.0,       # broad seeded queries, lower cadence
-    "threads_trends_broad": 24.0,        # broadest sweep, lower cadence
 }
 
 
@@ -193,16 +169,12 @@ def _per_source_last_seen(
         "tables": ["events"],
         "db": "csi.db",
         "sources_monitored": list(SOURCE_THRESHOLDS_HOURS.keys()),
-        "threads_lanes_flag": "UA_CSI_THREADS_LANES_ENABLED",
         "design_note": (
             "P1a (2026-05-20): one invariant covering the CSI adapters in one "
             "finding. Listing per-source thresholds + last_seen in "
             "observed_value lets the operator triage all stale sources from "
             "a single alert. Splitting per-source would spam the email/Task "
-            "Hub channels. 2026-06-03: youtube_playlist removed (retired #438); "
-            "Threads lanes (threads_owned, threads_trends_seeded, "
-            "threads_trends_broad) parked behind UA_CSI_THREADS_LANES_ENABLED "
-            "(experimental, creds unprovisioned) so they don't alert while off. "
+            "Hub channels. 2026-06-03: youtube_playlist removed (retired #438). "
             "2026-06-06: hackernews un-parked + threshold widened 3h->36h on the "
             "premise that HN stays alive via an 'overnight convergence /refresh' "
             "producer independent of the snapshot cron. 2026-06-10: widened "
@@ -220,7 +192,8 @@ def _per_source_last_seen(
             "re-parked behind UA_HACKERNEWS_SNAPSHOT_ENABLED — the SAME flag "
             "that arms its only real producer (the hackernews_snapshot cron); "
             "re-arming the cron re-arms the detector. The 120h threshold is "
-            "retained for the re-armed case. 2026-06-15: csi_analytics removed (retired #990 — the three trend-report timers that emitted it were retired; no active producer remains, the validation scripts that can still emit it are unscheduled manual runners)."
+            "retained for the re-armed case. 2026-06-15: csi_analytics removed (retired #990 — the three trend-report timers that emitted it were retired; no active producer remains, the validation scripts that can still emit it are unscheduled manual runners). "
+            "2026-06-22: threads_* lanes (threads_owned, threads_trends_seeded, threads_trends_broad) removed (decommissioned — experimental, no live ingestion adapter, X-API-dependent, redundant with the @ClaudeDevs/@bcherny lane). youtube_channel_rss is now the only continuously-live CSI source."
         ),
     },
 )
