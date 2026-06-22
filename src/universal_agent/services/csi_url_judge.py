@@ -352,12 +352,15 @@ def _call_llm_structured(*, system: str, user: str, tool: dict[str, Any], max_re
     for attempt in range(max_retries):
         try:
             response = client.messages.create(
-                model=resolve_opus(),
+                model=resolve_opus(),  # → glm-5.2 (opus tier) via ZAI map
                 max_tokens=1000,
                 system=system,
                 messages=[{"role": "user", "content": user}],
                 tools=[tool],
                 tool_choice={"type": "tool", "name": tool["name"]},
+                # glm-5.2 defaults thinking ON (10-24x tokens); this is a cheap
+                # structured-output pass with forced tool_choice, so keep it disabled.
+                thinking={"type": "disabled"},
             )
             # Extract tool_use block
             for block in response.content:

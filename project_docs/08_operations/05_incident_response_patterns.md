@@ -71,6 +71,37 @@ curl -fsS -m 4 http://127.0.0.1:8002/api/v1/health
 cd /opt/universal_agent && git status --short && git rev-parse --abbrev-ref HEAD
 ```
 
+### Full triage router (incl. the ZAI-429 / throttle lane)
+
+The map above resolves the gateway-vs-process symptoms; this fuller router adds the CI/deploy
+and inference-throttle lanes and points each class at its recovery verb.
+
+```mermaid
+flowchart TD
+    S["Symptom observed"] --> Q{"Where did it surface?"}
+
+    Q -->|"Dashboard / runtime"| GU{"Gateway unreachable<br/>or wedged?"}
+    Q -->|"CI / deploy"| CI["CI or deploy failure"]
+    Q -->|"Throttle / inference error"| Z{"ZAI 429 / [1313] / FUP<br/>or 401 in logs?"}
+
+    GU -->|"Process dead /<br/>crash on import"| C2["Class 2 — .venv corruption"]
+    GU -->|"git status: non-main<br/>branch or modified .py"| C1["Class 1 — rogue autonomous branch"]
+    GU -->|"Hangs / times out,<br/>process alive"| C3["Class 3 — gateway wedge"]
+    GU -->|"Serves but 15-20s<br/>burst stalls"| C4["Class 4 — event-loop starvation"]
+
+    C1 --> R1["Capture, stop gateway,<br/>park (not cancel),<br/>git reset --hard origin/main"]
+    C2 --> R2["ensure_existing_venv_is_usable:<br/>remove + uv sync --python 3.13"]
+    C3 --> R3["Defer lifespan sweep via asyncio.to_thread;<br/>check SESSION_API_TOKEN in /proc/PID/environ"]
+    C4 --> R4["UA_DAEMON_SESSIONS_ENABLED=0 (kill switch);<br/>durable fix = autonomous-runtime split (UA_AUTONOMOUS_RUNTIME_MODE=split)"]
+
+    CI --> RC["Poll gh issue list --label ci-failure;<br/>confirm /api/v1/version SHA (branch-vs-deploy honesty)"]
+
+    Z -->|"429 / [1313] /<br/>Fair-Usage-Policy"| ZT["Inference throttle:<br/>reduce burst load, lean on ZAI rate limiter"]
+    Z -->|"401 / [1004]"| ZK["Bad key: rotate across all<br/>Infisical aliases, restart consumers"]
+
+    C5["Class 5 — deploy-restart noise"] -.->|"alerts within deploy window<br/>are self-healing non-events"| RC
+```
+
 ---
 
 ## Class 1 — Rogue autonomous branch
