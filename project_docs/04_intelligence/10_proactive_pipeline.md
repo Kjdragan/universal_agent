@@ -665,6 +665,52 @@ implicit signals without understanding this loop.
 
 ## Reporting and delivery surfaces
 
+- **Proactive activity report** (`proactive_activity_report.py`): the LEAD of the
+  three-times-a-day proactive report. Where the rest of the report is *pipeline
+  stats*, this section answers the legibility question Kevin actually has — *is
+  every autonomous proactive process running, or did one break/go dark/get
+  paused silently?* `proactive_activity_report.py::build_activity_inventory`
+  reconciles **all three** schedulers into one inventory, because the proactive
+  fleet runs across more than one and a single-scheduler view lies:
+  - **systemd timers** run MOST proactive activities (they were migrated off the
+    in-app cron). `cron_jobs.json` shows these `enabled=false` — a *migration
+    artifact*, not "off". Their real run-status comes from
+    `systemctl list-timers --all`, parsed by
+    `proactive_activity_report.py::_parse_systemd_timers` and classified by
+    `::_classify_systemd` (healthy if the last run is within ~2× the expected
+    cadence, else degraded/stale). On a dev box without systemctl the source
+    degrades to a single `status="unknown"` entry — it never raises.
+  - **in-app CronService** activities (`simone_chat_auto_complete`,
+    `vp_mission_pr_reconciler`, `paper_to_podcast_daily`,
+    `morning_ideation_report`, `claude_code_intel_sync`) are reconciled by their
+    stable `metadata.system_job` id against `cron_jobs.json` + `cron_runs.jsonl`
+    in `::_collect_inapp_cron_activities`. `claude_code_intel_sync` is reported
+    `⏸️ paused` **by design** (X API credits depleted, deliberate operator flip)
+    via `::_OPERATOR_PAUSED_CRONS` — never "broken".
+  - **lanes** are not crons; their health is DB freshness, read read-only by
+    `::_collect_lane_activities`: convergence candidates (the report's own
+    `activity_state.db`), VP missions (`vp_state.db`), CSI events per `source`
+    (canonical `csi.db` via `transcript_corpus.py::resolve_csi_db_path`), and the
+    proactive-artifacts flow. `hackernews` + `claude_code_intel` CSI sources are
+    intentionally parked (`::_PARKED_LANE_SOURCES`) → reported `⏸️ parked`, not
+    `🌑 dark`.
+
+  `::render_activity_section` emits the compact grouped LEAD text (one
+  `✅/⚠️/⏸️/🌑` line per activity plus an `N healthy · M degraded · K paused ·
+  J dark` header); `proactive_intelligence_report.py::format_report_email`
+  PREPENDS it under a `═══ Proactive Activity Status ═══` header before the
+  legacy "Pipeline Activity" block, and the report subject became
+  `[UA Proactive] {period} Activity Report`. The reasoning LLM
+  (`_call_reasoning_llm`) now narrates **over the inventory** — calling out any
+  degraded/dark/unknown activity by name — with the pipeline stats as secondary
+  context. Every run is also captured into Simone's durable shared memory by
+  `proactive_activity_report.py::capture_activity_report_to_memory` (a
+  best-effort `memory/orchestrator.py::MemoryOrchestrator.capture_session_rollover`
+  into `memory/paths.py::resolve_shared_memory_workspace`), so
+  `build_file_memory_context` surfaces fleet health in later Simone sessions.
+  `build_activity_inventory` is pure-Python, deterministic, and **never raises** —
+  each source is independently guarded so a missing systemctl, registry file, or
+  locked DB degrades to `status="unknown"` rather than breaking delivery.
 - **Proactive intelligence reports** (`proactive_intelligence_report.py`): the
   three-times-a-day intel rhythm — `proactive_report_morning` (7:05 AM),
   `_midday` (12:05 PM), `_afternoon` (4:05 PM) Houston. The cron entrypoint
