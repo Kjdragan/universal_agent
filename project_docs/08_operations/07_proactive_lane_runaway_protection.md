@@ -13,7 +13,7 @@ code_paths:
   - "src/universal_agent/services/vp_failure_rescue.py"
   - "src/universal_agent/vp/dispatcher.py"
   - "src/universal_agent/tools/vp_orchestration.py"
-last_verified: 2026-06-14
+last_verified: 2026-06-22
 ---
 
 # Proactive-Lane Runaway Protection
