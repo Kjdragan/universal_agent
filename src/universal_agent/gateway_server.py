@@ -22497,6 +22497,116 @@ async def ideation_action_get(task_id: str, a: str = "", t: str = ""):
     return HTMLResponse(content=body, status_code=200)
 
 
+@app.get("/api/v1/gpu_demo/{task_id}/approve")
+async def gpu_demo_approve_get(task_id: str, a: str = "", t: str = ""):
+    """One-click approve/reject for a GPU-bound demo build held for desktop execution.
+
+    a in {"approve","reject"}, t an HMAC over f"gpu_demo:{task_id}:{a}".
+    The HMAC IS the auth (the link lands in a mail client; no bearer header needed).
+    Returns a small HTML landing page (200/401/404). Gates on
+    gpu_demo_desktop_approval_enabled() — 404 when the feature is off.
+    """
+    from fastapi.responses import HTMLResponse
+
+    from universal_agent import task_hub
+    from universal_agent.feature_flags import gpu_demo_desktop_approval_enabled
+    from universal_agent.services.cron_artifact_notifier import verify_gpu_demo_token
+
+    if not gpu_demo_desktop_approval_enabled():
+        return HTMLResponse(
+            content=_brief_chrome(
+                "Not found",
+                "<p>This feature is not enabled.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=404,
+        )
+
+    action = (a or "").strip().lower()
+    if action not in {"approve", "reject"}:
+        return HTMLResponse(
+            content=_brief_chrome(
+                "Link invalid",
+                "<p>This approval link is missing or has an unknown action. "                "Use the dashboard instead.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=401,
+        )
+
+    if not verify_gpu_demo_token(task_id, action, t or ""):
+        return HTMLResponse(
+            content=_brief_chrome(
+                "Link expired or invalid",
+                "<p>We couldn't verify this link. Use the dashboard instead.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=401,
+        )
+
+    safe_task_id = (
+        (task_id or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            item = task_hub.get_item(conn, task_id)
+            if item is None:
+                return HTMLResponse(
+                    content=_brief_chrome(
+                        "Build not found",
+                        f"<p>No GPU demo build with ID <code>{safe_task_id}</code>. "                        "It may have already been actioned or no longer exists.</p>",
+                        status_color="#cf222e",
+                    ),
+                    status_code=404,
+                )
+
+            # Stamp gpu_approval state — merge into existing metadata
+            import json as _json
+            meta = item.get("metadata")
+            if not isinstance(meta, dict):
+                try:
+                    meta = _json.loads(meta) if meta else {}
+                except Exception:
+                    meta = {}
+            gpu_approval = meta.get("gpu_approval")
+            if not isinstance(gpu_approval, dict):
+                gpu_approval = {}
+            gpu_approval["state"] = action  # "approve" or "reject"
+            meta["gpu_approval"] = gpu_approval
+            updated_item = dict(item)
+            updated_item["metadata"] = meta
+            task_hub.upsert_item(conn, updated_item)
+            conn.commit()
+        finally:
+            conn.close()
+
+    if action == "approve":
+        body = _brief_chrome(
+            "GPU build approved",
+            f"<p>Build <code>{safe_task_id}</code> is approved for GPU execution"
+            " on your desktop.</p>"
+            "<p>Run this command in your terminal:</p>"
+            f"<pre style='background:#f6f8fa;padding:12px;border-radius:6px'>"
+            f"/gpu-demo-build {safe_task_id}"
+            "</pre>"
+            "<p>The command will provision Ollama + qwen2.5-coder:7b, scaffold"
+            " and build the demo, then finalize the record.</p>",
+            status_color="#1a7f37",
+        )
+    else:
+        body = _brief_chrome(
+            "GPU build rejected",
+            f"<p>Build <code>{safe_task_id}</code> has been rejected and will not be executed.</p>",
+            status_color="#6e7781",
+        )
+    return HTMLResponse(content=body, status_code=200)
+
+
 @app.get("/briefs/{artifact_id}")
 async def briefs_viewer_get(artifact_id: str):
     """Dashboard viewer for the durable HTML brief.

@@ -647,3 +647,28 @@ def link_audit_retention_days(default: int = 90) -> int:
 
 def link_reconciler_interval_seconds(default: int = 30) -> int:
     return _read_int("UA_LINK_RECONCILER_INTERVAL_SECONDS", default, minimum=5)
+
+
+# ── GPU demo desktop-build approval (default OFF) ─────────────────────────────
+#
+# When ON, gpu-bound tutorial_build candidates are held in a pending-approval
+# state and routed to the operator's desktop for GPU-accelerated building via
+# the /gpu-demo-build slash command.  Off by default so prod behaviour is
+# unchanged until the operator explicitly enables it.
+#
+# UA_DISABLE_GPU_DEMO_DESKTOP_APPROVAL=1  → always False (kill-switch)
+# UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED=1  → True  (opt-in)
+# else                                    → default (False)
+
+
+def gpu_demo_desktop_approval_enabled(default: bool = False) -> bool:
+    """Return True when GPU-demo desktop-build approval routing is active.
+
+    Default OFF.  Set ``UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED=1`` to enable.
+    Override-off with ``UA_DISABLE_GPU_DEMO_DESKTOP_APPROVAL=1``.
+    """
+    if _is_truthy(os.getenv("UA_DISABLE_GPU_DEMO_DESKTOP_APPROVAL")):
+        return False
+    if _is_truthy(os.getenv("UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED")):
+        return True
+    return default
