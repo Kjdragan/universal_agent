@@ -199,6 +199,21 @@ archive_quiet() {
   args=(--src "$src" --slug "$slug" --root "$root" --url "$url")
   [[ -n "$is_dir" ]] && args+=(--dir)
   python3 "$ARCHIVER" "${args[@]}" >/dev/null 2>&1 || err "warning: artifact archive failed (artifact still published)"
+  # Interactive desktop archives land in a git-tracked <repo>/scratch_archive/, but the
+  # archiver does NOT commit. Surface a loud reminder when the entry is left uncommitted so
+  # the "save it in the project" step isn't silently skipped (it has been). Stderr only, so
+  # the URL-on-stdout contract is preserved; VPS / non-git archives don't trigger it.
+  if ! on_vps; then
+    local repo
+    repo="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "$repo" ]] && [[ -n "$(git -C "$repo" status --porcelain -- "$root" 2>/dev/null)" ]]; then
+      err ""
+      err "⚠️  scratch_archive/ has uncommitted changes from this publish — COMMIT them."
+      err "    Interactive scratchpad publishes must be SAVED IN THE REPO, not just on the"
+      err "    scratchpad: branch → add scratch_archive/ → PR → auto-merge. scratch_archive/**"
+      err "    is paths-ignored in deploy.yml, so committing it never restarts prod."
+    fi
+  fi
 }
 
 main() {
