@@ -1027,6 +1027,47 @@ def verify_ideation_token(task_id: str, action: str, token: str) -> bool:
     return hmac.compare_digest(expected, supplied)
 
 
+# ── GPU demo desktop-approval HMAC helpers ───────────────────────────────────
+#
+# Reuse the same secret material as sign_ack_token / sign_ideation_token (no
+# new env var or rotation surface).  The payload prefix "gpu_demo:" is
+# distinct, so a gpu_demo token cannot be replayed as any other token shape.
+
+
+def _gpu_demo_payload(task_id: str, action: str) -> bytes:
+    return f"gpu_demo:{task_id}:{action}".encode("utf-8")
+
+
+def sign_gpu_demo_token(task_id: str, action: str) -> str:
+    """HMAC-SHA256 over f"gpu_demo:{task_id}:{action}", truncated to 16 hex.
+
+    action must be "approve" or "reject"; anything else returns "" so
+    the token cannot validate against a foreign action shape.
+    """
+    secret = _ack_secret()
+    if not secret:
+        return ""
+    clean_action = (action or "").strip().lower()
+    if clean_action not in {"approve", "reject"}:
+        return ""
+    clean_id = (task_id or "").strip()
+    if not clean_id:
+        return ""
+    mac = hmac.new(secret, _gpu_demo_payload(clean_id, clean_action), hashlib.sha256)
+    return mac.hexdigest()[:16]
+
+
+def verify_gpu_demo_token(task_id: str, action: str, token: str) -> bool:
+    """Constant-time HMAC verification for a GPU-demo approval link.  False on any error."""
+    expected = sign_gpu_demo_token(task_id, action)
+    if not expected:
+        return False
+    supplied = (token or "").strip()
+    if not supplied:
+        return False
+    return hmac.compare_digest(expected, supplied)
+
+
 def _digest_pause_payload(hours: int) -> bytes:
     return f"digest_pause:{int(hours)}".encode("utf-8")
 
@@ -1120,4 +1161,6 @@ __all__ = [
     "verify_ack_token",
     "verify_digest_pause_token",
     "verify_feedback_token",
+    "sign_gpu_demo_token",
+    "verify_gpu_demo_token",
 ]

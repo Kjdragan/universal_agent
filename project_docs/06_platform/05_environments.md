@@ -377,6 +377,38 @@ defer to this; the dev/prod split was tightened on 2026-05-11 Phase D after a
 desktop run fired heartbeat despite the gates because Infisical's dev env
 mirrored `UA_ENABLE_HEARTBEAT=1` from prod.)
 
+### Desktop GPU — local LLM inference (Ollama)
+
+The desktop (`mint-desktop`) has an **NVIDIA GTX 1660 Ti (6GB VRAM)**, driver
+580 / CUDA 13; detect with `nvidia-smi`. **The VPS has no GPU** (Hostinger cloud
+VM) and never will, so any work that needs a *local* GPU model lives on the
+desktop only — the two are decoupled (a desktop GPU cannot accelerate VPS-side
+inference). This matters for **demos that hit a local Ollama server**: on the
+VPS they run on CPU at ~7 tok/s and a multi-pass run exceeds the 600s
+no-progress watchdog (`timeout_policy.py::LivenessWatchdog`), which is exactly
+what stalled the Ponytail/Ollama demo on 2026-06-22.
+
+- **Ollama is installed user-local** at `~/.local/ollama` (no root — the
+  `.tar.zst` bundles its own CUDA runtime; it just needs the driver). `ollama
+  serve` is a plain process, **not** a systemd/desktop unit.
+- **Standard local-GPU demo model: `qwen2.5-coder:7b`** (Q4_K_M, ~4.7GB) — best
+  code quality under the 6GB ceiling; runs ~90% on-GPU (~15 tok/s, slight CPU
+  spill) and completes demos in budget (~4 min for the 3-pass Ponytail demo vs
+  an infinite CPU stall). Faster fully-on-GPU fallback: `qwen2.5-coder:3b`.
+- **6GB guards (hard):** each model ≤5GB download, ≤3 models on disk. The
+  **`provision-local-gpu-ollama` skill**
+  (`.claude/skills/provision-local-gpu-ollama/provision_gpu_ollama.sh`)
+  provisions the box and **refuses** an oversized or over-count pull (it doesn't
+  just warn). It prints the `OLLAMA_URL` / `OLLAMA_MODEL` a demo consumes.
+- **GPU-bound demo gate (default-OFF).** Default demo builds still go to the VPS.
+  A demo classified as GPU-bound is parked (queued `agent_ready=False` so CODIE
+  never auto-claims it) and Kevin gets an email with an HMAC-signed approve link;
+  approving records intent on the always-on VPS gateway and surfaces the
+  `/gpu-demo-build <task_id>` command Kevin runs **interactively** on the desktop
+  (no desktop daemon — the desktop only acts when driven). Master switch:
+  `feature_flags.py::gpu_demo_desktop_approval_enabled` (`UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED`,
+  default off).
+
 ### Two local lanes (definition)
 
 The desktop supports two distinct local lanes — do **not** point the main repo

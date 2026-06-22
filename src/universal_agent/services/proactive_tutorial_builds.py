@@ -289,6 +289,13 @@ def queue_tutorial_builds_with_ceiling(
     auto_reaffirmed = 0
     pending_approval = 0
     for idx, candidate in enumerate(candidates):
+        # ── GPU-bound gate (Lane A: tutorial_build only; Lane B: cody_demo_task deferred) ──
+        # When the flag is on and the candidate is GPU-bound, classify_and_gate_gpu_demo
+        # queues it as pending-approval for desktop execution and sends the operator an
+        # email. Skip the normal ceiling-queue path for that candidate.
+        if classify_and_gate_gpu_demo(conn, candidate=candidate, source=source) is not None:
+            pending_approval += 1
+            continue
         video_id = str(candidate.get("video_id") or "").strip()
         # A row already dispatchable from a PRIOR run is a re-confirmation, not
         # new work — the no-churn invariant keeps it dispatchable regardless of
@@ -1109,6 +1116,348 @@ def _existing_build_is_dispatchable(conn: sqlite3.Connection, video_id: str) -> 
     return bool(existing and existing.get("agent_ready"))
 
 
+# ── GPU-bound candidate detection + desktop-approval gate (Lane A) ────────────
+#
+# Lane B (cody_demo_task) is deferred to a future PR.
+#
+# Resolution order:
+#   1. gpu_demo_desktop_approval_enabled() OFF → classify_and_gate_gpu_demo
+#      returns None immediately → the normal ceiling-queue path runs unchanged.
+#   2. Candidate is NOT gpu_bound → returns None → normal path runs.
+#   3. Candidate IS gpu_bound + flag ON → queue with agent_ready=False, stamp
+#      gpu_approval metadata, send approval email → return the task dict.
+
+
+# ── Keyword set for GPU-bound detection ──────────────────────────────────────
+_GPU_BOUND_KEYWORDS = (
+    "ollama",
+    "llama.cpp",
+    "llama-server",
+    "gguf",
+    "vllm",
+    "lm studio",
+    "lmstudio",
+    "localhost:11434",
+    "local llm",
+    "local model",
+    "run locally",
+)
+
+_GPU_DEFAULT_MODEL = "qwen2.5-coder:7b"
+
+
+def gpu_bound_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic keyword pre-filter — returns classification dict.
+
+    Matches case-insensitively against the candidate's title and
+    extraction_plan text for any GPU-bound keyword.
+
+    Returns::
+
+        {
+            "gpu_bound": bool,
+            "model": "qwen2.5-coder:7b",
+            "reason": str,
+            "vps_cpu_estimate": "~15-20 min (CPU, would exceed the 600s watchdog)",
+            "desktop_gpu_estimate": "~4 min (GTX 1660 Ti, qwen2.5-coder:7b)",
+        }
+    """
+    title = str(candidate.get("video_title") or candidate.get("title") or "").lower()
+    plan = candidate.get("extraction_plan")
+    plan_text = ""
+    if isinstance(plan, dict):
+        plan_text = json.dumps(plan).lower()
+    elif isinstance(plan, str):
+        plan_text = plan.lower()
+
+    haystack = f"{title} {plan_text}"
+    hit: str | None = None
+    for kw in _GPU_BOUND_KEYWORDS:
+        if kw in haystack:
+            hit = kw
+            break
+
+    if hit is None:
+        return {
+            "gpu_bound": False,
+            "model": _GPU_DEFAULT_MODEL,
+            "reason": "no GPU-bound keywords found",
+            "vps_cpu_estimate": "~15-20 min (CPU, would exceed the 600s watchdog)",
+            "desktop_gpu_estimate": "~4 min (GTX 1660 Ti, qwen2.5-coder:7b)",
+        }
+    return {
+        "gpu_bound": True,
+        "model": _GPU_DEFAULT_MODEL,
+        "reason": f"matched keyword: {hit!r}",
+        "vps_cpu_estimate": "~15-20 min (CPU, would exceed the 600s watchdog)",
+        "desktop_gpu_estimate": "~4 min (GTX 1660 Ti, qwen2.5-coder:7b)",
+    }
+
+
+def classify_and_gate_gpu_demo(
+    conn: sqlite3.Connection,
+    *,
+    candidate: dict[str, Any],
+    source: str,
+) -> dict[str, Any] | None:
+    """Classify a candidate and gate it for desktop GPU approval if appropriate.
+
+    Returns the queued task dict when the candidate is GPU-bound AND the feature
+    flag is ON.  Returns None in all other cases so the caller's normal
+    ceiling-queue path runs unchanged.
+    """
+    from universal_agent.feature_flags import gpu_demo_desktop_approval_enabled
+
+    if not gpu_demo_desktop_approval_enabled():
+        return None
+
+    verdict = gpu_bound_from_candidate(candidate)
+    if not verdict["gpu_bound"]:
+        return None
+
+    # GPU-bound + flag ON: queue pending-approval and send the operator an email.
+    result = queue_tutorial_build_task(
+        conn,
+        video_id=str(candidate.get("video_id") or "").strip(),
+        video_title=str(candidate.get("video_title") or candidate.get("title") or "").strip(),
+        video_url=str(candidate.get("video_url") or candidate.get("url") or "").strip(),
+        channel_name=str(candidate.get("channel_name") or candidate.get("channel") or "").strip(),
+        source=source,
+        extraction_plan=candidate.get("extraction_plan") if isinstance(candidate.get("extraction_plan"), dict) else {},
+        priority=int(candidate.get("priority") or 3),
+        agent_ready=False,
+    )
+    task = result.get("task") or {}
+    task_id = str(task.get("task_id") or "").strip()
+
+    if task_id:
+        # Stamp endpoint_required + gpu_approval into metadata
+        import json as _json
+        item = task_hub.get_item(conn, task_id)
+        if item is not None:
+            meta = item.get("metadata")
+            if not isinstance(meta, dict):
+                try:
+                    meta = _json.loads(meta) if meta else {}
+                except Exception:
+                    meta = {}
+            meta["endpoint_required"] = "ollama_local"
+            meta["gpu_approval"] = {
+                "state": "pending",
+                "model": verdict["model"],
+                "reason": verdict["reason"],
+                "vps_cpu_estimate": verdict["vps_cpu_estimate"],
+                "desktop_gpu_estimate": verdict["desktop_gpu_estimate"],
+            }
+            updated = dict(item)
+            updated["metadata"] = meta
+            task_hub.upsert_item(conn, updated)
+            conn.commit()
+
+        # Fire-and-forget approval email (async helper run in a new event loop)
+        try:
+            asyncio.get_event_loop().run_until_complete(
+                _send_gpu_demo_approval_email(
+                    task_id=task_id,
+                    candidate=candidate,
+                    verdict=verdict,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "classify_and_gate_gpu_demo: approval email send failed for %s",
+                task_id,
+                exc_info=True,
+            )
+
+    return result
+
+
+async def _send_gpu_demo_approval_email(
+    *,
+    task_id: str,
+    candidate: dict[str, Any],
+    verdict: dict[str, Any],
+) -> dict[str, Any]:
+    """Send the operator an approve/reject email for a GPU-bound demo build.
+
+    Mirrors proactive_health_notifier.send_critical_digest — acquires an
+    AgentMailService, sends a formatted HTML+text email with the HMAC approve
+    link, and shuts down anything it owns.  Returns {sent: bool, ...}.
+    Never raises.
+    """
+    from universal_agent.services.cron_artifact_notifier import sign_gpu_demo_token
+    from universal_agent.services.email_tags import ActionTag, KindTag
+    from universal_agent.services.proactive_health_notifier import (
+        KEVIN_EMAIL,
+        _acquire_agentmail_service,
+    )
+
+    base = (
+        os.getenv("UA_PUBLIC_BASE_URL", "")
+        or os.getenv("FRONTEND_URL", "")
+    ).strip().rstrip("/")
+
+    approve_token = sign_gpu_demo_token(task_id, "approve") if base else ""
+    reject_token = sign_gpu_demo_token(task_id, "reject") if base else ""
+
+    if not base or not approve_token:
+        logger.info(
+            "_send_gpu_demo_approval_email: no base URL or secret — skipping send for %s",
+            task_id,
+        )
+        return {"sent": False, "reason": "no_base_url_or_secret"}
+
+    approve_url = f"{base}/api/v1/gpu_demo/{task_id}/approve?a=approve&t={approve_token}"
+    reject_url = f"{base}/api/v1/gpu_demo/{task_id}/approve?a=reject&t={reject_token}"
+
+    title = str(candidate.get("video_title") or candidate.get("title") or task_id)
+    channel = str(candidate.get("channel_name") or candidate.get("channel") or "")
+    model = str(verdict.get("model") or _GPU_DEFAULT_MODEL)
+    reason = str(verdict.get("reason") or "")
+    vps_est = str(verdict.get("vps_cpu_estimate") or "")
+    gpu_est = str(verdict.get("desktop_gpu_estimate") or "")
+
+    subject = f"[GPU Build Approval] {title}"
+    text = "\n".join([
+        "A tutorial-build candidate needs GPU inference:\n",
+        f"Title: {title}",
+        f"Channel: {channel}",
+        f"Task ID: {task_id}",
+        f"Reason: {reason}",
+        f"Model: {model}",
+        f"VPS estimate: {vps_est}",
+        f"Desktop estimate: {gpu_est}",
+        "",
+        f"Approve (run on desktop GPU): {approve_url}",
+        f"Reject: {reject_url}",
+        "",
+        f"After approving, run: /gpu-demo-build {task_id}",
+    ])
+    html = (
+        "<!doctype html><html><body style='font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px'>"
+        "<h2 style='color:#0969da'>GPU Demo Build Approval Required</h2>"
+        f"<p>A tutorial-build candidate requires GPU inference and cannot run on the VPS:</p>"
+        "<table style='border-collapse:collapse;width:100%;margin-bottom:16px'>"
+        f"<tr><td style='padding:6px;font-weight:600'>Title</td><td style='padding:6px'>{title}</td></tr>"
+        f"<tr><td style='padding:6px;font-weight:600'>Channel</td><td style='padding:6px'>{channel}</td></tr>"
+        f"<tr><td style='padding:6px;font-weight:600'>Task ID</td><td style='padding:6px'><code>{task_id}</code></td></tr>"
+        f"<tr><td style='padding:6px;font-weight:600'>Detected keyword</td><td style='padding:6px'>{reason}</td></tr>"
+        f"<tr><td style='padding:6px;font-weight:600'>Model</td><td style='padding:6px'><code>{model}</code></td></tr>"
+        f"<tr style='color:#cf222e'><td style='padding:6px;font-weight:600'>VPS estimate</td><td style='padding:6px'>{vps_est}</td></tr>"
+        f"<tr style='color:#1a7f37'><td style='padding:6px;font-weight:600'>Desktop estimate</td><td style='padding:6px'>{gpu_est}</td></tr>"
+        "</table>"
+        f"<a href='{approve_url}' style='display:inline-block;padding:10px 20px;background:#1a7f37;color:#fff;text-decoration:none;font-weight:600;border-radius:6px;margin-right:8px'>Approve — build on desktop GPU</a>"
+        f"<a href='{reject_url}' style='display:inline-block;padding:10px 20px;background:#6e7781;color:#fff;text-decoration:none;font-weight:600;border-radius:6px'>Reject</a>"
+        f"<p style='margin-top:20px;color:#6b7280;font-size:13px'>After approving, run <code>/gpu-demo-build {task_id}</code> in your terminal.</p>"
+        "</body></html>"
+    )
+
+    agentmail_service, owns_agentmail = await _acquire_agentmail_service()
+    if agentmail_service is None:
+        logger.warning(
+            "_send_gpu_demo_approval_email: no AgentMailService — approval email not sent for %s",
+            task_id,
+        )
+        return {"sent": False, "reason": "agentmail_service=None"}
+
+    try:
+        await agentmail_service.send_email(
+            to=KEVIN_EMAIL,
+            subject=subject,
+            text=text,
+            html=html,
+            force_send=True,
+            action=ActionTag.ACTION,
+            kind=KindTag.PROACTIVE,
+            source="gpu_demo_desktop_approval",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "_send_gpu_demo_approval_email: send_email failed (%s)",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return {"sent": False, "reason": f"{type(exc).__name__}: {exc}"}
+    finally:
+        if owns_agentmail and agentmail_service is not None:
+            try:
+                await agentmail_service.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+
+    logger.info(
+        "_send_gpu_demo_approval_email: approval email sent to %s for task %s",
+        KEVIN_EMAIL,
+        task_id,
+    )
+    return {"sent": True, "to": KEVIN_EMAIL, "task_id": task_id}
+
+
+def finalize_desktop_gpu_demo(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    manifest_path: str,
+    agent_id: str = "dashboard_operator",
+) -> dict[str, Any]:
+    """Finalize a desktop GPU demo build after the operator runs /gpu-demo-build.
+
+    Validates that the task was approved, stamps the completion metadata, and
+    calls ``task_hub.perform_task_action(action="complete")``.  Returns the
+    updated task dict.
+
+    Raises ``ValueError`` if the task is not found, not approved, or the action
+    fails.
+    """
+    import json as _json
+
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        raise ValueError("task_id is required")
+
+    item = task_hub.get_item(conn, clean_task_id)
+    if item is None:
+        raise ValueError(f"Task {clean_task_id!r} not found")
+
+    meta = item.get("metadata")
+    if not isinstance(meta, dict):
+        try:
+            meta = _json.loads(meta) if meta else {}
+        except Exception:
+            meta = {}
+
+    gpu_approval = meta.get("gpu_approval")
+    if not isinstance(gpu_approval, dict):
+        gpu_approval = {}
+
+    state = str(gpu_approval.get("state") or "").lower()
+    if state != "approved":
+        raise ValueError(
+            f"Task {clean_task_id!r} gpu_approval.state={state!r}, expected 'approved'"
+        )
+
+    # Stamp completion metadata
+    gpu_approval["state"] = "built"
+    gpu_approval["manifest_path"] = str(manifest_path or "").strip()
+    meta["gpu_approval"] = gpu_approval
+    meta["vp_terminal_status"] = "completed"
+    meta["demo_finalize"] = {"ok": True, "endpoint_hit": "ollama_local"}
+    updated = dict(item)
+    updated["metadata"] = meta
+    task_hub.upsert_item(conn, updated)
+    conn.commit()
+
+    # Close the task via the canonical action
+    return task_hub.perform_task_action(
+        conn,
+        task_id=clean_task_id,
+        action="complete",
+        agent_id=agent_id,
+        reason="desktop GPU build complete",
+    )
+
+
 def _json_loads_obj(raw: Any) -> dict[str, Any]:
     """Parse a JSON object from raw text or return the input if already a dict."""
     if isinstance(raw, dict):
@@ -1121,3 +1470,24 @@ def _json_loads_obj(raw: Any) -> dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
     return {}
+
+
+if __name__ == "__main__":
+    # Self-check for gpu_bound_from_candidate (run: python -m universal_agent.services.proactive_tutorial_builds)
+    _hit = gpu_bound_from_candidate({"video_title": "Run llama.cpp on your GPU", "extraction_plan": {}})
+    assert _hit["gpu_bound"], f"expected gpu_bound=True, got {_hit}"
+    assert _hit["model"] == "qwen2.5-coder:7b"
+
+    _miss = gpu_bound_from_candidate({"video_title": "FastAPI tutorial", "extraction_plan": {}})
+    assert not _miss["gpu_bound"], f"expected gpu_bound=False, got {_miss}"
+
+    _plan_hit = gpu_bound_from_candidate({
+        "video_title": "Build a coding assistant",
+        "extraction_plan": {"framework": "ollama", "endpoint": "localhost:11434"},
+    })
+    assert _plan_hit["gpu_bound"], f"expected gpu_bound=True via plan, got {_plan_hit}"
+
+    _lmstudio_hit = gpu_bound_from_candidate({"video_title": "LM Studio local model demo", "extraction_plan": {}})
+    assert _lmstudio_hit["gpu_bound"], f"expected gpu_bound=True for 'lm studio', got {_lmstudio_hit}"
+
+    print("gpu_bound_from_candidate: all assertions passed.")
