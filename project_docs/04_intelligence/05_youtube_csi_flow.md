@@ -250,8 +250,8 @@ calls route through the **ZAI proxy** (`_build_anthropic_client_for_zai` →
 - **Reduce step** (`_reduce_meta_synthesize`): sees only titles + thesis lines +
   classifications (not full retellings), so context stays small on 30+ video
   days. Emits meta-synthesis prose ONLY (Cross-Video Themes / Learning Insights
-  / Neglected Opportunities). Model tier `opus` → `glm-5.1`
-  (`UA_YOUTUBE_DIGEST_REDUCE_MODEL`).
+  / Neglected Opportunities). Model tier `opus` → `glm-5.2`
+  (`UA_YOUTUBE_DIGEST_REDUCE_MODEL`; opus = `glm-5.2` since the 2026-06-13 migration).
 - **Assembly** (`_assemble_map_reduce_digest` / `_build_decisions_json_block`):
   the final `youtube_digest_decisions` ranked JSON is built **deterministically
   in Python** from the map classifications, not re-emitted by the reducer LLM
@@ -691,7 +691,7 @@ native playlist learning dispatch. Keyword sets: `YOUTUBE_CODE_HINT_KEYWORDS`
 | `UA_YOUTUBE_DIGEST_PIPELINE` | `map_reduce` | `map_reduce` or `single_call` |
 | `UA_YOUTUBE_DIGEST_MAP_MODEL` | `glm-4.5-air` | Map-step model |
 | `UA_YOUTUBE_DIGEST_MAP_CONCURRENCY` | `1` | Map parallelism (3 → 1 on 2026-06-13, storm-avoidance / sequential) |
-| `UA_YOUTUBE_DIGEST_REDUCE_MODEL` | `opus`→`glm-5.1` | Reduce-step model |
+| `UA_YOUTUBE_DIGEST_REDUCE_MODEL` | `opus`→`glm-5.2` | Reduce-step model |
 | `UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N` | `4` | Tutorial dispatch count |
 | `UA_YOUTUBE_DIGEST_DEMO_GATE_MIN_SCORE` | `70` | Demo-worthiness score floor |
 | `UA_YOUTUBE_DIGEST_REQUIRE_TRANSCRIPT` | `1` | Exclude no-transcript videos (vs legacy metadata-only retelling) — see A.4 |
