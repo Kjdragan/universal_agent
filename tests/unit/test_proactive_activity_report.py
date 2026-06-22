@@ -95,7 +95,7 @@ def workspaces(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _make_conn() -> sqlite3.Connection:
+def _make_conn(*, with_proactive_artifacts: bool = True) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE convergence_candidates (created_at TEXT)")
@@ -103,6 +103,14 @@ def _make_conn() -> sqlite3.Connection:
         "INSERT INTO convergence_candidates (created_at) VALUES (?)",
         (datetime.now(timezone.utc).isoformat(),),
     )
+    if with_proactive_artifacts:
+        # proactive_artifacts lives in the runtime activity_state.db — the report's
+        # own conn — not csi.db. A fresh row must classify healthy.
+        conn.execute("CREATE TABLE proactive_artifacts (created_at TEXT)")
+        conn.execute(
+            "INSERT INTO proactive_artifacts (created_at) VALUES (?)",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
     return conn
 
 
@@ -190,3 +198,71 @@ def test_build_inventory_never_raises_without_systemctl(monkeypatch, tmp_path):
     assert "activities" in inv and "summary" in inv
     # systemd source degrades to a single 'unknown' placeholder.
     assert any(a["status"] == par.STATUS_UNKNOWN for a in inv["activities"])
+
+
+def test_proactive_artifacts_reads_activity_db_and_is_healthy():
+    """The proactive_artifacts lane must read the report's own conn (activity DB),
+    NOT csi.db. A fresh row classifies healthy."""
+    conn = _make_conn(with_proactive_artifacts=True)
+    acts = par._collect_lane_activities(conn)
+    by_name = {a["name"]: a for a in acts}
+    assert "Proactive artifacts" in by_name
+    assert by_name["Proactive artifacts"]["status"] == par.STATUS_HEALTHY
+
+
+def test_proactive_artifacts_missing_table_degrades_not_raises():
+    """A conn without the table degrades to 'unknown', never raises."""
+    conn = _make_conn(with_proactive_artifacts=False)
+    acts = par._collect_lane_activities(conn)
+    by_name = {a["name"]: a for a in acts}
+    assert by_name["Proactive artifacts"]["status"] == par.STATUS_UNKNOWN
+
+
+def _make_csi_db(tmp_path, rows):
+    """Build a tmp csi.db `events` table with (source, occurred_at) rows."""
+    db_path = tmp_path / "csi.db"
+    cx = sqlite3.connect(str(db_path))
+    cx.execute("CREATE TABLE events (source TEXT, occurred_at TEXT)")
+    cx.executemany("INSERT INTO events (source, occurred_at) VALUES (?, ?)", rows)
+    cx.commit()
+    cx.close()
+    return db_path
+
+
+def test_retired_csi_source_is_omitted_not_dark(monkeypatch, tmp_path):
+    """A decommissioned producer (csi_analytics) leaves stale csi.db rows; it must
+    be OMITTED from the inventory (with a retired-count note), NOT reported dark."""
+    now = datetime.now(timezone.utc)
+    fresh = now.isoformat()
+    stale = (now - timedelta(days=20)).isoformat()
+    db_path = _make_csi_db(
+        tmp_path,
+        [
+            ("youtube_channel_rss", fresh),
+            ("csi_analytics", stale),  # retired producer, very stale
+            ("threads_owned", stale),  # retired producer, very stale
+        ],
+    )
+    import universal_agent.services.transcript_corpus as tc
+
+    monkeypatch.setattr(tc, "resolve_csi_db_path", lambda: str(db_path))
+
+    conn = _make_conn()
+    acts = par._collect_lane_activities(conn)
+    names = [a["name"] for a in acts]
+
+    # The retired sources are NOT listed as their own CSI lane rows.
+    assert "CSI · csi_analytics" not in names
+    assert "CSI · threads_owned" not in names
+    # The live source IS listed and healthy.
+    assert "CSI · youtube_channel_rss" in names
+    live = next(a for a in acts if a["name"] == "CSI · youtube_channel_rss")
+    assert live["status"] == par.STATUS_HEALTHY
+    # A retired-count note is emitted (parked, not dark) covering the 2 retired rows.
+    retired_note = next((a for a in acts if a["name"] == "CSI · retired lanes"), None)
+    assert retired_note is not None
+    assert retired_note["status"] == par.STATUS_PARKED
+    assert "2 retired" in retired_note["detail"]
+    # No retired source appears as a dark entry anywhere.
+    dark_names = [a["name"] for a in acts if a["status"] == par.STATUS_DARK]
+    assert not any("csi_analytics" in n or "threads" in n for n in dark_names)

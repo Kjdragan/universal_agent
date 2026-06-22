@@ -222,7 +222,7 @@ drops parked sources whose flag is off). **YouTube is the only live ingestion fe
 | Source | Status | Gate (default) | Code anchor | Notes |
 |---|---|---|---|---|
 | `youtube_channel_rss` | LIVE ✅ | none | `csi_source_liveness.py::SOURCE_THRESHOLDS_HOURS` | Sole convergence feed; 444-channel watchlist; 12h threshold. |
-| `threads_owned` / `threads_trends_seeded` / `threads_trends_broad` | PARKED ⏸️ | `UA_CSI_THREADS_LANES_ENABLED`=0 | `csi_source_liveness.py::_threads_lanes_enabled` | Experimental; adapter no-ops without Threads creds. Removal in flight on a separate branch. |
+| `threads_owned` / `threads_trends_seeded` / `threads_trends_broad` | RETIRED 🌑 | n/a — gate + helper deleted | `csi_source_liveness.py::effective_source_thresholds` docstring | Decommissioned 2026-06-22 (PR #1140): never had a live ingestion adapter, X-API-dependent, redundant with the @ClaudeDevs/@bcherny lane. Removed from UA-side monitoring (`UA_CSI_THREADS_LANES_ENABLED` flag + `_THREADS_SOURCES` helper deleted). The CSI-ingester-side `csi-threads-*` timers persist but are inert pending an ingester redeploy. |
 | `hackernews` | PARKED ⏸️ | `UA_HACKERNEWS_SNAPSHOT_ENABLED`=0 | `csi_source_liveness.py::_hackernews_snapshot_enabled` | No auto producer exists; re-parked 2026-06-21 (#1116). |
 | `claude_code_intel` (X `@ClaudeDevs`/`@bcherny`) | PAUSED ⏸️ | `UA_CLAUDE_CODE_INTEL_CRON_ENABLED` default 1→0 (#1136) | `gateway_server.py::_claude_code_intel_cron_enabled` | X API HTTP 402 CreditsDepleted. |
 | `csi_analytics` | RETIRED 🌑 | n/a | `csi_source_liveness.py` docstring | PR #990; superseded by the convergence pipeline; model glm-5.1 → **glm-5.2**. |

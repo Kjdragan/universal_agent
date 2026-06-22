@@ -121,9 +121,6 @@ def _default_source_names() -> List[str]:
         return configured
     return [
         "youtube_channel_rss",
-        "threads_owned",
-        "threads_trends_seeded",
-        "threads_trends_broad",
         "csi_analytics",
     ]
 
@@ -444,9 +441,6 @@ async def csi_source_health_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
     source_names = _default_source_names()
     source_min_events = {
         "youtube_channel_rss": 1,
-        "threads_owned": 0,
-        "threads_trends_seeded": 0,
-        "threads_trends_broad": 0,
         "csi_analytics": 0,
     }
     source_min_events.update(_parse_source_min_events(str(os.getenv("UA_CSI_DELIVERY_SOURCE_MIN_EVENTS") or "")))

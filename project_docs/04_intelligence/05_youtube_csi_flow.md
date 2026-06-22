@@ -558,14 +558,17 @@ hadn't written. Two heartbeat invariants now guard it
 
 `csi_source_liveness` separately checks `max(occurred_at)` freshness per source
 in `csi.db`. The monitored set comes from `csi_source_liveness.effective_source_thresholds`,
-which applies parking flags to the base `SOURCE_THRESHOLDS_HOURS` table: `youtube_playlist`
-was dropped (retired in PR #438; intentionally silent), `csi_analytics` was dropped
-(retired in PR #990 — the three trend-report timers that emitted it were removed;
-no active producer remains), and the experimental Threads lanes
-(`threads_owned`, `threads_trends_seeded`, `threads_trends_broad`) are excluded unless
-`UA_CSI_THREADS_LANES_ENABLED=1` — their adapters are also `enabled: false` in the CSI
-ingester config while parked, so they neither run nor alert until re-enabled with creds.
-`hackernews` is likewise parked behind `UA_HACKERNEWS_SNAPSHOT_ENABLED` (re-parked
+which applies parking flags to the base `csi_source_liveness.SOURCE_THRESHOLDS_HOURS` table.
+Three sources are *removed from the table outright* as decommissioned producers (they will
+never emit again, so they are gone rather than parked): `youtube_playlist` (retired in
+PR #438; intentionally silent), `csi_analytics` (retired in PR #990 — the three
+trend-report timers that emitted it were removed; no active producer remains), and the
+experimental Threads lanes `threads_owned`, `threads_trends_seeded`, `threads_trends_broad`
+(decommissioned 2026-06-22 — they never had a live ingestion adapter, are X-API-dependent,
+and are redundant with the @ClaudeDevs/@bcherny lane; the old `UA_CSI_THREADS_LANES_ENABLED`
+gating flag and `_THREADS_SOURCES`/`_threads_lanes_enabled` helpers were deleted with them).
+`youtube_channel_rss` is now the only continuously-live CSI source. `hackernews` remains
+*parked* (resumable, not removed) behind `UA_HACKERNEWS_SNAPSHOT_ENABLED` (re-parked
 2026-06-21): it has no automatic CSI-event producer — the `hackernews_snapshot` cron is
 its only producer, and `POST /api/v1/hackernews/refresh` has zero internal callers (only
 the manual dashboard button hits it), so with the cron off it is intentionally silent

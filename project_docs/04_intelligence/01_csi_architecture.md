@@ -377,7 +377,7 @@ Three **CSI Ingester oneshot scripts** (each ran on a systemd timer, not a daemo
 | event_type | Emission script | Cadence | Payload |
 |---|---|---|---|
 | `rss_trend_report` | `csi_rss_trend_report.py` | 3×/day (7 AM, 1 PM, 7 PM CT) | Top channels, themes, narratives from YouTube RSS; report_markdown summary |
-| `threads_trend_report` | `csi_threads_trend_report.py` | 3×/day (parked: 0 events while threads adapters disabled) | Top buckets, sources, categories, themes from Threads; currently STALE |
+| `threads_trend_report` | `csi_threads_trend_report.py` | retired 2026-06-13; Threads lanes decommissioned 2026-06-22 (0 events) | Top buckets, sources, categories, themes from Threads; dead (no producer) |
 | `global_trend_brief_ready` | `csi_global_trend_brief.py` | 3×/day (7 AM, 1 PM, 7 PM CT) | LLM-synthesized cross-source brief; full_report_markdown includes narratives + contradictions + why-it-matters |
 
 **Operational status (as of 2026-06-13 — three trend timers intentionally retired):**
@@ -449,12 +449,14 @@ gateway's `ua_signals_ingest` endpoint (`CSI_UA_ENDPOINT` env var).
 
 | source | status | gate (default) | code anchor | notes |
 |---|---|---|---|---|
-| **youtube_channel_rss** | **LIVE** ✅ | none | `csi_source_liveness.py::SOURCE_THRESHOLDS_HOURS` | Sole convergence feed; ~444-channel watchlist; 12h liveness threshold. |
-| **threads_owned** / **threads_trends_seeded** / **threads_trends_broad** | **PARKED** ⏸️ | `UA_CSI_THREADS_LANES_ENABLED`=0 | `csi_source_liveness.py::_threads_lanes_enabled` | Experimental; adapters `enabled: false` in the ingester config and no-op without Threads creds. Excluded from `effective_source_thresholds` while parked. Removal in flight on a separate branch (not on `origin/main`). |
-| **hackernews** | **PARKED** ⏸️ | `UA_HACKERNEWS_SNAPSHOT_ENABLED`=0 | `csi_source_liveness.py::_hackernews_snapshot_enabled` | No automatic CSI-event producer — the `hackernews_snapshot` cron is its only producer (`POST /api/v1/hackernews/refresh` has zero internal callers). Re-parked 2026-06-21 (#1116); excluded from `effective_source_thresholds` while off. |
+| **youtube_channel_rss** | **LIVE** ✅ | none | `csi_source_liveness.py::SOURCE_THRESHOLDS_HOURS` | The **only continuously-live CSI source**. Sole convergence feed; ~444-channel watchlist; 12h liveness threshold. |
+| **threads_owned** / **threads_trends_seeded** / **threads_trends_broad** | **RETIRED** 🌑 (decommissioned 2026-06-22, PR #1140) | n/a — gate + helper deleted | `csi_source_liveness.py::effective_source_thresholds` docstring | Experimental; never had a live ingestion adapter, X-API-dependent, redundant with the @ClaudeDevs/@bcherny lane. Removed from all UA-side monitoring + source lists; the `UA_CSI_THREADS_LANES_ENABLED` flag and `_THREADS_SOURCES`/`_threads_lanes_enabled` helpers were deleted. See the ‡ note below. |
+| **hackernews** | **PARKED** ⏸️ | `UA_HACKERNEWS_SNAPSHOT_ENABLED`=0 | `csi_source_liveness.py::_hackernews_snapshot_enabled` | Parked (resumable, **not** removed). No automatic CSI-event producer — the `hackernews_snapshot` cron is its only producer (`POST /api/v1/hackernews/refresh` has zero internal callers). Re-parked 2026-06-21 (#1116); excluded from `effective_source_thresholds` while off. |
 | **csi_analytics** | **RETIRED** 🌑 | n/a | `csi_source_liveness.py::effective_source_thresholds` docstring | PR #990; superseded by the convergence pipeline (§3). Removed from `SOURCE_THRESHOLDS_HOURS` outright — neither runs nor alerts. See §3.6. |
 | **youtube_playlist** | **RETIRED** 🌑 | n/a | `csi_source_liveness.py::effective_source_thresholds` docstring | PR #438; daily digest is the canonical YouTube trigger. Removed from the table outright. |
 | **reddit** | **removed** | n/a | — | Legacy `reddit_discovery` adapter deleted 2026-06-06 (PR #707). Listed for historical context only. |
+
+> ‡ **Threads lanes decommissioned 2026-06-22 (PR #1140).** The experimental `threads_owned` / `threads_trends_seeded` / `threads_trends_broad` lanes were removed from all UA-side monitoring and source lists (`csi_source_liveness`, `tools/csi_bridge.py`, `gateway_server.py`) — they never had a live ingestion adapter, are X-API-dependent (the same HTTP-402 wall as the @ClaudeDevs/@bcherny X lane), and were redundant with it. The `csi_source_liveness` invariant no longer tracks them (the `UA_CSI_THREADS_LANES_ENABLED` flag and `_THREADS_SOURCES` helper were deleted), and `proactive_activity_report.py` omits them as retired (`_RETIRED_LANE_SOURCES`) rather than flagging dark. Any stale `config.yaml::sources.threads_*` entries upstream are inert (`enabled: false`).
 
 **Status definitions:**
 

@@ -760,13 +760,23 @@ implicit signals without understanding this loop.
     in `::_collect_inapp_cron_activities`. `claude_code_intel_sync` is reported
     `⏸️ paused` **by design** (X API credits depleted, deliberate operator flip)
     via `::_OPERATOR_PAUSED_CRONS` — never "broken".
-  - **lanes** are not crons; their health is DB freshness, read read-only by
+  - **lanes** are not crons; their health is DB freshness, read by
     `::_collect_lane_activities`: convergence candidates (the report's own
     `activity_state.db`), VP missions (`vp_state.db`), CSI events per `source`
     (canonical `csi.db` via `transcript_corpus.py::resolve_csi_db_path`), and the
     proactive-artifacts flow. `hackernews` + `claude_code_intel` CSI sources are
     intentionally parked (`::_PARKED_LANE_SOURCES`) → reported `⏸️ parked`, not
-    `🌑 dark`.
+    `🌑 dark`. **Decommissioned** CSI producers — `csi_analytics`,
+    `youtube_playlist`, and the `threads_*` lanes (`::_RETIRED_LANE_SOURCES`) —
+    are *omitted entirely* from the inventory (with a one-line "N retired lane(s)
+    excluded" note) rather than flagged dark; they leave stale `csi.db` rows
+    behind that would otherwise false-flag. The **proactive-artifacts** lane reads
+    the runtime `activity_state.db` — the report's own `conn` — via a direct
+    `proactive_artifacts` `MAX(created_at)` query, **not** `csi.db`: the table is
+    written there by `proactive_artifacts.py::upsert_artifact` callers
+    (`durable.db.connect_runtime_db(get_activity_db_path())`). An earlier version
+    read a stale `csi.db` copy and always reported this lane `🌑 dark` (fixed
+    2026-06-22).
 
   `::render_activity_section` emits the compact grouped LEAD text (one
   `✅/⚠️/⏸️/🌑` line per activity plus an `N healthy · M degraded · K paused ·

@@ -5269,9 +5269,6 @@ def classify_csi_project_key(
         key in mix_obj
         for key in (
             "youtube_channel_rss",
-            "threads_owned",
-            "threads_trends_seeded",
-            "threads_trends_broad",
         )
     ) and event_type_l in {
         "opportunity_bundle_ready",
@@ -23946,9 +23943,6 @@ def _parse_source_min_events_spec(raw: str) -> dict[str, int]:
 def _default_delivery_source_min_events() -> dict[str, int]:
     defaults = {
         "youtube_channel_rss": 1,
-        "threads_owned": 0,
-        "threads_trends_seeded": 0,
-        "threads_trends_broad": 0,
         "csi_analytics": 0,
     }
     env_map = _parse_source_min_events_spec(str(os.getenv("UA_CSI_DELIVERY_SOURCE_MIN_EVENTS") or ""))
@@ -24000,17 +23994,6 @@ def _delivery_hint_for_source(source_name: str, *, under_min_volume: bool, stale
                 "journalctl -u csi-ingester -n 120 --no-pager"
             ),
         }
-    if source_name in {"threads_owned", "threads_trends_seeded", "threads_trends_broad"}:
-        return {
-            "code": "threads_source_stale_or_low_volume",
-            "severity": "warning",
-            "title": "Threads source volume below threshold",
-            "action": (
-                "Verify Threads token freshness, source query packs, and keyword quotas. "
-                "Confirm THREADS_* credentials are loaded in CSI runtime env."
-            ),
-            "runbook_command": "journalctl -u csi-ingester -n 200 --no-pager | grep -i threads",
-        }
     return None
 
 
@@ -24020,9 +24003,6 @@ async def dashboard_csi_delivery_health(
     stale_minutes: int = 240,
     max_failed_attempt_ratio: Optional[float] = None,
     min_rss_events: Optional[int] = None,
-    min_threads_owned_events: Optional[int] = None,
-    min_threads_seeded_events: Optional[int] = None,
-    min_threads_broad_events: Optional[int] = None,
     max_dlq_recent: Optional[int] = None,
     source_min_events: Optional[str] = None,
 ):
@@ -24038,12 +24018,6 @@ async def dashboard_csi_delivery_health(
     source_min_map.update(_parse_source_min_events_spec(str(source_min_events or "")))
     if min_rss_events is not None:
         source_min_map["youtube_channel_rss"] = max(0, int(min_rss_events))
-    if min_threads_owned_events is not None:
-        source_min_map["threads_owned"] = max(0, int(min_threads_owned_events))
-    if min_threads_seeded_events is not None:
-        source_min_map["threads_trends_seeded"] = max(0, int(min_threads_seeded_events))
-    if min_threads_broad_events is not None:
-        source_min_map["threads_trends_broad"] = max(0, int(min_threads_broad_events))
     tuned_max_dlq_recent = (
         max(0, int(max_dlq_recent))
         if max_dlq_recent is not None
@@ -24343,9 +24317,6 @@ async def dashboard_csi_delivery_health(
                 "max_failed_attempt_ratio": tuned_max_failed_attempt_ratio,
                 "source_min_events": source_min_map,
                 "min_rss_events": int(source_min_map.get("youtube_channel_rss") or 0),
-                "min_threads_owned_events": int(source_min_map.get("threads_owned") or 0),
-                "min_threads_seeded_events": int(source_min_map.get("threads_trends_seeded") or 0),
-                "min_threads_broad_events": int(source_min_map.get("threads_trends_broad") or 0),
                 "max_dlq_recent": tuned_max_dlq_recent,
                 "adapter_consecutive_failures": tuned_adapter_consecutive_failures,
                 "stale_threshold_minutes": stale_threshold_minutes,
