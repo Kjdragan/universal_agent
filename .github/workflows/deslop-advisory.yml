@@ -39,7 +39,7 @@ jobs:
     if: ${{ startsWith(github.head_ref, 'claude/') || startsWith(github.head_ref, 'codie/') }}
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Sized for "diff against base branch only" — the merge-base lookup
           # below re-fetches the base ref at the same depth.

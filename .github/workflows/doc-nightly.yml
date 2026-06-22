@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -68,7 +68,7 @@ jobs:
       # breaks here — it makes checkout resolve a pre-existing broken submodule gitlink
       # (.claude/agents/agent-browser, absent from .gitmodules) and exit 128. The PAT
       # push below neutralizes the persisted GITHUB_TOKEN extraheader inline instead.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.12'
