@@ -2804,6 +2804,64 @@ class CronService:
                                                 and not _f_was_deploy_killed
                                                 else 1
                                             )
+                                            # Mechanical fail-loud guard for
+                                            # paper_to_podcast_daily: the
+                                            # 2026-06-22 silent no-op exited
+                                            # clean_exit_zero with zero usable
+                                            # papers because the LLM narrative
+                                            # self-diagnosed "cache empty" and
+                                            # gracefully ended the turn. This
+                                            # post-run check inspects the run's
+                                            # ACTUAL work products and flips a
+                                            # would-be rc=0 to rc=1 when zero
+                                            # papers are evidenced, so the
+                                            # failure surfaces in logs /
+                                            # dashboard / watchdog instead of
+                                            # being painted as success. Only
+                                            # applies to paper_to_podcast_daily
+                                            # (gated on metadata.system_job)
+                                            # and only on the rc=0 path (a
+                                            # timeout/cancel/exception keeps
+                                            # its real classification). Best-
+                                            # effort: any guard exception is
+                                            # swallowed so it cannot mask the
+                                            # original outcome.
+                                            if _f_rc_equiv_llm == 0:
+                                                try:
+                                                    _f_sys_job = str(
+                                                        (job.metadata or {}).get("system_job") or ""
+                                                    ).strip()
+                                                    if _f_sys_job == "paper_to_podcast_daily":
+                                                        from universal_agent.services.paper_to_podcast_guard import (
+                                                            evaluate_paper_to_podcast_run as _f_eval_p2p,
+                                                        )
+                                                        _f_p2p_result = _f_eval_p2p(
+                                                            job.workspace_dir
+                                                        )
+                                                        if _f_p2p_result.is_failure:
+                                                            logger.warning(
+                                                                "Phase F.1 paper_to_podcast fail-loud "
+                                                                "guard fired for job %s: %s "
+                                                                "(flipping rc_equiv 0->1)",
+                                                                job.job_id, _f_p2p_result.reason,
+                                                            )
+                                                            _f_rc_equiv_llm = 1
+                                                            if not _f_run_error_text:
+                                                                _f_run_error_text = (
+                                                                    "paper_to_podcast fail-loud guard: "
+                                                                    + _f_p2p_result.reason
+                                                                )
+                                                            if record and record.status == "success":
+                                                                record.status = "error"
+                                                                record.error = (
+                                                                    "paper_to_podcast fail-loud guard: "
+                                                                    + _f_p2p_result.reason
+                                                                )
+                                                except Exception as _f_guard_exc:  # noqa: BLE001
+                                                    logger.debug(
+                                                        "Phase F.1 paper_to_podcast guard skipped for job %s: %s",
+                                                        job.job_id, _f_guard_exc,
+                                                    )
                                             _f_conn_llm = _f_open_conn_llm()
                                             try:
                                                 # Pre-close auto-linked cron
@@ -3168,6 +3226,21 @@ class CronService:
                 if record.status not in {"cancelled", "retry_queued"}:
                     self._clear_inflight(job.job_id)
                 moved_outputs = self._organize_workspace_outputs(job.workspace_dir)
+                # Silent no-op guard: a run the agent classified as 'success'
+                # but that produced none of its declared expected_artifacts is
+                # downgraded to 'error' here so the Watchdog surfaces it. Runs
+                # BEFORE append_run + the cron_run_completed emit so the flipped
+                # status propagates to events, notifications, and the
+                # success-gated memory-capture below. See the 2026-06-22
+                # paper_to_podcast_daily RCA (agent narrated a download bug,
+                # exited clean, no podcast landed).
+                try:
+                    self._verify_expected_artifacts(job, record)
+                except Exception as _artifact_guard_exc:  # noqa: BLE001
+                    logger.warning(
+                        "expected-artifact guard crashed for job %s: %s",
+                        job.job_id, _artifact_guard_exc,
+                    )
                 # Finalize one-shot schedule consumption only after run actually started.
                 if reason == "schedule" and job.run_at is not None:
                     job.last_run_at = record.started_at or time.time()
@@ -3313,6 +3386,73 @@ class CronService:
         except Exception as exc:
             logger.warning("Failed organizing chron workspace outputs for %s: %s", workspace_dir, exc)
             return []
+
+    def _verify_expected_artifacts(self, job: CronJob, record: CronRunRecord) -> bool:
+        """Downgrade a 'success' run to 'error' when declared artifacts are missing.
+
+        Silent no-op guard. An agentic cron whose session returns ``response_text``
+        with no ``errors`` is classified ``success`` even when it produced no real
+        output — exactly the 2026-06-22 ``paper_to_podcast_daily`` failure: the
+        agent narrated an arXiv download bug, stopped, no podcast/audio landed,
+        and the run surfaced green. Jobs that declare
+        ``metadata['expected_artifacts']`` get a post-run filesystem check; if any
+        declared artifact is absent or under ``min_bytes``, the run is reclassified
+        ``error`` with a clear message so the Watchdog/invariants surface it as a
+        real failure instead of a clean completed no-op.
+
+        ``expected_artifacts`` shape: list[dict] of
+        ``{"path": <rel-to-workspace>, "min_bytes": int, "label": str}``.
+
+        Only downgrades ``success`` -> ``error``. Never clobbers an existing
+        ``error`` / ``cancelled`` / ``auth_required`` / ``retry_queued``. Returns
+        True iff it flipped the status. Crash-safe: a bad spec / IO error skips
+        that spec and logs, never re-classifies on a guard bug.
+        """
+        if record.status != "success":
+            return False
+        declared = (job.metadata or {}).get("expected_artifacts") or []
+        if not declared:
+            return False
+        try:
+            workspace = Path(job.workspace_dir).resolve()
+        except Exception:
+            return False
+        missing: list[str] = []
+        for spec in declared:
+            try:
+                rel = str(spec.get("path", "")).strip()
+                if not rel:
+                    continue
+                min_bytes = int(spec.get("min_bytes", 1))
+                label = str(spec.get("label") or rel)
+                candidate = (workspace / rel).resolve()
+                # Path-escape guard: declared paths are workspace-relative.
+                if candidate != workspace and workspace not in candidate.parents:
+                    missing.append(f"{label} (unsafe path {rel})")
+                    continue
+                if not candidate.is_file() or candidate.stat().st_size < min_bytes:
+                    missing.append(f"{label} ({rel})")
+            except Exception as spec_exc:  # noqa: BLE001
+                logger.debug(
+                    "expected-artifact check skipped spec %r for job %s: %s",
+                    spec, job.job_id, spec_exc,
+                )
+        if not missing:
+            return False
+        msg = (
+            "Run produced no usable output — expected artifact(s) missing: "
+            f"{'; '.join(missing)}. Agent exited clean but the headline "
+            "deliverable never landed (silent no-op guard)."
+        )
+        record.status = "error"
+        record.error = msg
+        prev_preview = (record.output_preview or "").strip()
+        record.output_preview = (prev_preview + "\n" + msg if prev_preview else msg)[:400]
+        logger.warning(
+            "Chron job %s downgraded success->error by artifact guard: %s",
+            job.job_id, msg,
+        )
+        return True
 
     def _persist_run_output(self, job: CronJob, record: CronRunRecord, result: Any) -> None:
         """Save cron run outputs into work_products and optional artifacts directory."""

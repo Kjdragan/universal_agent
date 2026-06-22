@@ -60,6 +60,45 @@ Do NOT fall back to the raw `arxiv` Python library, `curl`/`wget` against
 export.arxiv.org, or any hand-rolled HTTP — those bypass the rate limiter and
 cause the 429 storms this skill exists to avoid.
 
+Paper cache contract (READ CAREFULLY — the 2026-06-22 silent no-op was a cache-check bug here)
+------------------------------------------------------------------------------------------------------
+
+The arxiv-mcp-server writes EVERY downloaded paper — whether the source was
+arXiv's HTML endpoint OR a PDF fallback — as `<arxiv_id>.md` (markdown text) at
+its `--storage-path`. PDFs are converted to markdown and the intermediate
+`.pdf` is deleted. There are NEVER any `.pdf` files in the cache. This is not a
+bug; it is how the server works (v0.5.0 `tools/download.py::get_paper_path`).
+
+Canonical storage location: `/home/ua/.arxiv-mcp-server/papers/` on the VPS
+(the server's `--storage-path`, resolved by
+`universal_agent.arxiv_runtime.canonical_arxiv_storage_path()`). Every paper
+`download_paper` returns `status: success` for IS on disk at
+`<storage-path>/<paper_id>.md` by the time the call returns — `download_paper`
+writes the file BEFORE returning success. You do NOT need to re-check the
+cache; if `download_paper` returned `status: success`, the paper is cached.
+
+DO NOT call `list_papers` to "verify" a download you just made — `list_papers`
+is for inventory of the whole cache, not per-paper verification, and calling it
+at the wrong moment (before downloads complete) is exactly the bug that caused
+the 2026-06-22 no-op: the agent concluded "none of my 5 targets are in the
+cache" because it listed BEFORE downloading, then gave up. The correct flow is
+`search_papers` -> for each paper `download_paper` (returns content inline) ->
+optionally `read_paper` to re-read. Trust the `status: success` return.
+
+When a `download_paper` call returns `status: error` for ONE paper (e.g. the
+PDF-fallback path hits an arxiv library API change like `'Result' object has no
+attribute 'download_pdf'`), skip THAT paper and continue with the remaining
+papers — the skill's Constraints already say "If a paper download fails, skip
+it and continue with remaining papers". A single paper's download error is NOT
+a reason to abandon the run or declare the cache broken. As long as >=1 paper
+downloads successfully (status: success), proceed to Phase B with the papers
+that DID download.
+
+Because papers are `.md` (not `.pdf`), add them to NotebookLM with
+`nlm source add <nb> --file <path-to-paper.md>` (the `nlm` CLI accepts `.md`
+files) or `nlm source add <nb> --text "$(cat <paper.md>)"`. Do NOT look for a
+`.pdf` to upload — there is none.
+
 NotebookLM — use the `nlm` CLI for ALL NotebookLM operations (NOT the `mcp__notebooklm-mcp__*` tools).
 
 **CRITICAL:** The long-lived NotebookLM MCP server's `refresh_auth` intermittently reports
@@ -114,9 +153,10 @@ building a new one — that is the recovery path after a deploy-restart.
 
 Phase A — Paper Discovery (direct MCP tools):
 1. Call mcp__arxiv-mcp-server__search_papers with the user's topic, max_results=5, sort_by=relevance, date_from 12 months ago, and relevant categories (cs.AI, cs.CL, cs.LG, cs.MA for AI/ML topics). Make ONE search call; the server already paces requests. If it returns a rate-limit/429 error, wait ~60s and retry the same call ONCE — never switch to the raw `arxiv` library or curl.
-2. For each paper, call download_paper then read_paper to get full text (one paper at a time — the server paces these for you)
+2. For each paper, call download_paper (returns the paper text inline in its `content` field on `status: success`). One paper at a time — the server paces these for you. `download_paper` writes the paper to `<storage-path>/<paper_id>.md` BEFORE returning success, so a `status: success` return IS the cache-hit signal — do not re-call list_papers to verify. You MAY call read_paper to re-fetch the text if you need it again. If a single paper returns `status: error`, skip it and continue with the rest (see Paper cache contract above).
 3. Extract: title, authors, key findings, methodology, contributions
 4. Save paper metadata to work_products/paper_to_podcast/papers_metadata.json
+5. FAIL-LOUD CHECK: if ZERO papers downloaded successfully (every download_paper call returned `status: error`), do NOT proceed to Phase B and do NOT write a manifest claiming success. Exit the run with a clear failure message (write `work_products/paper_to_podcast/FAILURE.txt` describing the download failure and exit non-zero / report failure to the operator). The cron wrapper's post-run guard treats zero usable papers as a hard failure regardless.
 
 Phase B — NotebookLM Content Generation (via the `nlm` CLI — see Required Capabilities):
 0. RESUME CHECK (deploy-restart recovery — do this BEFORE creating anything).
@@ -144,8 +184,8 @@ Phase B — NotebookLM Content Generation (via the `nlm` CLI — see Required Ca
    seconds now>, "status": "creating"}`. Until the manifest is written at the very
    end this is the ONLY durable record of the notebook handle, so writing it now
    is what lets a deploy-restart adopt this notebook instead of building a new one.
-3. For each downloaded paper PDF (from Phase A), `nlm source add <notebook_id> --file <path-to-paper.pdf> --wait`
-   (one call per paper, sequential).
+3. For each downloaded paper (from Phase A), add it to the notebook. Papers are stored as `.md` files (NOT `.pdf` — see Paper cache contract). Use the canonical storage path: `nlm source add <notebook_id> --file /home/ua/.arxiv-mcp-server/papers/<paper_id>.md --wait` (one call per paper, sequential). The `nlm` CLI accepts `.md` files.
+
 4. Generate artifacts — the audio overview is the headline deliverable, so kick it off FIRST and never skip it:
    a. Audio: `nlm audio create <notebook_id> --format deep_dive --confirm`
       — then update `.nlm_resume.json` `status` to `"polling"`.
