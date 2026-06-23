@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cracking Non-Deterministic Evaluation — Three Approaches, Four Pillars</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1a1f2b; --muted:#5c6675; --line:#e3e7ed;
+    --good:#1f8a4c; --good-bg:#e7f6ec; --part:#b9770a; --part-bg:#fdf3e0; --bad:#c23a3a; --bad-bg:#fbeaea;
+    --win:#1f6feb; --win-bg:#eaf2ff; --accent:#1f6feb;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;line-height:1.55}
+  .wrap{max-width:1060px;margin:0 auto;padding:34px 20px 70px}
+  header{margin-bottom:8px}
+  .kicker{font-size:12.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  h1{font-size:29px;line-height:1.18;margin:8px 0 6px;font-weight:800;letter-spacing:-.01em}
+  .sub{font-size:16px;color:var(--muted);margin:0 0 4px;max-width:760px}
+  .verdict-line{margin:18px 0 26px;padding:14px 18px;background:var(--win-bg);border:1px solid #cfe0ff;
+    border-left:4px solid var(--win);border-radius:10px;font-size:15.5px}
+  .verdict-line b{color:var(--win)}
+  h2{font-size:14px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+    margin:36px 0 14px;font-weight:700}
+  /* pillars */
+  .pillars{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .pillar{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+  .pillar .n{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:7px;
+    background:var(--accent);color:#fff;font-weight:800;font-size:13px;margin-right:9px}
+  .pillar h3{display:flex;align-items:center;font-size:15.5px;margin:0 0 6px;font-weight:700}
+  .pillar p{margin:0;font-size:13.5px;color:var(--muted)}
+  .pillar .fail{display:block;margin-top:8px;font-size:12.5px;color:var(--bad);font-weight:600}
+  /* matrix */
+  .matrix{width:100%;border-collapse:separate;border-spacing:0;background:var(--card);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:13.5px}
+  .matrix th,.matrix td{padding:13px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+  .matrix thead th{background:#fafbfc;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .matrix tbody tr:last-child td{border-bottom:none}
+  .matrix .pcol{width:30%;font-weight:700}
+  .matrix .pcol small{display:block;font-weight:500;color:var(--muted);margin-top:3px;font-size:12px}
+  .matrix th.app{width:23.3%}
+  .matrix th.app span{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:none;letter-spacing:0;margin-top:2px}
+  .cell{display:flex;gap:8px;align-items:flex-start}
+  .badge{flex:0 0 auto;width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;
+    justify-content:center;font-size:12px;font-weight:800;margin-top:1px}
+  .b-good{background:var(--good-bg);color:var(--good)}
+  .b-part{background:var(--part-bg);color:var(--part)}
+  .b-bad{background:var(--bad-bg);color:var(--bad)}
+  .cell em{font-style:normal;color:var(--muted);font-size:12.5px}
+  .winner-col{background:var(--win-bg)}
+  .scorerow td{background:#fafbfc;font-weight:700;font-size:13px}
+  .scorerow .tot{font-size:14px}
+  .s-win{color:var(--win)}
+  /* verdict cards */
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 17px}
+  .card.win{border:1.5px solid var(--win);box-shadow:0 2px 14px rgba(31,111,235,.10)}
+  .card .tag{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 9px;border-radius:20px;display:inline-block;margin-bottom:9px}
+  .tag.win{background:var(--win);color:#fff}
+  .tag.keep{background:var(--good-bg);color:var(--good)}
+  .tag.donor{background:var(--part-bg);color:var(--part)}
+  .card h3{margin:0 0 7px;font-size:16px;font-weight:800}
+  .card p{margin:0;font-size:13.5px;color:var(--muted)}
+  .card .role{margin-top:9px;font-size:12.5px;color:var(--ink);font-weight:600}
+  /* caveat */
+  .caveat{margin-top:30px;background:#fff8e9;border:1px solid #f3e2b8;border-left:4px solid var(--part);
+    border-radius:10px;padding:16px 18px;font-size:14.5px}
+  .caveat b{color:var(--part)}
+  .foot{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+  .foot b{color:var(--ink)}
+  @media(max-width:720px){
+    .pillars,.cards{grid-template-columns:1fr}
+    h1{font-size:24px}
+    .matrix{font-size:12.5px}
+    .matrix .pcol{width:34%}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="kicker">UA · Non-Deterministic Evaluation</div>
+    <h1>Which approach actually cracks non-deterministic evaluation?</h1>
+    <p class="sub">Comparing the three lineages we have — the <b>loop_experiments</b> probe, the older <b>URW / Ralph</b> wrapper, and <b>QLoop</b> — against the four pillars a trustworthy subjective-quality judge must stand on.</p>
+  </header>
+
+  <div class="verdict-line">
+    <b>Verdict:</b> QLoop's methodology wins — decisively. The reason matters more than the result: in non-deterministic evaluation <b>the guards <em>are</em> the product</b>. "Simpler" doesn't mean leaner-but-equivalent; it means missing the specific guards that keep a judge from rubber-stamping. Strip them and you don't get a lighter evaluator — you get a confident, wrong one.
+  </div>
+
+  <h2>The four pillars — each prevents a specific failure</h2>
+  <div class="pillars">
+    <div class="pillar">
+      <h3><span class="n">1</span>Externalize the contract <em>before</em> generating</h3>
+      <p>Write acceptance criteria as a separate explicit spec, not recited inline. Our biggest measured lever: <b>0.31 → 0.75</b> at ~1 extra call.</p>
+      <span class="fail">Prevents: a vague target the model silently reinterprets to suit itself.</span>
+    </div>
+    <div class="pillar">
+      <h3><span class="n">2</span>Judge evidence, not narration</h3>
+      <p>The judge scores the artifact — rendered output, screenshots, extracted DOM — never the generator's "I'm done" story.</p>
+      <span class="fail">Prevents: the sycophancy hole that sinks bare /loop and /goal.</span>
+    </div>
+    <div class="pillar">
+      <h3><span class="n">3</span>Separate scoring from deciding</h3>
+      <p>The LLM judge only <b>scores</b>; a deterministic controller owns accept / refine / stop. The judge can <b>never force an accept</b>.</p>
+      <span class="fail">Prevents: the agreeable model that did the work also deciding it's done — the rubber-stamp itself.</span>
+    </div>
+    <div class="pillar">
+      <h3><span class="n">4</span>Validate the judge against human-anchored tiers</h3>
+      <p>Measure whether the judge can tell <b>good</b> from <b>great</b> — per-tier drift, not a pooled average that hides the collapse.</p>
+      <span class="fail">Prevents: a judge silently degraded into a rubber-stamp you can't even see.</span>
+    </div>
+  </div>
+
+  <h2>How the three approaches score</h2>
+  <table class="matrix">
+    <thead>
+      <tr>
+        <th class="pcol">Pillar</th>
+        <th class="app">loop-it<span>the in-house probe</span></th>
+        <th class="app">URW / Ralph<span>the older wrapper</span></th>
+        <th class="app winner-col">QLoop<span>productized &amp; hardened</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="pcol">1 · Externalize the contract<small>written spec before generation</small></td>
+        <td><div class="cell"><span class="badge b-good">✓</span><em>Discovered it — the 0.31→0.75 result is its proof</em></div></td>
+        <td><div class="cell"><span class="badge b-part">◑</span><em>Task rubric exists, but loose &amp; not negotiated</em></div></td>
+        <td class="winner-col"><div class="cell"><span class="badge b-good">✓</span><em>AcceptanceContract: gates + weighted dims + per-dim floors, negotiated pre-gen</em></div></td>
+      </tr>
+      <tr>
+        <td class="pcol">2 · Evidence, not narration<small>judge sees artifacts only</small></td>
+        <td><div class="cell"><span class="badge b-part">◑</span><em>Judge sees artifact + rubric</em></div></td>
+        <td><div class="cell"><span class="badge b-part">◑</span><em>Artifact previews (good), but partial</em></div></td>
+        <td class="winner-col"><div class="cell"><span class="badge b-good">✓</span><em>No transcript parameter at all — enforced by AST test</em></div></td>
+      </tr>
+      <tr>
+        <td class="pcol">3 · Scoring ≠ deciding<small>deterministic veto on top</small></td>
+        <td><div class="cell"><span class="badge b-part">◑</span><em>Independent voted judge, but no pure controller</em></div></td>
+        <td><div class="cell"><span class="badge b-bad">✗</span><em>Single lenient judge, decision inlined (pass &gt; 0.65)</em></div></td>
+        <td class="winner-col"><div class="cell"><span class="badge b-good">✓</span><em>Pure decide(): judge can only force <b>reset</b>, never accept</em></div></td>
+      </tr>
+      <tr>
+        <td class="pcol">4 · Validate the judge<small>per-tier human anchors</small></td>
+        <td><div class="cell"><span class="badge b-bad">✗</span><em>Named the problem, didn't solve it</em></div></td>
+        <td><div class="cell"><span class="badge b-bad">✗</span><em>None</em></div></td>
+        <td class="winner-col"><div class="cell"><span class="badge b-good">✓</span><em>per_anchor_abs_drift + decide_keep guard <span style="color:#b9770a">(anchors still synthetic)</span></em></div></td>
+      </tr>
+      <tr class="scorerow">
+        <td class="pcol">Pillars covered</td>
+        <td>1 full · 2 partial</td>
+        <td>0 full · 2 partial</td>
+        <td class="winner-col tot s-win">4 of 4</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>What each one is really for</h2>
+  <div class="cards">
+    <div class="card win">
+      <span class="tag win">Adopt — the engine</span>
+      <h3>QLoop</h3>
+      <p>The only one that treats <b>the judge as something to be validated, not trusted</b>. That's the conceptual leap — everything else is a fancier way of asking an agreeable model "are you happy?"</p>
+      <div class="role">→ Adopt its <b>core</b>, not the kitchen sink.</div>
+    </div>
+    <div class="card">
+      <span class="tag keep">Keep — the proof</span>
+      <h3>loop-it</h3>
+      <p>Its value isn't as an evaluator — it's the <b>empirical evidence</b> for <em>why</em> the pillars work (the 0.31 → 0.75 → 0.875 ladder).</p>
+      <div class="role">→ Keep as the validation harness.</div>
+    </div>
+    <div class="card">
+      <span class="tag donor">Salvage — one part</span>
+      <h3>URW / Ralph</h3>
+      <p>Right instinct on <b>cheap deterministic pre-gates</b> (binary/constraint checks before you pay for an LLM judge). Its simplicity lands exactly on the rubber-stamp.</p>
+      <div class="role">→ Parts donor, not a base.</div>
+    </div>
+  </div>
+
+  <div class="caveat">
+    <b>The honest ceiling:</b> no architecture cracks this alone. QLoop carries the same unsolved residual as the others — its anchors are <b>synthetic</b>. The real crack is <b>QLoop's machinery <em>fed by human-scored anchors</em></b>: per-tier drift and the discrimination gate are exactly what stop a pooled average from washing out the signal. Without that machinery, even good anchors get averaged into noise; without anchors, even QLoop's machinery is just plumbing. QLoop is the half that's already built — a few dozen human-scored weak→strong exemplars is the half we still owe, and the single highest-leverage thing to produce.
+  </div>
+
+  <div class="foot">
+    <b>Bottom line:</b> adopt QLoop's four-pillar methodology and its core (the <code>decide</code> controller + the contract + the evidence boundary + the calibration gate). Defer the heavier optional layers (browser-evidence collection, lesson-learning, negotiation) until they earn their place. &nbsp;·&nbsp; Decision recap for UA · 2026-06-22
+  </div>
+</div>
+</body>
+</html>
