@@ -9,7 +9,7 @@ code_paths:
   - infrastructure/tailscale/tailnet-policy.hujson
   - infrastructure/tailscale/device_roles.json
   - scripts/tailscale_vps_preflight.sh
-last_verified: 2026-06-15
+last_verified: 2026-06-23
 ---
 
 # Agent Runbook: Reaching the Production VPS
