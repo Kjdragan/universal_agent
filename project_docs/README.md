@@ -109,6 +109,7 @@ _MCP server, tools/bridges, SDK integration, skills_
 - **[SDK Integration](07_tools/02_sdk_integration.md)** — Claude Agent SDK integration helpers, session history adapter, runtime info, task events, harness planning phase. _(verified 2026-06-15)_
 - **[Skills System](07_tools/03_skills_system.md)** — Skills architecture, invocation by principals, dependency/gated-binary setup. _(verified 2026-06-22)_
 - **[HyperFrames Video Generation (Studio + Pipeline)](07_tools/04_hyperframes_video_generation.md)** — Studio + pipeline (external project in Cody_Code_Generations/): beat-sheet pipeline, Agent SDK app, learning loop, widget strategy, UA adoption status (design-only). _(verified 2026-06-17)_
+- **[Skill-Description Optimizer (and why description-tuning has a ceiling)](07_tools/05_skill_description_optimizer.md)** — The UA auth-mode optimizer + reusable `inference_auth`/`skill_triggering_eval` services; the full 2026-06-22 investigation (stale bundled optimizer, GLM-is-NOT-skill-blind correction, Opus vs GLM head-to-head) and reproduction steps. **Conclusion: a weak vein to mine — the descriptions are already passable; description-tuning hit a ceiling (and naming an excluded case can backfire).** _(verified 2026-06-22)_
 
 ## 08_operations
 
