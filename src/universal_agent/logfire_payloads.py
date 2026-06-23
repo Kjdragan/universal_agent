@@ -24,7 +24,7 @@ def _is_truthy(value: str | None, default: bool = False) -> bool:
 def _safe_int(value: str | None, default: int, min_value: int, max_value: int) -> int:
     try:
         parsed = int((value or "").strip())
-    except Exception:
+    except (ValueError, TypeError):
         return default
     return max(min_value, min(max_value, parsed))
 

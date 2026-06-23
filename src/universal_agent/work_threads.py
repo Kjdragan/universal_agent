@@ -63,7 +63,7 @@ def _normalize_string_list(value: Any) -> list[str]:
 def _safe_int(value: Any, default: int = 1) -> int:
     try:
         return max(1, int(value))
-    except Exception:
+    except (ValueError, TypeError):
         return default
 
 

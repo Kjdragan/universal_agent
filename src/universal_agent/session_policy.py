@@ -26,7 +26,7 @@ def _env_int(name: str, default: int) -> int:
         return default
     try:
         return int(str(raw).strip())
-    except Exception:
+    except (ValueError, TypeError):
         return default
 
 
