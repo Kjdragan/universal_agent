@@ -2213,8 +2213,11 @@ class AgentMailService:
                     target_agent=target_agent,
                 )
 
-                # ── Immediate notification for external email arrivals ──
-                if not sender_trusted:
+                # ── Immediate notification for genuinely external arrivals ──
+                # Self-sends (the inbox's own address, e.g. an app sending AS Simone)
+                # are trusted-origin and already safety-scanned, so they do NOT warrant
+                # an external-email alert. Notify only for untrusted, non-self-send mail.
+                if not sender_trusted and sender_role != "self_send":
                     self._emit_notification(
                         kind="agentmail_external_arrived",
                         title="📧⚠️ External Email Received",
@@ -3385,17 +3388,22 @@ class AgentMailService:
             security_classification=str(triage.get("safety_status") or "clean"),
             note=note,
         )
-        self._emit_notification(
-            kind="agentmail_review_required",
-            title="🔶 External Email — Human Triage Required",
-            message=note or f"External inbound email from {sender_email or 'unknown sender'} requires security review.",
-            severity="warning",
-            metadata={
-                "thread_id": thread_id,
-                "sender_email": sender_email,
-                "session_key": str(payload.get("session_key") or ""),
-            },
-        )
+        # Notify the operator only for genuinely external mail. A self-send (the
+        # inbox's own address) is trusted-origin and already safety-scanned; it is
+        # still filed as review_required above for the record, but must NOT trigger
+        # an "external email" alert email.
+        if sender_role != "self_send":
+            self._emit_notification(
+                kind="agentmail_review_required",
+                title="🔶 External Email — Human Triage Required",
+                message=note or f"External inbound email from {sender_email or 'unknown sender'} requires security review.",
+                severity="warning",
+                metadata={
+                    "thread_id": thread_id,
+                    "sender_email": sender_email,
+                    "session_key": str(payload.get("session_key") or ""),
+                },
+            )
 
     async def recover_abandoned_sessions(self) -> dict[str, int]:
         """Recover email queue items orphaned by a gateway restart.
