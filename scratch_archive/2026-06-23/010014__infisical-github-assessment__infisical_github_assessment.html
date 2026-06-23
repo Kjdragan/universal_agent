@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Infisical → GitHub — Assessment &amp; Implementation Plan</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { background: #ffffff; color: #1f2328; font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; margin: 0; padding: 0; }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 32px 22px 80px; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 22px; margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #d8dee4; scroll-margin-top: 16px; }
+  h3 { font-size: 17px; margin: 26px 0 8px; }
+  p { margin: 10px 0; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: #f6f8fa; border-radius: 5px; padding: 2px 6px; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 8px; padding: 14px 16px; overflow-x: auto; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre code { background: none; padding: 0; }
+  .sub { color: #57606a; font-size: 14px; margin: 0 0 8px; }
+  .verdict { border-radius: 10px; padding: 18px 20px; margin: 22px 0 6px; border: 1px solid; }
+  .verdict.go { background: #f3fbf5; border-color: #acdcb8; }
+  .verdict .tag { display: inline-block; font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; padding: 3px 10px; border-radius: 999px; background: #1a7f37; color: #fff; }
+  .verdict h2 { border: none; margin: 8px 0 6px; font-size: 19px; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 13.5px; }
+  th, td { border: 1px solid #d8dee4; padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  .y { color: #1a7f37; font-weight: 600; }
+  .n { color: #cf222e; font-weight: 600; }
+  .m { color: #9a6700; font-weight: 600; }
+  .toc { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 8px; padding: 14px 18px; margin: 20px 0; font-size: 14.5px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 3px 0; }
+  .callout { border-left: 4px solid #0969da; background: #f0f6ff; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 14.5px; }
+  .callout.warn { border-color: #9a6700; background: #fff8e8; }
+  .callout.danger { border-color: #cf222e; background: #fff5f5; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .card { border: 1px solid #d8dee4; border-radius: 10px; padding: 14px 16px; }
+  .card h3 { margin-top: 0; }
+  .flow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:#f6f8fa; border:1px solid #d8dee4; border-radius:10px; padding:14px 16px; margin:14px 0; font-size:13.5px; }
+  .node { background:#fff; border:1px solid #c4ccd4; border-radius:8px; padding:7px 11px; font-weight:600; }
+  .node.inf { border-color:#7048e8; background:#f3f0ff; }
+  .node.gh { border-color:#1f2328; }
+  .arrow { color:#57606a; font-weight:700; }
+  .phase { border:1px solid #d8dee4; border-radius:10px; padding:0; margin:16px 0; overflow:hidden; }
+  .phase > .ph-head { background:#f6f8fa; padding:10px 16px; font-weight:700; border-bottom:1px solid #d8dee4; }
+  .phase > .ph-body { padding:6px 16px 14px; }
+  .pill { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px; margin-left:8px; vertical-align:middle; }
+  .pill.must { background:#1a7f37; color:#fff; }
+  .pill.opt { background:#9a6700; color:#fff; }
+  .muted { color: #57606a; font-size: 13px; }
+  ul.tight li { margin: 4px 0; }
+  footer { margin-top: 50px; padding-top: 16px; border-top: 1px solid #d8dee4; color: #57606a; font-size: 13px; }
+  @media (max-width: 680px) { .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Infisical → GitHub — Assessment &amp; Implementation Plan</h1>
+  <p class="sub">For the <code>universal_agent</code> CI/CD · 2026-06-23 · evidence-based on our actual GitHub secrets</p>
+
+  <div class="verdict go">
+    <span class="tag">Recommendation: Adopt — App Connection + Secret Sync</span>
+    <h2>Let Infisical own the CI secrets it already owns at runtime.</h2>
+    <p>We have <strong>14 GitHub Actions secrets</strong>, and at least <strong>5 of them are the same values we already store in Infisical</strong>, mirrored into GitHub by hand. That hand-mirroring is a silent drift surface: rotate the value in the vault and CI keeps the stale one until someone remembers to update GitHub. An Infisical <strong>GitHub App connection + Secret Sync</strong> makes the vault the single source of truth and pushes those values into GitHub automatically. Low effort, real payoff, matches exactly what you described.</p>
+  </div>
+
+  <div class="toc">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#two">Two opposite features (don't conflate them)</a></li>
+      <li><a href="#evidence">Our actual GitHub secrets — the drift surface</a></li>
+      <li><a href="#verdict">What to adopt, and what to skip</a></li>
+      <li><a href="#plan">Implementation plan</a></li>
+      <li><a href="#oidc">Optional phase 2 — OIDC, kill the stored creds</a></li>
+      <li><a href="#risks">Risks &amp; guardrails</a></li>
+    </ol>
+  </div>
+
+  <h2 id="two">1. Two opposite features (don't conflate them)</h2>
+  <p>The Infisical docs you sent describe two things that point in <em>opposite directions</em>. Getting them straight is half the decision:</p>
+  <div class="two">
+    <div class="card">
+      <h3>A · GitHub Actions integration <span class="muted">(pull)</span></h3>
+      <p>The <code>Infisical/secrets-action</code> runs <em>inside a workflow</em> and pulls secrets from Infisical at job runtime, exposing them as env vars. Auth is <strong>OIDC</strong> — GitHub mints a short-lived token, no Infisical creds stored in GitHub.</p>
+      <div class="flow" style="margin-top:10px">
+        <span class="node gh">GH workflow</span><span class="arrow">→ OIDC →</span><span class="node inf">Infisical</span><span class="arrow">→ env vars →</span><span class="node">job steps</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>B · GitHub App Connection + Secret Sync <span class="muted">(push)</span></h3>
+      <p>Infisical connects to GitHub via a scoped <strong>GitHub App</strong> and <em>pushes</em> vault secrets <em>into</em> GitHub Actions secrets (repo / environment / org). One-way, Infisical → GitHub, kept in sync on change. This is the "inject variables into GitHub from Infisical" you described.</p>
+      <div class="flow" style="margin-top:10px">
+        <span class="node inf">Infisical</span><span class="arrow">→ push →</span><span class="node gh">GitHub Actions secrets</span><span class="arrow">→</span><span class="node">workflows read <code>${{ secrets.X }}</code></span>
+      </div>
+    </div>
+  </div>
+  <p>They can even be alternatives: <strong>B</strong> pre-populates GitHub's secret store so workflows read <code>${{ secrets.X }}</code> exactly as they do today; <strong>A</strong> skips GitHub's store and fetches live. For our deploy, <strong>B</strong> is the smaller change because our workflows already consume <code>${{ secrets.* }}</code>.</p>
+
+  <h2 id="evidence">2. Our actual GitHub secrets — the drift surface</h2>
+  <p>Pulled live from the repo (<code>gh secret list</code>). Categorized by whether the value also lives in Infisical (and is therefore sync-eligible):</p>
+  <table>
+    <thead><tr><th>GitHub Actions secret</th><th>Also in Infisical?</th><th>Disposition</th></tr></thead>
+    <tbody>
+      <tr><td><code>AGENTMAIL_API_KEY</code></td><td class="y">Yes — runtime secret</td><td><span class="y">Sync from Infisical</span></td></tr>
+      <tr><td><code>UA_OPERATOR_TELEGRAM_BOT_TOKEN</code></td><td class="y">Yes — runtime secret</td><td><span class="y">Sync from Infisical</span></td></tr>
+      <tr><td><code>UA_OPERATOR_TELEGRAM_CHAT_ID</code></td><td class="y">Yes — runtime secret</td><td><span class="y">Sync from Infisical</span></td></tr>
+      <tr><td><code>UA_OPS_TOKEN</code></td><td class="y">Yes — deploy-validate requires it</td><td><span class="y">Sync from Infisical</span></td></tr>
+      <tr><td><code>TAILSCALE_AUTHKEY</code> / <code>TAILSCALE_OAUTH_CLIENT_ID</code> / <code>TAILSCALE_OAUTH_SECRET</code></td><td class="m">Likely — verify</td><td><span class="y">Sync if present in vault</span></td></tr>
+      <tr><td><code>INFISICAL_CLIENT_ID</code> / <code>INFISICAL_CLIENT_SECRET</code></td><td class="m">Chicken-and-egg</td><td><span class="m">Leave in GitHub <em>or</em> replace with OIDC (phase 2)</span></td></tr>
+      <tr><td><code>INFISICAL_PROJECT_ID</code></td><td class="m">It's an ID, not a secret</td><td>Leave as a GitHub <em>variable</em></td></tr>
+      <tr><td><code>AUTO_MERGE_PAT</code></td><td class="n">GitHub-native PAT</td><td>Keep in GitHub (could store in vault for rotation tracking)</td></tr>
+      <tr><td><code>VPS_SSH_KEY</code> / <code>VPS_SSH_HOST</code> / <code>VPS_SSH_USER</code></td><td class="n">Deploy infra</td><td>Keep in GitHub (or vault-manage the key)</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><strong>The win in one line:</strong> at least 4–7 of these secrets are duplicated by hand between Infisical and GitHub. Today, rotating one in the vault leaves CI stale and silent. A Secret Sync makes that rotation propagate to CI automatically — that's the whole pitch, and it's real.</div>
+  <div class="callout warn"><strong>Bootstrap chicken-and-egg:</strong> <code>INFISICAL_CLIENT_ID/SECRET</code> are how the workflow would authenticate to Infisical in the first place, so they can't usefully be <em>synced from</em> Infisical to bootstrap themselves. Either leave those two in GitHub as-is (simplest), or remove them entirely via OIDC (phase 2, §5). Everything else is freely syncable.</div>
+
+  <h2 id="verdict">3. What to adopt, and what to skip</h2>
+  <ul class="tight">
+    <li><span class="y">✔ Adopt</span> — <strong>GitHub App Connection + Secret Sync (B)</strong>, scoped to <em>only</em> the <code>universal_agent</code> repo, pushing the sync-eligible subset above into repo Actions secrets. This is the direct fix for the drift surface.</li>
+    <li><span class="m">◐ Optional, phase 2</span> — <strong>OIDC via <code>secrets-action</code> (A)</strong>, purely to delete <code>INFISICAL_CLIENT_ID/SECRET</code> from GitHub (replace two long-lived stored creds with short-lived OIDC tokens). Security hardening, not functionality. Defer until B is proven.</li>
+    <li><span class="n">✘ Skip</span> — using <strong>A</strong> to fetch <em>all</em> runtime secrets into the workflow. The workflow doesn't need them; the <em>VPS</em> fetches runtime secrets itself at service start. Pulling the full set into CI would just widen blast radius.</li>
+  </ul>
+
+  <h2 id="plan">4. Implementation plan</h2>
+
+  <div class="phase">
+    <div class="ph-head">Phase 0 · Confirm the sync set <span class="pill must">must</span></div>
+    <div class="ph-body">
+      <ul class="tight">
+        <li>For each sync-eligible secret, confirm the value is identical in Infisical (<code>production</code> env) and GitHub. Resolve any drift <em>now</em> — the vault value becomes canonical.</li>
+        <li>Verify the Tailscale secrets exist in the vault; if not, add them (or leave them GitHub-native).</li>
+        <li>Decide naming: GitHub secret names must match what workflows reference (<code>${{ secrets.AGENTMAIL_API_KEY }}</code> etc.). The sync must preserve exact key names.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="ph-head">Phase 1 · Create the GitHub App Connection <span class="pill must">must</span></div>
+    <div class="ph-body">
+      <p>In Infisical: <strong>Project → Integrations → App Connections → GitHub</strong>. Choose the <strong>GitHub App</strong> method (recommended over OAuth/PAT — finely-grained, least-privilege, better audit trail).</p>
+      <p>Grant the minimum permissions the docs specify:</p>
+      <pre><code>Repository permissions:
+  Metadata     : Read-only
+  Secrets      : Read and write
+  Environments : Read and write
+  Actions      : Read
+Install on:    Only select repositories → universal_agent  (NOT "All repositories")</code></pre>
+      <p>Authorize the install scoped to the single repo. This is the security-critical step: scope it to <code>universal_agent</code> only so Infisical can never touch unrelated repos.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="ph-head">Phase 2 · Configure the Secret Sync <span class="pill must">must</span></div>
+    <div class="ph-body">
+      <ul class="tight">
+        <li>Create a <strong>GitHub Secret Sync</strong>: source = Infisical <code>production</code> env at the path holding these keys; destination = <code>universal_agent</code> <strong>repository</strong> Actions secrets (not org-level).</li>
+        <li>Scope the sync to the explicit sync-eligible key list — do <strong>not</strong> bulk-push the whole vault into GitHub. Push only what CI reads.</li>
+        <li>Enable sync-on-change so a vault rotation propagates to GitHub automatically.</li>
+        <li>Run the initial sync; confirm with <code>gh secret list</code> that values updated (timestamps move) and names are unchanged.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="ph-head">Phase 3 · Verify end-to-end <span class="pill must">must</span></div>
+    <div class="ph-body">
+      <ul class="tight">
+        <li>Rotate one low-risk synced secret in Infisical (e.g. re-enter <code>UA_OPERATOR_TELEGRAM_CHAT_ID</code> to the same value) and confirm the GitHub secret's <code>Updated</code> timestamp advances.</li>
+        <li>Trigger a no-op workflow run (or wait for the next deploy) and confirm CI still authenticates and the deploy goes green — proves names/values survived the sync.</li>
+        <li>Document the connection + sync in <code>project_docs/06_platform/01_secrets_and_infisical.md</code> (which secrets are vault-managed-into-GitHub, which stay GitHub-native, and the "don't hand-edit synced GitHub secrets" rule).</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout"><strong>Effort estimate:</strong> Phases 0–3 are a single short session of UI configuration in Infisical + one verification deploy. No UA code changes required — workflows keep reading <code>${{ secrets.* }}</code> exactly as they do now. This is config, not engineering.</div>
+
+  <h2 id="oidc">5. Optional phase 2 — OIDC, kill the stored creds</h2>
+  <p>Once the sync is trusted, the remaining long-lived creds in GitHub are <code>INFISICAL_CLIENT_ID/SECRET</code>. The <code>secrets-action</code> with OIDC removes them:</p>
+<pre><code>permissions:
+  id-token: write   # GitHub mints the OIDC token
+  contents: read
+
+steps:
+  - uses: Infisical/secrets-action@v1.0.9
+    with:
+      method: "oidc"
+      identity-id: "&lt;machine-identity-id&gt;"   # public, safe to commit
+      project-slug: "&lt;project-slug&gt;"
+      env-slug: "production"
+  # subsequent steps read the fetched secrets as env vars</code></pre>
+  <div class="callout warn"><strong>Caveat that limits the upside:</strong> our <em>VPS</em> still needs <code>INFISICAL_CLIENT_ID/SECRET</code> for its own startup bootstrap — it runs outside GitHub's OIDC context. So OIDC removes the creds from GitHub, but the workflow would then have to fetch them from Infisical (via OIDC) and hand them to the VPS over the existing stdin channel. Net: two fewer long-lived secrets in GitHub, slightly more workflow plumbing. A genuine but modest hardening — do it only after B is solid, and only if removing stored creds from GitHub is worth the added step.</div>
+
+  <h2 id="risks">6. Risks &amp; guardrails</h2>
+  <ul class="tight">
+    <li><strong>Over-broad GitHub App scope.</strong> The one mistake that matters. Install the App on <em>selected repositories → universal_agent only</em>, never "All repositories," never org-wide secrets unless a concrete need appears.</li>
+    <li><strong>Don't sync the bootstrap creds into themselves.</strong> Exclude <code>INFISICAL_CLIENT_ID/SECRET</code> from the sync set (chicken-and-egg). Handle them via "leave as-is" or OIDC.</li>
+    <li><strong>Hand-edits to synced secrets will be overwritten.</strong> Once a secret is sync-managed, GitHub is a read-replica — edit it in Infisical, not in GitHub. Document this so no one is surprised when a manual GitHub edit reverts on the next sync.</li>
+    <li><strong>Name discipline.</strong> A sync that renames or namespaces keys would break <code>${{ secrets.AGENTMAIL_API_KEY }}</code> references. Keep destination names identical to the vault keys.</li>
+    <li><strong>Blast radius is bounded.</strong> This is one-way Infisical→GitHub for a small, explicit key set on a single repo. It does not touch the VPS runtime path, the loader, or deploy mechanics — so it's safely reversible (delete the sync + connection to revert to manual secrets).</li>
+  </ul>
+
+  <footer>
+    Evidence: live <code>gh secret list</code> (14 secrets) + <code>grep secrets.* .github/workflows</code>. Sources:
+    <a href="https://infisical.com/docs/integrations/app-connections/github">App Connections — GitHub</a> ·
+    <a href="https://infisical.com/docs/integrations/cicd/githubactions">GitHub Actions integration</a>.
+    Companion exhibit: Infisical Agent assessment (recommend against).
+  </footer>
+</div>
+</body>
+</html>
