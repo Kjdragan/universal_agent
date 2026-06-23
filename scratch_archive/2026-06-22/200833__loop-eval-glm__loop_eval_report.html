@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Does our loop system beat bare /loop? — glm-5.2, resolved</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#fff;--ink:#1c2330;--muted:#5b6675;--line:#e3e7ee;--accent:#2f6df6;
+    --good:#1d8a4e;--good-bg:#e7f6ee;--bad:#b3261e;--bad-bg:#fdecea;--warn:#9a6a00;--warn-bg:#fdf4dd;--chip:#eef2fb;--code-bg:#f0f3f8;--code:#0f1b2d;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:900px;margin:0 auto;padding:28px 18px 64px}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:-.2px}h2{font-size:19px;margin:0 0 12px}
+  h3{font-size:13px;margin:16px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  p{margin:8px 0}.muted{color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin:16px 0;box-shadow:0 1px 2px rgba(20,30,50,.04)}
+  code{background:var(--code-bg);color:var(--code);padding:1px 6px;border-radius:6px;font:13px ui-monospace,Menlo,Consolas,monospace}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  tr:last-child td{border-bottom:none}
+  .bar{height:18px;border-radius:4px;background:var(--accent);display:inline-block;vertical-align:middle}
+  .lede{font-size:17px}.big{font-size:21px;font-weight:700}
+  .callout{border-left:4px solid var(--warn);background:var(--warn-bg);border-radius:0 10px 10px 0;padding:12px 16px;margin:12px 0}
+  .verdict{border-left:4px solid var(--accent);background:#eef3fe;border-radius:0 10px 10px 0;padding:14px 16px;margin:14px 0;font-size:16px}
+  .win{color:var(--good);font-weight:700}.null{color:var(--muted)}
+  footer{color:var(--muted);font-size:13px;text-align:center;margin-top:24px}
+</style></head><body><div class="wrap">
+
+<h1>Does our loop system beat bare <code>/loop</code>?</h1>
+<p class="muted">A controlled A/B on <b>glm-5.2</b>, graded by an objective arbiter (regex/length + a blind
+independent grader), never the loop's own judgment. The investigation resolved to a single mechanism. 2026-06-22.</p>
+
+<div class="card">
+  <p class="lede">Answer: <b>yes — conditionally, and not for the reason we guessed.</b> On a <b>vague</b> task
+  (no operator-supplied criteria), turning the goal into an <b>explicit, externalized checklist</b> the artifact
+  is answered against more than <b>doubled</b> the objective score (0.31 → 0.75) for ~1 extra model call.
+  The independent judge then <b>closes the final gap</b> (→ 0.875): derive_explicit was stuck at 3/4 on
+  every trial, the judge pushed half the runs to a perfect 4/4 — a B→A lift worth its 3× cost when output
+  quality is the priority. On tasks where you <i>already</i> wrote a sharp check, bare <code>/loop</code> ties everything.</p>
+</div>
+
+<div class="card">
+  <h2>The resolved ladder — vague pitch, glm-5.2, score /4, 4 trials each</h2>
+  <table>
+    <tr><th>configuration</th><th>mechanism</th><th>score</th><th>calls</th><th></th></tr>
+    <tr><td>bare</td><td>self-judge, no criteria</td><td>0.31</td><td>2</td><td><span class="bar" style="width:31px"></span></td></tr>
+    <tr><td>discipline</td><td>derive criteria <b>inline</b> + self-verify</td><td>0.31</td><td>2</td><td><span class="bar" style="width:31px"></span></td></tr>
+    <tr style="background:#e7f6ee55"><td><b>derive_explicit</b></td><td>derive criteria as a <b>separate explicit checklist</b> → answer against it (no judge)</td><td class="win">0.75</td><td>3</td><td><span class="bar" style="width:75px"></span></td></tr>
+    <tr><td>derive_judge</td><td>+ independent judge enforces</td><td>0.875</td><td>9</td><td><span class="bar" style="width:88px;background:#1d8a4e"></span></td></tr>
+    <tr style="background:#eef3fe88"><td>operator-given criteria</td><td>explicit checklist handed in (the ceiling)</td><td>1.00</td><td>2</td><td><span class="bar" style="width:100px;background:#2f6df6"></span></td></tr>
+  </table>
+  <p class="muted">For reference, on tasks where the criteria were already explicit in the prompt (D1, N1, N3, N4),
+  bare and improved <b>tied</b> at ~1.0 — the system added nothing there.</p>
+</div>
+
+<div class="card">
+  <h2>The mechanism (the one thing that does the work)</h2>
+  <div class="verdict"><b>Externalize the check.</b> Turn the goal into an explicit, separate checklist and
+  answer <i>against</i> it. A check you <b>write down</b> binds the model; a check it only <b>recites to itself</b>
+  (derive-inline) does not — that's the entire difference between 0.31 and 0.75. It works whether <b>you</b> write
+  the checklist or the model derives it <b>as a separate step</b>.</div>
+  <ul>
+    <li><b>Deriving good criteria was never the problem.</b> Told to, glm-5.2 derived essentially the grading
+      rubric (avoid these buzzwords, be concrete, name an audience, be concise). It just <b>ignored its own
+      criteria</b> when they lived inline — in one trial it listed "remove these buzzwords" and then emitted the
+      original buzzword-laden sentence verbatim and declared DONE.</li>
+    <li><b>The independent judge closes the last gap to fully-compliant.</b> derive_explicit was stuck at
+      3/4 on every trial (always dropping one criterion); the judge pushed half the runs to a perfect 4/4 — the
+      B→A line that matters for quality work, worth its 3× cost when the output has to be right. (Skip it for
+      cost-sensitive bulk work.) It's not the <i>lever</i> — externalizing the check is — but it's not free value either.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h2>How we got here (and two confounds we caught)</h2>
+  <table>
+    <tr><th>step</th><th>finding</th></tr>
+    <tr><td>Pass 1 (judge)</td><td>improved tied bare everywhere — judge looked useless.</td></tr>
+    <tr><td>Confound #1</td><td>The one apparent win (N2 0.25→1.00) was <b>information</b>: bare wasn't told the criteria. Told them, bare hit 1.00 too.</td></tr>
+    <tr><td>Discipline-alone</td><td>On a vague task, deriving criteria <b>inline</b> + self-verifying did nothing (0.31 = bare). So "the discipline helps" was also unproven.</td></tr>
+    <tr><td>derive + judge</td><td>Deriving criteria <b>separately</b> + enforcing → <b>0.875</b>. The system flipped to a clear win on vague tasks.</td></tr>
+    <tr><td>Confound #2 / isolation</td><td>The judge never corrected anything. Isolating it (derive_explicit, no judge) → <b>0.75</b>. So the lever is <b>externalizing the check</b>, not the judge.</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>What we changed, and honest limits</h2>
+  <p><b>The <code>/loop</code> discipline was corrected</b> to "derive the check as a <i>separate explicit
+  checklist</i>, then answer against it" — the 0.75 version — instead of the original "derive + self-verify"
+  (the 0.31 version that didn't work). The independent judge is demoted to an optional top-up.</p>
+  <p class="muted"><b>Limits:</b> one model (glm-5.2); the resolving ladder is one task family (a vague pitch),
+  4 trials/cell; the "externalize the check" effect is intuitive and likely general but is so far shown on this
+  task. The judge's value may be larger on harder tasks where the author can't get it right first try (untested),
+  or with a different-model judge (we had no real Anthropic key, so cross-model was out of reach).</p>
+</div>
+
+<footer>loop_experiments · glm-5.2 bare-vs-improved A/B · objective arbiter · resolved to: externalize the check</footer>
+</div></body></html>
