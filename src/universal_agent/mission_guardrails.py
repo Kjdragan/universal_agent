@@ -314,7 +314,7 @@ def _extract_nested_tool_names(tool_input: Any) -> list[str]:
     if isinstance(tool_input, str):
         try:
             tool_input = json.loads(tool_input)
-        except Exception:
+        except json.JSONDecodeError:
             pass
 
     if not isinstance(tool_input, dict):
@@ -339,7 +339,7 @@ def _extract_task_hub_actions(tool_name_lower: str, tool_input: Any) -> list[str
     if isinstance(tool_input, str):
         try:
             tool_input = json.loads(tool_input)
-        except Exception:
+        except json.JSONDecodeError:
             pass
 
     if not isinstance(tool_input, dict):
@@ -369,7 +369,7 @@ def _parse_tool_result_payload(tool_result: Any) -> dict[str, Any]:
         parsed = json.loads(text)
         if isinstance(parsed, dict):
             return parsed
-    except Exception:
+    except json.JSONDecodeError:
         pass
     return {}
 

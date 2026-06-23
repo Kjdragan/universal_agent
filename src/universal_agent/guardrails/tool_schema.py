@@ -273,7 +273,7 @@ def _try_parse_json_list(raw_value: object) -> Optional[list]:
         return None
     try:
         parsed = json.loads(stripped)
-    except Exception:
+    except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, list) else None
 
@@ -286,7 +286,7 @@ def _try_parse_json_object(raw_value: object) -> Optional[dict]:
         return None
     try:
         parsed = json.loads(stripped)
-    except Exception:
+    except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
 
