@@ -2,11 +2,12 @@
 
 > Durable, dated copy of every artifact published to the tailnet scratchpad.
 > Newest first. Auto-generated from `index.jsonl` — do not edit by hand.
-> 8 artifact(s) archived.
+> 9 artifact(s) archived.
 
 
 ## 2026-06-23
 
+- **23:26:24** — [/demo — Portable Claude Code Demo Factory: Phased Implementation Plan](2026-06-23/232624__demo-plan-a0cf94/report.html) · slug `demo-plan-a0cf94` · [live](https://uaonvps.taildcc090.ts.net/scratch/demo-plan-a0cf94/)
 - **01:00:14** — [Infisical → GitHub — Assessment & Implementation Plan](2026-06-23/010014__infisical-github-assessment__infisical_github_assessment.html) · slug `infisical-github-assessment` · [live](https://uaonvps.taildcc090.ts.net/scratch/infisical-github-assessment/infisical_github_assessment.html)
 - **01:00:04** — [Infisical Agent — Adoption Assessment for Universal Agent](2026-06-23/010004__infisical-agent-assessment__infisical_agent_assessment.html) · slug `infisical-agent-assessment` · [live](https://uaonvps.taildcc090.ts.net/scratch/infisical-agent-assessment/infisical_agent_assessment.html)
 

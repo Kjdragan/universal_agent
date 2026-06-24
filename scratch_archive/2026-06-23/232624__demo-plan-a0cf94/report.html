@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>/demo — Portable Claude Code Demo Factory: Phased Implementation Plan</title>
+<style>
+:root{color-scheme:light;--fg:#1f2328;--muted:#656d76;--bg:#ffffff;--soft:#f6f8fa;--border:#d0d7de;--accent:#0969da;--accent-soft:#ddf4ff}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:#ffffff;color:#1f2328;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6;font-size:16px}
+nav.docset{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--border);padding:.55rem 1rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+nav.docset .brand{font-weight:700;margin-right:.6rem;font-size:.9rem;color:var(--muted)}
+nav.docset a{font-size:.82rem;text-decoration:none;color:var(--accent);padding:.2rem .55rem;border-radius:6px;white-space:nowrap}
+nav.docset a:hover{background:var(--accent-soft)}
+nav.docset a.current{background:var(--fg);color:#fff;font-weight:600}
+nav.docset .sep{width:1px;height:1.1rem;background:var(--border);margin:0 .2rem}
+nav.docset a.file{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem}
+.scratch-back{padding:.5rem 1rem;font-size:.82rem;background:var(--soft);border-bottom:1px solid var(--border)}
+.scratch-back a{color:var(--accent);text-decoration:none}
+.scratch-back a:hover{text-decoration:underline}
+main{max-width:880px;margin:0 auto;padding:2.2rem 1.3rem 5rem}
+h1,h2,h3,h4{line-height:1.25;margin-top:1.8em;margin-bottom:.6em;font-weight:650}
+h1{font-size:1.9rem;border-bottom:1px solid var(--border);padding-bottom:.3em;margin-top:.2em}
+h2{font-size:1.45rem;border-bottom:1px solid var(--border);padding-bottom:.25em}
+h3{font-size:1.18rem}
+a{color:var(--accent)}
+p,li{overflow-wrap:break-word}
+code{background:var(--soft);padding:.15em .4em;border-radius:6px;font-size:.86em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--soft);border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;line-height:1.45}
+pre code{background:none;padding:0;font-size:.82rem}
+blockquote{margin:1em 0;padding:.2em 1em;color:var(--muted);border-left:4px solid var(--border)}
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:.92rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--border);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:650}
+tr:nth-child(even) td{background:#fbfcfd}
+hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+.srcmeta{color:var(--muted);font-size:.85rem;margin:.4rem 0 1rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+footer{max-width:880px;margin:0 auto;padding:1.5rem 1.3rem;color:var(--muted);font-size:.78rem;border-top:1px solid var(--border)}
+
+.sr-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#0969da;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer}
+.sr-fab:hover{background:#0a5fd0}
+.sr-panel{position:fixed;right:16px;bottom:64px;z-index:2147483000;width:340px;max-width:92vw;max-height:70vh;background:#fff;color:#1f2328;border:1px solid #d0d7de;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);display:none;flex-direction:column;overflow:hidden;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.sr-panel.sr-open{display:flex}
+.sr-head{display:flex;justify-content:space-between;align-items:center;padding:.6rem .8rem;border-bottom:1px solid #eaecef}
+.sr-x,.sr-del{background:none;border:none;color:#656d76;cursor:pointer;font-size:13px}
+.sr-headbtns{display:flex;gap:.4rem;align-items:center}
+.sr-clear{background:none;border:1px solid #d0d7de;border-radius:5px;color:#656d76;cursor:pointer;font-size:11px;padding:.1rem .45rem}
+.sr-clear:hover{background:#f6f8fa}
+.sr-hint{font-size:.74rem;line-height:1.45;color:#57606a;padding:.5rem .8rem;border-bottom:1px solid #eaecef;background:#f6f8fa}
+.sr-list{overflow:auto;padding:.5rem .8rem;flex:1}
+.sr-empty{color:#656d76;font-size:.85rem;padding:.5rem 0}
+.sr-item{border:1px solid #eaecef;border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem}
+.sr-loc{display:flex;justify-content:space-between;font-size:.72rem;color:#656d76;font-family:ui-monospace,Menlo,monospace;margin-bottom:.25rem}
+.sr-quote{font-size:.8rem;color:#3b4148;background:#f6f8fa;border-left:3px solid #d0d7de;padding:.2rem .5rem;margin-bottom:.3rem}
+.sr-body{width:100%;border:1px solid #d0d7de;border-radius:6px;padding:.35rem .45rem;font:inherit;resize:vertical}
+.sr-actions{display:flex;gap:.4rem;padding:.6rem .8rem;border-top:1px solid #eaecef}
+.sr-note{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:inherit}
+.sr-submit{flex:1;background:#1f883d;color:#fff;border:none;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:600 13px/1 inherit}
+.sr-submit:hover{background:#1a7332}
+.sr-chip{position:absolute;z-index:2147483001;background:#1f2328;color:#fff;border:none;border-radius:6px;padding:.25rem .5rem;font:600 12px/1 sans-serif;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sr-mark{background:#fff3c4;box-shadow:inset 0 -2px 0 #e3b341;border-radius:2px;cursor:pointer}
+.sr-mark:hover{background:#ffe98a}
+.sr-round{border:1px solid #eaecef;border-radius:8px;margin-bottom:.6rem;overflow:hidden}
+.sr-rhead{display:flex;justify-content:space-between;align-items:center;gap:.4rem;background:#f6f8fa;border-bottom:1px solid #eaecef;padding:.35rem .55rem;font-size:.72rem;color:#57606a;font-family:ui-monospace,Menlo,monospace}
+.sr-recopy{background:#fff;border:1px solid #d0d7de;border-radius:5px;padding:.1rem .4rem;cursor:pointer;font:inherit;color:#0969da;white-space:nowrap}
+.sr-hitem{padding:.35rem .55rem;border-top:1px solid #f0f1f3}
+.sr-hbody{font-size:.85rem;white-space:pre-wrap;color:#1f2328}
+.sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast{display:none!important}}
+</style>
+</head>
+<body><div class="scratch-back"><a href="/scratch/">← Scratchpad index</a></div><main><h1 id="demo-portable-claude-code-demo-factory-phased-implementation-plan"><code>/demo</code> — Portable Claude Code Demo Factory: Phased Implementation Plan</h1>
+<p><strong>Date:</strong> 2026-06-23
+<strong>Status:</strong> PLAN — design ratified in grilling session, awaiting build go-ahead
+<strong>Owner:</strong> claude
+<strong>Scope:</strong> A <strong>portable Claude Code slash command</strong> (<code>/demo</code>) + a standalone <strong><code>demo_factory</code></strong> repo. This is <strong>NOT</strong> a feature inside Universal Agent. Zero new code in <code>src/universal_agent/</code>. UA is the authoring environment and a source of <strong>proven patterns to replicate, never dependencies to import</strong>. The only UA touch-point is an <em>optional</em> dashboard registration when run on a UA machine.
+<strong>Design exhibit:</strong> <code>https://uaonvps.taildcc090.ts.net/scratch/demo-design/demo_design.html</code></p>
+<hr />
+<h2 id="1-what-this-is">1. What this is</h2>
+<p>Point <code>/demo</code> at any source — a GitHub repo, an X/Threads post, a blog/news URL, a YouTube video, a dropped-in image, or a one-line topic — and it <strong>researches the thing until it understands it well enough to build with it</strong>, writes an operator briefing, then builds a <strong>real, runnable demo</strong> that exercises the capability end-to-end. The lasting payoff is a <strong>skill</strong> that can graduate into a global capability.</p>
+<p>Two archetypes (the framework-selection rule already encoded in UA's <code>proactive_tutorial_builds.py</code> DEMO_BUILD_CONTRACT, replicated here):</p>
+<ul>
+<li><strong>Agent capability</strong> (a Claude Code feature, an MCP, an agent tool, a new API param) → a <strong>dialogue-driven Claude Agent SDK agent + a custom skill</strong>. Recipe: proof script → extract skill via <code>skill-creator</code> → base agent + demonstration dialogue.</li>
+<li><strong>General framework</strong> (a new library/model/API) → a <strong>straight script</strong> that drives the framework to do one real task. May graduate to a skill via the same script→skill bridge.</li>
+</ul>
+<p>The <strong>skill is the universal durable artifact</strong> — even a general-framework demo can become a modular agent capability.</p>
+<h3 id="packaging-split">Packaging split</h3>
+<table>
+<thead>
+<tr>
+<th>Piece</th>
+<th>Home</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Portable surface</strong></td>
+<td><code>dragan-plugins</code> (installed into <code>~/.claude/</code>)</td>
+<td>The <code>/demo</code> command entrypoint (next to <code>/new-repo</code>) + <strong>graduated skills</strong></td>
+</tr>
+<tr>
+<td><strong>Engine + data</strong></td>
+<td><strong><code>demo_factory</code></strong> repo (<code>~/lrepos/demo_factory</code>, GitHub, optional VPS)</td>
+<td>Base SDK template + hooks, growing <strong>local skill library</strong>, the <strong>vault</strong> (+ FTS), <code>LESSONS.md</code> ledgers, regression suite, verifier/hook scripts</td>
+</tr>
+</tbody>
+</table>
+<p>The command is a <strong>thin launcher</strong> that locates/clones and drives the factory — exactly the shape <code>/new-repo</code> already uses (a plugin skill calling <code>scaffold_repo.sh</code> in its assets).</p>
+<p><strong>Promotion pipeline:</strong> a skill is born in a demo → accrues to the factory's local library → (proven + reused) → <strong>graduates into <code>dragan-plugins</code></strong>, becoming a global capability in every session.</p>
+<hr />
+<h2 id="2-architecture">2. Architecture</h2>
+<pre><code class="language-mermaid">flowchart TD
+    subgraph PLUGIN[&quot;dragan-plugins  (~/.claude/, every session)&quot;]
+        CMD[&quot;/demo entrypoint skill&quot;]
+        GRAD[&quot;graduated skills&quot;]
+    end
+    subgraph FACTORY[&quot;demo_factory repo  (engine + data)&quot;]
+        TPL[&quot;base SDK agent template + HOOKS.md&quot;]
+        LIB[&quot;local skill library&quot;]
+        VAULT[&quot;vault + SQLite FTS index&quot;]
+        LESS[&quot;LESSONS.md ledgers&quot;]
+        REG[&quot;regression suite&quot;]
+        VER[&quot;verifier + hook scripts&quot;]
+    end
+    subgraph OUT[&quot;per-source demo repo  (frozen artifact)&quot;]
+        BRF[&quot;briefing CONCEPT.md + README&quot;]
+        PRF[&quot;proof scripts&quot;]
+        SKL[&quot;the skill&quot;]
+        AGT[&quot;base agent + demonstration dialogue&quot;]
+        MAN[&quot;manifest.json&quot;]
+    end
+    CMD --&gt;|drives| FACTORY
+    CMD --&gt;|&quot;/new-repo&quot;| OUT
+    LIB --&gt;|&quot;reuse + accrue&quot;| OUT
+    OUT --&gt;|&quot;new skill accrues back&quot;| LIB
+    OUT --&gt;|&quot;entry written&quot;| VAULT
+    LIB --&gt;|&quot;proven + reused&quot;| GRAD
+    OUT -.-&gt;|optional, UA machine only| DASH[&quot;UA /opt/ua_demos dashboard&quot;]
+    OUT --&gt;|&quot;briefing published&quot;| SCRATCH[&quot;tailnet scratchpad + archive&quot;]
+</code></pre>
+<hr />
+<h2 id="3-runtime-flow-build-step-uses-native-goal">3. Runtime flow (build step uses native <code>/goal</code>)</h2>
+<pre><code class="language-mermaid">sequenceDiagram
+    actor User
+    participant Demo as /demo skill
+    participant Research as research helpers
+    participant Goal as &quot;claude -p /goal (driver)&quot;
+    participant Verify as verifier Stop hook (gate)
+    participant Factory as demo_factory
+
+    User-&gt;&gt;Demo: /demo &lt;source&gt; [steer]
+    Demo-&gt;&gt;Research: claude-code-guide + web-reader + deepwiki + NotebookLM aggregator
+    Research--&gt;&gt;Demo: buildable understanding + SOURCES
+    Demo-&gt;&gt;Demo: write briefing, self-brief-and-attest authors ACCEPTANCE + goal_condition
+    Demo--&gt;&gt;User: briefing scratchpad link (proceed unblocked)
+    Demo-&gt;&gt;Factory: provision repo via /new-repo, pre-trust workspace
+    Demo-&gt;&gt;Goal: background build loop, condition greps DEMO_VERIFY token
+    loop until token or turn cap
+        Goal-&gt;&gt;Verify: each turn runs verifier
+        Verify--&gt;&gt;Goal: prints DEMO_VERIFY PASS or FAIL into transcript
+    end
+    Demo-&gt;&gt;Demo: hard re-gate mechanical checks, treat cap-clear as DEFER
+    Demo-&gt;&gt;Factory: write vault entry, accrue skill, append LESSONS
+    Demo--&gt;&gt;User: repo + demo + skill candidate + vault entry
+</code></pre>
+<hr />
+<h2 id="4-reference-patterns-from-ua-replicate-do-not-import">4. Reference patterns from UA (replicate, do <strong>not</strong> import)</h2>
+<p>A generic Claude Code session has none of UA's Python in scope. These are the proven shapes we re-author as portable skill/factory logic.</p>
+<table>
+<thead>
+<tr>
+<th>UA symbol (reference)</th>
+<th>What we replicate in the factory</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>claude_cli_client.py::_run_goal_loop_mission</code></td>
+<td>The two-turn shape: Turn 1 authors <code>goal_condition.txt</code>; Turn 2 runs <code>claude -p "/goal &lt;condition&gt;"</code> (argv form). <strong>UA's "internal goal loop" IS native <code>/goal</code></strong> — we use the same primitive.</td>
+</tr>
+<tr>
+<td><code>claude_cli_client.py::_build_cli_env</code> (<code>cody_mode='anthropic'</code>)</td>
+<td>The <strong>Anthropic-Max launch profile</strong>: scrub <code>ANTHROPIC_*</code>, forward <code>CLAUDE_CODE_OAUTH_TOKEN</code>, <code>--model claude-opus-4-8</code> on argv.</td>
+</tr>
+<tr>
+<td><code>services/cody_evaluation.py::evaluate_demo</code></td>
+<td>The deterministic verifier — but make its <code>rerun_command</code> <strong>required</strong> (it is optional/<code>None</code> for supervised Cody) and have it print one greppable <code>DEMO_VERIFY:</code> line.</td>
+</tr>
+<tr>
+<td><code>services/cody_implementation.py::DemoManifest</code>, <code>::detect_endpoint_from_text</code>, <code>::canonicalize_endpoint</code></td>
+<td>The <code>manifest.json</code> schema + endpoint canonicalization. Note: <code>detect_endpoint_from_text</code> is a <strong>substring grep a printed hostname can spoof</strong> → add an out-of-band signal.</td>
+</tr>
+<tr>
+<td><code>services/demo_workspace.py::provision_demo_workspace</code>, <code>::POLLUTION_INDICATORS</code></td>
+<td>Workspace hygiene — but reframed: strip <em>daemon</em> pollution, <strong>keep hooks</strong> (the <code>hooks</code> key strip is not <code>disableAllHooks</code>; <code>/goal</code> itself is a Stop hook). Add <strong>workspace pre-trust</strong> (the real <code>/goal</code> blocker).</td>
+</tr>
+<tr>
+<td><code>services/tutorial_demo_finalize.py::finalize_tutorial_build_demo</code></td>
+<td>Mechanical completion checks (venv/<code>uv.lock</code>/<code>pyproject</code> + README run-section) + manifest synthesis.</td>
+</tr>
+<tr>
+<td><code>proactive_tutorial_builds.py</code> DEMO_BUILD_CONTRACT + <code>cody-implements-from-brief</code> skill</td>
+<td>The build contract: framework selection, no-mock, model currency, runnable + manifest.</td>
+</tr>
+<tr>
+<td><code>timeout_policy.py::LivenessWatchdog</code></td>
+<td>No hard wall-clock cap — idle/no-progress kill + high backstop, layered with <code>/goal</code>'s "stop after N turns" clause.</td>
+</tr>
+<tr>
+<td><code>model_resolution::resolve_goal_eval_model</code></td>
+<td>On Anthropic-Max it returns <code>None</code> → the evaluator is <strong>real Haiku</strong>, no override needed (vs the autonomous ZAI <code>glm-4.5-air</code> weakness).</td>
+</tr>
+<tr>
+<td><code>gateway_server.py::_claude_code_intel_demos</code></td>
+<td>The <em>optional</em> UA dashboard surface — registration is a bonus, not a dependency.</td>
+</tr>
+</tbody>
+</table>
+<p>Portable mechanisms used directly (no replication needed): <code>/new-repo</code> (<code>scaffold_repo.sh</code>, <code>lab_common/secrets.py</code>, <code>lab_common/zai.py</code>, <code>vps_bootstrap.sh</code>), <code>skill-creator</code>, <code>self-brief-and-attest</code>, <code>claude-code-guide</code> agent, <code>youtube-transcript-metadata</code>, <code>record-app-demo-video</code>, <code>webapp-testing</code>, <code>notebooklm-orchestration</code>, <code>paper-to-podcast</code>, <code>gemini-tts-narrator</code>, <code>publish_scratch.sh</code> / <code>scratch_publish.py</code>.</p>
+<hr />
+<h2 id="5-phases">5. Phases</h2>
+<p>Each phase is independently shippable and leaves a runnable artifact. Boundaries separate config/scaffold work from prompt/skill logic from enrichment.</p>
+<h3 id="phase-0-bootstrap-demo_factory-the-demo-entrypoint">Phase 0 — Bootstrap <code>demo_factory</code> + the <code>/demo</code> entrypoint</h3>
+<p><strong>Goal:</strong> the skeleton both halves of the system live in, end-to-end installable.</p>
+<p><strong>Deliverables:</strong>
+- <code>demo_factory</code> repo created via <code>/new-repo</code> (uv 3.13, Infisical <strong>production</strong> bootstrap, private GitHub, optional VPS). Layout:
+  <code>demo_factory/
+    CLAUDE.md            # operating guide: minimize hooks unless necessary; record every one
+    HOOKS.md             # hook ledger (what / why / when added)
+    template/            # base Claude Agent SDK dialogue agent scaffold (+ its .claude/ hooks)
+    skills/              # the growing LOCAL skill library
+    vault/
+      entries/           # one markdown entry per capability
+      index.jsonl        # ledger (scratch_archive pattern)
+      index.html         # browsable + client-side search
+      fts.sqlite         # SQLite FTS5 over concept text (built/refreshed per run)
+    lessons/
+      DEMO_BUILD_LESSONS.md   # Loop 3 process memory
+    regression/          # runnable demos = the regression suite + a runner
+    scripts/
+      verify_demo.py     # the deterministic verifier (prints DEMO_VERIFY token)
+      vault_query.py     # "have we covered X?" FTS query
+      vault_write.py     # write/extend a capability entry
+      skill_accrue.py    # copy a demo skill into skills/, bump reuse counter</code>
+- <code>/demo</code> entrypoint skill in <code>dragan-plugins</code> (skeleton): resolves the factory path (clone-if-missing), parses the source/seed, and dispatches. Mirrors <code>/new-repo</code>'s SKILL.md + assets structure.</p>
+<p><strong>Key snippet — verifier token (the gate, run as a script Stop hook):</strong></p>
+<pre><code class="language-python"># demo_factory/scripts/verify_demo.py  — prints ONE forge-proof line
+# PASS only if: required files present, the documented run command ACTUALLY executed (exit 0),
+# no mock/stub client detected, and endpoint observed out-of-band == required.
+print(f&quot;DEMO_VERIFY: {'PASS' if ok else 'FAIL'} demo_id={demo_id} ran={ran} &quot;
+      f&quot;exit={exit_code} endpoint={endpoint_observed} screenshot={shot or 'n/a'}&quot;
+      + ('' if ok else f' reason={reason}'))
+</code></pre>
+<p><strong>Acceptance:</strong> <code>/demo --selftest</code> clones/links the factory, runs <code>verify_demo.py</code> against a trivial fixture, prints a <code>DEMO_VERIFY:</code> line, and writes one vault entry that appears in <code>index.html</code> and is found by <code>vault_query.py</code>.</p>
+<p><strong>Boundary:</strong> scaffold + scripts only. No source ingestion, no build orchestration yet.</p>
+<hr />
+<h3 id="phase-1-core-demo-spine-for-one-source-type">Phase 1 — Core <code>/demo</code> spine for <strong>one</strong> source type</h3>
+<p><strong>Goal:</strong> prove the whole flow for a single source type (recommend a <strong>GitHub repo</strong> or a <strong>Claude-feature URL</strong>), end-to-end, manually verified.</p>
+<p><strong>Deliverables:</strong>
+- <strong>Input → research:</strong> seed-type detection; for the chosen type, route to the right helper (GitHub → <code>gh clone</code> + read code/README + <code>deepwiki</code>; URL → <code>web-reader</code>/<code>defuddle</code>). For Claude-ecosystem sources, <strong><code>claude-code-guide</code> agent is required</strong>. Research writes a <code>SOURCES/</code> dir (the grounding the build + briefing cite).
+- <strong>Briefing:</strong> durable <code>CONCEPT.md</code> + <code>README.md</code> in the (to-be) repo; published to the scratchpad via <code>publish_scratch.sh</code> (markdown auto-renders), link handed back <strong>immediately</strong>, then proceed unblocked.
+- <strong>Build (archetype-routed):</strong> proof script → (agent archetype) extract skill via <code>skill-creator</code> + base agent + demonstration dialogue; (general archetype) a straight script + small suite.
+- <strong>Land:</strong> per-source repo via <code>/new-repo</code>; <code>manifest.json</code> (DemoManifest shape); vault entry written; skill accrued to <code>skills/</code>.</p>
+<p><strong>Acceptance (real artifact, Production-Verification-Rule #2):</strong> a real per-source repo on disk + GitHub, with a <code>manifest.json</code> whose <code>endpoint_hit</code> is verified (not <code>mock</code>), a README "## Run" that actually runs, and a vault entry. One representative demo built by a non-test run.</p>
+<p><strong>Boundary:</strong> build is still <em>manually</em> iterated here (no <code>/goal</code> yet) so the spine is debuggable in isolation.</p>
+<hr />
+<h3 id="phase-2-goal-driven-build-verifier-gate-hooks">Phase 2 — <code>/goal</code>-driven build + verifier gate + hooks</h3>
+<p><strong>Goal:</strong> replace the manual build iteration with the <strong>native <code>/goal</code> loop (driver) + deterministic verifier (gate)</strong> split.</p>
+<p><strong>Deliverables:</strong>
+- <code>self-brief-and-attest</code> authors <code>ACCEPTANCE.md</code> + <code>goal_condition.txt</code> up front. Every criterion phrased as a <strong>transcript-demonstrable</strong> check; the YES requires the literal <code>DEMO_VERIFY: PASS demo_id=&lt;id&gt;</code> token (never a paraphrase, never a self-reported boolean).
+- Build runs as a backgrounded <code>claude -p "/goal &lt;condition&gt;"</code> subprocess on the <strong>Anthropic-Max launch profile</strong>, in a <strong>pre-trusted</strong> workspace. Fallback to single-pass + retry if hooks/trust unavailable.
+- <code>verify_demo.py</code> wired as a <strong>script Stop hook</strong> in the template's <code>.claude/</code> (recorded in <code>HOOKS.md</code>); it executes the demo, detects mocks, observes the endpoint <strong>out-of-band</strong>, prints the token.
+- <code>goal_condition.txt</code> carries <code>... or stop after N turns</code> where <strong>N scales with verification depth</strong> (≈6 headless). <strong>Turn-cap-clear ⇒ DEFER, not pass.</strong> After the loop returns, mechanical checks <strong>re-run as a hard code gate</strong>.</p>
+<p><strong>Key snippet — <code>goal_condition.txt</code> template:</strong></p>
+<pre><code>Build a runnable demo of &lt;capability&gt; that FULLY exercises it end-to-end against the real
+endpoint (never mock). DONE only when the transcript contains the literal line
+  DEMO_VERIFY: PASS demo_id=&lt;id&gt;
+printed by demo_factory/scripts/verify_demo.py after it actually executed the README run
+command. Echo the verifier output every turn. If not done, fix and retry.
+Constraints: do not edit files outside this workspace. Or stop after &lt;N&gt; turns.
+</code></pre>
+<p><strong>Acceptance:</strong> a demo built entirely by the <code>/goal</code> loop, where the transcript shows the <code>DEMO_VERIFY: PASS</code> token, the post-loop hard re-gate passes, and <code>endpoint_hit==anthropic_native</code> is confirmed out-of-band. A deliberately-broken demo loops and ends in <strong>DEFER</strong> (not a false PASS).</p>
+<p><strong>Boundary:</strong> loop/gate mechanics only. Recursive learning is Phase 3.</p>
+<hr />
+<h3 id="phase-3-recursive-improvement-loops">Phase 3 — Recursive improvement loops</h3>
+<p><strong>Goal:</strong> the system gets better every run.</p>
+<p><strong>Deliverables (reusing the proven <code>/new-repo</code> lessons mechanism — <em>blocker → root cause → fix → file</em>):</strong>
+- <strong>Loop 1 (per-skill):</strong> extend the <code>skill-creator</code> path so every authored skill ships <code>LESSONS.md</code>; read at the <strong>start of every run</strong>, appended on runtime difficulty, folded into the skill body on consolidation.
+- <strong>Loop 2 (capability accrual):</strong> <code>skill_accrue.py</code> registers each demo skill into <code>skills/</code> and bumps a reuse counter.
+- <strong>Loop 3 (process memory):</strong> <code>DEMO_BUILD_LESSONS.md</code> read at the start of every build.
+- <strong>Regression-on-change:</strong> when a shared skill folds in a lesson, <code>regression/</code> re-runs the demos that use it (each demo is runnable + verified). Guards self-modifying skills from rotting.</p>
+<p><strong>Key snippet — <code>LESSONS.md</code> schema (per skill and per process):</strong></p>
+<pre><code class="language-markdown">## &lt;ISO date&gt; — &lt;one-line symptom&gt;
+- **Blocker:** what failed
+- **Root cause:** why
+- **Fix:** the change
+- **Applied to:** file/section
+</code></pre>
+<p><strong>Acceptance:</strong> two consecutive demos that need an overlapping capability — the second <strong>reuses</strong> the accrued skill (counter increments) and a runtime lesson recorded in run 1 is visibly pre-empted in run 2. A folded-in lesson triggers a regression re-run.</p>
+<p><strong>Boundary:</strong> learning mechanics. Vault recall is Phase 4.</p>
+<hr />
+<h3 id="phase-4-vault-recall-layer">Phase 4 — Vault recall layer</h3>
+<p><strong>Goal:</strong> "have we covered X?" becomes answerable, and failures become first-class knowledge.</p>
+<p><strong>Deliverables:</strong>
+- <strong>One entry per capability</strong> (not per run — re-visiting extends it): concept brief + visual briefing link + proven skill(s) + demo repo link + lessons + failure notes. Markdown + frontmatter.
+- <strong>SQLite FTS5</strong> (<code>fts.sqlite</code>) over concept text + entry metadata, refreshed each run; <code>vault_query.py</code> is the agent-facing "have we covered X?" query.
+- <strong>Un-demoable entries (your failure idea):</strong> when a concept relates to a real skill but <strong>won't demo</strong> (needs hardware/paid tier/unreleased API), the process writes <em>"what it is + why it didn't demo + what it'd take"</em> into <code>CONCEPT.md</code> <strong>and</strong> the visual briefing, and marks the entry <code>un-demoable</code>.
+- <strong>Pre-flight decision:</strong> before building, query the vault; the result feeds the <strong>reuse / expand / create-new</strong> decision (groundwork for the librarian).</p>
+<p><strong>Acceptance:</strong> a second <code>/demo</code> on a capability already covered hits the vault pre-flight, reports the prior entry + reusable skill, and <strong>extends</strong> the existing entry rather than duplicating. An un-demoable run produces a marked entry with an honest blocker note.</p>
+<p><strong>Boundary:</strong> recall + storage. Consolidation is Phase 5.</p>
+<hr />
+<h3 id="phase-5-skill-librarian-graduation-pipeline">Phase 5 — Skill librarian + graduation pipeline</h3>
+<p><strong>Goal:</strong> keep the library from sprawling; ship proven skills globally.</p>
+<p><strong>Deliverables:</strong>
+- <strong>Vault-lookup decision:</strong> when the pre-flight finds <em>related</em> (not exact) skills, an LLM judgment picks <strong>reuse · expand an existing skill · create-new-then-flag-for-consolidation</strong>.
+- <strong>Periodic librarian pass:</strong> consolidates a crowded cluster into a <strong>master skill</strong> (HyperFrames <code>video-ad-producer</code> shape — one skill, internal modes) or a <strong>skill group</strong> (stitch-skills shape — directory + README + sub-skills), then re-runs the regression suite.
+- <strong>Graduation pipeline:</strong> reuse-count + librarian judgment promote a proven skill from <code>skills/</code> → <strong><code>dragan-plugins</code></strong> (a global capability). Deliberate, reviewed; never auto-install.</p>
+<p><strong>Acceptance:</strong> a cluster of ≥3 related skills is consolidated into a master skill/group with the regression suite green; one proven skill is graduated into <code>dragan-plugins</code> and is then invocable from a fresh, unrelated session.</p>
+<p><strong>Boundary:</strong> library health + promotion. Enrichment is Phase 6.</p>
+<hr />
+<h3 id="phase-6-enrichment-remaining-source-types">Phase 6 — Enrichment + remaining source types</h3>
+<p><strong>Goal:</strong> the marquee polish + full source coverage.</p>
+<p><strong>Deliverables:</strong>
+- <strong>Visual verification + screencast:</strong> for UI demos, a render → screenshot (<code>webapp-testing</code> / DevTools) → critique → fix sub-loop with a <strong>higher N (≈20)</strong>; PASS gated on the screenshot file existing on disk + a vision check surfaced as a verifier line. Auto-screencast via <code>record-app-demo-video</code> → a "watch it run" artifact in the vault/briefing.
+- <strong>Cross-capability composition demos</strong> once the library has several skills.
+- <strong>"Where could we use this?"</strong> — each briefing ends with an LLM section mapping the capability to existing projects/repos.
+- <strong>NotebookLM:</strong> per-capability <strong>audio overview</strong> (<code>paper-to-podcast</code> / <code>gemini-tts-narrator</code>); <strong>research aggregator</strong> (additive to the routed research, never a replacement); <strong>wiki repurposed</strong> (per-capability-cluster overview on demand into the vault entry).
+- <strong>Weekly "what's new in the toolbox"</strong> digest over new vault entries.
+- <strong>Remaining source types</strong> added incrementally: X/Threads (web-reader/defuddle + follow primary linked artifact), generic article/news, YouTube (<code>youtube-transcript-metadata</code>), dropped-in image/file, freeform topic.</p>
+<p><strong>Acceptance:</strong> a visual demo passes via the screenshot-gated sub-loop with a screencast artifact; a briefing carries a "where could we use this" section + an audio overview; each new source type produces a verified demo.</p>
+<p><strong>Boundary:</strong> terminal phase.</p>
+<hr />
+<h2 id="6-cross-cutting-concerns">6. Cross-cutting concerns</h2>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Resolution</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Demo runtime inference</strong></td>
+<td>Default: the Claude Code binary (updated → new features present) over the ZAI backend. Provider-specific (Google/OpenAI/…): keys from Infisical <strong>production</strong> via the <code>/new-repo</code> bootstrap. Local-GPU/local-model demos: desktop <strong>Ollama</strong> (<code>qwen2.5-coder:7b</code>). Best-effort + honest markup when an endpoint is missing.</td>
+</tr>
+<tr>
+<td><strong><code>/goal</code> evaluator integrity</strong></td>
+<td>Launch on the <strong>Anthropic-Max profile</strong> so the evaluator is real Haiku. Verify <code>endpoint_hit==anthropic_native</code> every build to catch a ZAI env leak.</td>
+</tr>
+<tr>
+<td><strong>Workspace trust</strong></td>
+<td>Pre-trust the new per-source repo <strong>before</strong> backgrounding <code>/goal</code>, else it silently no-ops. Degrade to single-pass + retry if trust/hooks unavailable.</td>
+</tr>
+<tr>
+<td><strong>Hooks policy</strong></td>
+<td>First-class. Curated, version-controlled in the template; new hooks added/tested in the template's own test env; every hook recorded in <code>HOOKS.md</code>; <code>CLAUDE.md</code> guideline: minimize unless necessary, never prohibit.</td>
+</tr>
+<tr>
+<td><strong>Timeouts</strong></td>
+<td>No hard wall-clock cap. <code>/goal</code>'s "stop after N turns" + <code>LivenessWatchdog</code> idle-kill + a high absolute backstop, layered. Don't reuse a 30-min cap.</td>
+</tr>
+<tr>
+<td><strong>Model currency</strong></td>
+<td>Verify current model ids/signatures from authoritative source (<code>claude-code-guide</code>, Context7, provider docs) — never training-data recall. Deprecated ids = failed demo.</td>
+</tr>
+<tr>
+<td><strong>Secrets</strong></td>
+<td>Infisical production via <code>/new-repo</code>'s <code>lab_common/secrets.py</code>. Never print secret values.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="7-per-phase-acceptance-summary">7. Per-phase acceptance summary</h2>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Real-artifact acceptance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td><code>--selftest</code> prints a <code>DEMO_VERIFY:</code> line + writes a queryable vault entry</td>
+</tr>
+<tr>
+<td>1</td>
+<td>A real per-source repo + verified <code>manifest.json</code> + runnable README + vault entry (non-test run)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>A <code>/goal</code>-built demo with the <code>DEMO_VERIFY: PASS</code> token + out-of-band endpoint proof; broken demo → DEFER not false PASS</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Skill reused across two demos (counter++); a run-1 lesson pre-empted in run 2; regression re-run on fold-in</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Re-visit extends an existing vault entry; un-demoable run produces a marked entry</td>
+</tr>
+<tr>
+<td>5</td>
+<td>≥3-skill cluster consolidated, regression green; one skill graduated into <code>dragan-plugins</code>, invocable from a fresh session</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Visual demo passes screenshot-gated sub-loop + screencast; briefing has "where to use" + audio; each new source type verified</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-open-decisions-deferred-to-build-time">8. Open decisions deferred to build time</h2>
+<ul>
+<li>Exact <code>vault/entries/*.md</code> frontmatter schema (tags, status enum: <code>demoed</code> / <code>un-demoable</code> / <code>partial</code>, reuse-count, source provenance + freshness stamp).</li>
+<li>Reuse-count + librarian thresholds that trigger consolidation and graduation.</li>
+<li>Whether the plan's canonical home migrates from UA <code>plans/</code> into <code>demo_factory/</code> at Phase 0 (recommended).</li>
+<li>The "watch it run" screencast length/format defaults.</li>
+</ul>
+<hr />
+<h2 id="9-risks-mitigations">9. Risks &amp; mitigations</h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/goal</code> evaluator false-PASS (transcript-only judge rubber-stamps)</td>
+<td>The verifier — not the evaluator — is the gate; condition greps a forge-proof token; hard re-gate after the loop.</td>
+</tr>
+<tr>
+<td><code>/goal</code> false-NEGATIVE (real success not surfaced) loops to cap</td>
+<td>Force echo-into-transcript each turn; treat cap-clear as DEFER; budget turns for it.</td>
+</tr>
+<tr>
+<td>Endpoint spoof (printed hostname satisfies substring grep)</td>
+<td>Out-of-band signal (proxy/SDK request count or server-returned token), not <code>detect_endpoint_from_text</code> alone.</td>
+</tr>
+<tr>
+<td><code>/goal</code> silently no-ops in untrusted workspace</td>
+<td>Pre-trust precondition + graceful fallback.</td>
+</tr>
+<tr>
+<td>ZAI env leak makes "Haiku" judge run on <code>glm-4.5-air</code></td>
+<td>Anthropic-Max launch profile + per-build endpoint verification.</td>
+</tr>
+<tr>
+<td>Self-modifying skills rot</td>
+<td>Accumulated demos = regression suite, re-run on fold-in.</td>
+</tr>
+<tr>
+<td>Skill-library sprawl</td>
+<td>Librarian consolidation + reuse-driven graduation.</td>
+</tr>
+<tr>
+<td>Scope balloon</td>
+<td>Phases 0–2 are the minimum viable <code>/demo</code>; 3–6 are independently shippable increments.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>This plan is the living blueprint — edit it as phases complete or revise. Canonical home migrates to <code>demo_factory/</code> once Phase 0 creates it.</em></p></main>
+<footer>Rendered on the tailnet HTML scratchpad · private to your devices.</footer>
+<script>
+(function(){
+  "use strict";
+  var m = location.pathname.match(/\/scratch\/([^\/]+)\//);
+  var parts = location.pathname.split('/').filter(Boolean);
+  var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
+  var KEY = 'scratchReview:' + slug;
+  var comments = [];
+  var lastSel = null;  // most recent text selection inside <main>, kept so "+ Comment" works after the click clears it
+  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
+  var HKEY = 'scratchReviewHistory:' + slug;   // archive of all submitted rounds (never auto-cleared)
+  var history = [];
+  try { history = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch(e){}
+  function persistHistory(){ try{ localStorage.setItem(HKEY, JSON.stringify(history)); }catch(e){} }
+  var viewMode = 'review';  // 'review' (active round) | 'history' (Past comments)
+  function save(){ persist(); render(); applyMarks(); }
+
+  // In-page indicators: highlight the commented text so you can see what you've marked.
+  function clearMarks(){
+    var main=document.querySelector('main'); if(!main) return;
+    main.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+  }
+  function wrapQuote(quote, cid){
+    if(!quote) return; var main=document.querySelector('main'); if(!main) return;
+    var w=document.createTreeWalker(main, NodeFilter.SHOW_TEXT, null), n;
+    while((n=w.nextNode())){
+      if(n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark')) continue;
+      var idx=n.nodeValue.indexOf(quote);
+      if(idx>=0){ var r=document.createRange(); r.setStart(n,idx); r.setEnd(n,idx+quote.length); var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view'; try{ r.surroundContents(mk); }catch(e){} return; }
+    }
+  }
+  function applyMarks(){ clearMarks(); comments.forEach(function(c){ if(c.quote) wrapQuote(c.quote, c.id); }); }
+  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+
+  function headingFor(node){
+    var hs = document.querySelectorAll('main h1[id],main h2[id],main h3[id],main h4[id]');
+    var best=null;
+    for(var i=0;i<hs.length;i++){
+      if(hs[i]===node || (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING)) best=hs[i];
+    }
+    return best;
+  }
+
+  var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
+  var panel=document.createElement('div'); panel.className='sr-panel';
+  panel.innerHTML='<div class="sr-head"><b class="sr-title">Review</b><span class="sr-headbtns"><button type="button" class="sr-clear" data-act="clear">Clear</button><button type="button" class="sr-x" data-act="close">✕</button></span></div>'
+    +'<div class="sr-hint">Highlight text then <b>+ Comment</b>, or <b>+ Note</b> for a general remark. Comments save as you type — add as many as you want. <b>Submit → copy prompt</b> exports your round, archives it under <b>Past</b>, and clears the page for the next round.</div>'
+    +'<div class="sr-list"></div>'
+    +'<div class="sr-actions"></div>';
+  var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
+  var toast=document.createElement('div'); toast.className='sr-toast'; toast.style.display='none';
+  document.body.appendChild(btn); document.body.appendChild(panel); document.body.appendChild(chip); document.body.appendChild(toast);
+
+  function showToast(t){ toast.textContent=t; toast.style.display='block'; setTimeout(function(){toast.style.display='none';},4500); }
+  function openPanel(o){ panel.classList.toggle('sr-open', o!==false); }
+
+  function reviewActionsHTML(){
+    return '<button type="button" class="sr-note" data-act="comment">+ Comment</button>'
+      +'<button type="button" class="sr-note" data-act="note">+ Note</button>'
+      +'<button type="button" class="sr-note" data-act="history">Past'+(history.length?' ('+history.length+')':'')+'</button>'
+      +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button>';
+  }
+  function render(){
+    btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
+    var title=panel.querySelector('.sr-title'), list=panel.querySelector('.sr-list'),
+        actions=panel.querySelector('.sr-actions'), hint=panel.querySelector('.sr-hint');
+    var clr=panel.querySelector('.sr-clear');
+    if(viewMode==='history'){
+      title.textContent='Past comments'; hint.style.display='none'; if(clr) clr.style.display='none';
+      if(!history.length){ list.innerHTML='<div class="sr-empty">No submitted rounds yet.</div>'; }
+      else {
+        var html='';
+        for(var k=history.length-1;k>=0;k--){
+          var h=history[k]; var when=esc((h.submitted_at||'').replace('T',' ').slice(0,16));
+          html+='<div class="sr-round"><div class="sr-rhead"><span>Round '+(k+1)+' · '+when+' · '+h.comments.length+'</span>'
+            +'<button type="button" class="sr-recopy" data-r="'+k+'">copy prompt</button></div>'
+            +h.comments.map(function(c){
+              return '<div class="sr-hitem"><div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span></div>'
+                +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+                +'<div class="sr-hbody">'+esc(c.body||'(no text)')+'</div></div>';
+            }).join('')
+            +'</div>';
+        }
+        list.innerHTML=html;
+      }
+      actions.innerHTML='<button type="button" class="sr-note" data-act="back">← Back to review</button>';
+      return;
+    }
+    title.textContent='Review'; hint.style.display='';
+    if(clr) clr.style.display = comments.length ? '' : 'none';
+    actions.innerHTML=reviewActionsHTML();
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, or <b>+ Note</b>.</div>'; return; }
+    list.innerHTML='';
+    comments.forEach(function(c,i){
+      var row=document.createElement('div'); row.className='sr-item';
+      row.innerHTML='<div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
+        +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+        +'<textarea class="sr-body" data-i="'+i+'" rows="2" placeholder="Your comment…">'+esc(c.body||'')+'</textarea>';
+      list.appendChild(row);
+    });
+  }
+
+  function addComment(quote, heading){
+    comments.push({id:Date.now()+'-'+comments.length, quote:quote||'', heading:heading||'', body:''});
+    save(); openPanel(true);
+    var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus();
+  }
+
+  document.addEventListener('mouseup', function(){
+    setTimeout(function(){
+      var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var main=document.querySelector('main');
+      if(txt && txt.length>1 && sel.rangeCount && main && main.contains(sel.anchorNode)){
+        var r=sel.getRangeAt(0).getBoundingClientRect();
+        chip.style.top=(window.scrollY+r.bottom+6)+'px'; chip.style.left=(window.scrollX+r.left)+'px';
+        var h=headingFor(sel.anchorNode); var hd=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
+        chip.dataset.quote=txt.slice(0,280); chip.dataset.heading=hd;
+        lastSel={quote:txt.slice(0,280), heading:hd};
+        chip.style.display='block';
+      } else { chip.style.display='none'; }
+    },10);
+  });
+  chip.addEventListener('mousedown', function(e){ e.preventDefault(); addComment(chip.dataset.quote, chip.dataset.heading); chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); });
+  btn.addEventListener('click', function(){ openPanel(!panel.classList.contains('sr-open')); render(); });
+  panel.addEventListener('click', function(e){
+    var act=e.target.getAttribute('data-act');
+    if(act==='close') openPanel(false);
+    else if(act==='comment'){ if(lastSel && lastSel.quote){ addComment(lastSel.quote, lastSel.heading); lastSel=null; } else { showToast('Highlight some text on the page first, then “+ Comment”. (Use “+ Note” for a general remark.)'); } }
+    else if(act==='note') addComment('','');
+    else if(act==='submit') submit();
+    else if(act==='history'){ viewMode='history'; render(); }
+    else if(act==='back'){ viewMode='review'; render(); }
+    else if(act==='clear'){ if(comments.length && (typeof confirm!=='function' || confirm('Discard the '+comments.length+' unsubmitted comment(s)? Past history is kept.'))){ comments=[]; persist(); clearMarks(); render(); showToast('Cleared. Past history kept.'); } }
+    else if(e.target.classList.contains('sr-recopy')){ var r=+e.target.getAttribute('data-r'); if(history[r]) copyText(buildPrompt(history[r].comments)).then(function(){ showToast('Round '+(r+1)+' prompt re-copied to the clipboard.'); }).catch(function(){ showToast('Clipboard blocked.'); }); }
+    else if(e.target.classList.contains('sr-del')){ comments.splice(+e.target.getAttribute('data-i'),1); save(); }
+  });
+  panel.addEventListener('input', function(e){
+    if(e.target.classList.contains('sr-body')){ comments[+e.target.getAttribute('data-i')].body=e.target.value; persist(); btn.textContent='💬 Review ('+comments.length+')'; }
+  });
+
+  function buildPrompt(cs){
+    cs = cs || comments;
+    var title=document.title||slug; var L=[];
+    L.push('[scratch-review '+slug+']');
+    L.push('Review of "'+title+'"'); L.push(location.href);
+    L.push('I left '+cs.length+' comment(s); full JSON downloaded to ~/Downloads/scratch-comments-'+slug+'.json'); L.push('');
+    cs.forEach(function(c,i){
+      L.push((i+1)+'. ['+(c.heading?'§ '+c.heading:'note')+'] '+(c.body||'(no text)'));
+      if(c.quote) L.push('   ↳ re: "'+c.quote+'"');
+    });
+    L.push(''); L.push('Re-read the artifact and address each comment, then reply in our chat.');
+    return L.join('\n');
+  }
+  function downloadJSON(){
+    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='scratch-comments-'+slug+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},120);
+  }
+  function copyText(text){
+    if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function(res,rej){ try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res(); }catch(err){ rej(err); } });
+  }
+  function submit(){
+    if(!comments.length){ showToast('No comments yet — highlight text → + Comment, or + Note.'); return; }
+    var text=buildPrompt(comments); downloadJSON();
+    // Archive the round, then clean the slate so the next round starts fresh (no stale
+    // re-highlighting on a revised page). History is kept under "Past".
+    history.push({submitted_at:new Date().toISOString(), comments:comments.slice()}); persistHistory();
+    comments=[]; persist(); clearMarks(); viewMode='review'; render();
+    copyText(text).then(function(){ showToast('Copied — paste into Claude Code. Round archived under “Past”; page cleared for the next round.'); })
+                  .catch(function(){ showToast('JSON downloaded; round archived & cleared. Clipboard blocked — copy from the file.'); });
+  }
+
+  // Click a highlighted span on the page → open the panel and focus that comment.
+  var mainEl=document.querySelector('main');
+  if(mainEl) mainEl.addEventListener('click', function(e){
+    var mk=e.target.closest?e.target.closest('.sr-mark'):null; if(!mk) return;
+    openPanel(true); var idx=-1; comments.forEach(function(c,j){ if(c.id===mk.dataset.cid) idx=j; });
+    if(idx>=0){ var ta=panel.querySelectorAll('.sr-body')[idx]; if(ta){ ta.scrollIntoView({block:'center'}); ta.focus(); } }
+  });
+
+  render(); applyMarks();
+})();
+</script>
+</body></html>
