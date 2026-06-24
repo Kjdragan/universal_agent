@@ -102,7 +102,7 @@ A generic Claude Code session has none of UA's Python in scope. These are the pr
 
 | UA symbol (reference) | What we replicate in the factory |
 |---|---|
-| `claude_cli_client.py::_run_goal_loop_mission` | The two-turn shape: Turn 1 authors `goal_condition.txt`; Turn 2 runs `claude -p "/goal <condition>"` (argv form). **UA's "internal goal loop" IS native `/goal`** — we use the same primitive. |
+| `claude_cli_client.py::_run_goal_loop_mission` | A working **reference** that the headless two-turn pattern holds up in production: Turn 1 authors `goal_condition.txt`; Turn 2 runs `claude -p "/goal <condition>"` (argv form). `/goal` itself is **native Claude Code** — `/demo` invokes it directly, not via this UA wrapper. |
 | `claude_cli_client.py::_build_cli_env` (`cody_mode='anthropic'`) | The **Anthropic-Max launch profile**: scrub `ANTHROPIC_*`, forward `CLAUDE_CODE_OAUTH_TOKEN`, `--model claude-opus-4-8` on argv. |
 | `services/cody_evaluation.py::evaluate_demo` | The deterministic verifier — but make its `rerun_command` **required** (it is optional/`None` for supervised Cody) and have it print one greppable `DEMO_VERIFY:` line. |
 | `services/cody_implementation.py::DemoManifest`, `::detect_endpoint_from_text`, `::canonicalize_endpoint` | The `manifest.json` schema + endpoint canonicalization. Note: `detect_endpoint_from_text` is a **substring grep a printed hostname can spoof** → add an out-of-band signal. |
