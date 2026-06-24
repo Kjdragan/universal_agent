@@ -126,12 +126,16 @@ Each phase is independently shippable and leaves a runnable artifact. Boundaries
 **Goal:** the skeleton both halves of the system live in, end-to-end installable.
 
 **Deliverables:**
-- `demo_factory` repo created via `/new-repo` (uv 3.13, Infisical **production** bootstrap, private GitHub, optional VPS). Layout:
+- `demo_factory` repo created via `/new-repo` (uv 3.13, private GitHub, optional VPS), wired to its **own Infisical project** (isolated from UA — see §6 Cross-cutting). Layout:
   ```
   demo_factory/
-    CLAUDE.md            # operating guide: minimize hooks unless necessary; record every one
+    CLAUDE.md            # operating guide: minimize hooks unless necessary + record every one;
+                         #   pin https://code.claude.com/docs/ (llms.txt index) as the research authority
     HOOKS.md             # hook ledger (what / why / when added)
-    template/            # base Claude Agent SDK dialogue agent scaffold (+ its .claude/ hooks)
+    SECRETS.md           # secret ledger: key name + owning demo + purpose (NEVER values)
+    templates/
+      agent_sdk/         # Template A: Claude Agent SDK dialogue-agent scaffold (+ .claude/ hooks)
+      generic/           # Template B: generic uv build environment for non-agent (framework) demos
     skills/              # the growing LOCAL skill library
     vault/
       entries/           # one markdown entry per capability
@@ -147,6 +151,8 @@ Each phase is independently shippable and leaves a runnable artifact. Boundaries
       vault_write.py     # write/extend a capability entry
       skill_accrue.py    # copy a demo skill into skills/, bump reuse counter
   ```
+- **Two base templates** (both standalone, both uv-managed, both improving): `templates/agent_sdk/` (Claude Agent SDK dialogue agent, archetype 1) and `templates/generic/` (plain build environment for non-agent framework demos, archetype 2). Same venv/secrets bootstrap; only the scaffold contents differ.
+- A dedicated **demo-factory Infisical project** with its own machine-identity client (one-time setup), holding the factory's own copies of shared provider keys. UA's vault is never touched.
 - `/demo` entrypoint skill in `dragan-plugins` (skeleton): resolves the factory path (clone-if-missing), parses the source/seed, and dispatches. Mirrors `/new-repo`'s SKILL.md + assets structure.
 
 **Key snippet — verifier token (the gate, run as a script Stop hook):**
@@ -290,8 +296,8 @@ Constraints: do not edit files outside this workspace. Or stop after <N> turns.
 | **Workspace trust** | Pre-trust the new per-source repo **before** backgrounding `/goal`, else it silently no-ops. Degrade to single-pass + retry if trust/hooks unavailable. |
 | **Hooks policy** | First-class. Curated, version-controlled in the template; new hooks added/tested in the template's own test env; every hook recorded in `HOOKS.md`; `CLAUDE.md` guideline: minimize unless necessary, never prohibit. |
 | **Timeouts** | No hard wall-clock cap. `/goal`'s "stop after N turns" + `LivenessWatchdog` idle-kill + a high absolute backstop, layered. Don't reuse a 30-min cap. |
-| **Model currency** | Verify current model ids/signatures from authoritative source (`claude-code-guide`, Context7, provider docs) — never training-data recall. Deprecated ids = failed demo. |
-| **Secrets** | Infisical production via `/new-repo`'s `lab_common/secrets.py`. Never print secret values. |
+| **Model currency & docs** | Verify current model ids/signatures/features from authoritative sources — never training-data recall. For Claude Code / Agent SDK / Anthropic topics the canonical source is the **official docs at https://code.claude.com/docs/** (fetch `https://code.claude.com/docs/llms.txt` to discover all pages, then read the relevant ones); `claude-code-guide` + Context7 + provider docs for the rest. Deprecated ids = failed demo. |
+| **Secrets (isolated from UA)** | The factory uses its **own Infisical project**, so UA's recursive `production` fetch is **byte-for-byte unaffected** (UA never authenticates to the demo project). Demos read it via `/new-repo`'s `lab_common/secrets.py` — just a different `INFISICAL_PROJECT_ID` in `.env`. Shared provider keys get their own copies there. Within it: `DEMO_<slug>_` prefix + optional `/demos/<slug>/` folder + the `SECRETS.md` ledger. Adding a secret is a deliberate, operator-gated mutation; never print values. |
 
 ---
 
