@@ -8,7 +8,7 @@ code_paths:
   - src/universal_agent/gateway_server.py
   - src/universal_agent/cron_service.py
   - tests/gateway/test_cron_ensure_jobs.py
-last_verified: 2026-06-16
+last_verified: 2026-06-24
 ---
 
 # ADR: Resumable External Jobs
