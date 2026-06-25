@@ -507,6 +507,15 @@ there), in which case teardown is skipped to preserve artifacts. Reusable
 worktree helpers live in `vp/worktree_utils.py` (`provision_worktree`,
 `syntax_check_changed_py`, `revert_changed_files`, etc.).
 
+### Workspace reaping (regenerable + archival)
+
+Two complementary reapers keep `UA_VP_CODER_WORKSPACE_ROOT` bounded; both
+resolve the same path the writer uses (`vp/profiles.py::resolve_vp_profiles`,
+via `get_vp_profile("vp.coder.primary").workspace_root`):
+
+- **Daily regenerable-artifact reap** — `scripts/vp_coder_regenerable_reaper.py::reap_regenerable_artifacts`, registered as the `vp_coder_workspace_regenerable_reap` cron job (`gateway_server.py::_ensure_vp_coder_regenerable_reap_cron_job`, default `25 6 * * *` CT). Removes ONLY regenerable names (`.venv`, `__pycache__`, `node_modules`, `.pytest_cache`, `.ruff_cache`, `dist`, `build`, `.next`) from each mission dir — these rebuild via `uv sync` / build, so no evidence window is needed. Direct-child mission dirs modified within `UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS` (default 6h) are skipped so an in-flight `uv sync` is never raced. The live repo `.venv` and any `activity_state.db` are hard-excluded (resolved-path equality + filename guard). Mission source / manifests / logs / `SOURCES/` / `BRIEF.md` / `ACCEPTANCE.md` / `COMPLETION.md` are always preserved. Added 2026-06-25 after the disk-critical incident where `AGENT_RUN_WORKSPACES/vp_coder_primary_external/` held 30G across 221 mission dirs (19.6G of it regenerable `.venv`) because the weekly pruner is structurally blind to sub-7d `.venv` bloat.
+- **Weekly whole-dir archival** — `scripts/vp_coder_workspace_pruner.py`, registered as the `vp_coder_workspace_pruning` cron job (`gateway_server.py::_ensure_vp_coder_workspace_pruning_cron_job`, default `5 17 * * 0` CT). Owns whole-dir archival of fully-completed missions (everything older than `UA_VP_CODER_WORKSPACE_RETENTION_HOURS`, default 168h/7d, moves to a sibling `_archive/`, then is hard-deleted after 2× retention). Running weekly is acceptable BECAUSE the daily reaper holds the line on the regenerable driver.
+
 ### Finalization
 
 `_execute_mission_logic` derives `failure_mode` and `transcript_tail` from the

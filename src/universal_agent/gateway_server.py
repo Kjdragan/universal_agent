@@ -15205,6 +15205,7 @@ async def lifespan(app: FastAPI):
                 _ensure_proactive_artifact_digest_cron_job()
                 _ensure_cron_artifact_reminders_sweep_cron_job()
                 _ensure_vp_coder_workspace_pruning_cron_job()
+                _ensure_vp_coder_regenerable_reap_cron_job()
                 _ensure_scratch_pruning_cron_job()
                 _ensure_vp_mission_pr_reconciler_cron_job()
                 _ensure_architecture_canvas_drift_cron_job()
@@ -19976,6 +19977,58 @@ def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
         timezone_env_var="UA_VP_CODER_WORKSPACE_PRUNING_TIMEZONE",
         # Ship 4 (Task Hub Observability Protocol): opted IN. Even GC
         # sweeps benefit from "did it run cleanly?" visibility.
+    )
+
+
+def _ensure_vp_coder_regenerable_reap_cron_job() -> Optional[dict[str, Any]]:
+    """Daily regenerable-artifact reap for VP-coder mission dirs.
+
+    Companion to ``_ensure_vp_coder_workspace_pruning_cron_job`` (weekly,
+    whole-dir archival). This daily job runs
+    ``scripts.vp_coder_regenerable_reaper.reap_regenerable_artifacts`` which
+    removes ONLY regenerable names (``.venv``, ``__pycache__``,
+    ``node_modules``, ``.pytest_cache``, ``.ruff_cache``, ``dist``, ``build``,
+    ``.next``) — every one of those rebuilds via ``uv sync`` / build, so no
+    7-day evidence window is needed. Active-mission protection is built into
+    the reaper (``UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS``, default 6h); the
+    live repo ``.venv`` and any ``activity_state.db`` are hard-excluded.
+
+    Root cause this addresses: the 2026-06-25 disk-critical incident where
+    ``AGENT_RUN_WORKSPACES/vp_coder_primary_external/`` held 30G across 221
+    coder mission dirs (19.6G of it regenerable ``.venv``) because the
+    weekly pruner only owns whole-dir archival of >7d missions and was
+    structurally blind to sub-7d ``.venv`` bloat between weekly runs.
+
+    Schedule: ``25 6 * * *`` America/Chicago — daily 06:25 CT, inside the
+    06:00-21:00 CT active window. A fixed-time cron is dormancy-exempt per
+    ``project_docs/08_operations/03_dormancy_and_operating_hours.md`` but we
+    keep it inside the window anyway so a missed catch-up still lands inside
+    the operator's day. ``skip_task_hub_link=True`` — a daily GC sweep must
+    not spam Task Hub with ~30 rows/month.
+    """
+    return _register_system_cron_job(
+        system_job="vp_coder_workspace_regenerable_reap",
+        default_cron="25 6 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.vp_coder_regenerable_reaper",
+        description=(
+            "Daily reap of regenerable artifacts (.venv, __pycache__, "
+            "node_modules, .pytest_cache, .ruff_cache, dist, build, .next) "
+            "from VP-coder mission dirs. Active missions skipped within "
+            "UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS (default 6h)."
+        ),
+        timeout_seconds=600,
+        # S5 Phase A batch pattern: gated by _proactive_cron_enabled AND not
+        # already migrated to a deploy-independent systemd timer (no double-fire).
+        enabled=_proactive_cron_enabled(
+            "UA_VP_CODER_REGENERABLE_REAP_ENABLED"
+        )
+        and not _is_migrated_to_systemd("vp_coder_workspace_regenerable_reap"),
+        cron_env_var="UA_VP_CODER_REGENERABLE_REAP_CRON",
+        timezone_env_var="UA_VP_CODER_REGENERABLE_REAP_TIMEZONE",
+        # Daily housekeeping GC sweep — opt OUT of the Hermes Phase F
+        # auto-link path. We do not want a task_hub row per daily tick.
+        skip_task_hub_link=True,
     )
 
 

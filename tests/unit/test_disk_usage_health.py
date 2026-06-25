@@ -179,3 +179,51 @@ def test_observed_value_includes_gb_used_and_free():
     root = next((m for m in pressured if m["mount"] == "/"), None)
     assert root is not None
     assert root.get("used_gb") and root.get("free_gb") and root.get("total_gb")
+
+
+def test_message_does_not_contains_stale_not_the_driver_literal():
+    """2026-06-25 regression guard.
+
+    The previous message + design_note claimed AGENT_RUN_WORKSPACES is
+    "NOT the driver (~0.3G reapable)" and pointed at the uv cache as the
+    sole driver. Under sustained VP-coder load that framing was stale
+    (per-mission .venv bloat reached 30G / 19.6G regenerable on
+    2026-06-25) and actively misled cycles into dismissing real bloat.
+
+    Asserts:
+      1. The probe's returned ``message`` field has no ``"NOT the driver"``.
+      2. The ``design_note`` metadata has no ``"NOT the driver"``.
+      3. The source file itself has no ``"NOT the driver"`` literal anywhere
+         (defense against re-introduction in a docstring or comment).
+    """
+    # (1) Invoke the probe directly so we read the exact ``message`` string
+    # returned (it is later surfaced as ``recommendation`` on HeartbeatFinding).
+    with _mock_disk_usage({
+        "/": DiskUsage(_gb(100), _gb(85), _gb(15)),  # 85% warn
+    }):
+        from universal_agent.services.invariants import disk_usage_health
+        importlib.reload(disk_usage_health)
+        result = disk_usage_health.disk_usage_health({})
+    assert result is not None, "probe should fire at 85%"
+    assert "NOT the driver" not in (result.get("message") or ""), (
+        "probe 'message' must not contain the misleading 'NOT the driver' literal"
+    )
+
+    # (2) design_note inside the @invariant metadata.
+    registered = [
+        inv for inv in pi.get_registered_invariants()
+        if inv.id == "disk_usage_health"
+    ]
+    assert registered, "disk_usage_health must be registered on import"
+    metadata = registered[0].metadata or {}
+    design_note = metadata.get("design_note") or ""
+    assert "NOT the driver" not in design_note, (
+        "design_note must not claim AGENT_RUN_WORKSPACES is 'NOT the driver'"
+    )
+
+    # (3) Source-file grep — strongest guarantee against re-introduction.
+    import inspect
+    src = inspect.getsource(disk_usage_health)
+    assert "NOT the driver" not in src, (
+        "no occurrence of 'NOT the driver' allowed anywhere in the module"
+    )

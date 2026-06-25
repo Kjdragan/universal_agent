@@ -15,15 +15,27 @@ partition):
 - `/opt` — where AGENT_RUN_WORKSPACES + the repo's .uv-cache live
 - `/var/lib` — where csi.db + activity_state.db + runtime_state.db live
 
-The dominant growth driver as of 2026-06-21 is unpruned **VP-coder mission
-workspaces** under AGENT_RUN_WORKSPACES/vp_coder_primary_external (~22G; the
-weekly pruner had been a no-op due to a writer/reaper path mismatch, fixed in
-scripts/vp_coder_workspace_pruner.py). The uv cache was the driver in 2026-06-04
-but is now ~tiny (~676M — remote_deploy.sh prunes it every deploy), so it is no
-longer the concern. Secondary one-time reclaimable: stale containerd build cache
-(`docker builder prune`). This probe surfaces real top consumers via
-runbook_command. See scripts/deploy/remote_deploy.sh and
-project_docs/06_platform/04_deployment_and_cicd.md.
+PRIMARY DISK DRIVERS (corrected 2026-06-25 after the disk-critical
+incident where / hit 92% under sustained VP-coder load):
+
+1. **VP-coder mission ``.venv`` bloat** under
+   ``AGENT_RUN_WORKSPACES/vp_coder_primary_external``. Observed 30G
+   across 221 mission dirs, 19.6G of it regenerable per-mission ``.venv``
+   (+ ``__pycache__`` 0.8G, ``node_modules`` 0.4G). This IS a primary
+   driver under sustained VP load — see
+   ``scripts/vp_coder_regenerable_reaper.py`` (daily) +
+   ``scripts/vp_coder_workspace_pruner.py`` (weekly) for the durable fix.
+
+2. uv cache (``~/.cache/uv``, ``/root/.cache/uv``, ``/tmp/uv_cache``,
+   ``<repo>/.uv-cache``). Was the dominant driver on 2026-06-04 but is
+   now pruned every deploy by ``scripts/deploy/remote_deploy.sh`` and is
+   regularly <1G — so the older "uv cache is THE driver" framing is
+   stale. ``uv cache prune`` often finds nothing unused.
+
+Secondary one-time reclaimable: stale containerd build cache
+(``docker builder prune``). This probe surfaces real top consumers via
+runbook_command. See ``scripts/deploy/remote_deploy.sh`` and
+``project_docs/06_platform/04_deployment_and_cicd.md``.
 
 Severity (strict per operator pattern set in P4):
 - WARN: any mount above 75%
@@ -114,11 +126,18 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
             "inference, no subprocess (the du diagnostics live in "
             "runbook_command, off the per-heartbeat path — keeps the probe "
             "~1ms and avoids blocking the heartbeat loop). Severity_override "
-            "lifts to critical above 90% on any mount. 2026-06-04: corrected "
-            "the cleanup recommendation — the real growth driver is the "
-            "unpruned uv cache (~65G across ua/root/tmp/repo trees), not "
-            ">14-day AGENT_RUN_WORKSPACES dirs (~0.3G reapable). "
-            "remote_deploy.sh now prunes the uv caches on every deploy."
+            "lifts to critical above 90% on any mount. "
+            "2026-06-04: previously attributed the growth driver to the uv "
+            "cache (~65G) and dismissed AGENT_RUN_WORKSPACES as ~0.3G "
+            "reapable. 2026-06-25 CORRECTION: that framing was stale and "
+            "actively misled cycles into dismissing real VP-coder bloat. "
+            "Under sustained VP load the per-mission .venv bloat under "
+            "AGENT_RUN_WORKSPACES/vp_coder_primary_external IS a primary "
+            "driver (30G observed, 19.6G regenerable .venv), and the uv "
+            "cache is regularly <1G (remote_deploy.sh prunes it every "
+            "deploy). The durable fix is the daily regenerable-artifact "
+            "reaper (scripts/vp_coder_regenerable_reaper.py) plus the "
+            "weekly whole-dir pruner (scripts/vp_coder_workspace_pruner.py)."
         ),
         "thresholds": {
             "warn_pct": WARN_THRESHOLD_PCT,
@@ -168,12 +187,18 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         ),
         "message": (
             f"Disk pressure on {len(pressured)} mount(s): {', '.join(mount_names)}. "
-            f"Worst {worst_pct}%. Top reclaimable consumer is the uv cache "
-            "(~/.cache/uv + /root/.cache/uv + /tmp/uv_cache + <repo>/.uv-cache), "
-            "now auto-pruned each deploy via scripts/deploy/remote_deploy.sh "
-            "(uv cache prune --ci --force). Run the runbook for live `du -sh` of "
-            "actual top consumers — AGENT_RUN_WORKSPACES holds only ~0.3G of "
-            "reapable >14-day dirs and is NOT the driver."
+            f"Worst {worst_pct}%. Top reclaimable consumers under sustained "
+            "VP-coder load are the per-mission .venv / __pycache__ / "
+            "node_modules trees under "
+            "AGENT_RUN_WORKSPACES/vp_coder_primary_external (the daily "
+            "regenerable-artifact reaper scripts/vp_coder_regenerable_reaper.py "
+            "+ the weekly whole-dir pruner "
+            "scripts/vp_coder_workspace_pruner.py own the durable fix), "
+            "followed by the uv cache (~/.cache/uv + /root/.cache/uv + "
+            "/tmp/uv_cache + <repo>/.uv-cache — auto-pruned each deploy via "
+            "scripts/deploy/remote_deploy.sh, regularly <1G so 'uv cache "
+            "prune' often finds nothing unused). Run the runbook for live "
+            "`du -sh` of actual top consumers."
         ),
         "severity_override": severity,
     }
