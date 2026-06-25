@@ -11,6 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 class FactoryRole(str, Enum):
+    """Where this node sits in the factory topology.
+
+    The role drives the default capability policy resolved by
+    :func:`build_factory_runtime_policy`: whether the node runs the full
+    gateway, publishes or listens for delegated work, and which services
+    (CSI ingest, AgentMail inbox) it owns.
+    """
+
     HEADQUARTERS = "HEADQUARTERS"
     LOCAL_WORKER = "LOCAL_WORKER"
     STANDALONE_NODE = "STANDALONE_NODE"
@@ -22,6 +30,15 @@ _VALID_RUNTIME_STAGES = {"development", "staging", "local", "production"}
 
 @dataclass(frozen=True)
 class FactoryRuntimePolicy:
+    """Resolved capability policy for the current factory node.
+
+    Frozen dataclass produced by :func:`build_factory_runtime_policy`. Most
+    fields are booleans or mode strings sourced from the :class:`FactoryRole`
+    defaults and then optionally overridden by ``UA_CAPABILITY_*`` env vars.
+    The ``can_*`` / ``is_*`` properties are the canonical way to ask
+    capability questions so callers do not re-derive them from mode strings.
+    """
+
     role: str
     gateway_mode: str  # full | health_only
     start_ui: bool
@@ -33,14 +50,25 @@ class FactoryRuntimePolicy:
 
     @property
     def can_publish_delegations(self) -> bool:
+        """Whether this node may publish delegated work for others to claim.
+
+        True only when ``delegation_mode == "publish_and_listen"`` (the
+        headquarters default).
+        """
         return self.delegation_mode == "publish_and_listen"
 
     @property
     def can_listen_delegations(self) -> bool:
+        """Whether this node consumes delegated work from upstream publishers.
+
+        True for ``publish_and_listen`` and ``listen_only`` modes; False for
+        ``disabled``.
+        """
         return self.delegation_mode in {"publish_and_listen", "listen_only"}
 
     @property
     def is_headquarters(self) -> bool:
+        """Whether this node is running as the headquarters (``HEADQUARTERS``)."""
         return self.role == FactoryRole.HEADQUARTERS.value
 
 
@@ -56,6 +84,12 @@ def _env_flag(name: str, default: bool) -> bool:
 
 
 def resolve_runtime_stage(raw_stage: Optional[str] = None) -> Optional[str]:
+    """Resolve the deployment stage (development/staging/local/production).
+
+    Prefers an explicit ``raw_stage`` argument, then the ``UA_RUNTIME_STAGE``
+    env var. Returns ``None`` when neither is set. Raises ``ValueError`` for
+    an unrecognized value so an invalid stage never silently passes through.
+    """
     raw = str(raw_stage or os.getenv("UA_RUNTIME_STAGE") or "").strip().lower()
     if not raw:
         return None
@@ -68,6 +102,13 @@ def resolve_runtime_stage(raw_stage: Optional[str] = None) -> Optional[str]:
 
 
 def resolve_machine_slug(raw_slug: Optional[str] = None) -> str:
+    """Resolve a non-empty slug identifying this physical machine.
+
+    Tries, in order: the ``raw_slug`` argument, ``UA_MACHINE_SLUG``,
+    ``UA_FACTORY_ID``, ``INFISICAL_MACHINE_IDENTITY_NAME``, and finally the
+    OS hostname as an always-present fallback. Used for machine-scoped state
+    and Infisical environment mapping.
+    """
     raw = (
         str(raw_slug or "").strip()
         or str(os.getenv("UA_MACHINE_SLUG") or "").strip()
@@ -79,6 +120,13 @@ def resolve_machine_slug(raw_slug: Optional[str] = None) -> str:
 
 
 def resolve_factory_role(raw_role: Optional[str] = None) -> FactoryRole:
+    """Resolve the node's :class:`FactoryRole` with a fail-safe default.
+
+    Prefers an explicit ``raw_role`` argument, then the ``FACTORY_ROLE`` env
+    var, defaulting to headquarters. An unrecognized value logs ``critical``
+    and falls back to :attr:`FactoryRole.LOCAL_WORKER` so a misconfigured node
+    never runs as a full headquarters by accident.
+    """
     raw = str(raw_role or os.getenv("FACTORY_ROLE") or FactoryRole.HEADQUARTERS.value).strip().upper()
     try:
         return FactoryRole(raw)
@@ -94,6 +142,15 @@ from typing import Any, Optional
 
 
 def build_factory_runtime_policy(raw_role: Optional[str] = None) -> FactoryRuntimePolicy:
+    """Build the :class:`FactoryRuntimePolicy` for this node.
+
+    Starts from role-based defaults (headquarters runs everything; a local
+    worker runs a health-only gateway and only listens; a standalone node runs
+    the full stack but does not delegate), then applies explicit
+    ``UA_CAPABILITY_*`` env-var overrides for the boolean and mode fields.
+    Only explicitly-set env vars override -- absent vars leave the role
+    default in place.
+    """
     role = resolve_factory_role(raw_role)
     kwargs: dict[str, Any] = {}
 
@@ -161,6 +218,14 @@ def build_factory_runtime_policy(raw_role: Optional[str] = None) -> FactoryRunti
 
 
 def normalize_llm_provider_override() -> Optional[str]:
+    """Normalize and validate ``LLM_PROVIDER_OVERRIDE`` in place.
+
+    Upper-cases the value and, if it is one of the allowed providers
+    (ZAI/ANTHROPIC/OPENAI/OLLAMA), writes the normalized form back to the env
+    and returns it. An unsupported value is logged, removed from the
+    environment, and yields ``None`` so downstream routing falls back to its
+    own default.
+    """
     raw = str(os.getenv("LLM_PROVIDER_OVERRIDE") or "").strip()
     if not raw:
         return None
