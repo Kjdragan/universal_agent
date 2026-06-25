@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo Factory — First Autonomous /demo Build</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1a2027; --muted:#5b6770; --line:#e3e7ec;
+    --accent:#2f6f4f; --accent-soft:#e7f3ec; --warn:#9a6a00; --warn-soft:#fbf3df;
+    --term-bg:#1b1f24; --term-ink:#d7dde3; --term-dim:#8a94a0; --term-green:#7fd18c;
+    --term-red:#f08b8b; --term-cyan:#79c7d6; --term-yellow:#e3c878;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:920px;margin:0 auto;padding:28px 20px 60px}
+  header{margin:8px 0 22px}
+  .kicker{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  h1{font-size:28px;margin:6px 0 8px;line-height:1.2}
+  .sub{color:var(--muted);font-size:16px;margin:0}
+  .badge{display:inline-flex;align-items:center;gap:7px;background:var(--accent-soft);color:var(--accent);
+    border:1px solid #cfe6d8;border-radius:999px;padding:5px 12px;font-weight:700;font-size:13px;margin-top:14px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--accent)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:16px 0;
+    box-shadow:0 1px 2px rgba(20,30,40,.03)}
+  h2{font-size:19px;margin:2px 0 12px}
+  h3{font-size:15px;margin:18px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  p{margin:8px 0}
+  .muted{color:var(--muted)}
+  ol.flow{list-style:none;counter-reset:s;padding:0;margin:6px 0}
+  ol.flow li{counter-increment:s;position:relative;padding:9px 0 9px 42px;border-bottom:1px dashed var(--line)}
+  ol.flow li:last-child{border-bottom:0}
+  ol.flow li::before{content:counter(s);position:absolute;left:0;top:8px;width:28px;height:28px;border-radius:8px;
+    background:var(--accent-soft);color:var(--accent);font-weight:700;display:flex;align-items:center;justify-content:center;font-size:13px}
+  ol.flow b{font-weight:650}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:6px}
+  .metric{background:var(--accent-soft);border:1px solid #d6e9de;border-radius:12px;padding:12px 14px}
+  .metric .n{font-size:22px;font-weight:750;color:var(--accent)}
+  .metric .l{font-size:12.5px;color:var(--muted);margin-top:2px}
+  code,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .term{background:var(--term-bg);border-radius:12px;padding:16px 16px;overflow-x:auto;
+    font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--term-ink)}
+  .term .pmt{color:var(--term-green)}
+  .term pre{margin:0;white-space:pre;color:var(--term-ink)}
+  .run{background:#11161b;border-radius:12px;padding:14px 16px;color:#cdd6df;
+    font:13.5px/1.7 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto}
+  .run .c{color:#79c7d6}
+  .pill{display:inline-block;background:#eef1f4;border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:13px}
+  .ok{color:var(--accent);font-weight:700}
+  table{width:100%;border-collapse:collapse;margin-top:6px;font-size:14.5px}
+  td,th{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:650;font-size:13px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:640px){.two{grid-template-columns:1fr}}
+  .note{background:var(--warn-soft);border:1px solid #efe1bd;border-radius:10px;padding:10px 13px;color:#6b5212;font-size:14px}
+  a{color:var(--accent)}
+  .foot{color:var(--muted);font-size:13px;margin-top:24px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="kicker">Demo Factory · autonomous /demo</div>
+  <h1>The /demo factory built a working demo — by itself, end to end</h1>
+  <p class="sub">From a YouTube link to a verified, runnable demo in its own repo. No hand-written code, no hand-written prompt — the factory researched the idea, scaffolded a repo, wrote the demo, and a deterministic gate proved it runs against the real model.</p>
+  <span class="badge"><span class="dot"></span>VERIFIED PASS · real ZAI endpoint · not mocked</span>
+</header>
+
+<div class="card">
+  <h2>What it built</h2>
+  <p><b>A self-correcting loop.</b> Instead of one-shot prompting, it drives a model in a loop:
+  <b>generate code → grade it by running a real <code>pytest</code> suite → feed the failures back → revise → repeat until the tests pass</b> (or a round cap). The "loops, not prompts" idea — made trustworthy because the grader is <i>real test execution</i>, not the model judging itself.</p>
+  <p class="muted">Three tasks, each with a hidden test suite: <span class="pill">nth_fibonacci</span> <span class="pill">to_iso_date</span> <span class="pill">bounded_stack</span>. Real GLM calls (<code>glm-5-turbo</code> via ZAI), real test runs, no mocks. At least one task is nudged to miss on the first attempt so you can <i>see</i> the loop repair it.</p>
+</div>
+
+<div class="card">
+  <h2>How it got here — the autonomous pipeline</h2>
+  <p class="muted" style="margin-top:0">You type <code>/demo &lt;a link&gt;</code>. The factory (with Claude as the conductor) did all of this on its own:</p>
+  <ol class="flow">
+    <li><b>Classified</b> the seed — a YouTube video on "Claude Code works better with loops."</li>
+    <li><b>Checked the vault</b> — "have we built this before?" No → build fresh.</li>
+    <li><b>Researched</b> the idea until it understood it well enough to write a spec.</li>
+    <li><b>Picked the archetype</b> — a framework/technique → a straight script.</li>
+    <li><b>Scaffolded its own repo</b> — <code>~/lrepos/demo-self-correcting-loop</code>, wired to secrets, with the verifier gate installed.</li>
+    <li><b>Built it autonomously</b> — a headless <code>/goal</code> session wrote the code and re-ran the verifier until it passed.</li>
+    <li><b>Landed it</b> — wrote a manifest + a vault entry so the factory remembers it.</li>
+  </ol>
+</div>
+
+<div class="card">
+  <h2>See it run</h2>
+  <p class="muted" style="margin-top:0">The actual output of <code>uv run python main.py</code> — generate → run tests → revise → converge. Watch a task fail round 1 and get repaired:</p>
+  <div class="term"><pre>self-correcting loop | model=glm-5-turbo | round_cap=5 | tasks=3
+
+<span style="color:#e3c878">=== Task: nth_fibonacci  (symbol: nth_fibonacci) ===</span>
+  round 1: generated   5 lines -&gt; <span style="color:#f08b8b">pytest FAIL</span>
+            feeding failure back: &gt;       with pytest.raises(ValueError):
+  round 2: generated   7 lines -&gt; <span style="color:#7fd18c">pytest PASS</span>  <span style="color:#7fd18c">[OK]</span>
+  &gt;&gt; <span style="color:#79c7d6">converged in 2 round(s)</span>
+
+<span style="color:#e3c878">=== Task: to_iso_date  (symbol: to_iso_date) ===</span>
+  round 1: generated  56 lines -&gt; <span style="color:#7fd18c">pytest PASS</span>  <span style="color:#7fd18c">[OK]</span>
+  &gt;&gt; <span style="color:#79c7d6">converged in 1 round(s)</span>
+
+<span style="color:#e3c878">=== Task: bounded_stack  (symbol: BoundedStack) ===</span>
+  round 1: generated  24 lines -&gt; <span style="color:#7fd18c">pytest PASS</span>  <span style="color:#7fd18c">[OK]</span>
+  &gt;&gt; <span style="color:#79c7d6">converged in 1 round(s)</span>
+
+<span style="color:#e3c878">=== SUMMARY ===</span>
+TASK_RESULT name=nth_fibonacci status=PASS rounds=2
+TASK_RESULT name=to_iso_date status=PASS rounds=1
+TASK_RESULT name=bounded_stack status=PASS rounds=1
+LOOP_SUMMARY <span style="color:#7fd18c">all_converged=True</span> tasks=3 max_rounds=2</pre></div>
+</div>
+
+<div class="card">
+  <h2>The proof it's real (not a stub)</h2>
+  <div class="grid">
+    <div class="metric"><div class="n">PASS</div><div class="l">deterministic verifier gate</div></div>
+    <div class="metric"><div class="n">zai</div><div class="l">endpoint hit (real GLM, not mocked)</div></div>
+    <div class="metric"><div class="n">18</div><div class="l">turns to build it autonomously</div></div>
+    <div class="metric"><div class="n">~12 min</div><div class="l">build wall-clock</div></div>
+    <div class="metric"><div class="n">$2.25</div><div class="l">build cost</div></div>
+    <div class="metric"><div class="n">246</div><div class="l">lines of real demo code</div></div>
+  </div>
+  <h3>Verifier line (the forge-proof gate)</h3>
+  <div class="run"><span class="c">$</span> DEMO_VERIFY: <span class="ok">PASS</span> demo_id=self-correcting-loop ran=1 exit=0 endpoint=zai screenshot=n/a</div>
+  <p class="muted">The gate doesn't read the transcript — it <i>executes the demo</i> and observes the real endpoint out-of-band. It fired green twice: once inside the build loop, once on landing.</p>
+</div>
+
+<div class="card">
+  <h2>Run it yourself</h2>
+  <p class="muted" style="margin-top:0">It's a standalone repo on this machine. Two lines:</p>
+  <div class="run">
+<span class="c">cd</span> ~/lrepos/demo-self-correcting-loop<br>
+uv run python main.py
+  </div>
+  <p class="muted">It bootstraps the factory's secrets itself (ZAI routing), runs the 3 tasks through the loop, prints the round-by-round trace, and exits 0 only if every task converges. To run the gate that judges it: <code>uv run python scripts/verify_demo.py</code>.</p>
+  <div class="note"><b>Note:</b> it makes real GLM calls, so a full run takes a few minutes (model latency), and needs the desktop's Infisical creds (already present here).</div>
+</div>
+
+<div class="card">
+  <h2>Bonus — the run also closed a recursive-improvement loop</h2>
+  <p>This first live build surfaced two real weak spots in the factory's heuristics, which were then <b>fixed at the source</b> using the captured build log as evidence:</p>
+  <table>
+    <tr><th>Weakness</th><th>Fix</th></tr>
+    <tr><td><b>Archetype guessed from the URL string</b> — a YouTube URL has no "claude" in it, so it mis-defaulted.</td><td>Classifier now takes researched <i>context</i> + reports a confidence; low-confidence URLs get decided from research, not the string.</td></tr>
+    <tr><td><b>False-positive "reuse"</b> — over a tiny vault, the loop idea wrongly "matched" the unrelated deep-research demo on one weak shared word.</td><td>Added a relevance gate (min shared meaningful tokens + coverage). Loop → build-new; unrelated → no match; real deep-research → still matches.</td></tr>
+  </table>
+  <p class="muted">Both verified against the live vault; selftest 43/43 + regression 3/3 green.</p>
+</div>
+
+<div class="foot">
+  demo repo: <code>~/lrepos/demo-self-correcting-loop</code> · factory: <code>github.com/Kjdragan/demo_factory</code> ·
+  the <code>/demo</code> command is a global skill at <code>~/.claude/skills/demo/</code>
+</div>
+</div>
+</body>
+</html>
