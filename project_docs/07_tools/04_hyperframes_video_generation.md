@@ -4,7 +4,7 @@ status: active
 canonical: true
 subsystem: hyperframes-video-generation
 code_paths: []
-last_verified: 2026-06-17
+last_verified: 2026-06-25
 ---
 
 # HyperFrames Video Generation (Studio + Pipeline)
