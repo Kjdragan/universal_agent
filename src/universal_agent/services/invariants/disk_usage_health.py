@@ -90,22 +90,37 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
         "and climbing — proactive coverage before disk-full becomes outage."
     ),
     severity="warn",
+    # Plain-English static fallback (the probe returns a dynamic one with live
+    # numbers; this is belt-and-suspenders). No paths/commands — that's what the
+    # technical recommendation/runbook below are for.
+    operator_summary=(
+        "The production server is running low on disk space. Nothing is broken "
+        "yet, but if a disk fills completely the agent services start failing. "
+        "The fix is to reclaim space — mostly build caches, old per-mission "
+        "workspaces, and dangling Docker layers."
+    ),
     runbook_command=(
         "df -h; "
-        "echo '--- uv caches (top reclaimable consumer; auto-pruned each deploy) ---'; "
-        "sudo du -sh /home/ua/.cache/uv /root/.cache/uv /tmp/uv_cache "
-        "/opt/universal_agent/.uv-cache 2>/dev/null; "
-        "echo '--- AGENT_RUN_WORKSPACES total + largest subdirs ---'; "
-        "sudo du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES 2>/dev/null; "
+        "echo '--- Docker/containerd (often the biggest consumer; only the "
+        "dangling/build-cache part is reclaimable, ~few GB) ---'; "
+        "sudo docker system df 2>/dev/null; "
+        "sudo du -sh /var/lib/docker /var/lib/containerd 2>/dev/null; "
+        "echo '--- AGENT_RUN_WORKSPACES + ARCHIVE (regenerable; daily pruner) ---'; "
+        "sudo du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES "
+        "/opt/universal_agent/AGENT_RUN_WORKSPACES_ARCHIVE 2>/dev/null; "
         "sudo du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES/*/ 2>/dev/null | sort -rh | head -10; "
+        "echo '--- /home/ua (stale dev worktrees — operator judgment) ---'; "
+        "sudo du -sh /home/ua/* 2>/dev/null | sort -rh | head -10; "
         "echo '--- largest DB files ---'; "
         "sudo ls -laSh /opt/universal_agent/*.db /opt/universal_agent/AGENT_RUN_WORKSPACES/*.db "
         "/var/lib/universal-agent/csi/*.db 2>/dev/null | head -10; "
-        "echo '--- manual one-time uv prune (if no deploy is imminent) ---'; "
-        "echo 'sudo -H -u ua uv cache prune --ci --force; "
-        "sudo -H -u ua env UV_CACHE_DIR=/tmp/uv_cache uv cache prune --ci --force; "
-        "sudo -H -u ua env UV_CACHE_DIR=/opt/universal_agent/.uv-cache uv cache prune --ci --force; "
-        "sudo -H env HOME=/root /root/.local/bin/uv cache prune --ci --force'"
+        "echo '--- uv caches (tiny now; auto-pruned each deploy) ---'; "
+        "sudo du -sh /home/ua/.cache/uv /root/.cache/uv /tmp/uv_cache "
+        "/opt/universal_agent/.uv-cache 2>/dev/null; "
+        "echo '--- SAFE one-time reclaim (keeps running services) ---'; "
+        "echo 'sudo docker system prune -f   # dangling images + build cache only'; "
+        "echo 'sudo -u ua /opt/universal_agent/.venv/bin/python -m "
+        "universal_agent.scripts.vp_coder_workspace_pruner   # archive + hard-delete aged mission workspaces'"
     ),
     metadata={
         "design_note": (
@@ -114,11 +129,15 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
             "inference, no subprocess (the du diagnostics live in "
             "runbook_command, off the per-heartbeat path — keeps the probe "
             "~1ms and avoids blocking the heartbeat loop). Severity_override "
-            "lifts to critical above 90% on any mount. 2026-06-04: corrected "
-            "the cleanup recommendation — the real growth driver is the "
-            "unpruned uv cache (~65G across ua/root/tmp/repo trees), not "
-            ">14-day AGENT_RUN_WORKSPACES dirs (~0.3G reapable). "
-            "remote_deploy.sh now prunes the uv caches on every deploy."
+            "lifts to critical above 90% on any mount. 2026-06-25: corrected "
+            "the cleanup guidance AGAIN — DO NOT hardcode point-in-time top "
+            "consumers (the 2026-06-04 'uv cache ~65G' claim went stale; live "
+            "uv caches are now ~0.7G). Live audit: the real consumers are "
+            "Docker+containerd (/var/lib, ~59G, mostly LIVE running containers "
+            "— only ~few GB dangling is reclaimable), AGENT_RUN_WORKSPACES + "
+            "_ARCHIVE (~24G regenerable, daily pruner), and stale /home/ua dev "
+            "worktrees. Recommendation/runbook now name reclaim CATEGORIES + "
+            "commands, not absolute GB; the runbook surfaces live `du -sh`."
         ),
         "thresholds": {
             "warn_pct": WARN_THRESHOLD_PCT,
@@ -156,6 +175,7 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     severity = "critical" if worst_pct > CRITICAL_THRESHOLD_PCT else "warn"
 
     mount_names = sorted(m["mount"] for m in pressured)
+    worst_free_gb = min((m["free_gb"] for m in pressured), default=0.0)
     return {
         "observed_value": {
             "pressured_mounts": pressured,
@@ -166,14 +186,31 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"every monitored mount used_pct ≤ {WARN_THRESHOLD_PCT}% "
             f"(critical above {CRITICAL_THRESHOLD_PCT}%)"
         ),
+        # Plain-English lead with LIVE numbers (the email leads with this).
+        "operator_summary": (
+            f"The production server's disk is {worst_pct:.0f}% full "
+            f"(about {worst_free_gb:.0f} GB free) and slowly filling up. Nothing "
+            "is broken yet, but if it reaches ~100% the agent services start "
+            "failing. Most of the space is in active use (Docker images + running "
+            "containers); the safely reclaimable part is build caches, old "
+            "per-mission workspaces, and dangling Docker layers."
+        ),
+        # Technical recommendation (for Claude / handoff). Names reclaim
+        # CATEGORIES + commands, largest-first — NOT point-in-time GB figures,
+        # which go stale (see the 2026-06-25 design_note).
         "message": (
             f"Disk pressure on {len(pressured)} mount(s): {', '.join(mount_names)}. "
-            f"Worst {worst_pct}%. Top reclaimable consumer is the uv cache "
-            "(~/.cache/uv + /root/.cache/uv + /tmp/uv_cache + <repo>/.uv-cache), "
-            "now auto-pruned each deploy via scripts/deploy/remote_deploy.sh "
-            "(uv cache prune --ci --force). Run the runbook for live `du -sh` of "
-            "actual top consumers — AGENT_RUN_WORKSPACES holds only ~0.3G of "
-            "reapable >14-day dirs and is NOT the driver."
+            f"Worst {worst_pct}%. On the prod VPS these mounts are the single "
+            "/dev/sda1 partition. Likely top consumers, largest-reclaim-first: "
+            "(1) Docker/containerd dangling images + build cache "
+            "(`sudo docker system prune -f` — keeps running containers); "
+            "(2) AGENT_RUN_WORKSPACES regenerable build artifacts + the *_ARCHIVE "
+            "tree (reaped daily by universal-agent-vp-coder-workspace-pruning."
+            "service; run now via `sudo -u ua /opt/universal_agent/.venv/bin/"
+            "python -m universal_agent.scripts.vp_coder_workspace_pruner`); "
+            "(3) stale /home/ua dev worktrees (operator judgment). The uv caches "
+            "are tiny now (auto-pruned each deploy) and are NOT the driver. Run "
+            "the runbook for live `du -sh` of actual top consumers."
         ),
         "severity_override": severity,
     }

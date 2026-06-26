@@ -16,6 +16,8 @@ from universal_agent.services import proactive_health_notifier as notifier
 from universal_agent.services.email_tags import ActionTag, KindTag
 from universal_agent.services.proactive_health_notifier import (
     KEVIN_EMAIL,
+    _format_digest_email,
+    _operator_plain_summary,
     send_critical_digest,
 )
 
@@ -65,6 +67,55 @@ async def test_digest_sends_single_email_for_multiple_criticals(fake_agentmail):
     assert "metric_0" in body and "metric_1" in body and "metric_2" in body
     # A passed-in handle is NOT owned → not shut down.
     fake_agentmail.shutdown.assert_not_called()
+
+
+def test_digest_leads_with_plain_language_then_technical_detail():
+    """Email leads with a plain-language summary the operator can act on,
+    then the technical detail (for Claude) below a divider."""
+    finding = {
+        "finding_id": "invariant:disk_usage_health",
+        "metric_key": "disk_usage_health",
+        "severity": "critical",
+        "title": "Disk usage across monitored mounts within safe range",
+        "recommendation": "Disk pressure on 3 mount(s). Worst 91.3%. <technical...>",
+        "runbook_command": "df -h",
+        "observed_value": {"worst_used_pct": 91.3},
+        "metadata": {
+            "operator_summary": (
+                "The production server's disk is 91% full and slowly filling up."
+            )
+        },
+    }
+    _, body = _format_digest_email([finding], "2026-06-26T00:20:34Z")
+
+    # Plain lead present, and BEFORE the technical section.
+    assert "IN PLAIN LANGUAGE" in body
+    assert "WHAT YOU CAN DO" in body
+    assert "TECHNICAL DETAIL" in body
+    assert body.index("IN PLAIN LANGUAGE") < body.index("TECHNICAL DETAIL")
+    # The plain-English operator_summary leads; the misleading "within safe
+    # range" title only appears in the technical block (after the divider).
+    plain, _, technical = body.partition("TECHNICAL DETAIL")
+    assert "disk is 91% full" in plain
+    assert "within safe range" not in plain
+    assert "within safe range" in technical
+    # Technical specificity is preserved for the handoff.
+    assert "metric_key=disk_usage_health" in technical
+    assert "df -h" in technical
+
+
+def test_operator_plain_summary_falls_back_when_unauthored():
+    """No operator_summary → first sentence of the recommendation; then title."""
+    assert _operator_plain_summary(
+        {"recommendation": "First sentence here. Second sentence.", "title": "T"}
+    ) == "First sentence here."
+    assert _operator_plain_summary({"title": "Only a title"}) == "Only a title"
+    assert (
+        _operator_plain_summary(
+            {"metadata": {"operator_summary": "Plain lead."}, "recommendation": "tech"}
+        )
+        == "Plain lead."
+    )
 
 
 @pytest.mark.asyncio
