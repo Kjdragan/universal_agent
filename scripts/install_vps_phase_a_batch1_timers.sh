@@ -31,6 +31,7 @@ UNITS=(
   "universal-agent-vault-lint-contradictions"
   "universal-agent-architecture-canvas-drift"
   "universal-agent-vp-coder-workspace-pruning"
+  "universal-agent-cron-workspace-pruning"
 )
 # NOTE: universal-agent-insight-scoring-health was RETIRED 2026-06-21 (zombie
 # monitor — producer hourly_insight_email deregistered in #745). Its units are
@@ -65,5 +66,6 @@ for base in "${UNITS[@]}"; do
 done
 
 echo "== Phase A batch-1 timers =="
-systemctl list-timers "${UNITS[0]}.timer" "${UNITS[1]}.timer" "${UNITS[2]}.timer" \
-  "${UNITS[3]}.timer" --all --no-pager || true
+# Append ".timer" to every unit via bash parameter expansion so this scales with
+# the UNITS array (no per-index hardcoding).
+systemctl list-timers "${UNITS[@]/%/.timer}" --all --no-pager || true
