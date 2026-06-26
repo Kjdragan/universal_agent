@@ -1,0 +1,20 @@
+[Unit]
+Description=Run Universal Agent cron_* workspace pruning daily at 17:12 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. systemd 255 honors the
+# timezone suffix, so daily 17:12 America/Chicago is encoded directly (DST
+# handled by systemd). Fixed-time crons are NOT subject to the operating-hours
+# dormancy window (CLAUDE.md § "Operating Hours / Dormancy Default"). Slot is
+# offset 7 minutes from universal-agent-vp-coder-workspace-pruning (17:05) to
+# avoid simultaneous filesystem churn; both run on the SAME daily cadence (the
+# vp_coder timer's move Sun->daily is owned by task_0ba3174f96db). Persistent
+# replays a daily slot missed inside a deploy window.
+OnCalendar=*-*-* 17:12:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-cron-workspace-pruning.service
+
+[Install]
+WantedBy=timers.target
