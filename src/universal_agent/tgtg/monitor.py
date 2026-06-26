@@ -36,11 +36,31 @@ from .targets import Target, all_watched_ids, get_target
 log = logging.getLogger(__name__)
 
 
+# ── Internal runtime constants ───────────────────────────────────────────────────────────────────
+# Fixed recovery cadences for the polling loop. These are NOT operator-tunable
+# config — see config.py for env-overridable settings (POLL_* intervals, etc.).
+
+# Seconds to wait before retrying after the TGTG API raises a recognised error.
+BACKOFF_API_ERROR_SECONDS: int = 60
+
+# Seconds to wait before retrying after an unexpected (non-TgtgAPIError) failure.
+BACKOFF_UNEXPECTED_ERROR_SECONDS: int = 30
+
+# TGTG status codes indicating an item is permanently gone (store closed /
+# delisted). On these we mark the catalog entry dead and notify the operator once.
+DEAD_ITEM_STATUSES: tuple[int, ...] = (404, 400)
+
+
+def _proxy_dict(url: str) -> dict:
+    """Build a requests-style proxy dict covering both HTTP and HTTPS."""
+    return {"http": url, "https": url}
+
+
 def _pick_proxy(proxy_cycle) -> dict | None:
     url = next(proxy_cycle, None)
     if not url:
         return None
-    return {"http": url, "https": url}
+    return _proxy_dict(url)
 
 
 def _minutes_to_pickup(item: dict) -> float | None:
@@ -129,7 +149,7 @@ def fetch_watched_items(
                 log.warning("Could not fetch item %s: %s", item_id, exc)
                 # Mark dead if this looks like a permanent failure (404 / gone)
                 status = getattr(exc, "status", None)
-                if status in (404, 400):
+                if status in DEAD_ITEM_STATUSES:
                     should_notify = db.mark_dead(item_id)
                     if should_notify and on_dead_item:
                         catalog_row = db.get(item_id)
@@ -151,7 +171,7 @@ def fetch_watched_items(
             except TgtgAPIError as exc:
                 status = getattr(exc, "status", None)
                 log.warning("Catalog item %s fetch failed (%s): %s", item_id, status, exc)
-                if status in (404, 400):
+                if status in DEAD_ITEM_STATUSES:
                     should_notify = db.mark_dead(item_id)
                     if should_notify and on_dead_item:
                         catalog_row = db.get(item_id)
@@ -199,17 +219,25 @@ def run_monitor(
 
         proxy_url = next(proxy_cycle)
         if proxy_url:
-            client.proxies = {"http": proxy_url, "https": proxy_url}
+            client.proxies = _proxy_dict(proxy_url)
 
         try:
             pairs = fetch_watched_items(client, on_dead_item=on_dead_item)
         except TgtgAPIError as exc:
-            log.error("API error during fetch: %s — backing off 60s", exc)
-            time.sleep(60)
+            log.error(
+                "API error during fetch: %s — backing off %ds",
+                exc,
+                BACKOFF_API_ERROR_SECONDS,
+            )
+            time.sleep(BACKOFF_API_ERROR_SECONDS)
             continue
         except Exception as exc:
-            log.error("Unexpected error: %s — backing off 30s", exc)
-            time.sleep(30)
+            log.error(
+                "Unexpected error: %s — backing off %ds",
+                exc,
+                BACKOFF_UNEXPECTED_ERROR_SECONDS,
+            )
+            time.sleep(BACKOFF_UNEXPECTED_ERROR_SECONDS)
             continue
 
         items_only = [item for item, _ in pairs]
