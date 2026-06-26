@@ -60,7 +60,16 @@ _RAW_PATTERNS: list[tuple[str, str]] = [
     # Code execution
     (r"eval\s*\(", "code_execution"),
     (r"\$\([^)]+\)", "shell_injection"),
-    (r"`[^`]*`", "backtick_execution"),
+    # Destructive / arbitrary shell — matched by what the command DOES, not by the
+    # punctuation around it. The old blanket `[^`]*` rule flagged EVERY markdown
+    # inline-code span (`master`, `/dragan:x`, file paths), so any reply quoting a
+    # backtick-rich agent email (our own librarian/skill notices) self-quarantined.
+    # These catch the real danger — in or out of backticks — without that false
+    # positive. Network fetch / installs / eval / $() are already covered above.
+    (r"\brm\s+-[rfRF]", "destructive_command"),
+    (r"\b(?:bash|sh|zsh)\s+-c\b", "shell_exec"),
+    (r":\(\)\s*\{\s*:\s*\|\s*:", "fork_bomb"),
+    (r"\b(?:mkfs\b|dd\s+if=)", "destructive_command"),
     # YAML frontmatter injection (structured metadata designed to be parsed)
     (r"---\s*\n\s*name\s*:", "yaml_frontmatter_injection"),
 ]
@@ -78,6 +87,9 @@ _HIGH_CONFIDENCE_THREATS = frozenset({
     "mcp_endpoint_injection",
     "yaml_frontmatter_injection",
     "structured_install_block",
+    "destructive_command",
+    "shell_exec",
+    "fork_bomb",
 })
 
 
