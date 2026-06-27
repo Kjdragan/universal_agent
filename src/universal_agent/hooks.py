@@ -2687,7 +2687,7 @@ class AgentHookSet:
                          error_text += block.get("text", "")
         
         if is_error and error_text:
-            emit_status_event(f"Hook: tool validation error detected", level="WARNING", prefix="Hook")
+            emit_status_event("Hook: tool validation error detected", level="WARNING", prefix="Hook")
             # 1. Detect common schema/validation errors
             validation_hints = {
                 "required parameter": "⚠️ Schema Validation Failed: You missed a mandatory argument.",
@@ -2806,6 +2806,38 @@ class AgentHookSet:
                                 message_id=message_id,
                                 draft_id=draft_id,
                             )
+                    # Cron-run self-sends via the AgentMail MCP tool (e.g.
+                    # paper_to_podcast emailing the podcast directly with
+                    # mcp__AgentMail__send_message) bypass cron_artifact_notifier,
+                    # so no proactive_artifact_emails row would land and the
+                    # proactive-health watchdog would fire a false 'no email in
+                    # 30h' critical. Record via the shared delivery-tracking
+                    # layer so the row + [<job_id>] subject tag exist regardless
+                    # of which path (notifier vs MCP self-send vs local
+                    # attachment tool) delivered the email.
+                    if (
+                        conn is not None
+                        and run_kind == "cron"
+                        and message_id
+                        and isinstance(getattr(_runtime, "metadata", None), dict)
+                    ):
+                        _cron_job_id = str(_runtime.metadata.get("job_id") or "").strip()
+                        if _cron_job_id:
+                            try:
+                                from universal_agent.services.cron_artifact_notifier import (
+                                    record_cron_run_delivery_email,
+                                )
+
+                                record_cron_run_delivery_email(
+                                    conn,
+                                    job_id=_cron_job_id,
+                                    message_id=message_id,
+                                    subject=fields.get("subject") or "",
+                                    recipient=fields.get("to") or "",
+                                    source="agentmail_mcp_send_message",
+                                )
+                            except Exception:
+                                pass
                 finally:
                     if conn is not None:
                         try:

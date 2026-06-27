@@ -943,6 +943,23 @@ the triage verdict + dispatch path (candidate→task), not this artifact→task 
 > a matching email implies artifacts written by *that* run. Recipient filter
 > unchanged.
 
+> **Self-send delivery tracking (2026-06-26).** The notifier only records the
+> *disclosure* email it composes itself; when the agent inside the cron run
+> delivers the real artifact directly via an AgentMail tool (canonical case:
+> `paper_to_podcast_daily` resume-runs emailing the podcast mp3 through
+> `mcp__internal__agentmail_send_with_local_attachments`, or `mcp__AgentMail__send_message`),
+> that send bypassed the notifier entirely — so no `proactive_artifact_emails` row
+> landed and the subject lacked the `[<job_id>]` tag, firing a recurring false
+> 'no email in 30h' critical despite a verified Amazon SES delivery. Both self-send
+> observation sites now also call
+> `cron_artifact_notifier.py::record_cron_run_delivery_email`, which is idempotent
+> on `message_id`, tags the subject with `[<job_id>]` if missing, and coalesces
+> onto the cron's existing `proactive_artifacts` row (or mints a minimal
+> surfaced/emailed one). The call sites are
+> `tools/local_toolkit_bridge.py::_record_agentmail_delivery_from_runtime`
+> (run_kind `"cron"`) and `hooks.py::on_post_email_send_artifact` (run_kind `"cron"`),
+> so every cron delivery is tracked regardless of which path sent it.
+
 ---
 
 ## Gotchas
