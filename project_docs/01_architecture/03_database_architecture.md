@@ -19,7 +19,7 @@ code_paths:
   - src/universal_agent/services/stuck_run_reaper.py
   - CSI_Ingester/development/csi_ingester/store/sqlite.py
   - src/universal_agent/services/proactive_convergence.py
-last_verified: 2026-06-19
+last_verified: 2026-06-27
 ---
 
 # Database Architecture

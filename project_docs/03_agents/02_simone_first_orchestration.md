@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/services/vp_capacity.py
   - src/universal_agent/services/llm_classifier.py
   - src/universal_agent/gateway.py
-last_verified: 2026-06-19
+last_verified: 2026-06-27
 ---
 
 # Simone-First Orchestration
