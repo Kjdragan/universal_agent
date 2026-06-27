@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Convergence Skill Suite — handoff for the generator/evaluator-loop session</title>
+<style>
+:root{color-scheme:light;--fg:#1f2328;--muted:#656d76;--bg:#ffffff;--soft:#f6f8fa;--border:#d0d7de;--accent:#0969da;--accent-soft:#ddf4ff}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:#ffffff;color:#1f2328;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6;font-size:16px}
+nav.docset{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--border);padding:.55rem 1rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+nav.docset .brand{font-weight:700;margin-right:.6rem;font-size:.9rem;color:var(--muted)}
+nav.docset a{font-size:.82rem;text-decoration:none;color:var(--accent);padding:.2rem .55rem;border-radius:6px;white-space:nowrap}
+nav.docset a:hover{background:var(--accent-soft)}
+nav.docset a.current{background:var(--fg);color:#fff;font-weight:600}
+nav.docset .sep{width:1px;height:1.1rem;background:var(--border);margin:0 .2rem}
+nav.docset a.file{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem}
+.scratch-back{padding:.5rem 1rem;font-size:.82rem;background:var(--soft);border-bottom:1px solid var(--border)}
+.scratch-back a{color:var(--accent);text-decoration:none}
+.scratch-back a:hover{text-decoration:underline}
+main{max-width:880px;margin:0 auto;padding:2.2rem 1.3rem 5rem}
+h1,h2,h3,h4{line-height:1.25;margin-top:1.8em;margin-bottom:.6em;font-weight:650}
+h1{font-size:1.9rem;border-bottom:1px solid var(--border);padding-bottom:.3em;margin-top:.2em}
+h2{font-size:1.45rem;border-bottom:1px solid var(--border);padding-bottom:.25em}
+h3{font-size:1.18rem}
+a{color:var(--accent)}
+p,li{overflow-wrap:break-word}
+code{background:var(--soft);padding:.15em .4em;border-radius:6px;font-size:.86em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--soft);border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;line-height:1.45}
+pre code{background:none;padding:0;font-size:.82rem}
+blockquote{margin:1em 0;padding:.2em 1em;color:var(--muted);border-left:4px solid var(--border)}
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:.92rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--border);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:650}
+tr:nth-child(even) td{background:#fbfcfd}
+hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+.srcmeta{color:var(--muted);font-size:.85rem;margin:.4rem 0 1rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+footer{max-width:880px;margin:0 auto;padding:1.5rem 1.3rem;color:var(--muted);font-size:.78rem;border-top:1px solid var(--border)}
+
+.sr-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#0969da;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer}
+.sr-fab:hover{background:#0a5fd0}
+.sr-panel{position:fixed;right:16px;bottom:64px;z-index:2147483000;width:340px;max-width:92vw;max-height:70vh;background:#fff;color:#1f2328;border:1px solid #d0d7de;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);display:none;flex-direction:column;overflow:hidden;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.sr-panel.sr-open{display:flex}
+.sr-head{display:flex;justify-content:space-between;align-items:center;padding:.6rem .8rem;border-bottom:1px solid #eaecef}
+.sr-x,.sr-del{background:none;border:none;color:#656d76;cursor:pointer;font-size:13px}
+.sr-headbtns{display:flex;gap:.4rem;align-items:center}
+.sr-clear{background:none;border:1px solid #d0d7de;border-radius:5px;color:#656d76;cursor:pointer;font-size:11px;padding:.1rem .45rem}
+.sr-clear:hover{background:#f6f8fa}
+.sr-hint{font-size:.74rem;line-height:1.45;color:#57606a;padding:.5rem .8rem;border-bottom:1px solid #eaecef;background:#f6f8fa}
+.sr-list{overflow:auto;padding:.5rem .8rem;flex:1}
+.sr-empty{color:#656d76;font-size:.85rem;padding:.5rem 0}
+.sr-item{border:1px solid #eaecef;border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem}
+.sr-loc{display:flex;justify-content:space-between;font-size:.72rem;color:#656d76;font-family:ui-monospace,Menlo,monospace;margin-bottom:.25rem}
+.sr-quote{font-size:.8rem;color:#3b4148;background:#f6f8fa;border-left:3px solid #d0d7de;padding:.2rem .5rem;margin-bottom:.3rem}
+.sr-body{width:100%;border:1px solid #d0d7de;border-radius:6px;padding:.35rem .45rem;font:inherit;resize:vertical}
+.sr-actions{display:flex;gap:.4rem;padding:.6rem .8rem;border-top:1px solid #eaecef}
+.sr-note{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:inherit}
+.sr-submit{flex:1;background:#1f883d;color:#fff;border:none;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:600 13px/1 inherit}
+.sr-submit:hover{background:#1a7332}
+.sr-chip{position:absolute;z-index:2147483001;background:#1f2328;color:#fff;border:none;border-radius:6px;padding:.25rem .5rem;font:600 12px/1 sans-serif;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sr-mark{background:#fff3c4;box-shadow:inset 0 -2px 0 #e3b341;border-radius:2px;cursor:pointer}
+.sr-mark:hover{background:#ffe98a}
+.sr-round{border:1px solid #eaecef;border-radius:8px;margin-bottom:.6rem;overflow:hidden}
+.sr-rhead{display:flex;justify-content:space-between;align-items:center;gap:.4rem;background:#f6f8fa;border-bottom:1px solid #eaecef;padding:.35rem .55rem;font-size:.72rem;color:#57606a;font-family:ui-monospace,Menlo,monospace}
+.sr-recopy{background:#fff;border:1px solid #d0d7de;border-radius:5px;padding:.1rem .4rem;cursor:pointer;font:inherit;color:#0969da;white-space:nowrap}
+.sr-hitem{padding:.35rem .55rem;border-top:1px solid #f0f1f3}
+.sr-hbody{font-size:.85rem;white-space:pre-wrap;color:#1f2328}
+.sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast{display:none!important}}
+</style>
+</head>
+<body><div class="scratch-back"><a href="/scratch/">← Scratchpad index</a></div><main><h1 id="convergence-skill-suite-handoff-for-the-generatorevaluator-loop-session">Convergence Skill Suite — handoff for the generator/evaluator-loop session</h1>
+<p><strong>Why you're getting this:</strong> you're building a generator→evaluator→improver loop
+for <strong>non-deterministic</strong> tasks (output you can't grade with a simple assert). A
+sibling session just built and shipped a small, verified suite that solves exactly
+the evaluator + accept/reject part of that loop, plus the orchestration around it.
+This document is so you can decide whether to <em>reuse the code</em>, <em>steal the design</em>,
+or <em>ignore it</em>. Nothing here is load-bearing for your work unless you choose it.</p>
+<p>The single most relevant piece for you is <strong><code>judge-panel</code></strong> — a variance-aware
+LLM-as-judge evaluator. If you read only one section, read that one.</p>
+<hr />
+<h2 id="tldr">TL;DR</h2>
+<ul>
+<li><strong>5 primitives + 2 masters</strong>, each a standalone <code>~/lrepos/demo-*</code> repo, all
+  promoted into the <code>dragan</code> Claude Code plugin as <code>/dragan:&lt;name&gt;</code> commands.</li>
+<li>The engines are <strong>plain Python, dependency-injected</strong> — you can drop a single
+  file into your project and inject your own model/checker. The judge engine is
+  <strong>pure stdlib</strong>; only the bundled real-LLM judge needs the <code>anthropic</code> SDK.</li>
+<li>For non-deterministic eval, the design answer is: <strong>pairwise (not absolute)
+  judging + a panel of N judges + a noise-floor margin</strong> so a noisy judge becomes
+  a comparator your loop can actually gate on (keep/revert) without drifting inside
+  the judge's own jitter.</li>
+<li>Status: <strong>fully built, verified, shipped.</strong> Each repo has a deterministic offline
+  self-check (<code>*_OK</code>) and, where relevant, a real ZAI/GLM path. Desktop interactive
+  tooling — it does <strong>not</strong> deploy to the VPS. Commands go live on next session.</li>
+</ul>
+<hr />
+<h2 id="mental-model-primitives-vs-masters">Mental model: primitives vs masters</h2>
+<p>Call a <strong>primitive</strong> when you already know the shape of the evaluation. Call a
+<strong>master</strong> when you don't, or when the work is a multi-step pipeline.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Skill</th>
+<th>The loop</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>primitive</td>
+<td><code>autoresearch-loop</code></td>
+<td>scalar hill-climb; keep-if-better / revert</td>
+<td>you have a single <strong>number</strong> to optimize</td>
+</tr>
+<tr>
+<td>primitive</td>
+<td><code>pass-fail-repair</code></td>
+<td>run a real check, repair on real failure</td>
+<td>you have a <strong>runnable</strong> pass/fail check</td>
+</tr>
+<tr>
+<td>primitive</td>
+<td><strong><code>judge-panel</code></strong></td>
+<td>N independent LLM judges, pairwise, noise-floor margin</td>
+<td>output is <strong>subjective / non-deterministic</strong> — no number, no check</td>
+</tr>
+<tr>
+<td>primitive</td>
+<td><code>optimize-then-verify</code></td>
+<td>optimize the soft objective, then verify the hard one</td>
+<td>explicit "optimize X <strong>then</strong> check it still passes Y"</td>
+</tr>
+<tr>
+<td>primitive</td>
+<td><code>subagent-fanout</code></td>
+<td>parallel fan-out → fan-in synthesis</td>
+<td>breadth: N parallel attempts, merge</td>
+</tr>
+<tr>
+<td>master</td>
+<td><code>converge</code></td>
+<td>routes the gate (check/score/judge/hybrid), gate-first, escalates repair→optimize→fanout</td>
+<td><strong>one artifact</strong> to a bar, path unclear or multi-dimensional</td>
+</tr>
+<tr>
+<td>master</td>
+<td><code>converge-flow</code></td>
+<td>a sequence of gated checkpoints + a final gate</td>
+<td>a <strong>multi-phase pipeline</strong> (each step must pass before the next)</td>
+</tr>
+</tbody>
+</table>
+<p>Your generator/evaluator loop maps cleanly onto this: <strong>your generator</strong> is the
+<code>propose</code>/<code>improve</code> function; <strong>judge-panel</strong> is your evaluator; <strong><code>converge</code></strong> is
+the keep/revert+escalation harness if you want it prebuilt.</p>
+<hr />
+<h2 id="judge-panel-the-part-you-actually-want">judge-panel — the part you actually want</h2>
+<p><strong>Location:</strong> <code>~/lrepos/demo-judge-panel/</code> · GitHub <code>Kjdragan/demo-judge-panel</code>
+<strong>Engine:</strong> <code>judge_panel.py</code> (pure stdlib) · <strong>judges:</strong> <code>judges.py</code>
+<strong>Command:</strong> <code>/dragan:judge-panel</code> · <strong>Self-check:</strong> <code>uv run python main.py</code> → <code>JUDGE_PANEL_OK</code></p>
+<h3 id="the-core-idea">The core idea</h3>
+<p>A single LLM judge is noisy: it scores the same output differently across runs and
+flatters easily. A <strong>panel</strong> — several independent judges, aggregated with a
+<strong>noise-floor margin</strong> — turns that noise into a stable, gateable signal.</p>
+<p>Two modes (prefer the first for a loop):</p>
+<ul>
+<li><strong>pairwise</strong> — "is the candidate better than the baseline/incumbent?" Each judge
+  picks A or B. The panel is <strong>decisive only when the winning side clears a
+  supermajority</strong> of all valid votes. <strong>Ties dilute</strong> (a judge that can't tell
+  counts against decisiveness). A 3–2 split is <em>within the noise</em> → <code>decisive=False</code>
+  on purpose. This is what stops a subjective hill-climb drifting.</li>
+<li><strong>absolute</strong> — "score this 0–10 against a rubric." Panel reports the <strong>median</strong>,
+  decisive only when the judges' <strong>spread</strong> (stdev) is within <code>max_spread</code>.</li>
+</ul>
+<p><code>Verdict.accept_candidate()</code> is the one call your loop needs: it returns true only
+when the panel <strong>decisively</strong> preferred the candidate. That's your keep/revert gate.</p>
+<h3 id="the-judge-contract-this-is-the-reuse-seam">The judge contract (this is the reuse seam)</h3>
+<p>A judge is any callable: <code>judge(candidate, baseline, rubric, mode) -&gt; Vote</code>.
+The engine never calls a model itself — <strong>you inject the judge.</strong> So you can drop
+<code>judge_panel.py</code> into your repo and wire your <em>own</em> model with a ~15-line adapter,
+regardless of provider. The bundled <code>LLMJudge(lens, model="haiku")</code> is just one
+implementation (it routes through the operator's ZAI/GLM via <code>lab_common</code>); the
+<code>HeuristicJudge</code> is a deterministic one used for reproducible tests.</p>
+<h3 id="signatures">Signatures</h3>
+<pre><code class="language-python">from judge_panel import panel_pairwise, panel_absolute, Verdict, Vote
+
+# pairwise: is `candidate` better than `baseline`?
+v = panel_pairwise(candidate, baseline, judges, *, rubric=&quot;&quot;,
+                   supermajority=2/3, max_workers=8)  # -&gt; Verdict
+v.accept_candidate()   # True iff decisive AND candidate won  &lt;-- the keep signal
+v.candidate_better     # bool | None (None = tie/undecided)
+v.agreement            # winning-side fraction of all valid votes
+v.line()               # human-readable one-liner
+
+# absolute: score against a rubric
+v = panel_absolute(candidate, judges, *, rubric=&quot;&quot;, max_spread=1.5)
+v.score                # median across judges
+v.spread               # population stdev = the noise estimate
+v.decisive             # spread within max_spread
+</code></pre>
+<h3 id="minimal-usage-with-your-own-model">Minimal usage with your own model</h3>
+<pre><code class="language-python">from judge_panel import panel_pairwise, Vote, A_WINS, B_WINS, TIE
+
+def my_judge(lens):
+    def judge(candidate, baseline, rubric, mode):
+        # call YOUR model; return a Vote
+        ans = my_llm(f&quot;Through the lens of {lens}, which is better on:\n{rubric}\n&quot;
+                     f&quot;A:\n{candidate}\nB:\n{baseline}\nReply A, B, or tie.&quot;)
+        choice = {&quot;A&quot;: A_WINS, &quot;B&quot;: B_WINS}.get(ans.strip()[:1].upper(), TIE)
+        return Vote(judge=f&quot;llm:{lens}&quot;, choice=choice)
+    judge.__name__ = f&quot;judge_{lens}&quot;
+    return judge
+
+panel = [my_judge(l) for l in (&quot;clarity&quot;, &quot;correctness&quot;, &quot;usefulness&quot;)]
+v = panel_pairwise(new_output, current_best, panel, rubric=&quot;task spec here&quot;)
+if v.accept_candidate():
+    current_best = new_output          # variance-aware keep/revert
+</code></pre>
+<h3 id="design-points-worth-stealing-even-if-you-dont-use-the-code">Design points worth stealing even if you don't use the code</h3>
+<ul>
+<li><strong>Pairwise beats absolute for LLM judges.</strong> "Is B better than A?" is far more
+  reliable than "score B 0–10". It also maps straight onto keep/revert.</li>
+<li><strong>A margin, not a bare majority.</strong> Accepting on 3–2 is accepting inside the
+  noise. Require a supermajority (tunable) so an accepted change provably cleared
+  the panel's disagreement floor.</li>
+<li><strong>Diverse lenses, not N identical judges.</strong> Give each judge a different
+  perspective (clarity / correctness / usefulness); the <em>spread</em> becomes a free
+  noise estimate and diversity catches failure modes redundancy misses.</li>
+<li><strong>One bad judge can't sink the panel</strong> — a judge that errors is captured and
+  excluded; the rest still decide.</li>
+<li><strong>Anti-overfit:</strong> rotate the judge framing between <em>proposing</em> and <em>accepting</em>
+  (a train/val split for subjectivity); keep any hard deterministic constraints on
+  a <em>separate</em> runnable gate (see <code>pass-fail-repair</code>); a panel gives you "judged
+  better," never "proven better."</li>
+</ul>
+<hr />
+<h2 id="converge-prebuilt-keeprevert-escalation-harness-optional">converge — prebuilt keep/revert + escalation harness (optional)</h2>
+<p>If you'd rather not hand-roll the loop, <code>converge</code> is the single-artifact master.</p>
+<p><strong>Location:</strong> <code>~/lrepos/demo-converge/</code> · <code>converge.py</code> · <code>/dragan:converge</code>
+<strong>Self-check:</strong> <code>uv run python main.py</code> → <code>CONVERGE_OK</code></p>
+<p>It does three things your loop probably needs:</p>
+<ol>
+<li><strong>Routes the gate.</strong> A <code>Gate</code> carries whatever you can measure — a <code>check</code>
+   (runnable), a <code>score</code> (number), or <code>judges</code> (a judge-panel), or a <code>hybrid</code>
+   (hard check + soft score). The kind is inferred; you don't pre-pick a loop.</li>
+<li><strong>Gate-first.</strong> Evaluates the seed before spending anything — don't optimize
+   what already passes.</li>
+<li><strong>Escalates in cost order</strong>, re-gating after each tier, stopping at the first
+   pass: Tier 0 repair → Tier 1 hill-climb-then-verify → Tier 2 fan-out.</li>
+</ol>
+<pre><code class="language-python">from converge import Gate, converge
+from judges import default_heuristic_panel        # or your own injected judges
+
+gate = Gate(judges=my_panel, rubric=&quot;task spec&quot;)   # subjective gate
+r = converge(seed, gate,
+             propose=my_generator,                 # artifact -&gt; improved artifact
+             baseline=reference_output,            # judge gate compares against this
+             ledger_path=&quot;converge.tsv&quot;)
+r.converged, r.via, r.artifact                     # via: passed-first-try|repaired|optimized|fanout
+</code></pre>
+<p>For a <strong>multi-step</strong> process where each phase must pass before the next, use
+<code>converge_flow</code> (<code>converge_flow.py</code>, <code>/dragan:converge-flow</code>, <code>CONVERGE_FLOW_OK</code>):
+a list of <code>Step(name, gate, improve/propose, ...)</code> + an optional <code>final_gate</code>; the
+improved artifact chains forward; <code>stop_on_fail</code> halts at the first checkpoint that
+can't converge. <code>converge-flow</code> is manual-invocation by design.</p>
+<hr />
+<h2 id="paths-status-table">Paths &amp; status table</h2>
+<table>
+<thead>
+<tr>
+<th>Skill</th>
+<th>Repo (<code>~/lrepos/…</code>)</th>
+<th>Engine entry point</th>
+<th>Command</th>
+<th>Self-check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>judge-panel</td>
+<td><code>demo-judge-panel</code></td>
+<td><code>judge_panel.py</code> → <code>panel_pairwise</code> / <code>panel_absolute</code> / <code>Verdict.accept_candidate</code></td>
+<td><code>/dragan:judge-panel</code></td>
+<td><code>JUDGE_PANEL_OK</code></td>
+</tr>
+<tr>
+<td>converge</td>
+<td><code>demo-converge</code></td>
+<td><code>converge.py</code> → <code>Gate</code>, <code>converge</code></td>
+<td><code>/dragan:converge</code></td>
+<td><code>CONVERGE_OK</code></td>
+</tr>
+<tr>
+<td>converge-flow</td>
+<td><code>demo-converge</code></td>
+<td><code>converge_flow.py</code> → <code>Step</code>, <code>converge_flow</code></td>
+<td><code>/dragan:converge-flow</code></td>
+<td><code>CONVERGE_FLOW_OK</code></td>
+</tr>
+<tr>
+<td>autoresearch-loop</td>
+<td><code>demo-autoresearch-engine</code></td>
+<td><code>autoresearch.py</code> → <code>run_autoresearch</code></td>
+<td><code>/dragan:autoresearch-loop</code></td>
+<td><code>AUTORESEARCH_OK</code></td>
+</tr>
+<tr>
+<td>pass-fail-repair</td>
+<td><code>demo-self-correcting-loop</code></td>
+<td><code>self_correct</code> (in <code>skill/scripts/</code>)</td>
+<td><code>/dragan:pass-fail-repair</code></td>
+<td>self-check in <code>main.py</code></td>
+</tr>
+<tr>
+<td>optimize-then-verify</td>
+<td><code>demo-optimize-then-verify</code></td>
+<td><code>optimize_then_verify</code> (composes the two above)</td>
+<td><code>/dragan:optimize-then-verify</code></td>
+<td>self-check in <code>main.py</code></td>
+</tr>
+<tr>
+<td>subagent-fanout</td>
+<td><code>demo-subagent-orchestration</code></td>
+<td>fan-out engine (<code>skill/scripts/</code>)</td>
+<td><code>/dragan:subagent-fanout</code></td>
+<td>self-check</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Each skill's <code>SKILL.md</code> is the canonical recipe; bundled engines live in each
+  repo's <code>skill/scripts/</code>. A terse routing/deferral map is in
+  <code>~/lrepos/dragan-plugins/CONVERGENCE_SUITE.md</code>.</li>
+<li>The plugin (<code>Kjdragan/dragan-plugins</code>) lists all 7 + <code>new-repo</code>/<code>demo</code>/etc.
+  (11 skills total). Verified present in the installed plugin cache; <strong>new commands
+  activate on the next Claude Code session</strong> (plugins load at session start).</li>
+<li><strong>Not deployed to the VPS</strong> — this is desktop interactive tooling.</li>
+<li>Routing was validated empirically: 14/14 realistic phrasings route to the
+  intended skill, descriptions mutually disjoint (downward-deferral chain so the
+  masters yield to the leaner primitive when the loop is known).</li>
+</ul>
+<hr />
+<h2 id="three-ways-to-consume-it">Three ways to consume it</h2>
+<ol>
+<li><strong>Conversationally</strong> — in a Claude Code session with the <code>dragan</code> plugin
+   loaded, invoke <code>/dragan:judge-panel</code> (or <code>converge</code>) and follow the SKILL.md.</li>
+<li><strong>Code-level reuse (recommended for your loop)</strong> — copy <code>judge_panel.py</code> (pure
+   stdlib) into your repo, inject your own judge via the <code>judge(candidate, baseline,
+   rubric, mode) -&gt; Vote</code> contract, and gate on <code>Verdict.accept_candidate()</code>. Add
+   <code>converge.py</code> if you want the gate-first + escalation harness. No dependency on
+   the rest of the suite.</li>
+<li><strong>Design-only</strong> — read this doc + the SKILL.md files and reimplement the
+   pairwise + noise-floor-margin pattern in your own stack. The idea is the value;
+   the code is ~150 lines.</li>
+</ol>
+<hr />
+<h2 id="how-this-plugs-into-a-generatorevaluator-loop">How this plugs into a generator/evaluator loop</h2>
+<pre><code>generate/propose ─▶ candidate ─▶ judge-panel(candidate vs current_best)
+                                        │
+              accept_candidate()  ──────┤ decisive &amp; better ─▶ current_best = candidate
+                                        └ within-noise / worse ─▶ revert, propose again
+</code></pre>
+<ul>
+<li>Your <strong>generator</strong> = <code>propose(artifact) -&gt; artifact'</code> (or <code>improve(artifact,
+  feedback)</code>).</li>
+<li>Your <strong>evaluator</strong> = a <code>judge-panel</code> over your own model judges.</li>
+<li>Your <strong>accept rule</strong> = <code>panel_pairwise(candidate, current_best, panel).accept_candidate()</code>.</li>
+<li>Want gate-first + automatic escalation (repair → optimize → fan-out) for free?
+  Wrap it in <code>converge</code> with <code>Gate(judges=panel, rubric=...)</code>.</li>
+</ul>
+<p>Open question for your design (worth deciding explicitly): <strong>what's your baseline
+for the pairwise comparison?</strong> Comparing each candidate to the <em>current best</em>
+(incumbent) gives a clean monotone hill-climb; comparing to a <em>fixed reference</em>
+gives an absolute bar. <code>converge</code> uses incumbent-comparison inside its hill-climb
+tier and reference-comparison at the gate — you may want both.</p>
+<hr />
+<p><em>Generated by the session that built the suite (2026-06-27). Source of truth: each
+repo's <code>SKILL.md</code> + <code>~/lrepos/dragan-plugins/CONVERGENCE_SUITE.md</code> + the UA doc
+<code>project_docs/07_tools/06_convergence_skill_suite.md</code>. If this doc and those files
+disagree, those win.</em></p></main>
+<footer>Rendered on the tailnet HTML scratchpad · private to your devices.</footer>
+<script>
+(function(){
+  "use strict";
+  var m = location.pathname.match(/\/scratch\/([^\/]+)\//);
+  var parts = location.pathname.split('/').filter(Boolean);
+  var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
+  var KEY = 'scratchReview:' + slug;
+  var comments = [];
+  var lastSel = null;  // most recent text selection inside <main>, kept so "+ Comment" works after the click clears it
+  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
+  var HKEY = 'scratchReviewHistory:' + slug;   // archive of all submitted rounds (never auto-cleared)
+  var history = [];
+  try { history = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch(e){}
+  function persistHistory(){ try{ localStorage.setItem(HKEY, JSON.stringify(history)); }catch(e){} }
+  var viewMode = 'review';  // 'review' (active round) | 'history' (Past comments)
+  function save(){ persist(); render(); applyMarks(); }
+
+  // In-page indicators: highlight the commented text so you can see what you've marked.
+  function clearMarks(){
+    var main=document.querySelector('main'); if(!main) return;
+    main.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+  }
+  function wrapQuote(quote, cid){
+    if(!quote) return; var main=document.querySelector('main'); if(!main) return;
+    var w=document.createTreeWalker(main, NodeFilter.SHOW_TEXT, null), n;
+    while((n=w.nextNode())){
+      if(n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark')) continue;
+      var idx=n.nodeValue.indexOf(quote);
+      if(idx>=0){ var r=document.createRange(); r.setStart(n,idx); r.setEnd(n,idx+quote.length); var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view'; try{ r.surroundContents(mk); }catch(e){} return; }
+    }
+  }
+  function applyMarks(){ clearMarks(); comments.forEach(function(c){ if(c.quote) wrapQuote(c.quote, c.id); }); }
+  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+
+  function headingFor(node){
+    var hs = document.querySelectorAll('main h1[id],main h2[id],main h3[id],main h4[id]');
+    var best=null;
+    for(var i=0;i<hs.length;i++){
+      if(hs[i]===node || (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING)) best=hs[i];
+    }
+    return best;
+  }
+
+  var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
+  var panel=document.createElement('div'); panel.className='sr-panel';
+  panel.innerHTML='<div class="sr-head"><b class="sr-title">Review</b><span class="sr-headbtns"><button type="button" class="sr-clear" data-act="clear">Clear</button><button type="button" class="sr-x" data-act="close">✕</button></span></div>'
+    +'<div class="sr-hint">Highlight text then <b>+ Comment</b>, or <b>+ Note</b> for a general remark. Comments save as you type — add as many as you want. <b>Submit → copy prompt</b> exports your round, archives it under <b>Past</b>, and clears the page for the next round.</div>'
+    +'<div class="sr-list"></div>'
+    +'<div class="sr-actions"></div>';
+  var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
+  var toast=document.createElement('div'); toast.className='sr-toast'; toast.style.display='none';
+  document.body.appendChild(btn); document.body.appendChild(panel); document.body.appendChild(chip); document.body.appendChild(toast);
+
+  function showToast(t){ toast.textContent=t; toast.style.display='block'; setTimeout(function(){toast.style.display='none';},4500); }
+  function openPanel(o){ panel.classList.toggle('sr-open', o!==false); }
+
+  function reviewActionsHTML(){
+    return '<button type="button" class="sr-note" data-act="comment">+ Comment</button>'
+      +'<button type="button" class="sr-note" data-act="note">+ Note</button>'
+      +'<button type="button" class="sr-note" data-act="history">Past'+(history.length?' ('+history.length+')':'')+'</button>'
+      +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button>';
+  }
+  function render(){
+    btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
+    var title=panel.querySelector('.sr-title'), list=panel.querySelector('.sr-list'),
+        actions=panel.querySelector('.sr-actions'), hint=panel.querySelector('.sr-hint');
+    var clr=panel.querySelector('.sr-clear');
+    if(viewMode==='history'){
+      title.textContent='Past comments'; hint.style.display='none'; if(clr) clr.style.display='none';
+      if(!history.length){ list.innerHTML='<div class="sr-empty">No submitted rounds yet.</div>'; }
+      else {
+        var html='';
+        for(var k=history.length-1;k>=0;k--){
+          var h=history[k]; var when=esc((h.submitted_at||'').replace('T',' ').slice(0,16));
+          html+='<div class="sr-round"><div class="sr-rhead"><span>Round '+(k+1)+' · '+when+' · '+h.comments.length+'</span>'
+            +'<button type="button" class="sr-recopy" data-r="'+k+'">copy prompt</button></div>'
+            +h.comments.map(function(c){
+              return '<div class="sr-hitem"><div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span></div>'
+                +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+                +'<div class="sr-hbody">'+esc(c.body||'(no text)')+'</div></div>';
+            }).join('')
+            +'</div>';
+        }
+        list.innerHTML=html;
+      }
+      actions.innerHTML='<button type="button" class="sr-note" data-act="back">← Back to review</button>';
+      return;
+    }
+    title.textContent='Review'; hint.style.display='';
+    if(clr) clr.style.display = comments.length ? '' : 'none';
+    actions.innerHTML=reviewActionsHTML();
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, or <b>+ Note</b>.</div>'; return; }
+    list.innerHTML='';
+    comments.forEach(function(c,i){
+      var row=document.createElement('div'); row.className='sr-item';
+      row.innerHTML='<div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
+        +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+        +'<textarea class="sr-body" data-i="'+i+'" rows="2" placeholder="Your comment…">'+esc(c.body||'')+'</textarea>';
+      list.appendChild(row);
+    });
+  }
+
+  function addComment(quote, heading){
+    comments.push({id:Date.now()+'-'+comments.length, quote:quote||'', heading:heading||'', body:''});
+    save(); openPanel(true);
+    var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus();
+  }
+
+  document.addEventListener('mouseup', function(){
+    setTimeout(function(){
+      var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var main=document.querySelector('main');
+      if(txt && txt.length>1 && sel.rangeCount && main && main.contains(sel.anchorNode)){
+        var r=sel.getRangeAt(0).getBoundingClientRect();
+        chip.style.top=(window.scrollY+r.bottom+6)+'px'; chip.style.left=(window.scrollX+r.left)+'px';
+        var h=headingFor(sel.anchorNode); var hd=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
+        chip.dataset.quote=txt.slice(0,280); chip.dataset.heading=hd;
+        lastSel={quote:txt.slice(0,280), heading:hd};
+        chip.style.display='block';
+      } else { chip.style.display='none'; }
+    },10);
+  });
+  chip.addEventListener('mousedown', function(e){ e.preventDefault(); addComment(chip.dataset.quote, chip.dataset.heading); chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); });
+  btn.addEventListener('click', function(){ openPanel(!panel.classList.contains('sr-open')); render(); });
+  panel.addEventListener('click', function(e){
+    var act=e.target.getAttribute('data-act');
+    if(act==='close') openPanel(false);
+    else if(act==='comment'){ if(lastSel && lastSel.quote){ addComment(lastSel.quote, lastSel.heading); lastSel=null; } else { showToast('Highlight some text on the page first, then “+ Comment”. (Use “+ Note” for a general remark.)'); } }
+    else if(act==='note') addComment('','');
+    else if(act==='submit') submit();
+    else if(act==='history'){ viewMode='history'; render(); }
+    else if(act==='back'){ viewMode='review'; render(); }
+    else if(act==='clear'){ if(comments.length && (typeof confirm!=='function' || confirm('Discard the '+comments.length+' unsubmitted comment(s)? Past history is kept.'))){ comments=[]; persist(); clearMarks(); render(); showToast('Cleared. Past history kept.'); } }
+    else if(e.target.classList.contains('sr-recopy')){ var r=+e.target.getAttribute('data-r'); if(history[r]) copyText(buildPrompt(history[r].comments)).then(function(){ showToast('Round '+(r+1)+' prompt re-copied to the clipboard.'); }).catch(function(){ showToast('Clipboard blocked.'); }); }
+    else if(e.target.classList.contains('sr-del')){ comments.splice(+e.target.getAttribute('data-i'),1); save(); }
+  });
+  panel.addEventListener('input', function(e){
+    if(e.target.classList.contains('sr-body')){ comments[+e.target.getAttribute('data-i')].body=e.target.value; persist(); btn.textContent='💬 Review ('+comments.length+')'; }
+  });
+
+  function buildPrompt(cs){
+    cs = cs || comments;
+    var title=document.title||slug; var L=[];
+    L.push('[scratch-review '+slug+']');
+    L.push('Review of "'+title+'"'); L.push(location.href);
+    L.push('I left '+cs.length+' comment(s); full JSON downloaded to ~/Downloads/scratch-comments-'+slug+'.json'); L.push('');
+    cs.forEach(function(c,i){
+      L.push((i+1)+'. ['+(c.heading?'§ '+c.heading:'note')+'] '+(c.body||'(no text)'));
+      if(c.quote) L.push('   ↳ re: "'+c.quote+'"');
+    });
+    L.push(''); L.push('Re-read the artifact and address each comment, then reply in our chat.');
+    return L.join('\n');
+  }
+  function downloadJSON(){
+    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='scratch-comments-'+slug+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},120);
+  }
+  function copyText(text){
+    if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function(res,rej){ try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res(); }catch(err){ rej(err); } });
+  }
+  function submit(){
+    if(!comments.length){ showToast('No comments yet — highlight text → + Comment, or + Note.'); return; }
+    var text=buildPrompt(comments); downloadJSON();
+    // Archive the round, then clean the slate so the next round starts fresh (no stale
+    // re-highlighting on a revised page). History is kept under "Past".
+    history.push({submitted_at:new Date().toISOString(), comments:comments.slice()}); persistHistory();
+    comments=[]; persist(); clearMarks(); viewMode='review'; render();
+    copyText(text).then(function(){ showToast('Copied — paste into Claude Code. Round archived under “Past”; page cleared for the next round.'); })
+                  .catch(function(){ showToast('JSON downloaded; round archived & cleared. Clipboard blocked — copy from the file.'); });
+  }
+
+  // Click a highlighted span on the page → open the panel and focus that comment.
+  var mainEl=document.querySelector('main');
+  if(mainEl) mainEl.addEventListener('click', function(e){
+    var mk=e.target.closest?e.target.closest('.sr-mark'):null; if(!mk) return;
+    openPanel(true); var idx=-1; comments.forEach(function(c,j){ if(c.id===mk.dataset.cid) idx=j; });
+    if(idx>=0){ var ta=panel.querySelectorAll('.sr-body')[idx]; if(ta){ ta.scrollIntoView({block:'center'}); ta.focus(); } }
+  });
+
+  render(); applyMarks();
+})();
+</script>
+</body></html>

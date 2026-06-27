@@ -2,8 +2,12 @@
 
 > Durable, dated copy of every artifact published to the tailnet scratchpad.
 > Newest first. Auto-generated from `index.jsonl` — do not edit by hand.
-> 14 artifact(s) archived.
+> 15 artifact(s) archived.
 
+
+## 2026-06-27
+
+- **10:57:53** — [Convergence Skill Suite — handoff for the generator/evaluator-loop session](2026-06-27/105753__convergence-suite-handoff-6cacd3/report.html) · slug `convergence-suite-handoff-6cacd3` · [live](https://uaonvps.taildcc090.ts.net/scratch/convergence-suite-handoff-6cacd3/)
 
 ## 2026-06-26
 
