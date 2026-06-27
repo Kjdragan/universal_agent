@@ -15,15 +15,27 @@ partition):
 - `/opt` — where AGENT_RUN_WORKSPACES + the repo's .uv-cache live
 - `/var/lib` — where csi.db + activity_state.db + runtime_state.db live
 
-The dominant growth driver as of 2026-06-21 is unpruned **VP-coder mission
-workspaces** under AGENT_RUN_WORKSPACES/vp_coder_primary_external (~22G; the
-weekly pruner had been a no-op due to a writer/reaper path mismatch, fixed in
-scripts/vp_coder_workspace_pruner.py). The uv cache was the driver in 2026-06-04
-but is now ~tiny (~676M — remote_deploy.sh prunes it every deploy), so it is no
-longer the concern. Secondary one-time reclaimable: stale containerd build cache
-(`docker builder prune`). This probe surfaces real top consumers via
-runbook_command. See scripts/deploy/remote_deploy.sh and
-project_docs/06_platform/04_deployment_and_cicd.md.
+PRIMARY DISK DRIVERS (corrected 2026-06-25 after the disk-critical
+incident where / hit 92% under sustained VP-coder load):
+
+1. **VP-coder mission ``.venv`` bloat** under
+   ``AGENT_RUN_WORKSPACES/vp_coder_primary_external``. Observed 30G
+   across 221 mission dirs, 19.6G of it regenerable per-mission ``.venv``
+   (+ ``__pycache__`` 0.8G, ``node_modules`` 0.4G). This IS a primary
+   driver under sustained VP load — see
+   ``scripts/vp_coder_regenerable_reaper.py`` (daily) +
+   ``scripts/vp_coder_workspace_pruner.py`` (weekly) for the durable fix.
+
+2. uv cache (``~/.cache/uv``, ``/root/.cache/uv``, ``/tmp/uv_cache``,
+   ``<repo>/.uv-cache``). Was the dominant driver on 2026-06-04 but is
+   now pruned every deploy by ``scripts/deploy/remote_deploy.sh`` and is
+   regularly <1G — so the older "uv cache is THE driver" framing is
+   stale. ``uv cache prune`` often finds nothing unused.
+
+Secondary one-time reclaimable: stale containerd build cache
+(``docker builder prune``). This probe surfaces real top consumers via
+runbook_command. See ``scripts/deploy/remote_deploy.sh`` and
+``project_docs/06_platform/04_deployment_and_cicd.md``.
 
 Severity (strict per operator pattern set in P4):
 - WARN: any mount above 75%
@@ -118,9 +130,18 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
         "sudo du -sh /home/ua/.cache/uv /root/.cache/uv /tmp/uv_cache "
         "/opt/universal_agent/.uv-cache 2>/dev/null; "
         "echo '--- SAFE one-time reclaim (keeps running services) ---'; "
-        "echo 'sudo docker system prune -f   # dangling images + build cache only'; "
-        "echo 'sudo -u ua /opt/universal_agent/.venv/bin/python -m "
-        "universal_agent.scripts.vp_coder_workspace_pruner   # archive + hard-delete aged mission workspaces'"
+        "echo '# regenerable .venv/__pycache__/node_modules reap (the big lever; "
+        "runs daily, but force now):'; "
+        "echo 'cd /opt/universal_agent && sudo -u ua env "
+        "PYTHONPATH=/opt/universal_agent/src .venv/bin/python -m "
+        "universal_agent.scripts.vp_coder_regenerable_reaper'; "
+        "echo '# whole-dir archival of completed missions (weekly tier):'; "
+        "echo 'cd /opt/universal_agent && sudo -u ua env "
+        "PYTHONPATH=/opt/universal_agent/src .venv/bin/python -m "
+        "universal_agent.scripts.vp_coder_workspace_pruner'; "
+        "echo '# docker dangling (note: on this containerd-snapshotter host "
+        "system/buildx prune often reclaim ~0B — most images are LIVE):'; "
+        "echo 'sudo docker system prune -f'"
     ),
     metadata={
         "design_note": (
@@ -129,15 +150,23 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
             "inference, no subprocess (the du diagnostics live in "
             "runbook_command, off the per-heartbeat path — keeps the probe "
             "~1ms and avoids blocking the heartbeat loop). Severity_override "
-            "lifts to critical above 90% on any mount. 2026-06-25: corrected "
-            "the cleanup guidance AGAIN — DO NOT hardcode point-in-time top "
-            "consumers (the 2026-06-04 'uv cache ~65G' claim went stale; live "
-            "uv caches are now ~0.7G). Live audit: the real consumers are "
-            "Docker+containerd (/var/lib, ~59G, mostly LIVE running containers "
-            "— only ~few GB dangling is reclaimable), AGENT_RUN_WORKSPACES + "
-            "_ARCHIVE (~24G regenerable, daily pruner), and stale /home/ua dev "
-            "worktrees. Recommendation/runbook now name reclaim CATEGORIES + "
-            "commands, not absolute GB; the runbook surfaces live `du -sh`."
+            "lifts to critical above 90% on any mount. "
+            "2026-06-04: previously attributed the growth driver to the uv "
+            "cache (~65G) and dismissed AGENT_RUN_WORKSPACES as ~0.3G "
+            "reapable. 2026-06-25 CORRECTION: that framing was stale and "
+            "actively misled cycles into dismissing real VP-coder bloat. "
+            "Under sustained VP load the per-mission .venv bloat under "
+            "AGENT_RUN_WORKSPACES/vp_coder_primary_external IS a primary "
+            "driver (30G observed, 19.6G regenerable .venv), and the uv "
+            "cache is regularly <1G (remote_deploy.sh prunes it every "
+            "deploy). The durable fix is the daily regenerable-artifact "
+            "reaper (scripts/vp_coder_regenerable_reaper.py) plus the "
+            "weekly whole-dir pruner (scripts/vp_coder_workspace_pruner.py). "
+            "Lesson going forward: name reclaim CATEGORIES + commands, not "
+            "absolute point-in-time GB (those go stale); the runbook surfaces "
+            "live `du -sh`. (Docker/containerd also occupies ~59G on the VPS "
+            "but is mostly LIVE running containers — only a few GB dangling is "
+            "actually reclaimable.)"
         ),
         "thresholds": {
             "warn_pct": WARN_THRESHOLD_PCT,
@@ -200,17 +229,18 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # which go stale (see the 2026-06-25 design_note).
         "message": (
             f"Disk pressure on {len(pressured)} mount(s): {', '.join(mount_names)}. "
-            f"Worst {worst_pct}%. On the prod VPS these mounts are the single "
-            "/dev/sda1 partition. Likely top consumers, largest-reclaim-first: "
-            "(1) Docker/containerd dangling images + build cache "
-            "(`sudo docker system prune -f` — keeps running containers); "
-            "(2) AGENT_RUN_WORKSPACES regenerable build artifacts + the *_ARCHIVE "
-            "tree (reaped daily by universal-agent-vp-coder-workspace-pruning."
-            "service; run now via `sudo -u ua /opt/universal_agent/.venv/bin/"
-            "python -m universal_agent.scripts.vp_coder_workspace_pruner`); "
-            "(3) stale /home/ua dev worktrees (operator judgment). The uv caches "
-            "are tiny now (auto-pruned each deploy) and are NOT the driver. Run "
-            "the runbook for live `du -sh` of actual top consumers."
+            f"Worst {worst_pct}%. Top reclaimable consumers under sustained "
+            "VP-coder load are the per-mission .venv / __pycache__ / "
+            "node_modules trees under "
+            "AGENT_RUN_WORKSPACES/vp_coder_primary_external (the daily "
+            "regenerable-artifact reaper scripts/vp_coder_regenerable_reaper.py "
+            "+ the weekly whole-dir pruner "
+            "scripts/vp_coder_workspace_pruner.py own the durable fix), "
+            "followed by the uv cache (~/.cache/uv + /root/.cache/uv + "
+            "/tmp/uv_cache + <repo>/.uv-cache — auto-pruned each deploy via "
+            "scripts/deploy/remote_deploy.sh, regularly <1G so 'uv cache "
+            "prune' often finds nothing unused). Run the runbook for live "
+            "`du -sh` of actual top consumers."
         ),
         "severity_override": severity,
     }

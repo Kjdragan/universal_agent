@@ -8,6 +8,28 @@ usage creeps up over time (observed: 55 subdirs / 64% disk).
 This script archives any VP-coder workspace older than the
 retention window into a sibling `_archive` directory.  Defaults to
 7 days; override via `UA_VP_CODER_WORKSPACE_RETENTION_HOURS`.
+
+WHY WEEKLY IS STILL ACCEPTABLE (2026-06-25):
+The daily regenerable-artifact reaper
+(`scripts/vp_coder_regenerable_reaper.py`, registered as the
+`vp_coder_workspace_regenerable_reap` cron job) owns the high-frequency
+disk pressure — it removes ``.venv`` / ``__pycache__`` / ``node_modules`` /
+related caches from each mission dir every day, so the 19.6G of
+regenerable bloat observed in the 2026-06-25 incident never rebuilds
+between weekly runs. This weekly job is the SECOND tier: it owns
+WHOLE-DIR archival of fully-completed missions (everything older than
+the retention window moves to ``_archive``, then is hard-deleted after
+2× retention). The two jobs are complementary:
+
+  * daily regenerable reap  -> keeps the active window's disk bounded;
+  * weekly whole-dir prune  -> retires completed missions, bounds the
+                               long-term directory count + non-regenerable
+                               tail (source, logs, manifests).
+
+Running weekly is acceptable BECAUSE the daily reap holds the line on
+the regenerable driver; if the daily reaper is ever disabled
+(``UA_VP_CODER_REGENERABLE_REAP_ENABLED=0``), tighten this cadence to
+daily or address the regression before disk pressure returns.
 """
 
 from __future__ import annotations
