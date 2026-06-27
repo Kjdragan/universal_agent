@@ -241,8 +241,12 @@ async def _enrich_with_llm_agent_routing(
                 project_key=str(item.get("project_key") or ""),
                 available_agents=available_agents,
             )
-        except Exception as exc:
-            logger.warning("LLM agent routing enrichment failed for task %s: %s", item.get("task_id"), exc)
+        except Exception:
+            logger.warning(
+                "LLM agent routing enrichment failed for task %s",
+                item.get("task_id"),
+                exc_info=True,
+            )
             continue
 
         item["_routing"] = {
@@ -662,8 +666,6 @@ class ToDoDispatchService:
                 await asyncio.sleep(5)
 
     async def _process_session(self, session: GatewaySession):
-        import traceback
-
         from universal_agent import task_hub
         from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
         from universal_agent.services.capacity_governor import (
@@ -1056,8 +1058,12 @@ class ToDoDispatchService:
                                                 (json.dumps(metadata), t_id)
                                             )
                                             conn.commit()
-                    except Exception as attach_e:
-                        logger.error("Failed to attach completed workspace link for %s: %s", session.session_id, attach_e)
+                    except Exception:
+                        logger.error(
+                            "Failed to attach completed workspace link for %s",
+                            session.session_id,
+                            exc_info=True,
+                        )
 
                 # ── Stuck-assignment sweep ──────────────────────────
                 # If the agent's run finished but it never called
@@ -1135,8 +1141,11 @@ class ToDoDispatchService:
                 raise RuntimeError("todo dispatch execution callback is not configured")
                 
         except Exception as e:
-            logger.error("Failed to process todo_dispatch for %s: %s", session.session_id, e)
-            logger.error(traceback.format_exc())
+            logger.error(
+                "Failed to process todo_dispatch for %s",
+                session.session_id,
+                exc_info=True,
+            )
             if self.event_callback:
                 self.event_callback({
                     "type": "todo_dispatch_failed",

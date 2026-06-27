@@ -451,3 +451,99 @@ class TestTodoDispatchPromptVerificationBlock:
 
     def test_prompt_uses_task_hub_task_action_tool_name(self):
         assert "task_hub_task_action" in self._prompt()
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Failure-path logging: except blocks must attach the full traceback via
+# `exc_info` rather than string-interpolating only the exception message (or
+# emitting it as a separate `traceback.format_exc()` log line). Regression for
+# the "error messages and logging context in except blocks" cleanup in
+# todo_dispatch_service.py.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_llm_routing_warning_attaches_traceback_via_exc_info(monkeypatch, caplog):
+    """classify_agent_route failure must log a warning whose record carries the
+    full traceback (exc_info), not just the str() of the exception."""
+
+    async def _explode(*_args, **_kwargs):
+        raise RuntimeError("routing-classifier-explode")
+
+    monkeypatch.setattr(
+        "universal_agent.services.llm_classifier.classify_agent_route", _explode
+    )
+
+    item = {
+        "task_id": "email:boom",
+        "title": "Investigate anomaly",
+        "description": "desc",
+        "metadata": {},
+    }
+
+    with caplog.at_level("WARNING", logger="universal_agent.services.todo_dispatch_service"):
+        await _enrich_with_llm_agent_routing([item])
+
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING"
+        and "LLM agent routing enrichment failed" in r.getMessage()
+    ]
+    assert warnings, "expected a routing-enrichment failure warning"
+    rec = warnings[0]
+    assert rec.exc_info is not None, "warning must attach the traceback via exc_info"
+    exc_type, _exc_value, _tb = rec.exc_info
+    assert exc_type is RuntimeError
+
+
+@pytest.mark.asyncio
+async def test_process_session_failure_attaches_traceback_via_exc_info(monkeypatch, caplog):
+    """The top-level _process_session handler must attach the traceback via
+    exc_info and must NOT emit a separate `traceback.format_exc()` log line."""
+
+    conn = _conn()
+    service = ToDoDispatchService(execution_callback=AsyncMock())
+    session = GatewaySession(
+        session_id="daemon_simone_todo_fail",
+        user_id="daemon",
+        workspace_dir="/tmp/daemon_simone_todo_fail",
+        metadata={
+            "source": "daemon",
+            "session_role": "todo_execution",
+            "run_kind": "todo_execution",
+        },
+    )
+
+    monkeypatch.setattr("universal_agent.durable.db.connect_runtime_db", lambda *a, **k: conn)
+    monkeypatch.setattr(
+        "universal_agent.services.capacity_governor.CapacityGovernor.get_instance",
+        lambda: type("Governor", (), {"can_dispatch": staticmethod(lambda: (True, "capacity_available"))})(),
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("dispatch-sweep-explode")
+
+    monkeypatch.setattr("universal_agent.services.dispatch_service.dispatch_sweep", _boom)
+
+    service.register_session(session)
+
+    with caplog.at_level("ERROR", logger="universal_agent.services.todo_dispatch_service"):
+        await service._process_session(session)
+
+    failure_records = [
+        r for r in caplog.records if "Failed to process todo_dispatch" in r.getMessage()
+    ]
+    assert failure_records, "expected a top-level failure log"
+    rec = failure_records[-1]
+    assert rec.exc_info is not None, (
+        "failure log must attach the traceback via exc_info, not a bare message"
+    )
+    exc_type, _exc_value, _tb = rec.exc_info
+    assert exc_type is RuntimeError
+
+    # The manual `logger.error(traceback.format_exc())` line is gone: the
+    # traceback rides on exc_info of the real failure record instead of being
+    # logged as its own multi-line message.
+    assert not any(r.getMessage().startswith("Traceback") for r in caplog.records)
