@@ -18,7 +18,7 @@ code_paths:
   - src/universal_agent/services/invariants/cron_staleness.py
   - src/universal_agent/services/invariants/cron_consecutive_failures.py
   - memory/HEARTBEAT.md
-last_verified: 2026-06-20
+last_verified: 2026-06-27
 ---
 
 # Heartbeat Service
