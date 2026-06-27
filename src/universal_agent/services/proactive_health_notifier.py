@@ -415,10 +415,14 @@ def _llm_lead_enabled() -> bool:
     return _truthy(os.getenv("UA_HEARTBEAT_PROACTIVE_HEALTH_LLM_LEAD"), True)
 
 
-# Haiku-tier ZAI model for the plain-language synthesis — cheap/fast, pinned
-# like proactive_intelligence_report._call_reasoning_llm (glm-4.5-air is the
-# operator-locked haiku tier). Overridable for a quality bump.
-_LEAD_MODEL = os.getenv("UA_PROACTIVE_HEALTH_LEAD_MODEL", "glm-4.5-air")
+# ZAI model for the plain-language synthesis. Default `glm-4.6` (mid-tier, the
+# same model Mission Control runs on) — a deliberate step up from the haiku tier
+# (`glm-4.5-air`) for noticeably better descriptions, while avoiding glm-5-turbo's
+# long-generation stalls and glm-5.2's thinking-token cost (overkill for a short
+# summary). These alerts fire at most once per 6h, so the cost delta is
+# negligible. Override via UA_PROACTIVE_HEALTH_LEAD_MODEL (e.g. `glm-5.2` to push
+# to the flagship).
+_LEAD_MODEL = os.getenv("UA_PROACTIVE_HEALTH_LEAD_MODEL", "glm-4.6")
 
 
 async def _synthesize_plain_lead(
@@ -438,20 +442,25 @@ async def _synthesize_plain_lead(
     """
     if not _llm_lead_enabled() or not criticals:
         return None
-    # Bounded evidence: only the operator-facing fields. Never the raw runbook
-    # (commands) — the LLM lead must stay jargon-free.
+    # Bounded evidence: the operator-facing fields PLUS the seriousness signals
+    # (severity, threshold) so the lead can judge urgency. Never the raw runbook
+    # (commands) — the LLM lead must stay jargon-free. `recommendation` carries
+    # the real root cause / top driver; `operator_summary` is a softer framing,
+    # so the prompt below tells the model to weight `recommendation` for cause.
     evidence = [
         {
             "title": f.get("title"),
+            "severity": f.get("severity"),
+            "recommendation": f.get("recommendation"),
             "operator_summary": (f.get("metadata") or {}).get("operator_summary")
             or f.get("operator_summary"),
-            "recommendation": f.get("recommendation"),
+            "threshold_text": f.get("threshold_text"),
             "observed": f.get("observed_value"),
             "metric_key": f.get("metric_key"),
         }
         for f in criticals
     ]
-    evidence_json = json.dumps(evidence, default=str)[:6000]
+    evidence_json = json.dumps(evidence, default=str)[:8000]
     system = (
         "You are Simone, Kevin's AI chief of staff. Kevin reads this on his "
         "phone and needs to decide, in seconds, whether to hand a production "
@@ -462,6 +471,14 @@ async def _synthesize_plain_lead(
         "- Plain English: what is wrong, how serious, and what it means if "
         "ignored. NO metric_keys, file paths, or shell commands (a percentage "
         "or 'GB free' is fine; a command or path is not).\n"
+        "- NAME THE REAL CAUSE: the `recommendation` field states the actual "
+        "primary driver and the fix — lead with THAT as the cause. Do not "
+        "over-index on `observed` or `operator_summary` mentions of where a "
+        "resource merely sits (e.g. 'mostly in active use') if `recommendation` "
+        "points at a different, actionable driver.\n"
+        "- CONVEY URGENCY honestly from `severity` and how close `observed` is "
+        "to its limit / `threshold_text` — say whether it needs action soon or "
+        "is just worth a look.\n"
         "- Do NOT restate the action options (handing off / acknowledging) — "
         "the email adds those separately.\n"
         "- GROUNDING (strict): every claim must be derivable from the JSON. Do "
