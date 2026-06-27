@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Master Evaluator / Improver — Design Brief</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#fff; --ink:#1b2230; --muted:#5a6678; --line:#e3e7ee;
+    --auto:#2563eb; --self:#0f9d58; --conv:#9333ea; --fan:#e8590c; --warn:#c2410c;
+    --master:#0d9488;
+    --auto-bg:#eaf1ff; --self-bg:#e7f6ec; --conv-bg:#f4ebfe; --fan-bg:#fdeee2;
+    --shadow:0 1px 2px rgba(20,30,50,.06),0 6px 20px rgba(20,30,50,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 22px 80px;}
+  h1{font-size:30px;line-height:1.18;margin:0 0 8px;letter-spacing:-.02em;}
+  .sub{color:var(--muted);margin:0;font-size:16.5px;}
+  .stamp{color:var(--muted);font-size:13px;margin-top:10px;}
+  h2{font-size:22px;margin:50px 0 6px;letter-spacing:-.01em;border-top:1px solid var(--line);padding-top:30px;}
+  h2 .n{display:inline-block;width:30px;height:30px;line-height:30px;text-align:center;border-radius:8px;
+     background:var(--master);color:#fff;font-size:15px;margin-right:10px;vertical-align:2px}
+  h3{font-size:17px;margin:26px 0 10px;}
+  p{margin:0 0 14px;} ul{margin:0 0 14px;padding-left:22px} li{margin:6px 0}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.88em;
+    background:#eef1f6;padding:1px 6px;border-radius:5px;}
+  b{font-weight:700}
+
+  .purpose{background:linear-gradient(180deg,#f0fdfa,#fff);border:1px solid #b9e6df;
+    border-left:5px solid var(--master);border-radius:14px;padding:20px 24px;box-shadow:var(--shadow);}
+  .purpose .tag{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--master);margin:0 0 8px}
+  .purpose h2{border:none;padding:0;margin:0 0 10px;font-size:21px}
+  .purpose p{font-size:16.5px;color:#26433f;margin:0 0 12px}
+  .purpose p:last-child{margin-bottom:0}
+  .purpose b{color:#0b3b36}
+
+  .toc{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0 0}
+  .toc a{font-size:13px;text-decoration:none;color:#3a4a66;background:var(--card);border:1px solid var(--line);
+    border-radius:999px;padding:5px 12px}
+  .toc a:hover{border-color:var(--master);color:var(--master)}
+
+  /* repo cards */
+  .grid4{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin:8px 0}
+  @media(max-width:680px){.grid4{grid-template-columns:1fr}}
+  .rc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+    box-shadow:var(--shadow);border-top:4px solid var(--ink)}
+  .rc.auto{border-top-color:var(--auto)} .rc.self{border-top-color:var(--self)}
+  .rc.conv{border-top-color:var(--conv)} .rc.fan{border-top-color:var(--fan)}
+  .rc h4{margin:0 0 2px;font-size:15.5px}
+  .rc .cmd{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--muted);display:block;margin-bottom:8px}
+  .rc p{margin:0;font-size:13.8px;color:#3d4a63}
+  .rc .role{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:6px;color:#fff;margin-bottom:7px}
+  .role.auto{background:var(--auto)}.role.self{background:var(--self)}.role.conv{background:var(--conv)}.role.fan{background:var(--fan)}
+
+  pre{background:#0f1626;color:#e7edf8;border-radius:12px;padding:16px 18px;overflow:auto;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.7px;line-height:1.55;box-shadow:var(--shadow)}
+  pre .c{color:#8aa0c4} pre .k{color:#7fd1b9} pre .o{color:#f0a868} pre .r{color:#f08aa0}
+
+  .tiers{display:grid;gap:11px;margin:6px 0}
+  .tier{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 17px;
+    box-shadow:var(--shadow);border-left:5px solid var(--line)}
+  .tier.t0{border-left-color:var(--self)} .tier.t1{border-left-color:var(--conv)} .tier.t2{border-left-color:var(--fan)}
+  .tier h4{margin:0 0 4px;font-size:15px} .tier .tag{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .tier p{margin:5px 0 0;font-size:14px;color:#3d4a63}
+
+  .principle{background:#101727;color:#eef2fb;border-radius:14px;padding:18px 22px;margin:14px 0;box-shadow:var(--shadow)}
+  .principle h3{color:#fff;margin:0 0 8px;font-size:18px}
+  .principle p{color:#c9d3e6;margin:0;font-size:15.5px} .principle b{color:#fff}
+
+  /* router decision boxes */
+  .router{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow);margin:8px 0}
+  .q{font-weight:700;margin:0 0 10px}
+  .branch{display:grid;grid-template-columns:1fr 1fr 1fr;gap:11px}
+  @media(max-width:760px){.branch{grid-template-columns:1fr}}
+  .opt{border:1px solid var(--line);border-radius:11px;padding:12px 14px;background:#fafbfe}
+  .opt .cond{font-size:13px;color:var(--muted);font-weight:600}
+  .opt .then{font-size:14.5px;margin-top:5px;font-weight:700}
+  .opt.det{border-top:3px solid var(--self)} .opt.scal{border-top:3px solid var(--auto)} .opt.subj{border-top:3px solid var(--fan)}
+  .opt small{display:block;color:#48556e;font-size:12.6px;margin-top:5px;font-weight:400}
+
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;box-shadow:var(--shadow);font-size:13.8px;margin:8px 0}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#eef2f8;font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:#46526a}
+  tr:last-child td{border-bottom:none}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .dot.auto{background:var(--auto)}.dot.self{background:var(--self)}.dot.conv{background:var(--conv)}.dot.fan{background:var(--fan)}
+
+  .flow{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow);margin:8px 0}
+  .flow .stage{display:flex;align-items:center;gap:10px;margin:0 0 8px;flex-wrap:wrap}
+  .node{border-radius:9px;padding:7px 12px;font-size:13px;font-weight:600;border:1px solid var(--line);background:#f6f8fc}
+  .node.fan{background:var(--fan-bg);border-color:#f6d2b8;color:#9a3a05}
+  .node.auto{background:var(--auto-bg);border-color:#cfe0ff;color:#1a47b8}
+  .node.self{background:var(--self-bg);border-color:#bfe6cd;color:#0a6e3f}
+  .node.gate{background:var(--conv-bg);border-color:#e2cdf8;color:#6b21a8}
+  .node.master{background:#ccfbf1;border-color:#99e6da;color:#0a5b53}
+  .arr{color:var(--muted);font-weight:700}
+  .seam{background:#fff7ed;border:1px solid #f6d2b0;border-left:4px solid var(--warn);border-radius:12px;padding:14px 18px;margin:14px 0}
+  .seam b{color:var(--warn)}
+  .key{display:inline-block;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;margin-right:3px;color:#fff}
+  .key.auto{background:var(--auto)}.key.self{background:var(--self)}.key.conv{background:var(--conv)}.key.fan{background:var(--fan)}
+  .foot{color:var(--muted);font-size:13px;margin-top:46px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Master Evaluator / Improver — Design Brief</h1>
+<p class="sub">A single skill that judges, gates, and improves the interim steps of a long-running process — auto-selecting a deterministic or non-deterministic path. Built by composing four existing loop skills.</p>
+<p class="stamp">Self-contained handoff for an AI coder · grounded in four shipped repos · 2026-06-26</p>
+
+<div class="purpose" id="purpose">
+  <p class="tag">Why we're building this — the purpose</p>
+  <h2>One master skill for "generate → evaluate → gate → improve"</h2>
+  <p>We want a <b>single master evaluator/improver skill</b> that, given any step in a longer flow, figures out <i>how</i> that step should be judged and drives it to a passing state. Rather than a human hand-picking which loop to use, <b>the skill itself decides the path</b> — deterministic (a runnable pass/fail check) or non-deterministic (a subjective judgment) — and runs the right kind of evaluation/improvement.</p>
+  <p>Its core job is to <b>facilitate long-running code or processes that move through interim, gated checkpoints.</b> Each interim step must pass its evaluation — deterministic or not — before the flow proceeds; or, when we simply want a step <i>better</i> before moving on, it improves it in place. It's the judging/gating layer inside a generator → evaluator → improver loop.</p>
+  <p>The ordering is the point. <b>Try to pass the gate as cheaply as possible first; only escalate into optimization when the gate fails — then retry the gate.</b> Improvement is the expensive fallback, never the default. That efficiency ordering is a first-class part of the design.</p>
+</div>
+
+<div class="toc">
+  <a href="#blocks">1 · Building blocks</a>
+  <a href="#method">2 · The methodology</a>
+  <a href="#router">3 · Path routing</a>
+  <a href="#nondet">4 · Non-deterministic eval</a>
+  <a href="#loop">5 · The master loop</a>
+  <a href="#limits">6 · Honest limits</a>
+</div>
+
+<!-- 1 -->
+<h2 id="blocks"><span class="n">1</span>The building blocks — four existing loop skills</h2>
+<p>The master skill does not reinvent anything; it <b>routes among and composes four loops that already exist as standalone skills/repos.</b> Three are the same shape (iterate one artifact against one judge until it converges) and differ only in the judge; the fourth is a parallel primitive.</p>
+<div class="grid4">
+  <div class="rc auto">
+    <span class="role auto">Optimizer</span>
+    <h4>autoresearch-loop</h4><span class="cmd">/dragan:autoresearch-loop · demo-autoresearch-engine</span>
+    <p>Self-driving hill-climb (port of karpathy/autoresearch). One artifact, one <b>comparable scalar</b> evaluator, a proposer. Loop: propose → apply → score → <b>keep-if-better / revert-if-worse</b> → log to <code>results.tsv</code> → repeat until the score plateaus. Use when "better vs worse" is a <b>number</b>.</p>
+  </div>
+  <div class="rc self">
+    <span class="role self">Verifier</span>
+    <h4>self-correcting-loop</h4><span class="cmd">/dragan:self-correcting-loop · demo-self-correcting-loop</span>
+    <p>"Loops, not prompts." Generate → run a <b>real, executable rubric</b> (pytest, schema, compiler, linter) → on failure feed the <i>actual</i> error back and revise → repeat until it passes or a round cap. The rubric is ground truth and hidden from the generator. Use when correctness is <b>pass/fail</b>.</p>
+  </div>
+  <div class="rc conv">
+    <span class="role conv">Composition</span>
+    <h4>convergence-pipeline</h4><span class="cmd">/dragan:convergence-pipeline · demo-optimize-then-verify</span>
+    <p>Chains the two (genuine reuse, not reimplemented). <b>Stage 1</b> hill-climbs a draft toward a scalar; <b>Stage 2</b> seeds the repair loop with that winner and fixes it against an executable rubric until it passes. Use when a task has <b>both</b> a soft metric and a hard check.</p>
+  </div>
+  <div class="rc fan">
+    <span class="role fan">Parallelism</span>
+    <h4>subagent-orchestration</h4><span class="cmd">/dragan:subagent-orchestration · demo-subagent-orchestration</span>
+    <p>Claude Agent SDK fan-out → fan-in. Declares <b>named subagents in code</b>, dispatches N <b>in parallel</b> (each its own context window), then a synthesizer merges. Carries four traps (recursion isolation, decoupled write, auth routing, proof-of-fan-out). The parallel primitive — for breadth and, crucially, <b>as a judge panel</b> (§4).</p>
+  </div>
+</div>
+
+<!-- 2 -->
+<h2 id="method"><span class="n">2</span>The methodology — gate-pass first, optimize-on-fail</h2>
+
+<div class="principle">
+  <h3>The efficiency ordering (the core rule)</h3>
+  <p><b>Don't optimize what already passes.</b> Run the gate first. If it passes, proceed. Only when it fails do you spend tokens on improvement — and you escalate in cost-ordered tiers, retrying the gate after each. Breadth (parallel fan-out) is the last resort, not the first.</p>
+</div>
+
+<h3>One fact that shapes the design: what the optimizer does with "many facets"</h3>
+<p>The autoresearch engine optimizes <b>one artifact against one scalar</b>, walking the knobs by <b>coordinate descent</b> (one knob/step, keep-if-the-global-score-improved). A multi-knob config is already a many-facet search, and the single global score <b>sees the interactions</b> between knobs — coupled facets are handled correctly, just sequentially. So you only reach for parallel fan-out when facets are genuinely <b>separable</b> (own artifact + own score) or to run <b>parallel restarts</b> of the same loop to escape local optima — not as a generic "make it more optimized" knob.</p>
+
+<h3>The escalation ladder</h3>
+<p>Note that <code>convergence-pipeline</code> already <i>is</i> <code>self-correcting-loop</code> with an optimize stage in front — so escalating from #2 to #3 isn't a second repair pass; it's giving the repairer a <b>stronger starting draft</b>.</p>
+<div class="tiers">
+  <div class="tier t0"><span class="tag">Gate first · free-ish</span><h4>Run the gate</h4><p>Generate the step, run its evaluation. Pass → proceed immediately. No optimization spent.</p></div>
+  <div class="tier t0"><span class="tag">Tier 0 · cheapest repair</span><h4>self-correcting-loop alone</h4><p>Gate failed: repair against the (deterministic or judge) gate for K rounds, conditioned on the real failure.</p></div>
+  <div class="tier t1"><span class="tag">Tier 1 · draft too weak</span><h4>convergence-pipeline</h4><p>Repair stalled: optimize a better draft toward the soft metric first, then re-verify the hard gate.</p></div>
+  <div class="tier t2"><span class="tag">Tier 2 · stuck or big/separable</span><h4>subagent-orchestration wraps Tier 1, N-wide</h4><p>Separable → one pipeline per facet. Coupled → parallel restarts. Merge, then <b>re-verify the merged result</b>, and keep the branch that converges.</p></div>
+</div>
+
+<div class="seam">
+  <b>The merge is the dangerous step.</b> When you fan optimization across facets and recombine, a slightly-coupled merge can score <i>worse</i> than any branch or fail a gate none failed alone — a naive fan-in manufactures regressions. That's why the executable verify runs <b>last, on the merged artifact</b>, and a failed verify <b>loops back</b> into another fan-out with the real failure fed in. This is what makes "keep working until the gate passes" real.</p>
+</div>
+
+<!-- 3 -->
+<h2 id="router"><span class="n">3</span>Path routing — deterministic vs non-deterministic</h2>
+<p>This is the master skill's distinguishing job: <b>before evaluating, classify the gate.</b> Given the step's acceptance criterion, the router asks two questions and picks an evaluator. (It can detect this from the criterion itself — is a runnable command supplied? is there a numeric target? is the goal prose-quality?)</p>
+
+<div class="router">
+  <p class="q">Q1 · Is there a runnable check that returns pass/fail (tests, schema, compiler, linter, assertion)?</p>
+  <div class="branch">
+    <div class="opt det"><div class="cond">YES — and that's the whole bar</div><div class="then"><span class="dot self"></span>Deterministic path</div><small>Gate = run the check. Repair with <b>self-correcting-loop</b>. Ground truth is the check.</small></div>
+    <div class="opt scal"><div class="cond">NO check, but there's a comparable number to push (coverage, latency, robustness %)</div><div class="then"><span class="dot auto"></span>Scalar path</div><small>Gate = score ≥ threshold. Improve with <b>autoresearch-loop</b> hill-climb.</small></div>
+    <div class="opt subj"><div class="cond">NO check and NO clean scalar — quality is subjective</div><div class="then"><span class="dot fan"></span>Non-deterministic path</div><small>Gate = a <b>judge panel</b> verdict (§4). Improve via judge-guided hill-climb.</small></div>
+  </div>
+  <p class="q" style="margin-top:16px">Q2 · Are there <i>both</i> hard constraints AND soft quality? (e.g. must compile + must be readable; must include facts + must be persuasive)</p>
+  <div class="branch" style="grid-template-columns:1fr">
+    <div class="opt" style="border-top:3px solid var(--conv)"><div class="cond">YES — hybrid</div><div class="then"><span class="dot conv"></span>Hybrid path → <b>convergence-pipeline</b> shape</div><small>Optimize the <b>soft</b> objective (scalar or judge panel) first, then run the <b>deterministic</b> rubric on the hard constraints as the final word. The hard gate is always authoritative.</small></div>
+  </div>
+</div>
+
+<table>
+  <thead><tr><th>Gate signal</th><th>Path</th><th>Evaluator</th><th>Improver when it fails</th><th>"Done" =</th></tr></thead>
+  <tbody>
+    <tr><td>Runnable pass/fail</td><td><span class="dot self"></span>Deterministic</td><td>execute the check</td><td>self-correcting-loop</td><td>check passes</td></tr>
+    <tr><td>Comparable scalar</td><td><span class="dot auto"></span>Scalar</td><td>deterministic scorer</td><td>autoresearch-loop</td><td>score ≥ threshold / plateau</td></tr>
+    <tr><td>Subjective quality</td><td><span class="dot fan"></span>Non-deterministic</td><td>judge panel (fan-out)</td><td>judge-guided hill-climb</td><td>panel clears the bar</td></tr>
+    <tr><td>Hard + soft</td><td><span class="dot conv"></span>Hybrid</td><td>both, in order</td><td>convergence-pipeline</td><td>soft optimized → hard gate passes</td></tr>
+  </tbody>
+</table>
+
+<!-- 4 -->
+<h2 id="nondet"><span class="n">4</span>The non-deterministic path — turning a noisy judge into a trustworthy gate</h2>
+<p>The loops assume a <b>deterministic, comparable</b> signal. A subjective goal ("more persuasive", "higher answer quality", "better design") has neither a runnable check nor a clean scalar. The good news: <b>only the evaluator changes</b> — the loop machinery (keep/revert, ledger, round cap, proposer) is already fine, and the LLM proposer is <i>supposed</i> to be non-deterministic.</p>
+
+<h3>The core problem</h3>
+<p>Swap in an <b>LLM-as-judge</b> and you inherit three failure modes: it scores the <b>same artifact differently</b> across runs (variance); the proposer learns to <b>flatter the judge</b> (reward hacking); and there's <b>no absolute ground truth</b>. Keep/revert needs a trustworthy comparison — so every fix below makes the judge stable enough to gate on.</p>
+
+<table>
+  <thead><tr><th>Adaptation</th><th>What it does</th><th>Why it works</th></tr></thead>
+  <tbody>
+    <tr><td><b>1 · Pairwise, not absolute</b></td><td>Ask "is B better than current-best A?" not "score B 0–10".</td><td>LLM judges are far more reliable head-to-head. Maps directly onto autoresearch keep/revert.</td></tr>
+    <tr><td><b>2 · Judge panel = use #4 as the evaluator</b></td><td>Fan the <i>evaluation</i> out to N independent judges (different lenses/rubrics), aggregate by vote/median.</td><td>The elegant combination: <code>subagent-orchestration</code> becomes the variance-reduction layer. An ensemble cuts judge noise.</td></tr>
+    <tr><td><b>3 · Variance-aware keep/revert</b></td><td>Keep only if the panel prefers B by more than the judge's measured <b>noise floor</b> (re-judge the same pair to estimate it).</td><td>Stops the loop "accepting" changes inside the judge's own jitter — the #1 way a subjective hill-climb drifts forever.</td></tr>
+    <tr><td><b>4 · Rubric decomposition</b></td><td>Split "quality" into sub-criteria (clarity, accuracy, completeness, tone); score each; aggregate.</td><td>Several narrow judgments are more stable <i>and</i> more auditable than one holistic number.</td></tr>
+  </tbody>
+</table>
+
+<h3>Guards against hill-climbing the judge's biases</h3>
+<ul>
+  <li><b>Hold-out / rotating judges.</b> Optimize against one judge framing; <i>accept</i> with a different one. A train/val split for subjectivity.</li>
+  <li><b>Anchor on whatever <i>is</i> deterministic.</b> Even subjective artifacts usually have hard constraints (length, required facts, valid format, banned claims). Gate those deterministically (the hybrid path); judge only the soft remainder.</li>
+  <li><b>Human-in-the-loop as periodic ground truth.</b> Without an objective signal you only ever reach "judged to pass," never "proven." An occasional human spot-check on the ledger recalibrates the judge and catches drift cheaply — a natural fit for the interim-gate checkpoints.</li>
+</ul>
+
+<!-- 5 -->
+<h2 id="loop"><span class="n">5</span>The master loop — facilitating a long-running, interim-gated flow</h2>
+<p>This is how the skill plugs into a generator/evaluator/improver process. For each interim step of the larger flow, it routes, gates cheaply, escalates only on failure, records the decision, and proceeds. It supports both modes you described: <b>gate-to-proceed</b> (the step must pass) and <b>polish-before-proceed</b> (improve a step we simply want better).</p>
+<div class="flow">
+  <div class="stage"><span class="node master">for each interim step</span><span class="arr">→</span><span class="node">generate candidate</span><span class="arr">→</span><span class="node gate">route the evaluator (§3)</span><span class="arr">→</span><span class="node gate">run the gate</span></div>
+  <div class="stage" style="margin-left:8px"><span class="arr">pass →</span><span class="node master">record · proceed to next step</span></div>
+  <div class="stage" style="margin-left:8px"><span class="arr">fail →</span><span class="node self">Tier 0 repair</span><span class="arr">→</span><span class="node conv">Tier 1 optimize+verify</span><span class="arr">→</span><span class="node fan">Tier 2 fan-out+merge+verify</span><span class="arr">→ re-gate</span></div>
+</div>
+
+<pre><span class="c"># Master Evaluator/Improver — pseudocode (composes the four loop skills)</span>
+<span class="k">def</span> run_step(step, mode=<span class="o">"gate"</span>):              <span class="c"># mode: "gate" (must pass) | "polish" (improve then confirm)</span>
+    candidate = generate(step)
+    path, gate, scorer = <span class="k">route</span>(step.criterion)   <span class="c"># §3: deterministic | scalar | subjective | hybrid</span>
+
+    <span class="c"># --- efficiency ordering: try to pass before improving ---</span>
+    <span class="k">if</span> gate(candidate).passed <span class="k">and</span> mode == <span class="o">"gate"</span>:
+        <span class="k">return</span> record(step, candidate, <span class="o">"passed-first-try"</span>)
+
+    <span class="c"># --- escalate in cost-ordered tiers, re-gating after each ---</span>
+    <span class="k">for</span> tier <span class="k">in</span> [
+        <span class="k">lambda</span> c: self_correcting_loop(c, gate),                     <span class="c"># Tier 0  (#2)</span>
+        <span class="k">lambda</span> c: convergence_pipeline(c, scorer, gate),             <span class="c"># Tier 1  (#1→#2 via #3)</span>
+        <span class="k">lambda</span> c: fanout_then_merge_then_verify(c, scorer, gate),    <span class="c"># Tier 2  (#4 wraps #3)</span>
+    ]:
+        candidate = tier(candidate)
+        <span class="k">if</span> gate(candidate).passed:
+            <span class="k">return</span> record(step, candidate, <span class="o">"converged"</span>)
+
+    <span class="k">return</span> record(step, candidate, <span class="r">"unconverged"</span>, escalate_to_human=<span class="k">True</span>)
+
+<span class="c"># subjective gate() is a judge PANEL (§4): pairwise vs best, N judges, keep only past the noise floor.</span>
+<span class="c"># hybrid: scorer optimizes the soft objective; gate() is always the deterministic hard check.</span>
+<span class="c"># every step appends to a ledger — the audit trail of interim gate decisions for the whole run.</span></pre>
+
+<p style="margin-top:6px"><span class="key auto">#1</span> the loop + ledger &nbsp; <span class="key self">#2</span> the deterministic gate/repair &nbsp; <span class="key conv">#3</span> the optimize-then-verify frame &nbsp; <span class="key fan">#4</span> breadth <i>and</i> the judge panel. The master skill is the <b>router + tier-escalator + ledger</b> around them.</p>
+
+<!-- 6 -->
+<h2 id="limits"><span class="n">6</span>Honest limits</h2>
+<ul>
+  <li><b>Cost.</b> A judge panel multiplies eval cost by panel size every iteration; Tier 2 multiplies by N. The gate-first ordering exists precisely to avoid paying this when a step already passes. Pairwise (vs current-best only) keeps judging O(1) per step.</li>
+  <li><b>Fuzzy convergence on the subjective path.</b> "Stops improving" becomes "the panel stops preferring new candidates" — needs a noise-tolerant plateau and patience, or it chases jitter.</li>
+  <li><b>Preference, not proof.</b> The subjective ceiling is "the panel and the rubric agree it's better." Where being wrong is expensive, keep a deterministic verify as the final word and a human on the recalibration loop.</li>
+  <li><b>Routing can misclassify.</b> If the router picks "subjective" when a cheap deterministic check existed, it burns tokens; prefer the most deterministic path the criterion supports, and let the criterion <i>declare</i> its check when it has one.</li>
+</ul>
+
+<p class="foot">Status: this is a <b>design brief / proposed methodology</b>, not yet a built skill. The four building-block loops are shipped and runnable today (<code>/dragan:autoresearch-loop</code>, <code>/dragan:self-correcting-loop</code>, <code>/dragan:convergence-pipeline</code>, <code>/dragan:subagent-orchestration</code>); the master router + tier-escalator + ledger described here is the next thing to build. Working name for the master skill: <b>converge-gate</b> (rename at will).</p>
+</div>
+</body>
+</html>
