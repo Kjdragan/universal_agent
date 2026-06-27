@@ -53,6 +53,13 @@ class Invariant:
     severity: str  # "warn" or "critical"
     probe: ProbeFn
     runbook_command: str = ""
+    # Plain-English, operator-facing one/two-liner: WHAT is wrong and WHAT the
+    # operator can do about it, with no paths/metric_keys/commands. The email
+    # digest leads with this so the operator can decide whether to hand the
+    # finding to Claude (the technical detail follows below). A probe may return
+    # a dynamic `operator_summary` (with live numbers) to override this static
+    # default per-finding; an empty value falls back to the recommendation.
+    operator_summary: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -81,6 +88,7 @@ def invariant(
     description: str,
     severity: str = "warn",
     runbook_command: str = "",
+    operator_summary: str = "",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Callable[[ProbeFn], ProbeFn]:
     """Decorator form of register_invariant.
@@ -102,6 +110,7 @@ def invariant(
                 severity=severity,
                 probe=probe,
                 runbook_command=runbook_command,
+                operator_summary=operator_summary,
                 metadata=dict(metadata or {}),
             )
         )
@@ -130,6 +139,15 @@ def _build_finding(
     extra_metadata = dict(inv.metadata)
     extra_metadata.update(result.get("metadata") or {})
     extra_metadata["invariant_id"] = inv.id
+    # Operator-facing plain-language lead for the digest email. A probe may
+    # return a dynamic `operator_summary` (live numbers); otherwise fall back
+    # to the decorator's static default. Carried via metadata (survives the
+    # snapshot JSON round-trip; no HeartbeatFinding schema change needed).
+    operator_summary = str(
+        result.get("operator_summary") or inv.operator_summary or ""
+    ).strip()
+    if operator_summary:
+        extra_metadata["operator_summary"] = operator_summary
     # P4 (2026-05-20): allow a probe to override the declared severity
     # per-finding (e.g. zai_inference_health declares critical for the
     # FUP / sustained-429 cases but downgrades to warn when only the

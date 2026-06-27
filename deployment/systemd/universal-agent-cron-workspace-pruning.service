@@ -1,0 +1,32 @@
+[Unit]
+Description=Universal Agent cron_* workspace pruning (reclaim aged attempts/ + work_products/ inside persistent cron workspaces)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# FS-only job (iterate + unlink/rmtree) with NO Infisical-resolved secrets; it
+# reads only the plain config knobs UA_CRON_WORKSPACE_RETENTION_HOURS /
+# UA_CRON_WORKSPACE_PRUNE_DRY_RUN / UA_CRON_WORKSPACES_ROOT (all
+# env-with-code-default, supplied by .env if set). Mirrors
+# universal-agent-vp-coder-workspace-pruning for unit uniformity.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# Hard-deletes aged per-run entries (attempts/ + work_products/) inside
+# persistent cron_* workspaces. Never deletes a persistent cron_* workspace dir
+# itself, its containers, or root bookkeeping; preserves the newest attempt +
+# any manifest canonical/latest attempt. Flip UA_CRON_WORKSPACE_PRUNE_DRY_RUN=1
+# in .env to log-only on first deploy. Always exits 0.
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.cron_workspace_pruner
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

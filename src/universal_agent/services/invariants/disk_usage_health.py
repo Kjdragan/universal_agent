@@ -102,22 +102,46 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
         "and climbing — proactive coverage before disk-full becomes outage."
     ),
     severity="warn",
+    # Plain-English static fallback (the probe returns a dynamic one with live
+    # numbers; this is belt-and-suspenders). No paths/commands — that's what the
+    # technical recommendation/runbook below are for.
+    operator_summary=(
+        "The production server is running low on disk space. Nothing is broken "
+        "yet, but if a disk fills completely the agent services start failing. "
+        "The fix is to reclaim space — mostly build caches, old per-mission "
+        "workspaces, and dangling Docker layers."
+    ),
     runbook_command=(
         "df -h; "
-        "echo '--- uv caches (top reclaimable consumer; auto-pruned each deploy) ---'; "
-        "sudo du -sh /home/ua/.cache/uv /root/.cache/uv /tmp/uv_cache "
-        "/opt/universal_agent/.uv-cache 2>/dev/null; "
-        "echo '--- AGENT_RUN_WORKSPACES total + largest subdirs ---'; "
-        "sudo du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES 2>/dev/null; "
+        "echo '--- Docker/containerd (often the biggest consumer; only the "
+        "dangling/build-cache part is reclaimable, ~few GB) ---'; "
+        "sudo docker system df 2>/dev/null; "
+        "sudo du -sh /var/lib/docker /var/lib/containerd 2>/dev/null; "
+        "echo '--- AGENT_RUN_WORKSPACES + ARCHIVE (regenerable; daily pruner) ---'; "
+        "sudo du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES "
+        "/opt/universal_agent/AGENT_RUN_WORKSPACES_ARCHIVE 2>/dev/null; "
         "sudo du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES/*/ 2>/dev/null | sort -rh | head -10; "
+        "echo '--- /home/ua (stale dev worktrees — operator judgment) ---'; "
+        "sudo du -sh /home/ua/* 2>/dev/null | sort -rh | head -10; "
         "echo '--- largest DB files ---'; "
         "sudo ls -laSh /opt/universal_agent/*.db /opt/universal_agent/AGENT_RUN_WORKSPACES/*.db "
         "/var/lib/universal-agent/csi/*.db 2>/dev/null | head -10; "
-        "echo '--- manual one-time uv prune (if no deploy is imminent) ---'; "
-        "echo 'sudo -H -u ua uv cache prune --ci --force; "
-        "sudo -H -u ua env UV_CACHE_DIR=/tmp/uv_cache uv cache prune --ci --force; "
-        "sudo -H -u ua env UV_CACHE_DIR=/opt/universal_agent/.uv-cache uv cache prune --ci --force; "
-        "sudo -H env HOME=/root /root/.local/bin/uv cache prune --ci --force'"
+        "echo '--- uv caches (tiny now; auto-pruned each deploy) ---'; "
+        "sudo du -sh /home/ua/.cache/uv /root/.cache/uv /tmp/uv_cache "
+        "/opt/universal_agent/.uv-cache 2>/dev/null; "
+        "echo '--- SAFE one-time reclaim (keeps running services) ---'; "
+        "echo '# regenerable .venv/__pycache__/node_modules reap (the big lever; "
+        "runs daily, but force now):'; "
+        "echo 'cd /opt/universal_agent && sudo -u ua env "
+        "PYTHONPATH=/opt/universal_agent/src .venv/bin/python -m "
+        "universal_agent.scripts.vp_coder_regenerable_reaper'; "
+        "echo '# whole-dir archival of completed missions (weekly tier):'; "
+        "echo 'cd /opt/universal_agent && sudo -u ua env "
+        "PYTHONPATH=/opt/universal_agent/src .venv/bin/python -m "
+        "universal_agent.scripts.vp_coder_workspace_pruner'; "
+        "echo '# docker dangling (note: on this containerd-snapshotter host "
+        "system/buildx prune often reclaim ~0B — most images are LIVE):'; "
+        "echo 'sudo docker system prune -f'"
     ),
     metadata={
         "design_note": (
@@ -137,7 +161,12 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
             "cache is regularly <1G (remote_deploy.sh prunes it every "
             "deploy). The durable fix is the daily regenerable-artifact "
             "reaper (scripts/vp_coder_regenerable_reaper.py) plus the "
-            "weekly whole-dir pruner (scripts/vp_coder_workspace_pruner.py)."
+            "weekly whole-dir pruner (scripts/vp_coder_workspace_pruner.py). "
+            "Lesson going forward: name reclaim CATEGORIES + commands, not "
+            "absolute point-in-time GB (those go stale); the runbook surfaces "
+            "live `du -sh`. (Docker/containerd also occupies ~59G on the VPS "
+            "but is mostly LIVE running containers — only a few GB dangling is "
+            "actually reclaimable.)"
         ),
         "thresholds": {
             "warn_pct": WARN_THRESHOLD_PCT,
@@ -175,6 +204,7 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     severity = "critical" if worst_pct > CRITICAL_THRESHOLD_PCT else "warn"
 
     mount_names = sorted(m["mount"] for m in pressured)
+    worst_free_gb = min((m["free_gb"] for m in pressured), default=0.0)
     return {
         "observed_value": {
             "pressured_mounts": pressured,
@@ -185,6 +215,18 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"every monitored mount used_pct ≤ {WARN_THRESHOLD_PCT}% "
             f"(critical above {CRITICAL_THRESHOLD_PCT}%)"
         ),
+        # Plain-English lead with LIVE numbers (the email leads with this).
+        "operator_summary": (
+            f"The production server's disk is {worst_pct:.0f}% full "
+            f"(about {worst_free_gb:.0f} GB free) and slowly filling up. Nothing "
+            "is broken yet, but if it reaches ~100% the agent services start "
+            "failing. Most of the space is in active use (Docker images + running "
+            "containers); the safely reclaimable part is build caches, old "
+            "per-mission workspaces, and dangling Docker layers."
+        ),
+        # Technical recommendation (for Claude / handoff). Names reclaim
+        # CATEGORIES + commands, largest-first — NOT point-in-time GB figures,
+        # which go stale (see the 2026-06-25 design_note).
         "message": (
             f"Disk pressure on {len(pressured)} mount(s): {', '.join(mount_names)}. "
             f"Worst {worst_pct}%. Top reclaimable consumers under sustained "

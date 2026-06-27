@@ -2,8 +2,13 @@
 
 > Durable, dated copy of every artifact published to the tailnet scratchpad.
 > Newest first. Auto-generated from `index.jsonl` — do not edit by hand.
-> 9 artifact(s) archived.
+> 11 artifact(s) archived.
 
+
+## 2026-06-26
+
+- **20:33:51** — [Chaining the Loops + Non-Deterministic Adaptation](2026-06-26/203351__chaining-nondeterministic-analysis__chaining-and-nondeterministic.html) · slug `chaining-nondeterministic-analysis` · [live](https://uaonvps.taildcc090.ts.net/scratch/chaining-nondeterministic-analysis/chaining-and-nondeterministic.html)
+- **20:33:40** — [Four Demos — Convergence & Orchestration Field Guide](2026-06-26/203340__four-demos-field-guide__four-demos-field-guide.html) · slug `four-demos-field-guide` · [live](https://uaonvps.taildcc090.ts.net/scratch/four-demos-field-guide/four-demos-field-guide.html)
 
 ## 2026-06-23
 

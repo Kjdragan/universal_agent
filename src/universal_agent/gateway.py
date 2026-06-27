@@ -1520,6 +1520,45 @@ class InProcessGateway(Gateway):
         # detector (cron_service._is_llm_deploy_kill_result) can recognise a
         # mid-flight kill that produced non-empty text + tool_calls.
         subprocess_terminated = False
+        # Bind the per-request runtime context (run_kind / source / job_id /
+        # workspace) so in-process internal MCP tools — notably the
+        # ``mcp__internal__agentmail_send_with_local_attachments`` delivery
+        # recorder in ``local_toolkit_bridge`` — and the PostToolUse
+        # email-tracking hook can resolve the cron/heartbeat/VP context via
+        # ``get_request_runtime()``. The interactive chat gateway binds this
+        # in ``gateway_server._run``; the in-process path (cron LLM runs,
+        # heartbeats, VP dispatches) was missing it, so ``get_request_runtime()``
+        # returned None inside the tool and the cron self-send delivery row
+        # never landed in ``proactive_artifact_emails`` — leaving the
+        # ``paper_to_podcast_email_delivery`` watchdog to fire a recurring
+        # false 'no email in 30h' critical on a podcast Kevin actually
+        # received (verified Amazon SES message_id, 2026-06-26 run). See
+        # tests/unit/test_cron_self_send_delivery_tracking.py.
+        from universal_agent.request_runtime import (
+            RequestRuntimeContext,
+            reset_request_runtime,
+            set_request_runtime,
+        )
+        _request_runtime_token = set_request_runtime(
+            RequestRuntimeContext(
+                session_id=session.session_id,
+                workspace_dir=str(session.workspace_dir or ""),
+                source=run_source,
+                run_kind=str(
+                    request_metadata.get("run_kind")
+                    or (
+                        session.metadata.get("run_kind")
+                        if isinstance(session.metadata, dict)
+                        else ""
+                    )
+                    or ""
+                ).strip(),
+                workflow_kind=str(request_metadata.get("workflow_kind") or "").strip(),
+                repo_mutation_allowed=bool(request_metadata.get("repo_mutation_allowed")),
+                user_input=request.user_input,
+                metadata=dict(request_metadata),
+            )
+        )
         try:
             async for event in self.execute(session, request):
                 if event_callback:
@@ -1569,6 +1608,8 @@ class InProcessGateway(Gateway):
                 execution_summary={"tool_calls": tool_calls, "duration_seconds": duration},
             )
             raise
+        finally:
+            reset_request_runtime(_request_runtime_token)
 
         # Best-effort: sync session transcript into session memory after each query.
         # This reduces the chance of losing session memories when a session is abandoned

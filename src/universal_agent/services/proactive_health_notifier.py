@@ -390,16 +390,62 @@ def _build_finding_ack_url(finding_id: str) -> str:
     )
 
 
+def _operator_plain_summary(finding: dict[str, Any]) -> str:
+    """Plain-English, operator-facing one-liner for the digest's lead section.
+
+    Prefers the invariant's `operator_summary` (carried via metadata from
+    pipeline_invariants._build_finding). Falls back to the first sentence of the
+    technical recommendation, then the title — so an invariant that hasn't
+    authored an operator_summary still gets a readable lead instead of nothing.
+    """
+    md = finding.get("metadata") or {}
+    summary = (
+        finding.get("operator_summary") or md.get("operator_summary") or ""
+    ).strip()
+    if summary:
+        return summary
+    rec = (finding.get("recommendation") or "").strip()
+    if rec:
+        first = rec.split(". ")[0].strip().rstrip(".")
+        return (first[:240] + "…") if len(first) > 240 else first + "."
+    return (finding.get("title") or "A health check is failing.").strip()
+
+
 def _format_digest_email(
     criticals: list[dict[str, Any]], generated_at: str
 ) -> tuple[str, str]:
     n = len(criticals)
     plural = "s" if n != 1 else ""
     subject = f"[Proactive Health] {n} critical finding{plural}"
+
+    # ── Plain-language lead: what's going on + what the operator can do, so
+    #    Kevin can decide whether to hand this off. Technical detail follows
+    #    below the divider, for Claude / a handoff to act on.
     lines = [
-        f"{n} critical proactive_health invariant{plural} firing as of {generated_at}.",
+        f"{n} health alarm{plural} firing on the production server as of "
+        f"{generated_at}.",
         "",
+        "IN PLAIN LANGUAGE",
     ]
+    for idx, finding in enumerate(criticals, 1):
+        lines.append(f"  {idx}. {_operator_plain_summary(finding)}")
+    lines.append("")
+    lines.append("WHAT YOU CAN DO")
+    lines.append(
+        "  • Hand it off — reply to this email, or tell Claude Code "
+        '"look into the proactive-health alert". It has the full technical '
+        "detail below and can investigate and fix it."
+    )
+    lines.append(
+        "  • Or click an Acknowledge link below to mute a finding until it "
+        "recovers (stays green long enough)."
+    )
+    lines.append("")
+    lines.append("─" * 64)
+    lines.append("TECHNICAL DETAIL (for Claude / handoff)")
+    lines.append("─" * 64)
+    lines.append("")
+
     any_ack_url = False
     for idx, finding in enumerate(criticals, 1):
         title = finding.get("title") or "Proactive health finding"
