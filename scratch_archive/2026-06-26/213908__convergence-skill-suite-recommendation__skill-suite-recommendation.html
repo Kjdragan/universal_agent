@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Convergence Skill Suite — Portfolio Recommendation</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#fff; --ink:#1b2230; --muted:#5a6678; --line:#e3e7ee;
+    --auto:#2563eb; --self:#0f9d58; --conv:#9333ea; --fan:#e8590c; --judge:#0d9488; --warn:#c2410c;
+    --master:#be185d;
+    --auto-bg:#eaf1ff; --self-bg:#e7f6ec; --conv-bg:#f4ebfe; --fan-bg:#fdeee2; --judge-bg:#e6f7f4; --master-bg:#fce7f0;
+    --shadow:0 1px 2px rgba(20,30,50,.06),0 6px 20px rgba(20,30,50,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 22px 80px}
+  h1{font-size:29px;line-height:1.18;margin:0 0 8px;letter-spacing:-.02em}
+  .sub{color:var(--muted);margin:0;font-size:16.5px}
+  .stamp{color:var(--muted);font-size:13px;margin-top:10px}
+  h2{font-size:22px;margin:48px 0 8px;letter-spacing:-.01em;border-top:1px solid var(--line);padding-top:30px}
+  h2 .n{display:inline-block;width:30px;height:30px;line-height:30px;text-align:center;border-radius:8px;background:var(--master);color:#fff;font-size:15px;margin-right:10px;vertical-align:2px}
+  h3{font-size:17px;margin:24px 0 10px}
+  p{margin:0 0 14px} ul{margin:0 0 14px;padding-left:22px} li{margin:6px 0}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.87em;background:#eef1f6;padding:1px 6px;border-radius:5px}
+  b{font-weight:700}
+  a{color:var(--auto)}
+  .lead{font-size:17px;color:#33405a;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--master);border-radius:12px;padding:16px 20px;box-shadow:var(--shadow)}
+  .purpose{background:linear-gradient(180deg,#fdf2f8,#fff);border:1px solid #f3cfe0;border-left:5px solid var(--master);border-radius:14px;padding:18px 22px;box-shadow:var(--shadow)}
+  .purpose .tag{font-size:12px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--master);margin:0 0 8px}
+  .purpose p{font-size:16px;color:#3a2330;margin:0 0 10px} .purpose p:last-child{margin:0}
+
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:var(--shadow);font-size:13.8px;margin:10px 0}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#eef2f8;font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:#46526a}
+  tr:last-child td{border-bottom:none}
+  .old{color:var(--muted);text-decoration:line-through;font-size:12.8px}
+  .new{font-weight:700}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .dot.auto{background:var(--auto)}.dot.self{background:var(--self)}.dot.conv{background:var(--conv)}.dot.fan{background:var(--fan)}.dot.judge{background:var(--judge)}.dot.master{background:var(--master)}
+  .tagcell{font-size:11px;font-weight:800;letter-spacing:.03em;text-transform:uppercase;color:#fff;padding:2px 8px;border-radius:6px;display:inline-block}
+  .t-prim{background:#475569}.t-comp{background:var(--conv)}.t-mast{background:var(--master)}
+
+  .layers{display:grid;gap:12px;margin:8px 0}
+  .layer{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:15px 18px;box-shadow:var(--shadow);border-left:5px solid var(--line)}
+  .layer.prim{border-left-color:#475569}.layer.comp{border-left-color:var(--conv)}.layer.mast{border-left-color:var(--master)}
+  .layer h4{margin:0 0 6px;font-size:15.5px}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+  .chip{font-size:12.5px;font-weight:600;border-radius:999px;padding:3px 11px;border:1px solid var(--line)}
+  .chip.auto{background:var(--auto-bg);color:#1a47b8}.chip.self{background:var(--self-bg);color:#0a6e3f}.chip.fan{background:var(--fan-bg);color:#9a3a05}.chip.judge{background:var(--judge-bg);color:#0a5b53}.chip.conv{background:var(--conv-bg);color:#6b21a8}.chip.master{background:var(--master-bg);color:#9d174d}
+
+  .ruleBox{background:#101727;color:#eef2fb;border-radius:14px;padding:18px 22px;margin:12px 0;box-shadow:var(--shadow)}
+  .ruleBox h3{color:#fff;margin:0 0 8px;font-size:18px}
+  .ruleBox p{color:#c9d3e6;margin:0 0 6px;font-size:15.5px} .ruleBox b{color:#fff}
+
+  .desc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow);margin:10px 0;border-top:3px solid var(--ink)}
+  .desc.auto{border-top-color:var(--auto)}.desc.self{border-top-color:var(--self)}.desc.fan{border-top-color:var(--fan)}.desc.judge{border-top-color:var(--judge)}.desc.conv{border-top-color:var(--conv)}.desc.master{border-top-color:var(--master)}
+  .desc h4{margin:0 0 6px;font-size:14.5px;font-family:ui-monospace,Menlo,monospace}
+  .desc p{margin:0;font-size:13.6px;color:#3a4760}
+  .desc .trig{color:#0a5b53;font-weight:600}
+  .desc .defer{color:var(--warn);font-weight:600}
+
+  .docrule{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 14px;margin:8px 0;box-shadow:var(--shadow);font-size:14px}
+  .docrule b{color:#0b3b36}
+  .ok{color:var(--self);font-weight:800}.no{color:var(--warn);font-weight:800}
+
+  .seam{background:#fff7ed;border:1px solid #f6d2b0;border-left:4px solid var(--warn);border-radius:12px;padding:14px 18px;margin:14px 0}
+  .seam b{color:var(--warn)}
+  .demo{background:var(--judge-bg);border:1px solid #b8e6df;border-left:4px solid var(--judge);border-radius:12px;padding:14px 18px;margin:14px 0}
+  .demo b{color:#0a5b53}
+
+  .seq{counter-reset:step;list-style:none;padding:0;margin:8px 0}
+  .seq li{position:relative;padding:12px 14px 12px 52px;background:var(--card);border:1px solid var(--line);border-radius:11px;margin:0 0 9px;box-shadow:var(--shadow);font-size:14.5px}
+  .seq li::before{counter-increment:step;content:counter(step);position:absolute;left:14px;top:12px;width:26px;height:26px;line-height:26px;text-align:center;border-radius:7px;background:var(--master);color:#fff;font-weight:700;font-size:14px}
+  .seq b{color:var(--ink)}
+  .foot{color:var(--muted);font-size:13px;margin-top:46px;border-top:1px solid var(--line);padding-top:16px}
+  .verdict{background:#ecfdf5;border:1px solid #a7e6cd;border-left:5px solid var(--self);border-radius:14px;padding:18px 22px;box-shadow:var(--shadow);font-size:16px}
+  .verdict b{color:#075e3f}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Convergence Skill Suite — Portfolio Recommendation</h1>
+<p class="sub">How to name, structure, and trigger a suite of generate→evaluate→gate→improve skills so the right one is selected automatically — individual primitive or full chained master.</p>
+<p class="stamp">Validated against official Claude Code docs (via claude-code-guide) + skill-creator trigger discipline · 2026-06-26</p>
+
+<div class="purpose">
+  <p class="tag">What you asked for</p>
+  <p>A <b>portfolio</b>, not a monolith: keep the individual loops usable on their own (most work only needs one), but also have a <b>master</b> that chains them — and let Claude <b>select the right altitude per situation</b>, whether that's a single primitive or an entire gated flow.</p>
+  <p>You flagged a need for <b>two</b> master modes, and I agree: a <b>single-artifact "dev tool"</b> that drives one process to optimal/passing, and a <b>multi-step orchestrator</b> that gates the interim steps and final outcome of a long-running flow (e.g. inside <code>/dragan:demo</code>). <b>Conclusion up front: yes, build both.</b></p>
+</div>
+
+<!-- 1 -->
+<h2><span class="n">1</span>Renamed suite — clearer, parallel names</h2>
+<p>Your renames plus one for <code>convergence-pipeline</code>. I renamed it <code>optimize-then-verify</code> for two reasons: it's self-describing (it's literally what it does, and the repo's own title), and it frees the word <b>"converge"</b> for the master tier so the two aren't overloaded.</p>
+
+<table>
+  <thead><tr><th>Was</th><th>New name</th><th>Tier</th><th>What it judges / does</th></tr></thead>
+  <tbody>
+    <tr><td><span class="old">autoresearch-loop</span></td><td><span class="dot auto"></span><span class="new">autoresearch-loop</span> <small>(keep)</small></td><td><span class="tagcell t-prim">primitive</span></td><td>Optimize one artifact toward a <b>numeric score</b> (hill-climb)</td></tr>
+    <tr><td><span class="old">self-correcting-loop</span></td><td><span class="dot self"></span><span class="new">pass-fail-repair</span></td><td><span class="tagcell t-prim">primitive</span></td><td>Repair one artifact until a <b>runnable check</b> passes</td></tr>
+    <tr><td><span class="old">subagent-orchestration</span></td><td><span class="dot fan"></span><span class="new">subagent-fanout</span></td><td><span class="tagcell t-prim">primitive</span></td><td>Run N subagents <b>in parallel</b> → merge (fan-out → fan-in)</td></tr>
+    <tr><td><span class="old">—  (new)</span></td><td><span class="dot judge"></span><span class="new">judge-panel</span></td><td><span class="tagcell t-prim">primitive</span></td><td>Score/compare on <b>subjective quality</b> with an LLM judge panel</td></tr>
+    <tr><td><span class="old">convergence-pipeline</span></td><td><span class="dot conv"></span><span class="new">optimize-then-verify</span></td><td><span class="tagcell t-comp">composition</span></td><td>Chain optimize → verify on <b>one</b> artifact (known soft+hard)</td></tr>
+    <tr><td><span class="old">—  (new)</span></td><td><span class="dot master"></span><span class="new">converge</span></td><td><span class="tagcell t-mast">master · 1 artifact</span></td><td><b>Routes</b> the eval path + gate-first escalation for ONE artifact</td></tr>
+    <tr><td><span class="old">—  (new)</span></td><td><span class="dot master"></span><span class="new">converge-flow</span></td><td><span class="tagcell t-mast">master · multi-step</span></td><td>Orchestrate a <b>gated multi-step</b> process + final-outcome gate</td></tr>
+  </tbody>
+</table>
+
+<div class="seam">
+  <b>One naming caveat from the docs.</b> Claude picks skills purely from their descriptions, and the docs warn that <b>closely-related descriptions collide</b>. A shared token like "loop" across several names worsens that — so I dropped "loop" everywhere except <code>autoresearch-loop</code> (which you wanted to keep). If you prefer your <code>pass-fail-correcting-loop</code>, that's fine, but lean on disjoint verbs in its description to compensate. Names are cosmetic; <b>descriptions do the real triggering work</b> (§3).</p>
+</div>
+
+<!-- 2 -->
+<h2><span class="n">2</span>Portfolio shape + the selection rule</h2>
+<div class="layers">
+  <div class="layer prim"><h4>Primitives — used standalone, auto-trigger on narrow signals</h4>
+    <p>The atoms. Most real work needs exactly one. Each fires on its own distinct trigger vocabulary.</p>
+    <div class="chips"><span class="chip auto">autoresearch-loop</span><span class="chip self">pass-fail-repair</span><span class="chip fan">subagent-fanout</span><span class="chip judge">judge-panel</span></div>
+  </div>
+  <div class="layer comp"><h4>Named composition — when you already know it's soft + hard</h4>
+    <p>The known 2-chain. Reuses two primitives' engines by injection (already proven in the shipped repo — genuine reuse, not reimplementation).</p>
+    <div class="chips"><span class="chip conv">optimize-then-verify</span></div>
+  </div>
+  <div class="layer mast"><h4>Masters — route + escalate + keep a ledger; mostly invoked explicitly</h4>
+    <p>Thin orchestrators that <b>decide</b> how to judge and drive to done. <code>converge</code> = one artifact; <code>converge-flow</code> = a gated multi-step flow that calls <code>converge</code> per step.</p>
+    <div class="chips"><span class="chip master">converge</span><span class="chip master">converge-flow</span></div>
+  </div>
+</div>
+
+<div class="ruleBox">
+  <h3>The selection rule (this is what makes the suite work)</h3>
+  <p><b>You know which loop you want</b> → call the <b>primitive</b> (or <code>optimize-then-verify</code> if you know it's soft+hard). Claude auto-selects these from their narrow descriptions.</p>
+  <p><b>You don't know the eval path, it's multi-objective and needs deciding, or it's a gated multi-step flow</b> → call a <b>master</b>, which routes. Gate-pass first; optimize only on failure; re-gate.</p>
+</div>
+
+<!-- 3 -->
+<h2><span class="n">3</span>Trigger discipline — the draft descriptions</h2>
+<p>This is where the docs say to spend the effort: with seven semantically-overlapping skills, the <code>description</code> field is the <i>entire</i> basis for selection, and overlap is the documented failure mode. Below are draft descriptions engineered for <span class="trig">disjoint trigger terms</span> and explicit <span class="defer">downward deferral</span>. (Final pass: run skill-creator's <code>run_loop.py</code> trigger-eval optimizer — 20 should/shouldn't-trigger queries, 3× each — to tune them empirically before shipping.)</p>
+
+<div class="desc auto"><h4>autoresearch-loop</h4><p>Tune ONE artifact toward a single <span class="trig">numeric score</span> until it plateaus — hill-climb / coordinate-search a config, prompt, or function against a measurable metric (loss, accuracy, latency, coverage, robustness&nbsp;%). Triggers: "optimize overnight", "auto-tune", "hill-climb", "make this measurably better" when better-vs-worse is a NUMBER. <span class="defer">Not for pass/fail checks → pass-fail-repair; not for subjective quality → judge-panel.</span></p></div>
+
+<div class="desc self"><h4>pass-fail-repair</h4><p>Drive ONE artifact to <span class="trig">pass a runnable check</span> — generate, run the real check (pytest, schema validator, compiler, linter), feed the actual failure back, revise, repeat until it passes or a round cap. Triggers: "loop until the tests pass", "fix until it compiles/validates", "repair against a real check". <span class="defer">Not for a numeric score → autoresearch-loop; not for subjective quality → judge-panel.</span></p></div>
+
+<div class="desc fan"><h4>subagent-fanout</h4><p>Run ONE bounded task across several named subagents <span class="trig">in parallel</span> (separate context windows), then merge with a synthesizer — fan-out → fan-in. Triggers: multi-lens review, multi-angle research synthesis, parallel candidate generation, "several specialists then a merge". Also the substrate <code>judge-panel</code> is built on. <span class="defer">Not for sequential single-artifact iteration.</span></p></div>
+
+<div class="desc judge"><h4>judge-panel</h4><p>Rate or compare an artifact on <span class="trig">subjective quality</span> with an LLM judge panel — N independent judges, PAIRWISE preference, majority/median vote, noise-floor margin for stability. Triggers: persuasiveness, helpfulness, design/prose quality — judgment with no runnable check and no clean number. The non-deterministic evaluator. <span class="defer">Not for runnable checks → pass-fail-repair; not for numeric metrics → autoresearch-loop.</span></p></div>
+
+<div class="desc conv"><h4>optimize-then-verify</h4><p>Produce ONE artifact that is <span class="trig">both robust AND correct</span> by chaining: hill-climb a draft toward a numeric score, THEN repair the winner against a runnable check until it passes. Triggers: "make it good, then make it correct", "tune for a metric but it still has to pass the tests". Use when you ALREADY KNOW it's soft+hard. <span class="defer">If the eval path is unknown/needs deciding → converge; single objective → the matching primitive.</span></p></div>
+
+<div class="desc master"><h4>converge &nbsp;<small>(master · single artifact)</small></h4><p>Drive ONE artifact to a finished, passing state when <span class="trig">the right evaluation path isn't obvious</span> — auto-routes between numeric-optimize / pass-fail-repair / subjective-judge / hybrid, tries to PASS THE GATE cheaply first, escalates into optimization only on failure, then re-gates. A development optimizer: "get this to done / drive this process to pass / decide how to judge this". <span class="defer">If you already know the exact loop, call that primitive instead.</span></p></div>
+
+<div class="desc master"><h4>converge-flow &nbsp;<small>(master · multi-step)</small></h4><p>Orchestrate a <span class="trig">long-running, multi-step process with interim gated checkpoints</span> — each step must pass its evaluation (deterministic or subjective) before the flow proceeds, plus a final-outcome gate; or polish a step in place before moving on. Routes each gate via <code>converge</code>, keeps a ledger of interim decisions. Triggers: gated build pipelines, staged code generation, demo builds, "evaluate whether each interim step and the end outcome were achieved". The heaviest skill — usually invoked explicitly.</p></div>
+
+<!-- 4 -->
+<h2><span class="n">4</span>Construction rules — verified against the official docs</h2>
+<p>From the claude-code-guide pass over <a href="https://code.claude.com/docs/en/skills">code.claude.com/docs/en/skills</a> + plugins/sub-agents pages. These shape the build:</p>
+
+<div class="docrule"><span class="no">✗</span> <b>There is no "skill calls skill" API.</b> Composition happens through Claude's reasoning or a skill body that <i>names</i> the next skill in prose — OR at the code level (an engine importing another engine, as <code>optimize-then-verify</code> already does). The masters are <b>playbooks + a Python engine</b>, not programmatic skill-callers.</div>
+<div class="docrule"><span class="no">✗</span> <b>"Fires only on the compound case and defers" is NOT enforceable</b> — no precedence engine. You get deferral via (a) sharply disjoint descriptions, (b) explicit "use X instead when…" text, and optionally (c) <code>disable-model-invocation: true</code> to make a master <b>manual-only</b> (<code>/dragan:converge-flow</code>). Recommended: primitives auto-trigger; <code>converge-flow</code> (the most over-fire-prone) leans manual or tightly trigger-tuned.</div>
+<div class="docrule"><span class="ok">✓</span> <b>Directory name = the command.</b> A dir <code>pass-fail-repair/</code> in the <code>dragan</code> plugin becomes <code>/dragan:pass-fail-repair</code> automatically — <b>never hand-prefix <code>dragan:</code></b>. Frontmatter <code>name</code> is display-only (except a plugin-root SKILL.md). Use kebab-case.</div>
+<div class="docrule"><span class="ok">✓</span> <b>Parallel fan-out is a subagent capability, not skill execution.</b> <code>subagent-fanout</code> / <code>judge-panel</code> must run real subagents (the SDK fan-out engine you already built), documented/triggered by the skill — the SKILL.md runtime doesn't parallelize by itself.</div>
+<div class="docrule"><span class="ok">✓</span> <b>Don't duplicate the shared loop engine.</b> Hoist the common Python engine to the <b>plugin root</b> and reference it from each skill via <code>${CLAUDE_PLUGIN_ROOT}</code> (confirm the exact var in plugins-reference). Keep each SKILL.md &lt; ~500 lines; push detail into <code>references/</code>, executables into <code>scripts/</code>.</div>
+
+<!-- 5 -->
+<h2><span class="n">5</span>The two master modes — and the <code>/demo</code> fit</h2>
+<p>You were right that both are needed; they're different <i>scopes</i>, and the multi-step one calls the single-artifact one per step.</p>
+<table>
+  <thead><tr><th></th><th><span class="dot master"></span>converge &nbsp;(single artifact)</th><th><span class="dot master"></span>converge-flow &nbsp;(multi-step)</th></tr></thead>
+  <tbody>
+    <tr><td><b>Scope</b></td><td>ONE artifact driven to passing/optimal</td><td>A sequence of steps, each gated, + a final-outcome gate</td></tr>
+    <tr><td><b>Mostly is</b></td><td>a Python engine (router + tiers over the loop engines)</td><td>an orchestration playbook that runs <code>converge</code> per step</td></tr>
+    <tr><td><b>Best as</b></td><td>a <b>development tool</b> — optimize/fix an individual process</td><td>the <b>evaluation backbone</b> of a long pipeline</td></tr>
+    <tr><td><b>Example</b></td><td>"drive this parser / prompt / function to done"</td><td>"build this demo, gating each interim step + the final result"</td></tr>
+  </tbody>
+</table>
+
+<div class="demo">
+  <b>Yes — <code>converge-flow</code> fits <code>/dragan:demo</code> directly.</b> The demo factory already runs the build under a native goal loop with a <b>deterministic verifier gate</b> and a dead-air watchdog. <code>converge-flow</code> generalizes exactly that: each interim build stage (research → brief → scaffold → build) becomes a <i>gated step</i>; "demo runs &amp; <code>DEMO_VERIFY: PASS</code>" is the <i>final-outcome gate</i>; and a <code>judge-panel</code> gate can add the non-deterministic check the factory currently lacks — "is the demo actually <i>good</i>?", not just "does it exit 0?". That makes the demo factory the ideal <b>first real multi-step gated flow</b> to harden <code>converge-flow</code> against, rather than building it in the abstract.</p>
+</div>
+
+<!-- 6 -->
+<h2><span class="n">6</span>Recommendation &amp; sequencing</h2>
+<div class="verdict"><b>Build the suite as a layered portfolio, masters as thin orchestrators — and build both master modes, but in sequence, hardened on real work rather than speculatively.</b></div>
+<ol class="seq">
+  <li><b>Rename the three existing skills + add <code>judge-panel</code>.</b> Cheap, immediate clarity. <code>judge-panel</code> is the one genuinely missing primitive and is reusable on its own (any "evaluate this subjectively" need) — build it first regardless of the masters.</li>
+  <li><b>Build <code>converge</code> (single-artifact dev tool).</b> Mostly code: a router (det / scalar / subjective / hybrid) + the gate-first tier escalation, composing the existing engines. Testable in isolation; high standalone value as a dev optimizer.</li>
+  <li><b>Build <code>converge-flow</code> against <code>/dragan:demo</code>.</b> Let the demo factory's real gated stages shape the router, the ledger format, and the interim/final gate semantics. The masterpiece earns its complexity by surviving a real flow.</li>
+  <li><b>Tune every description with the trigger-eval loop.</b> 20 should/shouldn't-trigger queries per skill, <code>run_loop.py</code>, pick by held-out score. This is the step that prevents the seven-skill collision the docs warn about.</li>
+  <li><b>Operate on-the-fly in the interim</b> — for any chained case before the masters exist, follow the design brief as the written playbook so the gate-first discipline is consistent even un-codified.</li>
+</ol>
+
+<h3>Open risks to watch</h3>
+<ul>
+  <li><b>Trigger collision / over-orchestration</b> — seven overlapping skills; a master firing where a primitive would do. Mitigations: disjoint descriptions, deferral text, <code>disable-model-invocation</code> on <code>converge-flow</code>, and the trigger-eval tuning in step 4.</li>
+  <li><b>converge vs optimize-then-verify overlap</b> — both touch single-artifact soft+hard. Keep the line crisp: <code>optimize-then-verify</code> = "I KNOW the path"; <code>converge</code> = "DECIDE the path / drive to done".</li>
+  <li><b>Shared-engine wiring</b> — confirm <code>${CLAUDE_PLUGIN_ROOT}</code> in plugins-reference before hoisting; don't copy the engine into each skill dir.</li>
+  <li><b>Premature abstraction</b> — don't build <code>converge-flow</code> until the <code>/demo</code> (or another real gated flow) is the thing pulling it into existence.</li>
+</ul>
+
+<p class="foot">Status: recommendation / design decision — nothing built yet. The four loop primitives are shipped; this defines the renamed suite, the two new skills (<code>judge-panel</code>, the two masters), the trigger-discipline plan, and the build order. Companion exhibits: the four-demos field guide, the chaining + non-deterministic analysis, and the master-evaluator/improver design brief.</p>
+</div>
+</body>
+</html>
