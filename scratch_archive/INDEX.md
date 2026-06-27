@@ -2,11 +2,12 @@
 
 > Durable, dated copy of every artifact published to the tailnet scratchpad.
 > Newest first. Auto-generated from `index.jsonl` — do not edit by hand.
-> 12 artifact(s) archived.
+> 13 artifact(s) archived.
 
 
 ## 2026-06-26
 
+- **21:39:08** — [Convergence Skill Suite — Portfolio Recommendation](2026-06-26/213908__convergence-skill-suite-recommendation__skill-suite-recommendation.html) · slug `convergence-skill-suite-recommendation` · [live](https://uaonvps.taildcc090.ts.net/scratch/convergence-skill-suite-recommendation/skill-suite-recommendation.html)
 - **21:17:05** — [Master Evaluator / Improver — Design Brief](2026-06-26/211705__master-evaluator-improver__master-evaluator-improver-spec.html) · slug `master-evaluator-improver` · [live](https://uaonvps.taildcc090.ts.net/scratch/master-evaluator-improver/master-evaluator-improver-spec.html)
 - **20:33:51** — [Chaining the Loops + Non-Deterministic Adaptation](2026-06-26/203351__chaining-nondeterministic-analysis__chaining-and-nondeterministic.html) · slug `chaining-nondeterministic-analysis` · [live](https://uaonvps.taildcc090.ts.net/scratch/chaining-nondeterministic-analysis/chaining-and-nondeterministic.html)
 - **20:33:40** — [Four Demos — Convergence & Orchestration Field Guide](2026-06-26/203340__four-demos-field-guide__four-demos-field-guide.html) · slug `four-demos-field-guide` · [live](https://uaonvps.taildcc090.ts.net/scratch/four-demos-field-guide/four-demos-field-guide.html)
