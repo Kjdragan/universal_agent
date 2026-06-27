@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chaining the Loops + Non-Deterministic Adaptation</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#fff; --ink:#1b2230; --muted:#5a6678; --line:#e3e7ee;
+    --auto:#2563eb; --self:#0f9d58; --conv:#9333ea; --fan:#e8590c; --warn:#c2410c;
+    --shadow:0 1px 2px rgba(20,30,50,.06),0 6px 20px rgba(20,30,50,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1060px;margin:0 auto;padding:40px 22px 80px;}
+  h1{font-size:29px;line-height:1.2;margin:0 0 8px;letter-spacing:-.02em;}
+  .sub{color:var(--muted);margin:0;font-size:16px;}
+  .stamp{color:var(--muted);font-size:13px;margin-top:10px;}
+  h2{font-size:22px;margin:48px 0 6px;letter-spacing:-.01em;border-top:1px solid var(--line);padding-top:30px;}
+  h2.first{border-top:none;padding-top:6px}
+  h3{font-size:17px;margin:26px 0 10px;}
+  p{margin:0 0 14px;} ul{margin:0 0 14px;padding-left:22px} li{margin:5px 0}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.88em;
+    background:#eef1f6;padding:1px 6px;border-radius:5px;}
+  .lead{font-size:17px;color:#33405a;background:var(--card);border:1px solid var(--line);
+    border-left:4px solid var(--ink);border-radius:12px;padding:16px 20px;box-shadow:var(--shadow);}
+  .verdict{font-size:17px}
+
+  pre{background:#0f1626;color:#e7edf8;border-radius:12px;padding:16px 18px;overflow:auto;
+    font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:13px;line-height:1.55;box-shadow:var(--shadow)}
+  pre .c{color:#8aa0c4} pre .k{color:#7fd1b9} pre .o{color:#f0a868}
+
+  .tiers{display:grid;gap:12px;margin:6px 0 4px}
+  .tier{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:15px 18px;
+    box-shadow:var(--shadow);border-left:5px solid var(--line)}
+  .tier.t0{border-left-color:var(--self)} .tier.t1{border-left-color:var(--conv)} .tier.t2{border-left-color:var(--fan)}
+  .tier h4{margin:0 0 4px;font-size:15.5px}
+  .tier .tag{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .tier p{margin:6px 0 0;font-size:14.5px;color:#3d4a63}
+
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:6px 0}
+  @media(max-width:680px){.twocol{grid-template-columns:1fr}}
+  .box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}
+  .box h4{margin:0 0 6px;font-size:14.5px} .box.good h4{color:var(--self)} .box.bad h4{color:var(--warn)}
+  .box p{margin:0;font-size:14px;color:#3d4a63}
+
+  .seam{background:#fff7ed;border:1px solid #f6d2b0;border-left:4px solid var(--warn);
+    border-radius:12px;padding:14px 18px;margin:14px 0}
+  .seam b{color:var(--warn)}
+
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;box-shadow:var(--shadow);font-size:14px;margin:8px 0}
+  th,td{text-align:left;padding:11px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#eef2f8;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#46526a}
+  tr:last-child td{border-bottom:none}
+
+  .flow{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;
+    box-shadow:var(--shadow);margin:8px 0}
+  .flow .stage{display:flex;align-items:center;gap:12px;margin:0 0 8px;flex-wrap:wrap}
+  .node{border-radius:10px;padding:8px 13px;font-size:13.5px;font-weight:600;border:1px solid var(--line);background:#f6f8fc}
+  .node.fan{background:#fdeee2;border-color:#f6d2b8;color:#9a3a05}
+  .node.auto{background:#eaf1ff;border-color:#cfe0ff;color:#1a47b8}
+  .node.self{background:#e7f6ec;border-color:#bfe6cd;color:#0a6e3f}
+  .node.gate{background:#f4ebfe;border-color:#e2cdf8;color:#6b21a8}
+  .arr{color:var(--muted);font-weight:700}
+  .loopback{font-size:13px;color:var(--warn);margin-top:6px;font-weight:600}
+
+  .arch{background:#101727;color:#eef2fb;border-radius:14px;padding:6px 20px 18px;box-shadow:var(--shadow);margin:10px 0}
+  .arch h4{color:#fff} .arch p,.arch li{color:#c9d3e6}
+  .arch code{background:#26324a;color:#e7edf8}
+  .key{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:6px;margin-right:4px;color:#fff}
+  .key.auto{background:var(--auto)}.key.self{background:var(--self)}.key.conv{background:var(--conv)}.key.fan{background:var(--fan)}
+  .foot{color:var(--muted);font-size:13px;margin-top:44px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Chaining the Loops + Non-Deterministic Adaptation</h1>
+<p class="sub">Can the four demos be composed into one staged pipeline — and can they be bent toward a subjective goal that has no clean scalar or pass/fail check?</p>
+<p class="stamp">Engineering analysis · grounded in the four repos' engines · 2026-06-26</p>
+
+<p class="lead verdict"><b>Verdict:</b> Yes to both. Chaining is sound if you first decide whether your facets are <b>separable</b> or <b>coupled</b>, and you make the post-merge verify mandatory. Pointing the loops at a non-deterministic goal is also viable — and the single highest-leverage change is to turn <b>fan-out (#4) into the evaluator</b>: a panel of judges that converts a noisy subjective signal into a stable comparator the hill-climb can trust.</p>
+
+<!-- ============ PART A ============ -->
+<h2 class="first">Part A — Chaining #1, #2, #3, #4</h2>
+
+<h3>First, the factual correction: what #1 does with "many facets"</h3>
+<p>The autoresearch engine does <b>not</b> pick one component or optimize pieces independently. It optimizes <b>one artifact against one scalar</b>, and the proposer walks the knobs by <b>coordinate descent</b> — one knob per step, keep if the single global score improved. A five-knob config is already a many-facet search; it keeps the best <i>joint</i> combination. Critically, the one global score <b>sees the interactions</b> between knobs, so coupled knobs are handled correctly — just sequentially. So #1 already covers "many knobs in one thing, one score." Fan-out buys something different.</p>
+
+<h3>Where #4 actually adds value over plain #1</h3>
+<div class="twocol">
+  <div class="box good">
+    <h4>Separable facets → decompose</h4>
+    <p>Pieces with their <i>own</i> artifact and <i>own</i> score (5 independent service configs; 5 prompts each with its own eval). Run one <code>autoresearch</code> per facet in parallel, then the synthesizer assembles the winners. Embarrassingly parallel — <b>valid only if the pieces don't interact.</b></p>
+  </div>
+  <div class="box bad">
+    <h4>Coupled facets → parallel restarts</h4>
+    <p>One artifact, one global score (the common case). You <b>cannot</b> hill-climb facets in isolation and glue them — per-facet local optima ≠ global optimum. Use fan-out as a <b>portfolio</b>: N loops on the <i>same</i> artifact, different seeds/strategies, keep the best. Buys breadth against local minima, not decomposition.</p>
+  </div>
+</div>
+
+<h3>The escalation ladder (cost-ordered)</h3>
+<p>One fix to the original idea: <b>convergence-pipeline (#3) already <i>is</i> self-correcting-loop (#2) with an optimize stage in front.</b> So "use #2, and if it can't pass escalate to #3" isn't a second repair pass — what #3 adds when #2 stalls is a <i>better starting draft</i> (Stage 1 hands the repairer an optimized seed). With that understood, the tiers are clean:</p>
+<div class="tiers">
+  <div class="tier t0"><span class="tag">Tier 0 · cheapest, try first</span><h4>self-correcting-loop alone</h4><p>Pure pass/fail. One artifact, repair against the rubric for K rounds.</p></div>
+  <div class="tier t1"><span class="tag">Tier 1 · it stalled — draft too weak</span><h4>convergence-pipeline (#3)</h4><p>The optimize stage produces a stronger seed; then verify closes the edge cases the score left open.</p></div>
+  <div class="tier t2"><span class="tag">Tier 2 · still stuck, or big/separable</span><h4>subagent-orchestration wraps Tier 1, run N-wide</h4><p>Separable → one pipeline per facet. Coupled → parallel restarts of the same pipeline. Keep the branch that converges (or the best partial).</p></div>
+</div>
+<p style="margin-top:10px">Start cheap, escalate only on stall. Each tier multiplies cost (Tier 2 by N), so you never pay for breadth until a narrow attempt has actually failed.</p>
+
+<h3>The robust shape — and why "verify at the end" is correct</h3>
+<div class="flow">
+  <div class="stage"><span class="node fan">fan-out</span><span class="arr">→</span><span class="node auto">autoresearch ×N</span><span class="arr">→</span><span class="node fan">synthesizer merge</span><span class="arr">→</span><span class="node gate">verify on MERGED artifact</span></div>
+  <div class="loopback">↑ if verify fails to converge → re-fan-out with the real failure fed back in</div>
+</div>
+<div class="seam">
+  <b>The merge is the dangerous step.</b> When you fan optimization across facets, the synthesizer recombines optimized pieces — and if the facets were even slightly coupled, the merged artifact can score <i>worse</i> than any branch, or fail tests none of the branches failed alone. A naive fan-in can manufacture a regression. That is exactly why the executable verify (#2/#3 Stage&nbsp;2) belongs <b>at the very end, on the merged result</b> — it's the only thing that catches a bad synthesis. The verify-fails → re-fan-out loop is what makes it "keep working until the finished state passes."</p>
+</div>
+
+<!-- ============ PART B ============ -->
+<h2>Part B — Adapting to a non-deterministic artifact or goal</h2>
+
+<p>All four loops, as shipped, assume a <b>deterministic, comparable</b> signal: <code>autoresearch</code> needs one reproducible scalar; <code>self-correcting</code> needs a runnable pass/fail rubric. But many real goals have neither — "make this brief more persuasive," "raise this agent's answer quality," "make this landing page convert better." There's no <code>val_loss</code> and no pytest. The good news: <b>only the evaluator has to change.</b> The loop machinery (keep/revert, ledger, round cap, the proposer) is already fine — the LLM proposer is <i>supposed</i> to be non-deterministic.</p>
+
+<h3>The core problem: a noisy judge breaks keep-if-better</h3>
+<p>Swap the deterministic evaluator for an <b>LLM-as-judge</b> and you inherit three failure modes: the judge gives <b>different scores to the same artifact</b> on different runs (variance); the proposer learns to <b>flatter the judge</b> rather than improve the artifact (reward hacking); and there is <b>no absolute ground truth</b> to anchor to. Keep/revert depends on a <i>trustworthy comparison</i> — so every adaptation below is really about making the judge stable enough to compare against.</p>
+
+<h3>Four adaptations, in priority order</h3>
+<table>
+  <thead><tr><th>Change</th><th>What it does</th><th>Why it works</th></tr></thead>
+  <tbody>
+    <tr><td><b>1. Pairwise, not absolute</b></td><td>Ask "is candidate B better than current-best A?" instead of "score B from 0–10."</td><td>LLM judges are far more reliable at a head-to-head preference than an absolute number. Maps <i>directly</i> onto autoresearch's keep/revert: keep B only if the judge prefers it to A.</td></tr>
+    <tr><td><b>2. Judge panel = use #4 as the evaluator</b></td><td>Fan the <i>evaluation</i> out to N independent judges (different lenses/rubrics), aggregate by majority vote or median.</td><td>This is the elegant combination. <code>subagent-orchestration</code> isn't just for generating candidates — it's the variance-reduction layer. A panel cuts single-judge noise the way an ensemble cuts model variance.</td></tr>
+    <tr><td><b>3. Variance-aware keep/revert</b></td><td>Replace the <code>simplicity_eps</code> tie-band with a real <b>noise margin</b>: keep only if the panel prefers B by more than the judge's measured noise (estimate it by re-judging the same pair).</td><td>Stops the loop "accepting" changes that are within the judge's own jitter — the #1 way a subjective hill-climb drifts sideways forever.</td></tr>
+    <tr><td><b>4. Rubric decomposition</b></td><td>Break "quality" into sub-criteria (clarity, accuracy, completeness, tone), score each, aggregate.</td><td>Several narrow judgments are more stable and more <i>auditable</i> than one holistic number — and the ledger now records <i>why</i> each step was judged better.</td></tr>
+  </tbody>
+</table>
+
+<h3>Don't let the loop hill-climb the judge's biases</h3>
+<ul>
+  <li><b>Hold-out / rotating judges.</b> Optimize against one judge framing; <i>accept</i> with a different one (or a different rubric order). A train/val split for subjectivity — if a gain only shows up on the proposal judge, it's overfitting.</li>
+  <li><b>Anchor on whatever <i>is</i> deterministic.</b> Even a "subjective" artifact usually has hard constraints: length, must-include facts, banned claims, valid format/schema. Run the <code>self-correcting</code> rubric on <i>those</i>, and the LLM-judge hill-climb on the soft quality. That is the <b>convergence-pipeline shape applied to a non-deterministic goal</b>: optimize soft quality, then verify hard constraints.</li>
+  <li><b>Human-in-the-loop as the periodic ground-truth anchor.</b> Without any objective signal you can only ever reach "judged better," never "proven better." An occasional human spot-check on the ledger's kept rows recalibrates the judge and catches drift cheaply.</li>
+</ul>
+
+<h3>The combined architecture for a subjective goal</h3>
+<div class="arch">
+<pre><span class="c"># Non-deterministic optimize-then-verify — the four repos, re-pointed</span>
+<span class="k">propose</span>   <span class="o">(#1 LLMProposer)</span>  diverse candidate, optionally <span class="o">#4</span> parallel restarts for breadth
+   <span class="c">│</span>
+<span class="k">evaluate</span>  <span class="o">(#4 fan-out AS judge)</span>  N judges, <span class="k">pairwise</span> vs current-best, different lenses
+   <span class="c">│</span>                          → aggregate vote/median  → a stabilized comparator
+   <span class="c">│</span>
+<span class="k">keep/revert</span> <span class="o">(#1 engine)</span>  keep only if panel margin > noise floor; append to ledger
+   <span class="c">│</span>   ⟲  loop until the panel stops preferring new candidates (noise-tolerant plateau)
+   <span class="c">▼</span>
+<span class="k">verify</span>   <span class="o">(#2 / #3 Stage 2)</span>  run the DETERMINISTIC hard-constraint rubric on the winner
+                              (length, facts present, format valid, nothing banned)</pre>
+<p style="margin-top:4px"><span class="key auto">#1</span> supplies the loop + ledger &nbsp; <span class="key fan">#4</span> supplies diversity <i>and</i> the judge panel &nbsp; <span class="key self">#2</span> guards the hard constraints &nbsp; <span class="key conv">#3</span> is the overall optimize-then-verify frame.</p>
+</div>
+
+<h3>Honest limits</h3>
+<ul>
+  <li><b>Cost.</b> A judge panel multiplies eval cost by the panel size every iteration. Pairwise (compare to current-best only) keeps it O(1) per step rather than O(N²) tournaments.</li>
+  <li><b>Fuzzy convergence.</b> "Stops improving" becomes "the panel stops preferring new candidates" — you need a noise-tolerant plateau definition and patience, or the loop chases jitter.</li>
+  <li><b>No proof, only preference.</b> The ceiling is "the panel and your rubric agree it's better." For anything where being <i>wrong</i> is expensive, keep the deterministic verify stage as the final word and a human on the recalibration loop.</li>
+</ul>
+
+<p class="foot">Companion exhibit: <i>Four Demos — Convergence &amp; Orchestration Field Guide</i>. · This analysis is engineering judgment grounded in the shipped engines; the non-deterministic path is a proposed adaptation, not something already wired in the four repos.</p>
+</div>
+</body>
+</html>
