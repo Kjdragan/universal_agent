@@ -920,6 +920,16 @@
       "scope": "Studio + pipeline (external project in Cody_Code_Generations/): beat-sheet pipeline, Agent SDK app, learning loop, widget strategy, UA adoption status (design-only). Capability lives outside this repo; code_paths intentionally empty."
     },
     {
+      "id": "tools-convergence-suite",
+      "tier": 2,
+      "category": "07_tools",
+      "filename": "07_tools/06_convergence_skill_suite.md",
+      "title": "Convergence Skill Suite",
+      "code_paths": [],
+      "legacy_refs": [],
+      "scope": "External dragan-plugin skill suite (5 primitives + 2 masters) for driving an artifact to a bar: routing/gate-first/tier escalation, the downward-deferral chain, engine-injection composition. Lives outside this repo (Kjdragan/dragan-plugins); code_paths intentionally empty."
+    },
+    {
       "id": "ops-playbook",
       "tier": 1,
       "category": "08_operations",
