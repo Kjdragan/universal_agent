@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Convergence Skill Suite — built out</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1b1f24; --mut:#5b6471; --line:#e3e7ec;
+    --prim:#2f6f4f; --primbg:#e8f3ec; --mast:#7a4ec2; --mastbg:#f0e9fb;
+    --ok:#1f8a4c; --okbg:#e6f4ea; --code:#f0f2f5; --accent:#0d6efd;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:960px;margin:0 auto;padding:32px 20px 64px}
+  header h1{font-size:30px;margin:0 0 6px;letter-spacing:-.4px}
+  header p{color:var(--mut);margin:0 0 8px;font-size:17px}
+  .pill{display:inline-block;background:var(--okbg);color:var(--ok);border:1px solid #bfe3cc;
+    border-radius:999px;padding:3px 12px;font-size:13px;font-weight:600;margin-top:6px}
+  h2{font-size:20px;margin:38px 0 12px;letter-spacing:-.2px}
+  .sub{color:var(--mut);font-size:14px;margin:-6px 0 14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:4px 0;box-shadow:0 1px 2px rgba(20,30,40,.04);overflow:hidden}
+  table{border-collapse:collapse;width:100%}
+  th,td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);font-weight:700}
+  tr:last-child td{border-bottom:none}
+  .name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;white-space:nowrap}
+  .tagp{color:var(--prim)} .tagm{color:var(--mast)}
+  .fires{color:var(--mut);font-size:14px}
+  .badge{font-family:ui-monospace,monospace;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;
+    background:var(--okbg);color:var(--ok);border:1px solid #bfe3cc;white-space:nowrap}
+  .chain{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.9;color:var(--ink);overflow-x:auto}
+  .chain .k{color:var(--mast);font-weight:700}
+  .chain .d{color:var(--accent)}
+  .chain .p{color:var(--prim);font-weight:700}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+  .mini{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .mini h3{margin:0 0 4px;font-size:15px;font-family:ui-monospace,monospace}
+  .mini p{margin:0;color:var(--mut);font-size:13.5px}
+  code{background:var(--code);border-radius:5px;padding:1px 6px;font-family:ui-monospace,monospace;font-size:13px}
+  .foot{color:var(--mut);font-size:13px;margin-top:30px;border-top:1px solid var(--line);padding-top:14px}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--mut);margin:6px 0 0}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>The Convergence Skill Suite</h1>
+    <p>Loops for driving an artifact to a bar — primitives when you know the shape, masters when you don't.</p>
+    <span class="pill">✓ Built out · 11 plugin skills · all verified · all dark-factory merged</span>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--prim)"></span>primitive</span>
+      <span><span class="dot" style="background:var(--mast)"></span>master</span>
+      <span><span class="dot" style="background:var(--ok)"></span>verified gate</span>
+    </div>
+  </header>
+
+  <h2>Primitives — call these when you know the loop</h2>
+  <div class="card">
+    <table>
+      <tr><th>Skill</th><th>The loop</th><th>Fires on</th><th>Proof</th></tr>
+      <tr><td class="name tagp">autoresearch-loop</td><td>scalar hill-climb; keep-if-better / revert</td><td class="fires">"maximize a metric", tune hyperparameters</td><td><span class="badge">scalar</span></td></tr>
+      <tr><td class="name tagp">pass-fail-repair</td><td>run a real check, repair on real failure</td><td class="fires">"until the tests pass", fix until green</td><td><span class="badge">runnable</span></td></tr>
+      <tr><td class="name tagp">judge-panel</td><td>N independent judges, pairwise, noise-floor margin</td><td class="fires">"which is better", "rate the quality"</td><td><span class="badge">JUDGE_PANEL_OK</span></td></tr>
+      <tr><td class="name tagp">optimize-then-verify</td><td>optimize the soft objective, then verify the hard one</td><td class="fires">"optimize X <em>then</em> check it still passes Y"</td><td><span class="badge">2-stage</span></td></tr>
+      <tr><td class="name tagp">subagent-fanout</td><td>parallel fan-out → fan-in synthesis</td><td class="fires">"fan out N agents", merge findings</td><td><span class="badge">parallel</span></td></tr>
+    </table>
+  </div>
+
+  <h2>Masters — call these when you don't</h2>
+  <div class="card">
+    <table>
+      <tr><th>Skill</th><th>What it adds</th><th>Fires on</th><th>Proof</th></tr>
+      <tr><td class="name tagm">converge</td><td>routes the gate (check / score / judge / hybrid), <b>gate-first</b>, then escalates repair → optimize-then-verify → fan-out, re-gating each tier</td><td class="fires">ONE artifact to a bar when the path is unclear or multi-dimensional</td><td><span class="badge">CONVERGE_OK</span></td></tr>
+      <tr><td class="name tagm">converge-flow</td><td>a <b>sequence</b> of gated checkpoints; the improved artifact chains forward; a final-outcome gate. Manual-invocation by design</td><td class="fires">a multi-phase pipeline (build factory, <code>/demo</code>)</td><td><span class="badge">CONVERGE_FLOW_OK</span></td></tr>
+    </table>
+  </div>
+
+  <h2>How overlap is resolved — the downward-deferral chain</h2>
+  <p class="sub">Each master's description defers to the leaner tool when it fits, so the router never double-claims a phrasing.</p>
+  <div class="chain">
+<span class="k">converge</span>      ──<span class="d">defers</span>──▶  <span class="p">pass-fail-repair</span>      &nbsp;you know it's a runnable check<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;──<span class="d">defers</span>──▶  <span class="p">autoresearch-loop</span>     &nbsp;you know it's a single number<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;──<span class="d">defers</span>──▶  <span class="p">judge-panel</span>           &nbsp;pure subjective quality<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;──<span class="d">defers</span>──▶  <span class="p">optimize-then-verify</span>  &nbsp;explicit "optimize-then-verify" structure<br><br>
+<span class="k">converge-flow</span> ──<span class="d">defers</span>──▶  <span class="k" style="color:var(--mast)">converge</span>              &nbsp;one artifact, not a sequence
+  </div>
+
+  <h2>Empirical routing validation</h2>
+  <div class="grid2">
+    <div class="mini"><h3>14 / 14</h3><p>realistic user phrasings routed to the intended skill, scoring each query against the 7 live descriptions.</p></div>
+    <div class="mini"><h3>0 real misroutes</h3><p>the one apparent miss — "must compile <b>and</b> score &gt; 0.9" → <code>optimize-then-verify</code> — is the deferral working: that phrasing states the hard+soft structure outright. Descriptions are disjoint; no changes needed.</p></div>
+  </div>
+
+  <h2>How it's built</h2>
+  <p class="sub">Engine-injection composition (there is no skill-to-skill API): a master imports the primitive engines and injects them. Every skill is built and verified in its own <code>demo-*</code> repo with a deterministic offline gate plus, where relevant, a real ZAI/GLM path — then promoted into the <code>dragan</code> plugin. All repos are born dark-factory (a self-contained <code>auto-merge.yml</code> validates and squash-merges every PR with no review).</p>
+  <div class="card">
+    <table>
+      <tr><th>Repo</th><th>Ships</th></tr>
+      <tr><td class="name">demo-judge-panel</td><td>judge-panel engine + skill — parallel judges, pairwise/absolute, ties-dilute noise floor</td></tr>
+      <tr><td class="name">demo-converge</td><td>both masters — <code>converge.py</code> (router + gate-first + tiers) and <code>converge_flow.py</code> (gated checkpoints + final gate)</td></tr>
+      <tr><td class="name">demo-autoresearch-engine · demo-self-correcting-loop · demo-optimize-then-verify · demo-subagent-orchestration</td><td>the renamed primitives</td></tr>
+    </table>
+  </div>
+
+  <div class="foot">
+    Built 2026-06-26 · plugin <code>Kjdragan/dragan-plugins</code> (PRs #21, #25, #26, #27, all auto-merged) ·
+    commands go live on next plugin refresh: <code>/dragan:converge</code>, <code>/dragan:converge-flow</code>,
+    <code>/dragan:judge-panel</code>, and the renamed primitives.
+  </div>
+</div>
+</body>
+</html>
