@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Four Demos — Convergence & Orchestration Field Guide</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1b2230; --muted:#5a6678; --line:#e3e7ee;
+    --auto:#2563eb; --self:#0f9d58; --conv:#9333ea; --fan:#e8590c;
+    --auto-bg:#eaf1ff; --self-bg:#e7f6ec; --conv-bg:#f4ebfe; --fan-bg:#fdeee2;
+    --shadow:0 1px 2px rgba(20,30,50,.06),0 6px 20px rgba(20,30,50,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1060px;margin:0 auto;padding:40px 22px 80px;}
+  header h1{font-size:30px;line-height:1.2;margin:0 0 8px;letter-spacing:-.02em;}
+  header p.sub{color:var(--muted);margin:0 0 4px;font-size:16px;}
+  .stamp{color:var(--muted);font-size:13px;margin-top:10px;}
+  h2{font-size:21px;margin:46px 0 14px;letter-spacing:-.01em;}
+  h2 .em{color:var(--muted);font-weight:600;font-size:15px;margin-left:8px;}
+  p{margin:0 0 14px;}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.9em;
+    background:#eef1f6;padding:1px 6px;border-radius:5px;}
+  .lead{font-size:17.5px;color:#33405a;background:var(--card);border:1px solid var(--line);
+    border-left:4px solid var(--ink);border-radius:12px;padding:16px 20px;box-shadow:var(--shadow);}
+
+  /* family tree */
+  .tree{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:22px 20px;box-shadow:var(--shadow);margin:8px 0 6px;}
+  .tlabel{font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+    font-weight:700;margin:0 0 12px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .leaf{flex:1;min-width:175px;border-radius:11px;padding:12px 14px;border:1px solid var(--line);}
+  .leaf b{display:block;font-size:14.5px;}
+  .leaf small{color:var(--muted);font-size:12.6px;line-height:1.45;display:block;margin-top:3px;}
+  .leaf.auto{background:var(--auto-bg);border-color:#cfe0ff}
+  .leaf.self{background:var(--self-bg);border-color:#bfe6cd}
+  .leaf.conv{background:var(--conv-bg);border-color:#e2cdf8}
+  .leaf.fan{background:var(--fan-bg);border-color:#f6d2b8}
+  .famgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  @media(max-width:680px){.famgrid{grid-template-columns:1fr}}
+  .fambox{border:1px dashed var(--line);border-radius:12px;padding:14px 16px;background:#fcfdff}
+  .fambox h4{margin:0 0 6px;font-size:14px;}
+  .fambox p{margin:0;font-size:14px;color:#44506a}
+  .pill{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:.03em;
+    padding:2px 9px;border-radius:999px;vertical-align:middle;margin-left:2px}
+  .pill.auto{background:var(--auto);color:#fff}.pill.self{background:var(--self);color:#fff}
+  .pill.conv{background:var(--conv);color:#fff}.pill.fan{background:var(--fan);color:#fff}
+
+  /* repo cards */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    box-shadow:var(--shadow);padding:20px 22px;margin:16px 0;border-top:4px solid var(--ink);}
+  .card.auto{border-top-color:var(--auto)} .card.self{border-top-color:var(--self)}
+  .card.conv{border-top-color:var(--conv)} .card.fan{border-top-color:var(--fan)}
+  .card h3{margin:0 0 2px;font-size:18.5px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .card .cmd{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--muted)}
+  .card .repo{font-size:12.5px;color:var(--muted);margin:2px 0 12px}
+  .meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0 4px}
+  @media(max-width:680px){.meta{grid-template-columns:1fr 1fr}}
+  .meta div{background:#f6f8fc;border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+  .meta .k{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .meta .v{font-size:13.5px;margin-top:2px}
+
+  /* table */
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;box-shadow:var(--shadow);font-size:14px}
+  th,td{text-align:left;padding:11px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#eef2f8;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#46526a}
+  tr:last-child td{border-bottom:none}
+  td b{font-weight:700}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:middle}
+  .dot.auto{background:var(--auto)}.dot.self{background:var(--self)}.dot.conv{background:var(--conv)}.dot.fan{background:var(--fan)}
+
+  .rule{background:#101727;color:#eef2fb;border-radius:14px;padding:20px 22px;margin-top:18px;box-shadow:var(--shadow)}
+  .rule h3{margin:0 0 10px;color:#fff;font-size:17px}
+  .rule p{margin:0 0 8px;color:#c9d3e6;font-size:15px}
+  .rule b{color:#fff}
+  .foot{color:var(--muted);font-size:13px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Four Demos: Convergence &amp; Orchestration</h1>
+  <p class="sub">A field guide to telling <code>autoresearch-loop</code>, <code>self-correcting-loop</code>, <code>convergence-pipeline</code>, and <code>subagent-orchestration</code> apart.</p>
+  <p class="stamp">Reconstructed from each repo's <code>README.md</code> + <code>SKILL.md</code> · 2026-06-26</p>
+</header>
+
+<p class="lead">The thing that makes these easy to confuse: <b>three are the same shape</b> — iterate <i>one</i> artifact against <i>one</i> judge until it converges — and they differ only in what the judge is. <b>The fourth is unrelated</b>: it splits one task across many parallel workers and merges them.</p>
+
+<div class="tree">
+  <p class="tlabel">The 3 + 1 structure</p>
+  <div class="row">
+    <div class="leaf auto"><b>autoresearch-loop</b><small>judge = a <b>number</b> → hill-climb to "best"</small></div>
+    <div class="leaf self"><b>self-correcting-loop</b><small>judge = <b>pass/fail</b> → repair to "green"</small></div>
+    <div class="leaf conv"><b>convergence-pipeline</b><small><b>chains</b> the two: optimize, then verify</small></div>
+  </div>
+  <div class="famgrid">
+    <div class="fambox">
+      <h4>Convergence family <span class="pill auto">#1</span><span class="pill self">#2</span><span class="pill conv">#3</span></h4>
+      <p>One artifact, one evaluator, iterate to convergence. Temporal: improve over rounds. #3 is literally #1 followed by #2.</p>
+    </div>
+    <div class="fambox">
+      <h4>Orthogonal <span class="pill fan">#4</span></h4>
+      <p><b>subagent-orchestration</b> — not a loop. Spatial: split one task across N parallel subagents in their own context windows, then a synthesizer merges. Fan-out → fan-in.</p>
+    </div>
+  </div>
+</div>
+
+<h2>1 · autoresearch-loop <span class="em">the optimizer</span></h2>
+<div class="card auto">
+  <h3><span class="dot auto"></span>autoresearch-engine <span class="cmd">/dragan:autoresearch-loop</span></h3>
+  <div class="repo">Kjdragan/demo-autoresearch-engine · a framework-agnostic port of karpathy/autoresearch</div>
+  <p>A self-driving hill-climb. Give it one mutable artifact, a read-only evaluator that returns <b>one comparable scalar</b>, and a proposer. It loops: <code>propose → apply → score → keep-if-better / revert-if-worse → log to results.tsv → repeat</code> until the score plateaus. The artifact is left holding the best variant; the ledger is the full audit trail. Use it when "better vs worse" is a <b>number</b> and there's no single right answer, just <i>more optimal</i>.</p>
+  <div class="meta">
+    <div><div class="k">Judge</div><div class="v">scalar number (min or max)</div></div>
+    <div><div class="k">The move</div><div class="v">keep-better / revert-worse (coordinate descent, one knob/step)</div></div>
+    <div><div class="k">Stops when</div><div class="v">score plateaus (patience)</div></div>
+  </div>
+</div>
+
+<h2>2 · self-correcting-loop <span class="em">the verifier / repairer</span></h2>
+<div class="card self">
+  <h3><span class="dot self"></span>self-correcting-loop <span class="cmd">/dragan:self-correcting-loop</span></h3>
+  <div class="repo">Kjdragan/demo-self-correcting-loop · "loops, not prompts"</div>
+  <p>Generate a candidate → run a <b>real, executable rubric</b> (pytest, jsonschema, a compiler, a linter) → if it fails, feed the <i>actual</i> failure output back and revise → repeat until it passes or a round cap. The rubric is ground truth and is hidden from the generator, so the model satisfies the <i>check</i>, not the test text. Use it when correctness is <b>pass/fail</b> and you can <i>run</i> the check.</p>
+  <div class="meta">
+    <div><div class="k">Judge</div><div class="v">executable rubric (pass/fail)</div></div>
+    <div><div class="k">The move</div><div class="v">revise, conditioned on the real failure</div></div>
+    <div><div class="k">Stops when</div><div class="v">the rubric passes (or round cap)</div></div>
+  </div>
+</div>
+
+<h2>3 · convergence-pipeline <span class="em">the composition</span></h2>
+<div class="card conv">
+  <h3><span class="dot conv"></span>optimize-then-verify <span class="cmd">/dragan:convergence-pipeline</span></h3>
+  <div class="repo">Kjdragan/demo-optimize-then-verify · chains #1 and #2 (vendored verbatim — genuine reuse)</div>
+  <p>The other two, chained — <i>not</i> reimplemented. <b>Stage 1</b> runs <code>autoresearch-loop</code> to hill-climb a draft toward a scalar score; <b>Stage 2</b> seeds <code>self-correcting-loop</code> with Stage 1's winner and repairs it against an executable rubric until it passes. Order matters: get something <i>robust</i> first, then make it <i>exactly correct</i>. Use it only when a task has <b>both</b> a soft metric to maximize <b>and</b> a hard check it must ultimately pass.</p>
+  <div class="meta">
+    <div><div class="k">Judge</div><div class="v">scalar → then pass/fail</div></div>
+    <div><div class="k">The move</div><div class="v">optimize, then repair the winner</div></div>
+    <div><div class="k">Stops when</div><div class="v">the verifier passes</div></div>
+  </div>
+</div>
+
+<h2>4 · subagent-orchestration <span class="em">the odd one out</span></h2>
+<div class="card fan">
+  <h3><span class="dot fan"></span>subagent-orchestration <span class="cmd">/dragan:subagent-orchestration</span></h3>
+  <div class="repo">Kjdragan/demo-subagent-orchestration · Claude Agent SDK fan-out → fan-in</div>
+  <p>Nothing to do with convergence. A Claude Agent SDK orchestrator declares <b>named subagents in code</b> (<code>ClaudeAgentOptions.agents=</code>), fans one bounded task out to several of them <b>in parallel</b> (multiple <code>Agent</code> tool-use blocks in one turn, each its own clean context window), then a synthesizer merges the results. The skill carries four hard-won traps: recursion fork-bomb isolation, decoupling the file-write from the model, Anthropic-vs-ZAI auth routing, and <i>proving</i> the fan-out actually happened (≥2 distinct subagents) rather than trusting exit-0. Use it when one task has <b>independent facets</b> to handle concurrently and then combine.</p>
+  <div class="meta">
+    <div><div class="k">Judge</div><div class="v">a synthesizer (the merge agent)</div></div>
+    <div><div class="k">The move</div><div class="v">dispatch N workers at once → merge</div></div>
+    <div><div class="k">Stops when</div><div class="v">all workers return + synthesis written</div></div>
+  </div>
+</div>
+
+<h2>One-glance distinguisher</h2>
+<table>
+  <thead><tr><th>Skill</th><th>Loop?</th><th>Judge</th><th>The "move"</th><th>Stops when</th><th>Reach for it when…</th></tr></thead>
+  <tbody>
+    <tr><td><span class="dot auto"></span><b>autoresearch-loop</b></td><td>yes</td><td>scalar number</td><td>keep-better / revert-worse</td><td>score plateaus</td><td>"make this measurably better" — no single right answer</td></tr>
+    <tr><td><span class="dot self"></span><b>self-correcting-loop</b></td><td>yes</td><td>pass/fail (runnable)</td><td>revise from real failure</td><td>rubric passes</td><td>"right vs wrong" is a check you can run</td></tr>
+    <tr><td><span class="dot conv"></span><b>convergence-pipeline</b></td><td>yes ×2</td><td>scalar → then pass/fail</td><td>optimize, then repair</td><td>verifier passes</td><td>you have <b>both</b> a metric <i>and</i> a hard check</td></tr>
+    <tr><td><span class="dot fan"></span><b>subagent-orchestration</b></td><td>no — parallel</td><td>a synthesizer</td><td>dispatch N → merge</td><td>workers return</td><td>one task with <b>independent facets</b> to combine</td></tr>
+  </tbody>
+</table>
+
+<div class="rule">
+  <h3>The fastest decision rule</h3>
+  <p><b>Is your judge a number or a pass/fail check?</b></p>
+  <p>→ Number → <b>autoresearch-loop</b>. &nbsp; → Pass/fail → <b>self-correcting-loop</b>. &nbsp; → Both → <b>convergence-pipeline</b>.</p>
+  <p>Not iterating at all, but <b>splitting</b> work across parallel workers? → <b>subagent-orchestration</b>.</p>
+</div>
+
+<p class="foot">Companion exhibit: <i>Chaining the Loops + Non-Deterministic Adaptation</i> — the tier-escalation ladder and how to point these at a subjective/non-deterministic goal.</p>
+</div>
+</body>
+</html>
