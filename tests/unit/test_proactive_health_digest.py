@@ -18,6 +18,7 @@ from universal_agent.services.proactive_health_notifier import (
     KEVIN_EMAIL,
     _format_digest_email,
     _operator_plain_summary,
+    _synthesize_plain_lead,
     send_critical_digest,
 )
 
@@ -102,6 +103,49 @@ def test_digest_leads_with_plain_language_then_technical_detail():
     # Technical specificity is preserved for the handoff.
     assert "metric_key=disk_usage_health" in technical
     assert "df -h" in technical
+
+
+def test_format_digest_uses_llm_lead_over_deterministic_summaries():
+    """When an LLM lead is supplied, it replaces the per-finding deterministic
+    summaries in the plain section (technical detail unaffected)."""
+    finding = {
+        "finding_id": "invariant:disk_usage_health",
+        "metric_key": "disk_usage_health",
+        "severity": "critical",
+        "title": "Disk usage across monitored mounts within safe range",
+        "recommendation": "Disk pressure ... <technical>",
+        "runbook_command": "df -h",
+        "observed_value": {"worst_used_pct": 91.3},
+        "metadata": {"operator_summary": "DETERMINISTIC_FALLBACK_TEXT"},
+    }
+    llm_lead = "The server is almost out of disk space — about 17 GB left."
+    _, body = _format_digest_email([finding], "2026-06-26T00:20:34Z", plain_lead=llm_lead)
+    plain, _, technical = body.partition("TECHNICAL DETAIL")
+    assert llm_lead in plain
+    assert "DETERMINISTIC_FALLBACK_TEXT" not in plain  # LLM lead won
+    assert "metric_key=disk_usage_health" in technical  # technical preserved
+
+
+@pytest.mark.asyncio
+async def test_synthesize_plain_lead_falls_back_to_none_on_failure(monkeypatch):
+    """Any LLM error → None (caller uses the deterministic lead); never raises."""
+    async def _boom(*a, **k):
+        raise RuntimeError("zai down")
+
+    monkeypatch.setattr(notifier, "_call_llm", _boom, raising=False)
+    # _call_llm is imported function-locally; patch at its source module too.
+    import universal_agent.services.llm_classifier as llmc
+
+    monkeypatch.setattr(llmc, "_call_llm", _boom, raising=False)
+    out = await _synthesize_plain_lead(_criticals(1), "t")
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_synthesize_plain_lead_disabled_returns_none(monkeypatch):
+    monkeypatch.setenv("UA_HEARTBEAT_PROACTIVE_HEALTH_LLM_LEAD", "0")
+    out = await _synthesize_plain_lead(_criticals(1), "t")
+    assert out is None
 
 
 def test_operator_plain_summary_falls_back_when_unauthored():
