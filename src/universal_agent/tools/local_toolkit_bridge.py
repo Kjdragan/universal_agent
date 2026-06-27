@@ -422,6 +422,8 @@ async def _agentmail_send_with_local_attachments_impl(args: dict[str, Any]) -> d
                 message_id=str(result_payload.get("messageId") or result_payload.get("message_id") or "").strip(),
                 draft_id=str(result_payload.get("draftId") or result_payload.get("draft_id") or "").strip(),
                 attachment_paths=attachment_paths,
+                subject=subject,
+                recipient=", ".join(str(item or "").strip() for item in to if str(item or "").strip()),
             )
             return {"content": [{"type": "text", "text": f"Email successfully sent.\n{resp_body}"}]}
     except urllib.error.HTTPError as e:
@@ -430,7 +432,7 @@ async def _agentmail_send_with_local_attachments_impl(args: dict[str, Any]) -> d
         return {"content": [{"type": "text", "text": f"error: {str(e)}"}]}
 
 
-def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: str = "", attachment_paths: list[str] = None) -> None:
+def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: str = "", attachment_paths: list[str] = None, subject: str = "", recipient: str = "") -> None:
     try:
         from universal_agent import task_hub
         from universal_agent.agentmail_official import (
@@ -445,19 +447,19 @@ def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: s
     run_kind = ""
     claimed_task_ids: list[str] = []
     conn = None
-    
+
     if attachment_paths is None:
         attachment_paths = []
-        
+
     work_product_paths = []
     generic_attachments = []
-    
+
     for p in attachment_paths:
         if "work_products" in str(p) or "UA_ARTIFACTS_DIR" in str(p):
             work_product_paths.append(str(p))
         else:
             generic_attachments.append(str(p))
-            
+
     try:
         runtime, bridge, mapping, run_kind, claimed_task_ids, conn = resolve_email_tracking_from_runtime()
         if conn is None:
@@ -478,6 +480,33 @@ def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: s
                     attachment_paths=generic_attachments,
                     work_product_paths=work_product_paths,
                 )
+        # Cron-run self-sends (e.g. paper_to_podcast resume-runs emailing the
+        # podcast mp3 directly here) bypass cron_artifact_notifier, so no
+        # proactive_artifact_emails row would land and the proactive-health
+        # watchdog would fire a false 'no email in 30h' critical. Record it
+        # via the shared delivery-tracking layer so the row + [<job_id>]
+        # subject tag exist regardless of which path sent the email.
+        if run_kind == "cron" and message_id:
+            cron_job_id = str(
+                (runtime.metadata if isinstance(getattr(runtime, "metadata", None), dict) else {}).get("job_id")
+                or ""
+            ).strip()
+            if cron_job_id:
+                try:
+                    from universal_agent.services.cron_artifact_notifier import (
+                        record_cron_run_delivery_email,
+                    )
+
+                    record_cron_run_delivery_email(
+                        conn,
+                        job_id=cron_job_id,
+                        message_id=message_id,
+                        subject=subject,
+                        recipient=recipient,
+                        source="agentmail_send_with_local_attachments",
+                    )
+                except Exception:
+                    pass
     except Exception:
         return
     finally:

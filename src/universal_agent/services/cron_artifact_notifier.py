@@ -467,6 +467,143 @@ def notify_cron_artifact_fire_and_forget(
             )
 
 
+def record_cron_run_delivery_email(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    message_id: str = "",
+    subject: str = "",
+    recipient: str = "",
+    source: str = "",
+) -> Optional[dict[str, Any]]:
+    """Record a cron run's *self-sent* email as a delivered proactive artifact.
+
+    This is the delivery-tracking layer that catches sends the notifier
+    itself never sees. ``notify_cron_artifact`` only records the
+    *notifier*-composed disclosure email; when the agent inside the cron run
+    delivers the real artifact directly via an AgentMail tool (canonical case:
+    ``paper_to_podcast_daily`` resume-runs emailing the podcast mp3 through
+    ``mcp__internal__agentmail_send_with_local_attachments`` or
+    ``mcp__AgentMail__send_message``), that send bypasses the notifier. Without
+    this layer no row lands in ``proactive_artifact_emails`` and the subject
+    lacks the ``[<job_id>]`` tag the ``paper_to_podcast_email_delivery``
+    proactive-health watchdog keys on — producing a recurring false 'no email
+    in 30h' *critical* even though Kevin actually received the podcast
+    (verified Amazon SES ``message_id``).
+
+    Best-effort and idempotent:
+
+      1. **Dedup on ``message_id``** — skip if a row already exists for this
+         ``message_id`` (the notifier already recorded the same send, or a
+         retry re-fired).
+      2. **Tag the subject** — prepend ``[<job_id>]`` unless the agent's own
+         subject already carries it, so the watchdog's
+         ``subject LIKE '[<job_id>]%'`` match succeeds. The original subject
+         is preserved in ``metadata_json``.
+      3. **Coalesce the artifact** — attach the email to an existing same-cron
+         open ``proactive_artifacts`` row when one exists (matched on
+         ``job_id``, within the dedup window); only mint a minimal
+         surfaced/emailed artifact when none exists, so a pure self-send run
+         still records against something (``record_email_delivery`` requires a
+         pre-existing artifact row).
+
+    Never raises — a failure here must never propagate into the send path or
+    the post-tool hook.
+    """
+    clean_job_id = str(job_id or "").strip()
+    clean_message_id = str(message_id or "").strip()
+    if not clean_job_id or not clean_message_id:
+        return None
+    try:
+        proactive_artifacts.ensure_schema(conn)
+
+        # 1. Dedup — the notifier (or a retry) already recorded this exact send.
+        if conn.execute(
+            "SELECT 1 FROM proactive_artifact_emails WHERE message_id = ? LIMIT 1",
+            (clean_message_id,),
+        ).fetchone():
+            return None
+
+        # 2. Tag the subject with the bracketed job id the watchdog matches.
+        clean_subject = str(subject or "").strip()
+        prefix = f"[{clean_job_id}]"
+        tagged_subject = (
+            clean_subject
+            if clean_subject.startswith(prefix)
+            else f"{prefix} {clean_subject}".strip()[:200]
+        )
+
+        # 3. Coalesce onto an existing same-cron artifact; else mint a minimal
+        #    one so record_email_delivery (which requires a pre-existing
+        #    artifact) can attach the row.
+        linked_task_id = f"cron:{clean_job_id}"
+        artifact = _find_recent_open_artifact(
+            conn,
+            source_kind=DEFAULT_SOURCE_KIND,
+            linked_task_id=linked_task_id,
+            job_id=clean_job_id,
+            window_hours=_dedup_window_hours(),
+        )
+        if artifact is None:
+            source_ref = f"{clean_job_id}:{int(time.time())}"
+            artifact_id = proactive_artifacts.make_artifact_id(
+                source_kind=DEFAULT_SOURCE_KIND,
+                source_ref=source_ref,
+                artifact_type=DEFAULT_ARTIFACT_TYPE,
+                title=clean_subject or clean_job_id,
+            )
+            proactive_artifacts.upsert_artifact(
+                conn,
+                artifact_id=artifact_id,
+                artifact_type=DEFAULT_ARTIFACT_TYPE,
+                source_kind=DEFAULT_SOURCE_KIND,
+                source_ref=source_ref,
+                title=clean_subject or clean_job_id,
+                summary="Cron-run self-send delivery recorded by the delivery-tracking layer.",
+                status=proactive_artifacts.ARTIFACT_STATUS_SURFACED,
+                delivery_state=proactive_artifacts.DELIVERY_EMAILED,
+                metadata={
+                    "job_id": clean_job_id,
+                    "task_id": linked_task_id,
+                    "self_send": True,
+                    "source": source or "cron_self_send",
+                },
+            )
+            artifact = proactive_artifacts.get_artifact(conn, artifact_id)
+
+        artifact_id = str((artifact or {}).get("artifact_id") or "").strip()
+        if not artifact_id:
+            return None
+
+        result = proactive_artifacts.record_email_delivery(
+            conn,
+            artifact_id=artifact_id,
+            message_id=clean_message_id,
+            subject=tagged_subject,
+            recipient=str(recipient or "").strip(),
+            metadata={
+                "kind": "cron_self_send",
+                "source": source or "cron_self_send",
+                "original_subject": clean_subject,
+            },
+        )
+        logger.info(
+            "cron_artifact_notifier: recorded cron self-send delivery for job %s "
+            "(message_id=%s, recipient=%s)",
+            clean_job_id,
+            clean_message_id,
+            recipient,
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 — best-effort; never disrupt the send path
+        logger.debug(
+            "cron_artifact_notifier: record_cron_run_delivery_email failed for job %s: %s",
+            clean_job_id,
+            exc,
+        )
+        return None
+
+
 # ── Artifact discovery ─────────────────────────────────────────────────
 
 
@@ -1154,6 +1291,7 @@ __all__ = [
     "is_digest_paused",
     "notify_cron_artifact",
     "notify_cron_artifact_fire_and_forget",
+    "record_cron_run_delivery_email",
     "set_digest_pause",
     "sign_ack_token",
     "sign_digest_pause_token",
