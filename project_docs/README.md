@@ -26,7 +26,7 @@ _System-level design & cross-cutting models_
 - **[Task Lifecycle End-to-End](01_architecture/02_task_lifecycle_end_to_end.md)** — Trace one unit of work ingress→queue→claim→execute→finalize→deliver across channels. _(verified 2026-06-22)_
 - **[Database Architecture](01_architecture/03_database_architecture.md)** — DB inventory, schema, segregation boundaries (activity_state.db is canonical Task Hub DB, NOT task_hub.db), pruning. _(verified 2026-06-19)_
 - **[Model Choice & Resolution](01_architecture/04_model_choice_and_resolution.md)** — resolve_opus/sonnet/haiku, ZAI proxy vs Anthropic-native routing, the three execution profiles, inference health governance. _(verified 2026-06-21)_
-- **[Hook System Architecture](01_architecture/05_hook_system.md)** — Hook lifecycle, permissions, subagent architecture as wired in code. _(verified 2026-06-18)_
+- **[Hook System Architecture](01_architecture/05_hook_system.md)** — Hook lifecycle, permissions, subagent architecture as wired in code. _(verified 2026-06-26)_
 - **[Event Streaming & Tracing](01_architecture/06_event_streaming_and_tracing.md)** — AgentEvent emission, event stream protocol, transcript/trace building, Logfire links. _(verified 2026-06-22)_
 - **[Task Type & Mission System Registry](01_architecture/07_task_type_registry.md)** — Canonical catalog of every task type / mission system with lifecycle status (canonical/active_secondary/deprecated/removed) _(verified 2026-06-22)_
 
@@ -50,7 +50,7 @@ _VP workers, Simone orchestration, heartbeat, cron, idle dispatch, agent college
 - **[Heartbeat Service](03_agents/03_heartbeat_service.md)** — Heartbeat loop, max_proactive_per_cycle, findings schema/contract, auto-triage→Simone. _(verified 2026-06-20)_
 - **[Cron & Scheduling](03_agents/04_cron_and_scheduling.md)** — Cron registration, deploy-window detection (suppress restart noise), catch-up, system cron jobs. _(verified 2026-06-22)_
 - **[Idle Dispatch & Goal Loop](03_agents/05_idle_dispatch_and_goal_loop.md)** — Idle dispatch nudge mechanism, goal loop & completion attestation, failure-mode classification & rescue verbs. _(verified 2026-06-22)_
-- **[Agent College](03_agents/06_agent_college.md)** — Failure-analysis learning loop (if present/active in code; dispose if dead). _(verified 2026-06-16)_
+- **[Agent College](03_agents/06_agent_college.md)** — Failure-analysis learning loop (if present/active in code; dispose if dead). _(verified 2026-06-23)_
 
 ## 04_intelligence
 
@@ -58,19 +58,19 @@ _CSI, intel lanes, research, wiki, memory, proactive pipeline, mission control, 
 
 - **[CSI Architecture](04_intelligence/01_csi_architecture.md)** — CSI overall: convergence pipeline, vault intelligence pass/persistence, db split-brain (_csi_default_db_path), content-safety fail-closed gotcha. _(verified 2026-06-22)_
 - **[URL Judging & Research Grounding](04_intelligence/02_url_judging_and_research_grounding.md)** — Three-pass URL enrichment (pre-filter→LLM judge (resolve_opus)→fetch), trust_source bypass, research_grounding allowlist (separate path). _(verified 2026-06-14)_
-- **[Intel Lanes Configuration](04_intelligence/03_intel_lanes_config.md)** — Lane config schema, cron schedule (3x daily 08/16/22 CT), research_allowlist semantics. _(verified 2026-06-16)_
+- **[Intel Lanes Configuration](04_intelligence/03_intel_lanes_config.md)** — Lane config schema, cron schedule (3x daily 08/16/22 CT), research_allowlist semantics. _(verified 2026-06-23)_
 - **[ClaudeDevs X Intelligence](04_intelligence/04_claudedevs_x_intel.md)** — @ClaudeDevs polling lane, packet outputs, vault-as-canonical-product. _(verified 2026-06-21)_
 - **[YouTube CSI Flow](04_intelligence/05_youtube_csi_flow.md)** — YouTube feeds topology, dual-pipeline (UA-native playlist watcher vs CSI RSS feed — separate DBs), residential proxy ingestion. _(verified 2026-06-22)_
 - **[Demo Triage](04_intelligence/06_demo_triage.md)** — Demo candidate store, ranking, triage policy. _(verified 2026-06-22)_
 - **[LLM Wiki System](04_intelligence/07_llm_wiki.md)** — Vault management, internal sync/projection, query, LLM extraction, kb registry. _(verified 2026-06-22)_
-- **[Memory System](04_intelligence/08_memory_system.md)** — Tiered memory, memory store/index, vector backends (Chroma/Lance), orchestrator, feature flags. _(verified 2026-06-17)_
-- **[Lossless Memory](04_intelligence/09_lossless_memory.md)** — DAG compression & SQLite history. _(verified 2026-06-18)_
+- **[Memory System](04_intelligence/08_memory_system.md)** — Tiered memory, memory store/index, vector backends (Chroma/Lance), orchestrator, feature flags. _(verified 2026-06-24)_
+- **[Lossless Memory](04_intelligence/09_lossless_memory.md)** — DAG compression & SQLite history. _(verified 2026-06-26)_
 - **[Proactive Pipeline](04_intelligence/10_proactive_pipeline.md)** — raw→knowledge blocks→bounded retrieval→LLM synthesis→gated action. _(verified 2026-06-22)_
 - **[Mission Control Intelligence](04_intelligence/11_mission_control_intelligence.md)** — Operator intelligence surface, supervisor snapshots (note: Operator Brief panel removed Phase 8). _(verified 2026-06-22)_
-- **[Discord Intelligence](04_intelligence/12_discord_intelligence.md)** — Discord message pipeline, triage, calendar sync (gws materialization). _(verified 2026-06-12)_
+- **[Discord Intelligence](04_intelligence/12_discord_intelligence.md)** — Discord message pipeline, triage, calendar sync (gws materialization). _(verified 2026-06-26)_
 - **[Insight Pipeline Build Plan (Phases 0.5/4/5/6)](04_intelligence/13_insight_pipeline_build_plan.md)** `[archived]` — Living build/status plan: close the brief->digest email gap, digest dedup+template, feedback/index verify, gated legacy deletion. _(verified 2026-06-22)_
 - **[Intelligence Model Tiering by Process](04_intelligence/14_model_tiering_by_process.md)** — Per-process registry of which GLM tier each inference call uses and why (air/turbo/flagship), the decision rubric, and the 2026-06-10 429-burst remediation. _(verified 2026-06-14)_
-- **["ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign"](04_intelligence/15_demo_tutorial_pipeline_adr.md)** `[draft]` — Brief→Tutorial→Demo ladder; demo = runnable mini-app of the video's capability (native stack or Claude Agent SDK); gated auto-build (~10/day) _(verified 2026-06-15)_
+- **["ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign"](04_intelligence/15_demo_tutorial_pipeline_adr.md)** `[draft]` — Brief→Tutorial→Demo ladder; demo = runnable mini-app of the video's capability (native stack or Claude Agent SDK); gated auto-build (~10/day) _(verified 2026-06-22)_
 
 ## 05_channels
 
@@ -86,30 +86,29 @@ _Email/AgentMail, webhooks, telegram, discord ops, web-ui communication_
 
 _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environments, networking_
 
-- **[Secrets & Infisical](06_platform/01_secrets_and_infisical.md)** — Infisical as SSOT, initialize_runtime_secrets, bootstrap-identity-key immutability (overwrite=True but identity preserved), env rendering, dev mirrors prod. _(verified 2026-06-17)_
+- **[Secrets & Infisical](06_platform/01_secrets_and_infisical.md)** — Infisical as SSOT, initialize_runtime_secrets, bootstrap-identity-key immutability (overwrite=True but identity preserved), env rendering, dev mirrors prod. _(verified 2026-06-25)_
 - **[Runtime Bootstrap & Profiles](06_platform/02_runtime_bootstrap_and_profiles.md)** — Runtime stage resolution {development,staging,local,production}, deployment profiles, factory role policy, machine identity. _(verified 2026-06-22)_
 - **[Identity & Auth](06_platform/03_identity_and_auth.md)** — Identity registry/resolver, email recipient resolution, ops auth (JWT + legacy token), dashboard auth (cookie+HMAC), three trust surfaces. _(verified 2026-06-22)_
 - **[Deployment & CI/CD](06_platform/04_deployment_and_cicd.md)** — Branch model (any→PR→main→deploy; develop retired; feature/latest2 retired), pr-validate gates, auto-merge allowlist + PAT, concurrency guard, healthcheck gates, paths-ignore, crashloop abort. _(verified 2026-06-22)_
-- **[Execution Environments](06_platform/05_environments.md)** — Three Claude execution profiles (interactive Max / autonomous ZAI / Cody Anthropic-default-since-2026-05-11), local dev (just dev), demo execution, model routing. _(verified 2026-06-16)_
+- **[Execution Environments](06_platform/05_environments.md)** — Three Claude execution profiles (interactive Max / autonomous ZAI / Cody Anthropic-default-since-2026-05-11), local dev (just dev), demo execution, model routing. _(verified 2026-06-23)_
 - **["Networking: Tailscale, Residential Proxy, SSHFS"](06_platform/06_networking_tailscale_proxy_sshfs.md)** — Tailscale (uaonvps MagicDNS vs srv1360701 raw hostname), residential proxy (DataImpulse default/Webshare failover, VPS-only), SSHFS cross-machine mount. _(verified 2026-06-21)_
 - **[Claude Max OAuth Credentials (CLAUDE_CODE_OAUTH_TOKEN)](06_platform/07_claude_max_oauth_credentials.md)** — CLAUDE_CODE_OAUTH_TOKEN in Infisical is the SSOT for Cody-on-Anthropic / demo builds; refresh runbook + gotchas. _(verified 2026-06-11)_
 - **["ADR: Scheduling Substrate Redesign (deploy-resilient timers + read-only Mission Control)"](06_platform/08_scheduling_substrate_adr.md)** — Deploy-resilient scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. _(verified 2026-06-22)_
-- **["Agent Runbook: Reaching the Production VPS (read live state without fighting SSH)"](06_platform/09_agent_vps_access_runbook.md)** — Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) _(verified 2026-06-15)_
+- **["Agent Runbook: Reaching the Production VPS (read live state without fighting SSH)"](06_platform/09_agent_vps_access_runbook.md)** — Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) _(verified 2026-06-23)_
 - **["ZAI Rate Limiter & Inference Governance"](06_platform/10_zai_rate_limiter.md)** — Canonical doc for ZAI inference governance: the ZAIRateLimiter concurrency/backoff/FUP control, the zai_observability httpx events hook, the zai_inference_health watchdog, and the half-adoption reality (most opus callers bypass the limiter). _(verified 2026-06-22)_
-- **["ADR: Autonomous doc-drift issue triage & fix — three delivery options"](06_platform/11_autonomous_doc_triage_options_adr.md)** — Options for an autonomous Opus agent that triages/fixes the nightly doc-drift issues: (a) _(verified 2026-06-16)_
+- **["ADR: Autonomous doc-drift issue triage & fix — three delivery options"](06_platform/11_autonomous_doc_triage_options_adr.md)** — Options for an autonomous Opus agent that triages/fixes the nightly doc-drift issues: (a) _(verified 2026-06-26)_
 - **["ADR: Deploy-Restart Resilience for the Gateway (cut the churn, protect in-process work)"](06_platform/12_deploy_restart_resilience_adr.md)** — ADR: cut deploy-restart churn + protect in-process work across gateway restarts (coalesce queued deploys, drain/handoff in-flight turns). _(verified 2026-06-22)_
-- **["ADR: Resumable External Jobs (the requeue must have something to adopt)"](06_platform/13_resumable_external_jobs_adr.md)** — ADR (accepted 2026-06-16): resumable external jobs so a requeue has a durable record to adopt; implemented for paper_to_podcast. _(verified 2026-06-16)_
-- **[Local LLM Inference (Ollama on the Desktop GPU)](06_platform/14_local_llm_inference.md)** — Running an LLM locally on the desktop GPU via Ollama: the desktop-vs-VPS GPU split, user-local (no-root) install, the standard model `qwen2.5-coder:7b` + the 6GB guards (≤5GB/model, ≤3 on disk), the `provision-local-gpu-ollama` skill, and the GPU-bound-demo desktop-build approval gate. _(verified 2026-06-22)_
+- **["ADR: Resumable External Jobs (the requeue must have something to adopt)"](06_platform/13_resumable_external_jobs_adr.md)** — ADR (accepted 2026-06-16): resumable external jobs so a requeue has a durable record to adopt; implemented for paper_to_podcast. _(verified 2026-06-24)_
 
 ## 07_tools
 
 _MCP server, tools/bridges, SDK integration, skills_
 
 - **[MCP Server & Tools](07_tools/01_mcp_server_and_tools.md)** — FastMCP server, tool registry/discovery, bridge architecture, research pipeline tools, workspace resolution in tools, circuit breakers. _(verified 2026-06-22)_
-- **[SDK Integration](07_tools/02_sdk_integration.md)** — Claude Agent SDK integration helpers, session history adapter, runtime info, task events, harness planning phase. _(verified 2026-06-15)_
+- **[SDK Integration](07_tools/02_sdk_integration.md)** — Claude Agent SDK integration helpers, session history adapter, runtime info, task events, harness planning phase. _(verified 2026-06-24)_
 - **[Skills System](07_tools/03_skills_system.md)** — Skills architecture, invocation by principals, dependency/gated-binary setup. _(verified 2026-06-22)_
-- **[HyperFrames Video Generation (Studio + Pipeline)](07_tools/04_hyperframes_video_generation.md)** — Studio + pipeline (external project in Cody_Code_Generations/): beat-sheet pipeline, Agent SDK app, learning loop, widget strategy, UA adoption status (design-only). _(verified 2026-06-17)_
-- **[Skill-Description Optimizer (and why description-tuning has a ceiling)](07_tools/05_skill_description_optimizer.md)** — The UA auth-mode optimizer + reusable `inference_auth`/`skill_triggering_eval` services; the full 2026-06-22 investigation (stale bundled optimizer, GLM-is-NOT-skill-blind correction, Opus vs GLM head-to-head) and reproduction steps. **Conclusion: a weak vein to mine — the descriptions are already passable; description-tuning hit a ceiling (and naming an excluded case can backfire).** _(verified 2026-06-22)_
+- **[HyperFrames Video Generation (Studio + Pipeline)](07_tools/04_hyperframes_video_generation.md)** — Studio + pipeline (external project in Cody_Code_Generations/): beat-sheet pipeline, Agent SDK app, learning loop, widget strategy, UA adoption status (design-only). _(verified 2026-06-25)_
+- **[Convergence Skill Suite](07_tools/06_convergence_skill_suite.md)** — External dragan-plugin skill suite (5 primitives + 2 masters) _(verified 2026-06-27)_
 
 ## 08_operations
 
@@ -125,4 +124,4 @@ _Operating playbook, verification rules, dormancy, VPS recovery, incident patter
 
 ---
 
-_63/63 canonical docs present. Legacy point-in-time reports are archived (search-excluded) — see `00_DOCUMENTATION_REFACTOR_PLAN.md` §5._
+_64/64 canonical docs present. Legacy point-in-time reports are archived (search-excluded) — see `00_DOCUMENTATION_REFACTOR_PLAN.md` §5._
