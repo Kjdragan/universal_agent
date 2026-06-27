@@ -188,3 +188,165 @@ def test_never_raises_on_bad_db():
         recipient=RECIPIENT,
     )
     assert result is None
+
+
+# ── Runtime-path regressions (second-pass fix for #1196) ─────────────────
+# The tests above pin the shared ``record_cron_run_delivery_email`` layer with
+# direct calls. The 2026-06-26 false critical slipped past because no test
+# exercised the REAL path: a cron-context ``agentmail_send_with_local_attachments``
+# send flowing through the tool impl → ``_record_agentmail_delivery_from_runtime``
+# → ``resolve_email_tracking_from_runtime``. That path silently no-op'd because
+# ``InProcessGateway.run_query`` (the cron LLM execution path) never bound
+# ``request_runtime``, so ``get_request_runtime()`` returned None inside the
+# in-process tool (conn is None → skip). These two tests close that gap end to end.
+
+
+def test_self_send_via_runtime_records_tagged_row(tmp_path, monkeypatch):
+    """A cron-context ``agentmail_send_with_local_attachments`` send must land a
+    watchdog-tagged ``proactive_artifact_emails`` row through the REAL tool-impl
+    runtime path — not a direct ``record_cron_run_delivery_email`` call.
+
+    Reproduces the 2026-06-26 shape: the podcast email sent fine (real SES
+    message_id) but no delivery row landed, so the
+    ``paper_to_podcast_email_delivery`` watchdog fired a false 'no email in 30h'
+    critical. Before the gateway fix, ``get_request_runtime()`` was None inside
+    the in-process tool, so the recorder's ``conn is None`` guard skipped it."""
+    import asyncio
+    import urllib.request as urllib_request
+
+    from universal_agent.request_runtime import (
+        RequestRuntimeContext,
+        reset_request_runtime,
+        set_request_runtime,
+    )
+    from universal_agent.tools.local_toolkit_bridge import (
+        _agentmail_send_with_local_attachments_impl,
+    )
+
+    # The recorder opens its own connection via get_activity_db_path(); redirect
+    # it to a temp file the test reads back.
+    db_path = tmp_path / "activity_state.db"
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(db_path))
+    seed = sqlite3.connect(str(db_path))
+    seed.row_factory = sqlite3.Row
+    proactive_artifacts.ensure_schema(seed)
+    seed.close()
+
+    # Mock the AgentMail HTTP send so the test never touches the network.
+    class _FakeResp:
+        def __init__(self, body):
+            self._body = body.encode("utf-8")
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def _fake_urlopen(req, data=None, timeout=None):
+        return _FakeResp(json.dumps({"message_id": "ses-cron-runtime-001"}))
+
+    monkeypatch.setattr(urllib_request, "urlopen", _fake_urlopen)
+    monkeypatch.setenv("AGENTMAIL_API_KEY", "test-key")
+
+    # Bind the cron runtime context exactly as the fixed
+    # InProcessGateway.run_query does. metadata["job_id"] is what the recorder
+    # reads to tag the subject for the watchdog.
+    token = set_request_runtime(
+        RequestRuntimeContext(
+            session_id="sess-cron-runtime",
+            workspace_dir=str(tmp_path),
+            source="cron",
+            run_kind="cron",
+            metadata={"source": "cron", "job_id": JOB_ID, "run_kind": "cron"},
+        )
+    )
+    try:
+        result = asyncio.run(
+            _agentmail_send_with_local_attachments_impl(
+                {
+                    "inboxId": "oddcity216@agentmail.to",
+                    "to": [RECIPIENT],
+                    "subject": "Daily paper podcast (resumed run)",
+                    "text": "podcast attached",
+                    "html": "",
+                    "attachment_paths": [],
+                }
+            )
+        )
+    finally:
+        reset_request_runtime(token)
+
+    # The send itself succeeded and surfaced the message_id.
+    assert "ses-cron-runtime-001" in json.dumps(result)
+
+    # The watchdog query must now find the tagged row.
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        total, _last_sent = _watchdog_last_sent(conn)
+        assert total >= 1, "cron-context self-send did not land a watchdog-tagged row"
+        row = conn.execute(
+            "SELECT subject, recipient, message_id FROM proactive_artifact_emails "
+            "WHERE message_id = 'ses-cron-runtime-001'"
+        ).fetchone()
+        assert row is not None, "delivery row missing for the cron self-send"
+        assert row["subject"].startswith(f"[{JOB_ID}]"), row["subject"]
+        assert row["recipient"] == RECIPIENT
+    finally:
+        conn.close()
+
+
+def test_inprocess_gateway_binds_cron_request_runtime(tmp_path):
+    """Pins the root-cause fix directly: ``InProcessGateway.run_query`` (the cron
+    LLM execution path) must bind ``request_runtime`` so in-process internal MCP
+    tools see ``run_kind='cron'`` and ``metadata['job_id']``. Before the fix this
+    binding existed only on the interactive chat path (``gateway_server._run``),
+    so ``get_request_runtime()`` returned None on every cron run and the
+    self-send recorder silently skipped."""
+    import asyncio
+
+    from universal_agent.gateway import GatewayRequest, GatewaySession, InProcessGateway
+    from universal_agent.request_runtime import get_request_runtime
+
+    captured: dict = {}
+
+    class _CapturingGateway(InProcessGateway):
+        async def execute(self, session, request):
+            rt = get_request_runtime()
+            captured["bound"] = rt is not None
+            captured["run_kind"] = getattr(rt, "run_kind", None)
+            captured["source"] = getattr(rt, "source", None)
+            captured["job_id"] = (rt.metadata or {}).get("job_id") if rt else None
+            if False:
+                yield  # force async-generator semantics; yield nothing
+
+    # Bypass the heavy InProcessGateway.__init__ (DB connections / reaper) —
+    # run_query only touches self.execute / self._use_legacy / self._bridge.
+    gw = _CapturingGateway.__new__(_CapturingGateway)
+    gw._use_legacy = False
+    gw._bridge = None
+    gw._hooks = None
+
+    session = GatewaySession(
+        session_id="sess-cron-gw",
+        user_id=f"cron:{JOB_ID}",
+        workspace_dir=str(tmp_path),
+        metadata={"run_kind": "cron", "job_id": JOB_ID, "source": "cron"},
+    )
+    request = GatewayRequest(
+        user_input="run paper_to_podcast",
+        metadata={"source": "cron", "job_id": JOB_ID, "run_kind": "cron"},
+    )
+
+    asyncio.run(gw.run_query(session, request))
+
+    assert captured.get("bound") is True, (
+        "request_runtime was not bound on the cron (InProcessGateway) path"
+    )
+    assert captured.get("run_kind") == "cron"
+    assert captured.get("source") == "cron"
+    assert captured.get("job_id") == JOB_ID
