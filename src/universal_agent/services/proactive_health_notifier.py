@@ -411,8 +411,90 @@ def _operator_plain_summary(finding: dict[str, Any]) -> str:
     return (finding.get("title") or "A health check is failing.").strip()
 
 
-def _format_digest_email(
+def _llm_lead_enabled() -> bool:
+    return _truthy(os.getenv("UA_HEARTBEAT_PROACTIVE_HEALTH_LLM_LEAD"), True)
+
+
+# Haiku-tier ZAI model for the plain-language synthesis — cheap/fast, pinned
+# like proactive_intelligence_report._call_reasoning_llm (glm-4.5-air is the
+# operator-locked haiku tier). Overridable for a quality bump.
+_LEAD_MODEL = os.getenv("UA_PROACTIVE_HEALTH_LEAD_MODEL", "glm-4.5-air")
+
+
+async def _synthesize_plain_lead(
     criticals: list[dict[str, Any]], generated_at: str
+) -> Optional[str]:
+    """LLM-synthesized plain-language lead for the digest — Simone reading the
+    findings and explaining them to Kevin in plain English.
+
+    The PRIMARY path for the email's ``IN PLAIN LANGUAGE`` section: feeding the
+    findings through an LLM yields a cohesive, readable "what's going on"
+    narrative instead of concatenated per-invariant blurbs. Cheap haiku-tier
+    ZAI call (mirrors ``proactive_intelligence_report._call_reasoning_llm``).
+
+    Returns the narrative text, or ``None`` on disable / empty / any failure so
+    the caller falls back to the deterministic ``_operator_plain_summary`` list
+    — the alert is NEVER blocked on the LLM. Never raises.
+    """
+    if not _llm_lead_enabled() or not criticals:
+        return None
+    # Bounded evidence: only the operator-facing fields. Never the raw runbook
+    # (commands) — the LLM lead must stay jargon-free.
+    evidence = [
+        {
+            "title": f.get("title"),
+            "operator_summary": (f.get("metadata") or {}).get("operator_summary")
+            or f.get("operator_summary"),
+            "recommendation": f.get("recommendation"),
+            "observed": f.get("observed_value"),
+            "metric_key": f.get("metric_key"),
+        }
+        for f in criticals
+    ]
+    evidence_json = json.dumps(evidence, default=str)[:6000]
+    system = (
+        "You are Simone, Kevin's AI chief of staff. Kevin reads this on his "
+        "phone and needs to decide, in seconds, whether to hand a production "
+        "health alert to Claude Code. Write the PLAIN-LANGUAGE lead of the "
+        "alert email.\n"
+        "Rules:\n"
+        "- 1-3 short sentences per finding, numbered if more than one.\n"
+        "- Plain English: what is wrong, how serious, and what it means if "
+        "ignored. NO metric_keys, file paths, or shell commands (a percentage "
+        "or 'GB free' is fine; a command or path is not).\n"
+        "- Do NOT restate the action options (handing off / acknowledging) — "
+        "the email adds those separately.\n"
+        "- GROUNDING (strict): every claim must be derivable from the JSON. Do "
+        "not invent causes, numbers, or fixes you cannot see. If the data does "
+        "not explain WHY, say it needs investigation rather than guessing.\n"
+        "- Output plain text only, one finding per line. No preamble, no markdown."
+    )
+    user = (
+        f"{len(criticals)} critical health finding(s) as of {generated_at}. "
+        f"Write the plain-language lead:\n\n```json\n{evidence_json}\n```"
+    )
+    try:
+        from universal_agent.services.llm_classifier import _call_llm
+
+        text = (
+            await _call_llm(
+                system=system, user=user, model=_LEAD_MODEL, max_tokens=400
+            )
+        ).strip()
+        return text or None
+    except Exception as exc:  # noqa: BLE001 — never block the alert on the LLM
+        logger.warning(
+            "proactive_health: LLM lead synthesis failed (%s); using "
+            "deterministic fallback",
+            type(exc).__name__,
+        )
+        return None
+
+
+def _format_digest_email(
+    criticals: list[dict[str, Any]],
+    generated_at: str,
+    plain_lead: Optional[str] = None,
 ) -> tuple[str, str]:
     n = len(criticals)
     plural = "s" if n != 1 else ""
@@ -421,14 +503,24 @@ def _format_digest_email(
     # ── Plain-language lead: what's going on + what the operator can do, so
     #    Kevin can decide whether to hand this off. Technical detail follows
     #    below the divider, for Claude / a handoff to act on.
+    #
+    #    `plain_lead` is an LLM-synthesized narrative (Simone reading the
+    #    findings) — the primary path, for better, cohesive descriptions. When
+    #    it's None (LLM unavailable / failed / disabled) we fall back to the
+    #    deterministic per-finding `operator_summary` list so the alert always
+    #    ships with a readable lead.
     lines = [
         f"{n} health alarm{plural} firing on the production server as of "
         f"{generated_at}.",
         "",
         "IN PLAIN LANGUAGE",
     ]
-    for idx, finding in enumerate(criticals, 1):
-        lines.append(f"  {idx}. {_operator_plain_summary(finding)}")
+    if plain_lead and plain_lead.strip():
+        for para in plain_lead.strip().splitlines():
+            lines.append(f"  {para}" if para.strip() else "")
+    else:
+        for idx, finding in enumerate(criticals, 1):
+            lines.append(f"  {idx}. {_operator_plain_summary(finding)}")
     lines.append("")
     lines.append("WHAT YOU CAN DO")
     lines.append(
@@ -519,7 +611,11 @@ async def send_critical_digest(
         )
         return {"sent": False, "reason": "agentmail_service=None"}
 
-    subject, text = _format_digest_email(criticals, generated_at)
+    # LLM-synthesized plain-language lead (Simone reading the findings); None on
+    # any failure → _format_digest_email falls back to the deterministic
+    # per-finding summaries. The alert is never blocked on the LLM.
+    plain_lead = await _synthesize_plain_lead(criticals, generated_at)
+    subject, text = _format_digest_email(criticals, generated_at, plain_lead=plain_lead)
     finding_ids = [
         str(f.get("finding_id") or f.get("metric_key") or "unknown") for f in criticals
     ]
