@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 import html as _html
 import json
 import logging
+import os
 from pathlib import Path
 import posixpath
 import re
@@ -139,6 +140,10 @@ def _run_publish_script(args: list[str], timeout: float) -> str | None:
             text=True,
             timeout=timeout,
             check=False,
+            # Python is the rendering/injection layer; the shell must do pure transport on
+            # this hop. UA_SCRATCH_RENDERING=1 makes publish_scratch.sh skip its own
+            # markdown-render and HTML-toolbar-inject branches (no recursion, no double work).
+            env={**os.environ, "UA_SCRATCH_RENDERING": "1"},
         )
     except subprocess.TimeoutExpired:
         logger.warning("scratch publish timed out after %ss", timeout)
@@ -231,6 +236,7 @@ def publish_html_to_scratch(
     title: str | None = None,
     description: str | None = None,
     artifact_id: str | None = None,
+    review: bool = True,
     timeout: float = 90.0,
 ) -> str | None:
     """Publish an HTML string to the tailnet scratchpad; return its URL or ``None``.
@@ -246,12 +252,18 @@ def publish_html_to_scratch(
         description: Optional one-line description for the index.
         artifact_id: Optional STABLE id. When set, re-publishing overwrites the same URL
             (one living exhibit you keep refining) instead of minting a new random slug.
+        review: When True (default) the two-way review toolbar is injected into the HTML so
+            the operator can mark up the exhibit (text + element annotations, layout audit)
+            and paste a ``[scratch-review <slug>]`` round back. Idempotent — a document that
+            already carries the toolbar (e.g. one built via :func:`_html_page`) is left as-is.
         timeout: Seconds to wait for the publish (covers the ``ssh``/``scp`` path when
             run off the VPS).
 
     Returns:
         The published ``https://`` URL on success, or ``None`` on any failure.
     """
+    if review:
+        html = _inject_review_toolbar(html)
     return _publish_one(
         content=html,
         filename=filename,
@@ -490,57 +502,131 @@ _REVIEW_TOOLBAR_CSS = """
 .sr-hitem{padding:.35rem .55rem;border-top:1px solid #f0f1f3}
 .sr-hbody{font-size:.85rem;white-space:pre-wrap;color:#1f2328}
 .sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
-@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast{display:none!important}}
+.sr-mark-el{outline:2px dashed #e3b341!important;outline-offset:2px;cursor:pointer}
+main.sr-arming,body.sr-arming{cursor:crosshair}
+main.sr-arming *,body.sr-arming *{cursor:crosshair!important}
+.sr-audit{position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:2147483002;display:flex;gap:.8rem;align-items:center;background:#fff8e1;color:#7a5c00;border:1px solid #e3b341;border-radius:10px;padding:.5rem .8rem;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.18);max-width:92vw}
+.sr-audit-btns{display:flex;gap:.4rem}
+.sr-audit button{background:#fff;border:1px solid #e3b341;border-radius:6px;padding:.25rem .55rem;cursor:pointer;font:inherit;color:#7a5c00}
+.sr-audit button:hover{background:#fff3c4}
+@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast,.sr-audit{display:none!important}}
 """
 
 _REVIEW_TOOLBAR_JS = r"""
 (function(){
   "use strict";
+  if(window.__srToolbar) return; window.__srToolbar=1;
   var m = location.pathname.match(/\/scratch\/([^\/]+)\//);
   var parts = location.pathname.split('/').filter(Boolean);
   var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
   var KEY = 'scratchReview:' + slug;
-  var comments = [];
-  var lastSel = null;  // most recent text selection inside <main>, kept so "+ Comment" works after the click clears it
-  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
-  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
   var HKEY = 'scratchReviewHistory:' + slug;   // archive of all submitted rounds (never auto-cleared)
+  var comments = [];
   var history = [];
-  try { history = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch(e){}
-  function persistHistory(){ try{ localStorage.setItem(HKEY, JSON.stringify(history)); }catch(e){} }
+  var lastSel = null;     // most recent text selection in the content root, kept so "+ Comment" works after the click clears it
+  var armed = false;      // "+ Element" pick mode: the next tap inside the root becomes the target
+  var layoutAudit = [];   // findings from the open-time layout gate
   var viewMode = 'review';  // 'review' (active round) | 'history' (Past comments)
+  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
+  try { history = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch(e){}
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
+  function persistHistory(){ try{ localStorage.setItem(HKEY, JSON.stringify(history)); }catch(e){} }
+
+  // The content root: a rendered page has <main>; a hand-authored exhibit may not, so we
+  // fall back to <body>. Marks, selectors and the layout audit are all scoped to this root.
+  function root(){ return document.querySelector('main') || document.body; }
+  function rootTag(){ return root()===document.body ? 'body' : 'main'; }
+  function inToolbar(node){ return !!(node && node.closest && node.closest('.sr-panel,.sr-fab,.sr-chip,.sr-toast,.sr-audit')); }
+  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+  function cssEsc(s){ s=String(s); return (window.CSS&&CSS.escape)?CSS.escape(s):s; }
   function save(){ persist(); render(); applyMarks(); }
 
-  // In-page indicators: highlight the commented text so you can see what you've marked.
-  function clearMarks(){
-    var main=document.querySelector('main'); if(!main) return;
-    main.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+  // ---- anchoring: stable element selector + occurrence index ------------------------
+  function segFor(node){
+    if(node.id) return '#'+cssEsc(node.id);
+    var tag=node.tagName.toLowerCase(), i=1, sib=node;
+    while((sib=sib.previousElementSibling)){ if(sib.tagName===node.tagName) i++; }
+    return tag+':nth-of-type('+i+')';
   }
-  function wrapQuote(quote, cid){
-    if(!quote) return; var main=document.querySelector('main'); if(!main) return;
-    var w=document.createTreeWalker(main, NodeFilter.SHOW_TEXT, null), n;
-    while((n=w.nextNode())){
-      if(n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark')) continue;
-      var idx=n.nodeValue.indexOf(quote);
-      if(idx>=0){ var r=document.createRange(); r.setStart(n,idx); r.setEnd(n,idx+quote.length); var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view'; try{ r.surroundContents(mk); }catch(e){} return; }
+  function selectorFor(el){
+    var r=root();
+    if(el && el.nodeType!==1) el=el.parentElement;
+    if(!el || el===r) return rootTag();
+    var path=[], node=el;
+    while(node && node!==r && node!==document.body && node!==document.documentElement){
+      var seg=segFor(node); path.unshift(seg);
+      if(seg.charAt(0)==='#') return path.join(' > ');   // an id uniquely anchors; stop climbing
+      node=node.parentElement;
     }
+    return rootTag()+(path.length?' > '+path.join(' > '):'');
   }
-  function applyMarks(){ clearMarks(); comments.forEach(function(c){ if(c.quote) wrapQuote(c.quote, c.id); }); }
-  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+  function resolveSelector(sel){ if(!sel) return null; try{ return document.querySelector(sel); }catch(e){ return null; } }
+  function occurrenceIndex(container, quote, range){
+    if(!container||!quote) return 0;
+    var text=container.textContent||'', pre=document.createRange();
+    try{ pre.selectNodeContents(container); pre.setEnd(range.startContainer, range.startOffset); }catch(e){ return 0; }
+    var startPos=pre.toString().length, n=0, idx=-1;
+    while((idx=text.indexOf(quote, idx+1))>=0 && idx<=startPos){ n++; }
+    return n>0?n-1:0;   // 0-based index of the occurrence containing the selection start
+  }
+
+  // ---- in-page marks ----------------------------------------------------------------
+  function clearMarks(){
+    var r=root(); if(!r) return;
+    r.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+    r.querySelectorAll('.sr-mark-el').forEach(function(el){ el.classList.remove('sr-mark-el'); el.removeAttribute('data-cid'); });
+  }
+  function wrapNth(container, quote, nth, cid){
+    if(!quote||!container) return false;
+    var w=document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null), n, count=0;
+    while((n=w.nextNode())){
+      if(inToolbar(n.parentNode) || (n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark'))) continue;
+      var from=0, idx;
+      while((idx=n.nodeValue.indexOf(quote, from))>=0){
+        if(count===nth){
+          var rg=document.createRange(); rg.setStart(n,idx); rg.setEnd(n,idx+quote.length);
+          var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view';
+          try{ rg.surroundContents(mk); return true; }catch(e){ return false; }
+        }
+        count++; from=idx+quote.length;
+      }
+    }
+    return false;
+  }
+  function wrapQuote(quote, cid){ return wrapNth(root(), quote, 0, cid); }   // legacy global first-match fallback (revised page / no selector)
+  function markFor(c){
+    if(c.target==='element'){
+      var el=resolveSelector(c.selector);
+      if(el){ el.classList.add('sr-mark-el'); el.dataset.cid=c.id; }
+      return;
+    }
+    if(!c.quote) return;
+    var ok=false, container=c.selector?resolveSelector(c.selector):null;
+    if(container) ok=wrapNth(container, c.quote, c.nth||0, c.id);
+    if(!ok) wrapQuote(c.quote, c.id);
+  }
+  function applyMarks(){ clearMarks(); comments.forEach(markFor); }
 
   function headingFor(node){
-    var hs = document.querySelectorAll('main h1[id],main h2[id],main h3[id],main h4[id]');
-    var best=null;
-    for(var i=0;i<hs.length;i++){
-      if(hs[i]===node || (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING)) best=hs[i];
-    }
+    var hs=root().querySelectorAll('h1[id],h2[id],h3[id],h4[id]'), best=null;
+    for(var i=0;i<hs.length;i++){ if(hs[i]===node || (node.compareDocumentPosition && (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING))) best=hs[i]; }
     return best;
   }
+  function headingText(node){ var h=headingFor(node); return h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):''; }
+  function elementLabelFor(el){
+    if(!el) return 'element';
+    var tag=el.tagName.toLowerCase(), extra='';
+    if(tag==='img'){ extra=el.getAttribute('alt')||(el.getAttribute('src')||'').split('/').pop()||''; }
+    else if(tag==='svg' || (el.closest&&el.closest('.mermaid'))){ extra='diagram'; }
+    else { extra=(el.textContent||'').replace(/\s+/g,' ').trim().slice(0,60); }
+    return '<'+tag+'>'+(extra?' '+extra:'');
+  }
 
+  // ---- toolbar DOM ------------------------------------------------------------------
   var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
   var panel=document.createElement('div'); panel.className='sr-panel';
   panel.innerHTML='<div class="sr-head"><b class="sr-title">Review</b><span class="sr-headbtns"><button type="button" class="sr-clear" data-act="clear">Clear</button><button type="button" class="sr-x" data-act="close">✕</button></span></div>'
-    +'<div class="sr-hint">Highlight text then <b>+ Comment</b>, or <b>+ Note</b> for a general remark. Comments save as you type — add as many as you want. <b>Submit → copy prompt</b> exports your round, archives it under <b>Past</b>, and clears the page for the next round.</div>'
+    +'<div class="sr-hint">Highlight text → <b>+ Comment</b>, tap <b>+ Element</b> then a diagram/image/table, or <b>+ Note</b> for a general remark. Comments save as you type. <b>Submit → copy prompt</b> exports the round, archives it under <b>Past</b>, and clears the page for the next round.</div>'
     +'<div class="sr-list"></div>'
     +'<div class="sr-actions"></div>';
   var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
@@ -552,10 +638,12 @@ _REVIEW_TOOLBAR_JS = r"""
 
   function reviewActionsHTML(){
     return '<button type="button" class="sr-note" data-act="comment">+ Comment</button>'
+      +'<button type="button" class="sr-note" data-act="element">+ Element</button>'
       +'<button type="button" class="sr-note" data-act="note">+ Note</button>'
       +'<button type="button" class="sr-note" data-act="history">Past'+(history.length?' ('+history.length+')':'')+'</button>'
       +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button>';
   }
+  function locLabel(c){ return c.target==='element' ? ('▣ '+esc(c.elementLabel||'element')) : esc(c.heading?'§ '+c.heading:'note'); }
   function render(){
     btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
     var title=panel.querySelector('.sr-title'), list=panel.querySelector('.sr-list'),
@@ -571,7 +659,7 @@ _REVIEW_TOOLBAR_JS = r"""
           html+='<div class="sr-round"><div class="sr-rhead"><span>Round '+(k+1)+' · '+when+' · '+h.comments.length+'</span>'
             +'<button type="button" class="sr-recopy" data-r="'+k+'">copy prompt</button></div>'
             +h.comments.map(function(c){
-              return '<div class="sr-hitem"><div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span></div>'
+              return '<div class="sr-hitem"><div class="sr-loc"><span>'+locLabel(c)+'</span></div>'
                 +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
                 +'<div class="sr-hbody">'+esc(c.body||'(no text)')+'</div></div>';
             }).join('')
@@ -585,42 +673,55 @@ _REVIEW_TOOLBAR_JS = r"""
     title.textContent='Review'; hint.style.display='';
     if(clr) clr.style.display = comments.length ? '' : 'none';
     actions.innerHTML=reviewActionsHTML();
-    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, or <b>+ Note</b>.</div>'; return; }
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, <b>+ Element</b>, or <b>+ Note</b>.</div>'; return; }
     list.innerHTML='';
     comments.forEach(function(c,i){
       var row=document.createElement('div'); row.className='sr-item';
-      row.innerHTML='<div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
+      row.innerHTML='<div class="sr-loc"><span>'+locLabel(c)+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
         +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
         +'<textarea class="sr-body" data-i="'+i+'" rows="2" placeholder="Your comment…">'+esc(c.body||'')+'</textarea>';
       list.appendChild(row);
     });
   }
 
-  function addComment(quote, heading){
-    comments.push({id:Date.now()+'-'+comments.length, quote:quote||'', heading:heading||'', body:''});
-    save(); openPanel(true);
-    var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus();
+  function pushComment(spec){
+    var c={id:Date.now()+'-'+comments.length, target:spec.target||'text', quote:spec.quote||'', heading:spec.heading||'', body:spec.body||'', selector:spec.selector||'', nth:spec.nth||0, elementLabel:spec.elementLabel||''};
+    comments.push(c); persist(); render(); applyMarks(); openPanel(true);
+    if(spec.focus!==false){ var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus(); }
+    return c;
+  }
+  function addComment(quote, heading){ pushComment({target:'text', quote:quote||'', heading:heading||''}); }
+
+  function setArmed(on){
+    armed=on; var r=root(); if(r) r.classList.toggle('sr-arming', on);
+    if(on){ openPanel(false); showToast('Tap any element (diagram, image, table…) to attach a comment. Esc to cancel.'); }
   }
 
-  document.addEventListener('mouseup', function(){
-    setTimeout(function(){
-      var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var main=document.querySelector('main');
-      if(txt && txt.length>1 && sel.rangeCount && main && main.contains(sel.anchorNode)){
-        var r=sel.getRangeAt(0).getBoundingClientRect();
-        chip.style.top=(window.scrollY+r.bottom+6)+'px'; chip.style.left=(window.scrollX+r.left)+'px';
-        var h=headingFor(sel.anchorNode); var hd=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
-        chip.dataset.quote=txt.slice(0,280); chip.dataset.heading=hd;
-        lastSel={quote:txt.slice(0,280), heading:hd};
-        chip.style.display='block';
-      } else { chip.style.display='none'; }
-    },10);
-  });
-  chip.addEventListener('mousedown', function(e){ e.preventDefault(); addComment(chip.dataset.quote, chip.dataset.heading); chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); });
+  // ---- selection capture (mouse + touch) --------------------------------------------
+  function captureSelection(){
+    if(armed) return;
+    var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var r=root();
+    if(txt && txt.length>1 && sel.rangeCount && r && r.contains(sel.anchorNode) && !inToolbar(sel.anchorNode)){
+      var range=sel.getRangeAt(0); var rect=range.getBoundingClientRect();
+      chip.style.top=(window.scrollY+rect.bottom+6)+'px'; chip.style.left=(window.scrollX+rect.left)+'px';
+      var container=(sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement);
+      var quote=txt.slice(0,280);
+      lastSel={quote:quote, heading:headingText(sel.anchorNode), selector:selectorFor(container), nth:occurrenceIndex(container, quote, range)};
+      chip.style.display='block';
+    } else { chip.style.display='none'; }
+  }
+  document.addEventListener('mouseup', function(){ setTimeout(captureSelection,10); });
+  document.addEventListener('touchend', function(){ setTimeout(captureSelection,10); });
+  function commitSel(e){ if(e) e.preventDefault(); if(lastSel){ pushComment({target:'text', quote:lastSel.quote, heading:lastSel.heading, selector:lastSel.selector, nth:lastSel.nth}); lastSel=null; } chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); }
+  chip.addEventListener('mousedown', commitSel);
+  chip.addEventListener('touchstart', commitSel);
+
   btn.addEventListener('click', function(){ openPanel(!panel.classList.contains('sr-open')); render(); });
   panel.addEventListener('click', function(e){
     var act=e.target.getAttribute('data-act');
     if(act==='close') openPanel(false);
-    else if(act==='comment'){ if(lastSel && lastSel.quote){ addComment(lastSel.quote, lastSel.heading); lastSel=null; } else { showToast('Highlight some text on the page first, then “+ Comment”. (Use “+ Note” for a general remark.)'); } }
+    else if(act==='comment'){ if(lastSel && lastSel.quote){ pushComment({target:'text', quote:lastSel.quote, heading:lastSel.heading, selector:lastSel.selector, nth:lastSel.nth}); lastSel=null; } else { showToast('Highlight some text first, then “+ Comment”. (Use “+ Element” for a diagram/image; “+ Note” for a general remark.)'); } }
+    else if(act==='element'){ setArmed(true); }
     else if(act==='note') addComment('','');
     else if(act==='submit') submit();
     else if(act==='history'){ viewMode='history'; render(); }
@@ -640,14 +741,17 @@ _REVIEW_TOOLBAR_JS = r"""
     L.push('Review of "'+title+'"'); L.push(location.href);
     L.push('I left '+cs.length+' comment(s); full JSON downloaded to ~/Downloads/scratch-comments-'+slug+'.json'); L.push('');
     cs.forEach(function(c,i){
-      L.push((i+1)+'. ['+(c.heading?'§ '+c.heading:'note')+'] '+(c.body||'(no text)'));
-      if(c.quote) L.push('   ↳ re: "'+c.quote+'"');
+      var head = c.target==='element' ? ('▣ '+(c.elementLabel||'element')) : (c.heading?'§ '+c.heading:'note');
+      L.push((i+1)+'. ['+head+'] '+(c.body||'(no text)'));
+      if(c.quote) L.push('   ↳ re: "'+c.quote+'"  @ '+(c.selector||'?')+(c.nth?(' [occ '+(c.nth+1)+']'):''));
+      else if(c.target==='element') L.push('   ↳ element @ '+(c.selector||'?'));
     });
+    if(layoutAudit && layoutAudit.length){ L.push(''); L.push('Layout audit: '+layoutAudit.length+' finding(s) detected at open time — see layout_audit[] in the downloaded JSON.'); }
     L.push(''); L.push('Re-read the artifact and address each comment, then reply in our chat.');
     return L.join('\n');
   }
   function downloadJSON(){
-    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments};
+    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments,layout_audit:layoutAudit};
     var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
     var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='scratch-comments-'+slug+'.json';
     document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},120);
@@ -657,27 +761,124 @@ _REVIEW_TOOLBAR_JS = r"""
     return new Promise(function(res,rej){ try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res(); }catch(err){ rej(err); } });
   }
   function submit(){
-    if(!comments.length){ showToast('No comments yet — highlight text → + Comment, or + Note.'); return; }
+    if(!comments.length){ showToast('No comments yet — highlight text → + Comment, + Element, or + Note.'); return; }
     var text=buildPrompt(comments); downloadJSON();
     // Archive the round, then clean the slate so the next round starts fresh (no stale
-    // re-highlighting on a revised page). History is kept under "Past".
-    history.push({submitted_at:new Date().toISOString(), comments:comments.slice()}); persistHistory();
+    // re-highlighting on a revised page). History (incl. the round's layout audit) is kept under "Past".
+    history.push({submitted_at:new Date().toISOString(), comments:comments.slice(), layout_audit:layoutAudit.slice()}); persistHistory();
     comments=[]; persist(); clearMarks(); viewMode='review'; render();
     copyText(text).then(function(){ showToast('Copied — paste into Claude Code. Round archived under “Past”; page cleared for the next round.'); })
                   .catch(function(){ showToast('JSON downloaded; round archived & cleared. Clipboard blocked — copy from the file.'); });
   }
 
-  // Click a highlighted span on the page → open the panel and focus that comment.
-  var mainEl=document.querySelector('main');
-  if(mainEl) mainEl.addEventListener('click', function(e){
-    var mk=e.target.closest?e.target.closest('.sr-mark'):null; if(!mk) return;
-    openPanel(true); var idx=-1; comments.forEach(function(c,j){ if(c.id===mk.dataset.cid) idx=j; });
+  // ---- root click: pick an element target, or focus an existing mark -----------------
+  function onRootClick(e){
+    if(armed){
+      if(inToolbar(e.target)) return;
+      e.preventDefault(); e.stopPropagation();
+      var el=e.target; if(el && el.nodeType!==1) el=el.parentElement;
+      setArmed(false);
+      if(el) pushComment({target:'element', selector:selectorFor(el), elementLabel:elementLabelFor(el), heading:headingText(el)});
+      return;
+    }
+    var mk=e.target.closest?e.target.closest('.sr-mark, .sr-mark-el'):null; if(!mk) return;
+    openPanel(true);
+    var cid=mk.dataset.cid, idx=-1; comments.forEach(function(c,j){ if(c.id===cid) idx=j; });
     if(idx>=0){ var ta=panel.querySelectorAll('.sr-body')[idx]; if(ta){ ta.scrollIntoView({block:'center'}); ta.focus(); } }
-  });
+  }
+  var rootEl=root(); if(rootEl) rootEl.addEventListener('click', onRootClick, true);
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape' && armed){ setArmed(false); showToast('Element pick cancelled.'); } });
+
+  // ---- open-time layout gate (non-blocking advisory banner) -------------------------
+  // A correctly-built page (main capped at 880px; pre/table scroll internally) does not
+  // overflow the page horizontally, so page-overflow is a real defect — not the designed
+  // internal scroll of a wide code block or table (which we deliberately do NOT flag).
+  function isScrollContainer(el){ try{ var ox=getComputedStyle(el).overflowX; return ox==='auto'||ox==='scroll'||ox==='hidden'; }catch(e){ return false; } }
+  function runAudit(){
+    try{
+      var r=root(); if(!r) return;
+      var found=[], tol=3, vw=window.innerWidth||document.documentElement.clientWidth;
+      var docW=Math.max(document.documentElement.scrollWidth, document.body?document.body.scrollWidth:0);
+      if(docW > vw + tol){
+        found.push({kind:'page-overflow', selector:rootTag(), detail:'page is '+docW+'px wide vs '+vw+'px viewport — horizontal scroll required'});
+        var els=r.querySelectorAll('*');
+        for(var i=0;i<els.length && found.length<10;i++){
+          var el=els[i]; if(inToolbar(el)) continue;
+          var rect=el.getBoundingClientRect();
+          if(rect.width<8||rect.height<8) continue;
+          if(rect.right > vw + tol && !isScrollContainer(el) && !(el.parentElement && isScrollContainer(el.parentElement))){
+            found.push({kind:'past-viewport', selector:selectorFor(el), detail:el.tagName.toLowerCase()+' right edge at '+Math.round(rect.right)+'px exceeds viewport '+vw+'px'});
+          }
+        }
+      }
+      // Failed Mermaid: a .mermaid block that never became an <svg>. Only meaningful where a
+      // mermaid runtime is on the page (hand-authored exhibits); markdown fences render as
+      // <code class="language-mermaid"> and never match this, so no false positives there.
+      r.querySelectorAll('.mermaid, pre.mermaid').forEach(function(el){
+        if(found.length>=12 || inToolbar(el)) return;
+        var done = el.querySelector('svg') || el.getAttribute('data-processed')==='true';
+        if(!done && (el.textContent||'').trim()){ found.push({kind:'mermaid-unrendered', selector:selectorFor(el), detail:'mermaid block has no rendered <svg> — diagram failed to render'}); }
+      });
+      layoutAudit=found;
+      if(found.length) showAuditBanner(found);
+    }catch(e){}
+  }
+  function showAuditBanner(found){
+    if(document.querySelector('.sr-audit')) return;
+    var bar=document.createElement('div'); bar.className='sr-audit';
+    bar.innerHTML='<span>⚠ '+found.length+' layout issue'+(found.length>1?'s':'')+' detected on this page.</span>'
+      +'<span class="sr-audit-btns"><button type="button" data-act="audit-add">Add to review</button>'
+      +'<button type="button" data-act="audit-dismiss">Dismiss</button></span>';
+    document.body.appendChild(bar);
+    bar.addEventListener('click', function(e){
+      var a=e.target.getAttribute('data-act');
+      if(a==='audit-dismiss'){ bar.remove(); }
+      else if(a==='audit-add'){
+        found.forEach(function(f){ pushComment({target:'element', selector:f.selector, elementLabel:'[layout] '+f.kind, body:f.detail, focus:false}); });
+        bar.remove(); openPanel(true); showToast('Added '+found.length+' layout finding(s) to this review round.');
+      }
+    });
+  }
 
   render(); applyMarks();
+  if(document.readyState==='complete') setTimeout(runAudit,1500); else window.addEventListener('load', function(){ setTimeout(runAudit,1500); });
 })();
 """
+
+# Marker that flags an HTML document as already carrying the review toolbar, so injection is
+# idempotent across re-publishes and the Python→shell transport hop.
+_REVIEW_TOOLBAR_MARKER = "<!-- scratch-review-toolbar -->"
+
+
+def _inject_review_toolbar(html: str) -> str:
+    """Inject the two-way review toolbar into a hand-authored HTML document.
+
+    Rendered pages get the toolbar baked in by :func:`_html_page`, but hand-authored HTML
+    exhibits (e.g. ``visual-explainer`` pages) are published verbatim — this brings the same
+    markup capability (text + element annotations, layout audit, ``[scratch-review]`` round)
+    to them. Idempotent: a document that already carries the toolbar (its marker or the
+    ``sr-fab`` class from :func:`_html_page`) is returned unchanged, so re-publishing and the
+    Python→shell transport hop never double-inject. The block is appended just before
+    ``</body>`` (else ``</html>``, else at the end); the toolbar JS builds its own DOM and
+    falls back to ``<body>`` when there is no ``<main>``, so it works on arbitrary exhibits.
+    """
+    if not html or _REVIEW_TOOLBAR_MARKER in html or ".sr-fab{" in html:
+        return html
+    block = (
+        _REVIEW_TOOLBAR_MARKER
+        + "<style>"
+        + _REVIEW_TOOLBAR_CSS
+        + "</style>\n<script>"
+        + _REVIEW_TOOLBAR_JS
+        + "</script>\n"
+    )
+    lower = html.lower()
+    idx = lower.rfind("</body>")
+    if idx == -1:
+        idx = lower.rfind("</html>")
+    if idx == -1:
+        return html + "\n" + block
+    return html[:idx] + block + html[idx:]
 
 
 def _render_markdown(markdown_text: str) -> str:

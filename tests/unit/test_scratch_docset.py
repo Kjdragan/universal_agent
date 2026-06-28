@@ -237,3 +237,53 @@ def test_review_toolbar_baked_into_rendered_page():
 def test_review_toolbar_can_be_disabled():
     off = sp._html_page("Demo", "<p>hi</p>", review=False)
     assert ".sr-fab{" not in off and "navigator.clipboard" not in off
+
+
+def test_review_toolbar_has_richer_anchoring_and_element_and_audit():
+    """Feature 1 (anchoring + element annotations) and Feature 2 (layout audit) markup."""
+    p = sp._html_page("Demo", "<p>hi</p>")
+    # Feature 1: element-pick action, element marks, stable selectors + occurrence index.
+    assert 'data-act="element"' in p
+    assert ".sr-mark-el" in p
+    assert "selectorFor" in p and "occurrenceIndex" in p
+    assert "c.target==='element'" in p  # element-target comments are first-class
+    # Feature 2: open-time layout gate + the JSON field the agent reads.
+    assert "runAudit" in p and ".sr-audit{" in p
+    assert "layout_audit" in p and "mermaid-unrendered" in p
+    # Idempotency guard so a re-injected page never double-runs.
+    assert "__srToolbar" in p
+
+
+def test_inject_review_toolbar_placement_and_idempotency():
+    doc = "<html><head><title>x</title></head><body><main><p>hi</p></main></body></html>"
+    out = sp._inject_review_toolbar(doc)
+    # Injected exactly once, before </body>, with marker + toolbar CSS/JS.
+    assert sp._REVIEW_TOOLBAR_MARKER in out
+    assert ".sr-fab{" in out and "navigator.clipboard" in out
+    assert out.index(sp._REVIEW_TOOLBAR_MARKER) < out.index("</body>")
+    # Idempotent: a second pass (or a page already carrying the toolbar) is a no-op.
+    assert sp._inject_review_toolbar(out) == out
+    baked = sp._html_page("D", "<p>x</p>")
+    assert sp._inject_review_toolbar(baked) == baked
+
+
+def test_inject_review_toolbar_falls_back_when_no_body_or_html():
+    frag = "<div>just a fragment</div>"
+    out = sp._inject_review_toolbar(frag)
+    assert out.startswith(frag) and sp._REVIEW_TOOLBAR_MARKER in out and ".sr-fab{" in out
+
+
+def test_publish_html_injects_toolbar_by_default_and_skips_when_disabled(monkeypatch):
+    captured: dict = {}
+
+    def _fake_publish_one(**kw):
+        captured.clear()
+        captured.update(kw)
+        return "https://uaonvps.taildcc090.ts.net/scratch/s/r.html"
+
+    monkeypatch.setattr(sp, "_publish_one", _fake_publish_one)
+    body = "<html><body><p>hi</p></body></html>"
+    sp.publish_html_to_scratch(body, slug="s", filename="r.html")
+    assert sp._REVIEW_TOOLBAR_MARKER in captured["content"]
+    sp.publish_html_to_scratch(body, slug="s", filename="r.html", review=False)
+    assert sp._REVIEW_TOOLBAR_MARKER not in captured["content"]
