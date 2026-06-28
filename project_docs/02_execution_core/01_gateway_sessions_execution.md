@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/api/server.py
   - src/universal_agent/api/gateway_bridge.py
   - src/universal_agent/loop_control.py
-last_verified: 2026-06-19
+last_verified: 2026-06-28
 ---
 
 # Gateway, Sessions & Execution
