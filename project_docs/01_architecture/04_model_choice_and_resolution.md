@@ -13,7 +13,7 @@ code_paths:
   - scripts/claude_with_mcp_env.sh
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/scripts/glm52_probe.py
-last_verified: 2026-06-21
+last_verified: 2026-06-28
 ---
 
 # Model Choice & Resolution
