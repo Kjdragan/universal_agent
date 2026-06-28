@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Scratchpad markup — new review toolbar</title>
+<style>
+  :root{--ink:#1f2328;--muted:#57606a;--soft:#f6f8fa;--border:#d0d7de;--accent:#0969da}
+  *{box-sizing:border-box}
+  body{margin:0;background:#fff;color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  main{max-width:860px;margin:0 auto;padding:2.4rem 1.3rem 6rem}
+  h1{font-size:1.75rem;margin:.2rem 0 .4rem}
+  h2{font-size:1.2rem;margin:2rem 0 .5rem;padding-top:.4rem;border-top:1px solid var(--border)}
+  .lede{color:var(--muted);font-size:1.02rem}
+  .card{background:var(--soft);border:1px solid var(--border);border-radius:12px;padding:1rem 1.1rem;margin:1rem 0}
+  .try{border-left:4px solid var(--accent);background:#f3f8ff}
+  table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.94rem}
+  th,td{border:1px solid var(--border);padding:.5rem .65rem;text-align:left}
+  th{background:var(--soft)}
+  code{background:var(--soft);border:1px solid var(--border);border-radius:6px;padding:.05em .4em;font-family:ui-monospace,Menlo,monospace;font-size:.88em}
+  figure{margin:1.2rem 0;text-align:center}
+  figcaption{color:var(--muted);font-size:.85rem;margin-top:.4rem}
+  .pill{display:inline-block;background:#ddf4e4;color:#1a7332;border-radius:999px;padding:.1rem .55rem;font-size:.78rem;font-weight:600}
+</style>
+</head>
+<body>
+<main>
+  <h1>Scratchpad markup, upgraded <span class="pill">try it below</span></h1>
+  <p class="lede">This is a hand-authored HTML exhibit — exactly the kind of page that used to
+  have <em>no</em> review toolbar. Now it does. Tap the <strong>💬 Review</strong> button at the
+  bottom-right and try the three new things below, then Submit to copy a <code>[scratch-review]</code>
+  prompt back to me.</p>
+
+  <h2>1 · Precise text anchoring</h2>
+  <p>Pick a comment lands exactly where you meant it. Pick a comment used to land on the first
+  match of identical text; now each comment records a stable element selector plus an occurrence
+  index. The phrase <em>pick a comment</em> appears several times in this paragraph — highlight the
+  <strong>last</strong> one and hit <strong>+ Comment</strong>; the prompt I receive will say
+  <code>[occ 3]</code>, not occurrence 1.</p>
+  <div class="card try">Try: highlight any sentence above → a <strong>💬 Comment</strong> chip
+  appears → click it → type a note. The highlighted text stays marked on the page.</div>
+
+  <h2>2 · Annotate non-text elements</h2>
+  <p>Diagrams, images, tables and charts have no text to select — so there's a new
+  <strong>+ Element</strong> mode. Tap it, then tap the element you mean.</p>
+  <figure>
+    <svg width="320" height="120" viewBox="0 0 320 120" role="img" aria-label="three-box flow">
+      <rect x="6" y="40" width="86" height="40" rx="8" fill="#ddf4e4" stroke="#1a7332"/>
+      <rect x="117" y="40" width="86" height="40" rx="8" fill="#dbeafe" stroke="#0969da"/>
+      <rect x="228" y="40" width="86" height="40" rx="8" fill="#fff3c4" stroke="#e3b341"/>
+      <text x="49" y="64" text-anchor="middle" font-size="13">author</text>
+      <text x="160" y="64" text-anchor="middle" font-size="13">mark up</text>
+      <text x="271" y="64" text-anchor="middle" font-size="13">respond</text>
+      <line x1="92" y1="60" x2="115" y2="60" stroke="#57606a" stroke-width="2" marker-end="url(#a)"/>
+      <line x1="203" y1="60" x2="226" y2="60" stroke="#57606a" stroke-width="2" marker-end="url(#a)"/>
+      <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L6,3 L0,6 Z" fill="#57606a"/></marker></defs>
+    </svg>
+    <figcaption>A diagram you can comment on — tap <strong>+ Element</strong>, then tap this figure.</figcaption>
+  </figure>
+  <table>
+    <thead><tr><th>Action</th><th>What it anchors to</th></tr></thead>
+    <tbody>
+      <tr><td>+ Comment</td><td>selected text + selector + occurrence index</td></tr>
+      <tr><td>+ Element</td><td>the tapped element's selector (e.g. <code>#hero</code>)</td></tr>
+      <tr><td>+ Note</td><td>nothing — a general remark</td></tr>
+    </tbody>
+  </table>
+  <div class="card try">Try: <strong>+ Element</strong> → tap the diagram <em>or</em> a table cell.
+  The element gets a dashed outline and the comment records its selector.</div>
+
+  <h2>3 · Open-time layout audit</h2>
+  <p>When a page opens, the toolbar quietly checks for real render defects — the page overflowing
+  the screen horizontally, an element pushed past the viewport, or a Mermaid diagram that failed to
+  render. If it finds any, a banner offers to add them to your review round, and they're written into
+  the downloaded JSON either way. (This page is clean, so you shouldn't see the banner.)</p>
+
+  <h2>How the round comes back to me</h2>
+  <p>Submit downloads <code>scratch-comments-&lt;slug&gt;.json</code> and copies a prompt to your
+  clipboard. Paste it into our chat — I read each comment with its location and anchor, re-read this
+  exhibit, apply the changes, and re-publish in place. Same loop as before, just sharper.</p>
+</main>
+<!-- scratch-review-toolbar --><style>
+.sr-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#0969da;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer}
+.sr-fab:hover{background:#0a5fd0}
+.sr-panel{position:fixed;right:16px;bottom:64px;z-index:2147483000;width:340px;max-width:92vw;max-height:70vh;background:#fff;color:#1f2328;border:1px solid #d0d7de;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);display:none;flex-direction:column;overflow:hidden;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.sr-panel.sr-open{display:flex}
+.sr-head{display:flex;justify-content:space-between;align-items:center;padding:.6rem .8rem;border-bottom:1px solid #eaecef}
+.sr-x,.sr-del{background:none;border:none;color:#656d76;cursor:pointer;font-size:13px}
+.sr-headbtns{display:flex;gap:.4rem;align-items:center}
+.sr-clear{background:none;border:1px solid #d0d7de;border-radius:5px;color:#656d76;cursor:pointer;font-size:11px;padding:.1rem .45rem}
+.sr-clear:hover{background:#f6f8fa}
+.sr-hint{font-size:.74rem;line-height:1.45;color:#57606a;padding:.5rem .8rem;border-bottom:1px solid #eaecef;background:#f6f8fa}
+.sr-list{overflow:auto;padding:.5rem .8rem;flex:1}
+.sr-empty{color:#656d76;font-size:.85rem;padding:.5rem 0}
+.sr-item{border:1px solid #eaecef;border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem}
+.sr-loc{display:flex;justify-content:space-between;font-size:.72rem;color:#656d76;font-family:ui-monospace,Menlo,monospace;margin-bottom:.25rem}
+.sr-quote{font-size:.8rem;color:#3b4148;background:#f6f8fa;border-left:3px solid #d0d7de;padding:.2rem .5rem;margin-bottom:.3rem}
+.sr-body{width:100%;border:1px solid #d0d7de;border-radius:6px;padding:.35rem .45rem;font:inherit;resize:vertical}
+.sr-actions{display:flex;gap:.4rem;padding:.6rem .8rem;border-top:1px solid #eaecef}
+.sr-note{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:inherit}
+.sr-submit{flex:1;background:#1f883d;color:#fff;border:none;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:600 13px/1 inherit}
+.sr-submit:hover{background:#1a7332}
+.sr-chip{position:absolute;z-index:2147483001;background:#1f2328;color:#fff;border:none;border-radius:6px;padding:.25rem .5rem;font:600 12px/1 sans-serif;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sr-mark{background:#fff3c4;box-shadow:inset 0 -2px 0 #e3b341;border-radius:2px;cursor:pointer}
+.sr-mark:hover{background:#ffe98a}
+.sr-round{border:1px solid #eaecef;border-radius:8px;margin-bottom:.6rem;overflow:hidden}
+.sr-rhead{display:flex;justify-content:space-between;align-items:center;gap:.4rem;background:#f6f8fa;border-bottom:1px solid #eaecef;padding:.35rem .55rem;font-size:.72rem;color:#57606a;font-family:ui-monospace,Menlo,monospace}
+.sr-recopy{background:#fff;border:1px solid #d0d7de;border-radius:5px;padding:.1rem .4rem;cursor:pointer;font:inherit;color:#0969da;white-space:nowrap}
+.sr-hitem{padding:.35rem .55rem;border-top:1px solid #f0f1f3}
+.sr-hbody{font-size:.85rem;white-space:pre-wrap;color:#1f2328}
+.sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+.sr-mark-el{outline:2px dashed #e3b341!important;outline-offset:2px;cursor:pointer}
+main.sr-arming,body.sr-arming{cursor:crosshair}
+main.sr-arming *,body.sr-arming *{cursor:crosshair!important}
+.sr-audit{position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:2147483002;display:flex;gap:.8rem;align-items:center;background:#fff8e1;color:#7a5c00;border:1px solid #e3b341;border-radius:10px;padding:.5rem .8rem;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.18);max-width:92vw}
+.sr-audit-btns{display:flex;gap:.4rem}
+.sr-audit button{background:#fff;border:1px solid #e3b341;border-radius:6px;padding:.25rem .55rem;cursor:pointer;font:inherit;color:#7a5c00}
+.sr-audit button:hover{background:#fff3c4}
+@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast,.sr-audit{display:none!important}}
+</style>
+<script>
+(function(){
+  "use strict";
+  if(window.__srToolbar) return; window.__srToolbar=1;
+  var m = location.pathname.match(/\/scratch\/([^\/]+)\//);
+  var parts = location.pathname.split('/').filter(Boolean);
+  var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
+  var KEY = 'scratchReview:' + slug;
+  var HKEY = 'scratchReviewHistory:' + slug;   // archive of all submitted rounds (never auto-cleared)
+  var comments = [];
+  var history = [];
+  var lastSel = null;     // most recent text selection in the content root, kept so "+ Comment" works after the click clears it
+  var armed = false;      // "+ Element" pick mode: the next tap inside the root becomes the target
+  var layoutAudit = [];   // findings from the open-time layout gate
+  var viewMode = 'review';  // 'review' (active round) | 'history' (Past comments)
+  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
+  try { history = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch(e){}
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
+  function persistHistory(){ try{ localStorage.setItem(HKEY, JSON.stringify(history)); }catch(e){} }
+
+  // The content root: a rendered page has <main>; a hand-authored exhibit may not, so we
+  // fall back to <body>. Marks, selectors and the layout audit are all scoped to this root.
+  function root(){ return document.querySelector('main') || document.body; }
+  function rootTag(){ return root()===document.body ? 'body' : 'main'; }
+  function inToolbar(node){ return !!(node && node.closest && node.closest('.sr-panel,.sr-fab,.sr-chip,.sr-toast,.sr-audit')); }
+  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+  function cssEsc(s){ s=String(s); return (window.CSS&&CSS.escape)?CSS.escape(s):s; }
+  function save(){ persist(); render(); applyMarks(); }
+
+  // ---- anchoring: stable element selector + occurrence index ------------------------
+  function segFor(node){
+    if(node.id) return '#'+cssEsc(node.id);
+    var tag=node.tagName.toLowerCase(), i=1, sib=node;
+    while((sib=sib.previousElementSibling)){ if(sib.tagName===node.tagName) i++; }
+    return tag+':nth-of-type('+i+')';
+  }
+  function selectorFor(el){
+    var r=root();
+    if(el && el.nodeType!==1) el=el.parentElement;
+    if(!el || el===r) return rootTag();
+    var path=[], node=el;
+    while(node && node!==r && node!==document.body && node!==document.documentElement){
+      var seg=segFor(node); path.unshift(seg);
+      if(seg.charAt(0)==='#') return path.join(' > ');   // an id uniquely anchors; stop climbing
+      node=node.parentElement;
+    }
+    return rootTag()+(path.length?' > '+path.join(' > '):'');
+  }
+  function resolveSelector(sel){ if(!sel) return null; try{ return document.querySelector(sel); }catch(e){ return null; } }
+  function occurrenceIndex(container, quote, range){
+    if(!container||!quote) return 0;
+    var text=container.textContent||'', pre=document.createRange();
+    try{ pre.selectNodeContents(container); pre.setEnd(range.startContainer, range.startOffset); }catch(e){ return 0; }
+    var startPos=pre.toString().length, n=0, idx=-1;
+    while((idx=text.indexOf(quote, idx+1))>=0 && idx<=startPos){ n++; }
+    return n>0?n-1:0;   // 0-based index of the occurrence containing the selection start
+  }
+
+  // ---- in-page marks ----------------------------------------------------------------
+  function clearMarks(){
+    var r=root(); if(!r) return;
+    r.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+    r.querySelectorAll('.sr-mark-el').forEach(function(el){ el.classList.remove('sr-mark-el'); el.removeAttribute('data-cid'); });
+  }
+  function wrapNth(container, quote, nth, cid){
+    if(!quote||!container) return false;
+    var w=document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null), n, count=0;
+    while((n=w.nextNode())){
+      if(inToolbar(n.parentNode) || (n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark'))) continue;
+      var from=0, idx;
+      while((idx=n.nodeValue.indexOf(quote, from))>=0){
+        if(count===nth){
+          var rg=document.createRange(); rg.setStart(n,idx); rg.setEnd(n,idx+quote.length);
+          var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view';
+          try{ rg.surroundContents(mk); return true; }catch(e){ return false; }
+        }
+        count++; from=idx+quote.length;
+      }
+    }
+    return false;
+  }
+  function wrapQuote(quote, cid){ return wrapNth(root(), quote, 0, cid); }   // legacy global first-match fallback (revised page / no selector)
+  function markFor(c){
+    if(c.target==='element'){
+      var el=resolveSelector(c.selector);
+      if(el){ el.classList.add('sr-mark-el'); el.dataset.cid=c.id; }
+      return;
+    }
+    if(!c.quote) return;
+    var ok=false, container=c.selector?resolveSelector(c.selector):null;
+    if(container) ok=wrapNth(container, c.quote, c.nth||0, c.id);
+    if(!ok) wrapQuote(c.quote, c.id);
+  }
+  function applyMarks(){ clearMarks(); comments.forEach(markFor); }
+
+  function headingFor(node){
+    var hs=root().querySelectorAll('h1[id],h2[id],h3[id],h4[id]'), best=null;
+    for(var i=0;i<hs.length;i++){ if(hs[i]===node || (node.compareDocumentPosition && (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING))) best=hs[i]; }
+    return best;
+  }
+  function headingText(node){ var h=headingFor(node); return h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):''; }
+  function elementLabelFor(el){
+    if(!el) return 'element';
+    var tag=el.tagName.toLowerCase(), extra='';
+    if(tag==='img'){ extra=el.getAttribute('alt')||(el.getAttribute('src')||'').split('/').pop()||''; }
+    else if(tag==='svg' || (el.closest&&el.closest('.mermaid'))){ extra='diagram'; }
+    else { extra=(el.textContent||'').replace(/\s+/g,' ').trim().slice(0,60); }
+    return '<'+tag+'>'+(extra?' '+extra:'');
+  }
+
+  // ---- toolbar DOM ------------------------------------------------------------------
+  var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
+  var panel=document.createElement('div'); panel.className='sr-panel';
+  panel.innerHTML='<div class="sr-head"><b class="sr-title">Review</b><span class="sr-headbtns"><button type="button" class="sr-clear" data-act="clear">Clear</button><button type="button" class="sr-x" data-act="close">✕</button></span></div>'
+    +'<div class="sr-hint">Highlight text → <b>+ Comment</b>, tap <b>+ Element</b> then a diagram/image/table, or <b>+ Note</b> for a general remark. Comments save as you type. <b>Submit → copy prompt</b> exports the round, archives it under <b>Past</b>, and clears the page for the next round.</div>'
+    +'<div class="sr-list"></div>'
+    +'<div class="sr-actions"></div>';
+  var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
+  var toast=document.createElement('div'); toast.className='sr-toast'; toast.style.display='none';
+  document.body.appendChild(btn); document.body.appendChild(panel); document.body.appendChild(chip); document.body.appendChild(toast);
+
+  function showToast(t){ toast.textContent=t; toast.style.display='block'; setTimeout(function(){toast.style.display='none';},4500); }
+  function openPanel(o){ panel.classList.toggle('sr-open', o!==false); }
+
+  function reviewActionsHTML(){
+    return '<button type="button" class="sr-note" data-act="comment">+ Comment</button>'
+      +'<button type="button" class="sr-note" data-act="element">+ Element</button>'
+      +'<button type="button" class="sr-note" data-act="note">+ Note</button>'
+      +'<button type="button" class="sr-note" data-act="history">Past'+(history.length?' ('+history.length+')':'')+'</button>'
+      +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button>';
+  }
+  function locLabel(c){ return c.target==='element' ? ('▣ '+esc(c.elementLabel||'element')) : esc(c.heading?'§ '+c.heading:'note'); }
+  function render(){
+    btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
+    var title=panel.querySelector('.sr-title'), list=panel.querySelector('.sr-list'),
+        actions=panel.querySelector('.sr-actions'), hint=panel.querySelector('.sr-hint');
+    var clr=panel.querySelector('.sr-clear');
+    if(viewMode==='history'){
+      title.textContent='Past comments'; hint.style.display='none'; if(clr) clr.style.display='none';
+      if(!history.length){ list.innerHTML='<div class="sr-empty">No submitted rounds yet.</div>'; }
+      else {
+        var html='';
+        for(var k=history.length-1;k>=0;k--){
+          var h=history[k]; var when=esc((h.submitted_at||'').replace('T',' ').slice(0,16));
+          html+='<div class="sr-round"><div class="sr-rhead"><span>Round '+(k+1)+' · '+when+' · '+h.comments.length+'</span>'
+            +'<button type="button" class="sr-recopy" data-r="'+k+'">copy prompt</button></div>'
+            +h.comments.map(function(c){
+              return '<div class="sr-hitem"><div class="sr-loc"><span>'+locLabel(c)+'</span></div>'
+                +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+                +'<div class="sr-hbody">'+esc(c.body||'(no text)')+'</div></div>';
+            }).join('')
+            +'</div>';
+        }
+        list.innerHTML=html;
+      }
+      actions.innerHTML='<button type="button" class="sr-note" data-act="back">← Back to review</button>';
+      return;
+    }
+    title.textContent='Review'; hint.style.display='';
+    if(clr) clr.style.display = comments.length ? '' : 'none';
+    actions.innerHTML=reviewActionsHTML();
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, <b>+ Element</b>, or <b>+ Note</b>.</div>'; return; }
+    list.innerHTML='';
+    comments.forEach(function(c,i){
+      var row=document.createElement('div'); row.className='sr-item';
+      row.innerHTML='<div class="sr-loc"><span>'+locLabel(c)+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
+        +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+        +'<textarea class="sr-body" data-i="'+i+'" rows="2" placeholder="Your comment…">'+esc(c.body||'')+'</textarea>';
+      list.appendChild(row);
+    });
+  }
+
+  function pushComment(spec){
+    var c={id:Date.now()+'-'+comments.length, target:spec.target||'text', quote:spec.quote||'', heading:spec.heading||'', body:spec.body||'', selector:spec.selector||'', nth:spec.nth||0, elementLabel:spec.elementLabel||''};
+    comments.push(c); persist(); render(); applyMarks(); openPanel(true);
+    if(spec.focus!==false){ var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus(); }
+    return c;
+  }
+  function addComment(quote, heading){ pushComment({target:'text', quote:quote||'', heading:heading||''}); }
+
+  function setArmed(on){
+    armed=on; var r=root(); if(r) r.classList.toggle('sr-arming', on);
+    if(on){ openPanel(false); showToast('Tap any element (diagram, image, table…) to attach a comment. Esc to cancel.'); }
+  }
+
+  // ---- selection capture (mouse + touch) --------------------------------------------
+  function captureSelection(){
+    if(armed) return;
+    var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var r=root();
+    if(txt && txt.length>1 && sel.rangeCount && r && r.contains(sel.anchorNode) && !inToolbar(sel.anchorNode)){
+      var range=sel.getRangeAt(0); var rect=range.getBoundingClientRect();
+      chip.style.top=(window.scrollY+rect.bottom+6)+'px'; chip.style.left=(window.scrollX+rect.left)+'px';
+      var container=(sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement);
+      var quote=txt.slice(0,280);
+      lastSel={quote:quote, heading:headingText(sel.anchorNode), selector:selectorFor(container), nth:occurrenceIndex(container, quote, range)};
+      chip.style.display='block';
+    } else { chip.style.display='none'; }
+  }
+  document.addEventListener('mouseup', function(){ setTimeout(captureSelection,10); });
+  document.addEventListener('touchend', function(){ setTimeout(captureSelection,10); });
+  function commitSel(e){ if(e) e.preventDefault(); if(lastSel){ pushComment({target:'text', quote:lastSel.quote, heading:lastSel.heading, selector:lastSel.selector, nth:lastSel.nth}); lastSel=null; } chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); }
+  chip.addEventListener('mousedown', commitSel);
+  chip.addEventListener('touchstart', commitSel);
+
+  btn.addEventListener('click', function(){ openPanel(!panel.classList.contains('sr-open')); render(); });
+  panel.addEventListener('click', function(e){
+    var act=e.target.getAttribute('data-act');
+    if(act==='close') openPanel(false);
+    else if(act==='comment'){ if(lastSel && lastSel.quote){ pushComment({target:'text', quote:lastSel.quote, heading:lastSel.heading, selector:lastSel.selector, nth:lastSel.nth}); lastSel=null; } else { showToast('Highlight some text first, then “+ Comment”. (Use “+ Element” for a diagram/image; “+ Note” for a general remark.)'); } }
+    else if(act==='element'){ setArmed(true); }
+    else if(act==='note') addComment('','');
+    else if(act==='submit') submit();
+    else if(act==='history'){ viewMode='history'; render(); }
+    else if(act==='back'){ viewMode='review'; render(); }
+    else if(act==='clear'){ if(comments.length && (typeof confirm!=='function' || confirm('Discard the '+comments.length+' unsubmitted comment(s)? Past history is kept.'))){ comments=[]; persist(); clearMarks(); render(); showToast('Cleared. Past history kept.'); } }
+    else if(e.target.classList.contains('sr-recopy')){ var r=+e.target.getAttribute('data-r'); if(history[r]) copyText(buildPrompt(history[r].comments)).then(function(){ showToast('Round '+(r+1)+' prompt re-copied to the clipboard.'); }).catch(function(){ showToast('Clipboard blocked.'); }); }
+    else if(e.target.classList.contains('sr-del')){ comments.splice(+e.target.getAttribute('data-i'),1); save(); }
+  });
+  panel.addEventListener('input', function(e){
+    if(e.target.classList.contains('sr-body')){ comments[+e.target.getAttribute('data-i')].body=e.target.value; persist(); btn.textContent='💬 Review ('+comments.length+')'; }
+  });
+
+  function buildPrompt(cs){
+    cs = cs || comments;
+    var title=document.title||slug; var L=[];
+    L.push('[scratch-review '+slug+']');
+    L.push('Review of "'+title+'"'); L.push(location.href);
+    L.push('I left '+cs.length+' comment(s); full JSON downloaded to ~/Downloads/scratch-comments-'+slug+'.json'); L.push('');
+    cs.forEach(function(c,i){
+      var head = c.target==='element' ? ('▣ '+(c.elementLabel||'element')) : (c.heading?'§ '+c.heading:'note');
+      L.push((i+1)+'. ['+head+'] '+(c.body||'(no text)'));
+      if(c.quote) L.push('   ↳ re: "'+c.quote+'"  @ '+(c.selector||'?')+(c.nth?(' [occ '+(c.nth+1)+']'):''));
+      else if(c.target==='element') L.push('   ↳ element @ '+(c.selector||'?'));
+    });
+    if(layoutAudit && layoutAudit.length){ L.push(''); L.push('Layout audit: '+layoutAudit.length+' finding(s) detected at open time — see layout_audit[] in the downloaded JSON.'); }
+    L.push(''); L.push('Re-read the artifact and address each comment, then reply in our chat.');
+    return L.join('\n');
+  }
+  function downloadJSON(){
+    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments,layout_audit:layoutAudit};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='scratch-comments-'+slug+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},120);
+  }
+  function copyText(text){
+    if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function(res,rej){ try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res(); }catch(err){ rej(err); } });
+  }
+  function submit(){
+    if(!comments.length){ showToast('No comments yet — highlight text → + Comment, + Element, or + Note.'); return; }
+    var text=buildPrompt(comments); downloadJSON();
+    // Archive the round, then clean the slate so the next round starts fresh (no stale
+    // re-highlighting on a revised page). History (incl. the round's layout audit) is kept under "Past".
+    history.push({submitted_at:new Date().toISOString(), comments:comments.slice(), layout_audit:layoutAudit.slice()}); persistHistory();
+    comments=[]; persist(); clearMarks(); viewMode='review'; render();
+    copyText(text).then(function(){ showToast('Copied — paste into Claude Code. Round archived under “Past”; page cleared for the next round.'); })
+                  .catch(function(){ showToast('JSON downloaded; round archived & cleared. Clipboard blocked — copy from the file.'); });
+  }
+
+  // ---- root click: pick an element target, or focus an existing mark -----------------
+  function onRootClick(e){
+    if(armed){
+      if(inToolbar(e.target)) return;
+      e.preventDefault(); e.stopPropagation();
+      var el=e.target; if(el && el.nodeType!==1) el=el.parentElement;
+      setArmed(false);
+      if(el) pushComment({target:'element', selector:selectorFor(el), elementLabel:elementLabelFor(el), heading:headingText(el)});
+      return;
+    }
+    var mk=e.target.closest?e.target.closest('.sr-mark, .sr-mark-el'):null; if(!mk) return;
+    openPanel(true);
+    var cid=mk.dataset.cid, idx=-1; comments.forEach(function(c,j){ if(c.id===cid) idx=j; });
+    if(idx>=0){ var ta=panel.querySelectorAll('.sr-body')[idx]; if(ta){ ta.scrollIntoView({block:'center'}); ta.focus(); } }
+  }
+  var rootEl=root(); if(rootEl) rootEl.addEventListener('click', onRootClick, true);
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape' && armed){ setArmed(false); showToast('Element pick cancelled.'); } });
+
+  // ---- open-time layout gate (non-blocking advisory banner) -------------------------
+  // A correctly-built page (main capped at 880px; pre/table scroll internally) does not
+  // overflow the page horizontally, so page-overflow is a real defect — not the designed
+  // internal scroll of a wide code block or table (which we deliberately do NOT flag).
+  function isScrollContainer(el){ try{ var ox=getComputedStyle(el).overflowX; return ox==='auto'||ox==='scroll'||ox==='hidden'; }catch(e){ return false; } }
+  function runAudit(){
+    try{
+      var r=root(); if(!r) return;
+      var found=[], tol=3, vw=window.innerWidth||document.documentElement.clientWidth;
+      var docW=Math.max(document.documentElement.scrollWidth, document.body?document.body.scrollWidth:0);
+      if(docW > vw + tol){
+        found.push({kind:'page-overflow', selector:rootTag(), detail:'page is '+docW+'px wide vs '+vw+'px viewport — horizontal scroll required'});
+        var els=r.querySelectorAll('*');
+        for(var i=0;i<els.length && found.length<10;i++){
+          var el=els[i]; if(inToolbar(el)) continue;
+          var rect=el.getBoundingClientRect();
+          if(rect.width<8||rect.height<8) continue;
+          if(rect.right > vw + tol && !isScrollContainer(el) && !(el.parentElement && isScrollContainer(el.parentElement))){
+            found.push({kind:'past-viewport', selector:selectorFor(el), detail:el.tagName.toLowerCase()+' right edge at '+Math.round(rect.right)+'px exceeds viewport '+vw+'px'});
+          }
+        }
+      }
+      // Failed Mermaid: a .mermaid block that never became an <svg>. Only meaningful where a
+      // mermaid runtime is on the page (hand-authored exhibits); markdown fences render as
+      // <code class="language-mermaid"> and never match this, so no false positives there.
+      r.querySelectorAll('.mermaid, pre.mermaid').forEach(function(el){
+        if(found.length>=12 || inToolbar(el)) return;
+        var done = el.querySelector('svg') || el.getAttribute('data-processed')==='true';
+        if(!done && (el.textContent||'').trim()){ found.push({kind:'mermaid-unrendered', selector:selectorFor(el), detail:'mermaid block has no rendered <svg> — diagram failed to render'}); }
+      });
+      layoutAudit=found;
+      if(found.length) showAuditBanner(found);
+    }catch(e){}
+  }
+  function showAuditBanner(found){
+    if(document.querySelector('.sr-audit')) return;
+    var bar=document.createElement('div'); bar.className='sr-audit';
+    bar.innerHTML='<span>⚠ '+found.length+' layout issue'+(found.length>1?'s':'')+' detected on this page.</span>'
+      +'<span class="sr-audit-btns"><button type="button" data-act="audit-add">Add to review</button>'
+      +'<button type="button" data-act="audit-dismiss">Dismiss</button></span>';
+    document.body.appendChild(bar);
+    bar.addEventListener('click', function(e){
+      var a=e.target.getAttribute('data-act');
+      if(a==='audit-dismiss'){ bar.remove(); }
+      else if(a==='audit-add'){
+        found.forEach(function(f){ pushComment({target:'element', selector:f.selector, elementLabel:'[layout] '+f.kind, body:f.detail, focus:false}); });
+        bar.remove(); openPanel(true); showToast('Added '+found.length+' layout finding(s) to this review round.');
+      }
+    });
+  }
+
+  render(); applyMarks();
+  if(document.readyState==='complete') setTimeout(runAudit,1500); else window.addEventListener('load', function(){ setTimeout(runAudit,1500); });
+})();
+</script>
+</body>
+</html>

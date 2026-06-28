@@ -93,6 +93,34 @@ except Exception:
 print(url or "", end="")
 PYEOF
 }
+# --- HTML review-toolbar injection -----------------------------------------------------
+# Hand-authored `.html` exhibits are transported VERBATIM, so they never carry the two-way
+# review toolbar that rendered markdown gets (baked in by _html_page). Rewrite the file
+# content in place — inject the toolbar — then let the normal verbatim transport below run
+# unchanged (same slug, same archive). Skipped on the way down (UA_SCRATCH_RENDERING) and
+# when the toolbar is already present or Python is unavailable (raw fallback, as today).
+_is_html_file() { [[ "${1,,}" =~ \.(html|htm)$ ]]; }
+# $1=src → prints a temp file path with the toolbar injected, or nothing (keep original).
+_inject_toolbar() {
+  [[ -n "$UA_PY" && -x "$UA_PY" ]] || return 1
+  PYTHONPATH="$UA_ROOT/src" "$UA_PY" - "$1" 2>/dev/null <<'PYEOF'
+import os, sys, tempfile
+src = sys.argv[1]
+out_path = ""
+try:
+    from universal_agent.services.scratch_publish import _inject_review_toolbar
+    html = open(src, encoding="utf-8").read()
+    injected = _inject_review_toolbar(html)
+    if injected != html:
+        d = tempfile.mkdtemp(prefix="ua_scratch_inj_")
+        out_path = os.path.join(d, os.path.basename(src))  # keep the original filename
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(injected)
+except Exception:
+    out_path = ""
+print(out_path, end="")
+PYEOF
+}
 # Permanent archive store on the VPS for autonomous (robot) runs. A SIBLING of
 # SCRATCH_ROOT — never under it — so prune_scratch.py can never reach it. Retention is
 # unlimited by design; nothing prunes the archive.
@@ -147,6 +175,14 @@ cmd_publish() {
       return 0
     fi
     err "warning: markdown render unavailable (no UA venv?); publishing raw source"
+  fi
+
+  # Hand-authored HTML → inject the review toolbar so the operator can mark it up. Transport
+  # stays verbatim (same slug/archive); only the file content is swapped for the injected one.
+  if [[ -z "${UA_SCRATCH_RENDERING:-}" ]] && _is_html_file "$src"; then
+    local injected
+    injected="$(_inject_toolbar "$src")"
+    [[ -n "$injected" ]] && src="$injected"
   fi
 
   # Default to a random, unguessable slug. Good hygiene (the URL is unlisted),

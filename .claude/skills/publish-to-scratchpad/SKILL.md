@@ -177,17 +177,25 @@ pruned**. You do nothing extra; publish as usual.
 
 ## Two-way review (mark up → respond) — you ↔ Claude Code
 
-Markdown/doc-set pages (anything rendered through `scratch_publish.py::_html_page`) carry a
-**review toolbar**: the operator selects text or adds notes, then clicks **Submit**, which
-(1) downloads the comments to `~/Downloads/scratch-comments-<slug>.json` and (2) copies a
-ready-to-paste prompt to the clipboard. There is **no backend and no project routing** —
-the responder is *this Claude Code assistant*, not the task hub / VP / project Telegram.
+**Every** scratchpad HTML page carries a **review toolbar** — rendered markdown/doc-set pages
+(via `scratch_publish.py::_html_page`) *and* hand-authored HTML exhibits alike (injected by
+`scratch_publish.py::_inject_review_toolbar`, so your visual-explainer pages are markable too).
+The operator can **highlight text → + Comment** (anchored to a stable selector + occurrence
+index, so repeated text resolves to the right spot), **+ Element** to tap a diagram / image /
+table / chart, or **+ Note** for a general remark, then clicks **Submit**, which (1) downloads
+the comments to `~/Downloads/scratch-comments-<slug>.json` and (2) copies a ready-to-paste
+prompt to the clipboard. An **open-time layout audit** flags overflow / clipped / unrendered-
+Mermaid defects in a dismissible banner and records them in `layout_audit[]` in that JSON.
+There is **no backend and no project routing** — the responder is *this Claude Code assistant*,
+not the task hub / VP / project Telegram.
 
 **When you (Claude Code) see a pasted message starting with `[scratch-review <slug>]`:**
 read the operator's comments and respond, continuing the conversation. The paste itself is
-self-contained (it inlines the comments), but for full fidelity read
-`~/Downloads/scratch-comments-<slug>.json` (and, once a tailnet write-back exists, the
-`_comments.jsonl` beside the artifact), re-read the artifact, then address each comment.
+self-contained (it inlines the comments with their `§ heading` / `▣ element` location and the
+`@ <selector> [occ N]` anchor), but for full fidelity read
+`~/Downloads/scratch-comments-<slug>.json` — each comment carries `target` / `selector` / `nth`
+/ `elementLabel`, and `layout_audit[]` lists any render defects the page detected — then re-read
+the artifact and address each comment.
 
 **Refine in place:** publish iterative exhibits with a stable `artifact_id=` so re-publishing
 **overwrites the same URL** (one living exhibit you keep refining) instead of minting a new
