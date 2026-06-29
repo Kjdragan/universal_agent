@@ -21,7 +21,7 @@ code_paths:
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/api/server.py
   - src/universal_agent/api/gateway_bridge.py
-last_verified: 2026-06-22
+last_verified: 2026-06-29
 ---
 
 # System Architecture Overview
