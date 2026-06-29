@@ -23,7 +23,6 @@ from universal_agent.services.daemon_sessions import (
     DaemonSessionManager,
 )
 
-
 # ── liveness: a fresh "sign of life" protects a daemon from the reaper ───────
 
 
