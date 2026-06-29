@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/services/invariants/csi_source_liveness.py
   - src/universal_agent/services/proactive_convergence.py
   - src/universal_agent/heartbeat_service.py
-last_verified: 2026-06-22
+last_verified: 2026-06-29
 ---
 
 # Project at a Glance — 10-minute onboarding snapshot
