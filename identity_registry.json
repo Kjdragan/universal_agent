@@ -1,8 +1,6 @@
 {
     "primary_email": "kevinjdragan@gmail.com",
-    "secondary_emails": [
-        "kevin.dragan@outlook.com"
-    ],
+    "secondary_emails": [],
     "trusted_recipients": [
         "kevinjdragan@gmail.com",
         "kevin.dragan@outlook.com",
