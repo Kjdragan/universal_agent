@@ -97,7 +97,7 @@ BRIEF_TASK_FUNNEL_SOURCE_KINDS = ("tutorial_build",)
 # stayed green. The three probes below close that blind spot. Full context +
 # the deferred PR-B universal-guardrail design:
 # project_docs/08_operations/07_proactive_lane_runaway_protection.md
-NIGHTLY_WIKI_DAILY_VOLUME_CEILING = 6  # 1 wiki/night ≈ 2-3 files; >6 in a day = looping
+NIGHTLY_WIKI_DAILY_VOLUME_CEILING = 9  # ≤3 wikis/day (NotebookLM 3/day cap) × 3 files each (report+infographic+podcast); daily index file excluded. >9 = cap breach or re-dispatch loop
 RUNAWAY_ANOMALY_WINDOW_HOURS = 24
 # Per-mission-type daily VP-dispatch ceilings for the LOW-FREQUENCY proactive
 # lanes. High-baseline Cody/convergence types (task, code_generation, analysis,
@@ -1006,17 +1006,20 @@ def proactive_brief_task_funnel(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
     id="nightly_wiki_artifact_volume_anomaly",
     title="Nightly wiki produced an abnormal number of artifacts today",
     description=(
-        "Cron `nightly_wiki` is designed to produce ONE wiki per night "
-        "(UA_DAILY_PROACTIVE_WIKI_COUNT default 1 → a report + an infographic, "
-        "≈2-3 files). If more than NIGHTLY_WIKI_DAILY_VOLUME_CEILING artifact "
-        "files appear under artifacts/nightly_wikis/ in a single calendar day, "
-        "the mission is LOOPING — the rescue driver re-dispatching failed "
-        "missions (each fresh ATLAS=ZAI mission re-runs the NotebookLM pipeline) "
-        "or a bad wiki_count config. This is the runaway early-warning the "
-        "freshness/silence probe (`nightly_wiki_persistent_silence`) structurally "
-        "cannot catch — it only fires when the lane goes QUIET. Motivated by the "
-        "2026-06-14 incident: one intended wiki ballooned into ~130 NotebookLM "
-        "notebooks via an all-day re-dispatch storm."
+        "The `nightly_wiki` lane normally produces 1-2 wikis per night — the "
+        "scheduled VP run plus, some nights, a supplementary wiki Simone generates "
+        "during her heartbeat — each ≈3 files (report + infographic + podcast). A "
+        "hard NotebookLM 3/day wiki cap bounds a healthy day at ≈9 dated artifact "
+        "files (the daily `nightly_wiki_<date>.md` index file is NOT counted). If "
+        "more than NIGHTLY_WIKI_DAILY_VOLUME_CEILING dated wiki artifact files "
+        "appear under artifacts/nightly_wikis/ in a single calendar day, either "
+        "the 3/day cap was breached or a proactive_wiki mission is LOOPING — the "
+        "wiki rescue driver re-dispatching failed missions (each re-runs the "
+        "NotebookLM pipeline, burning ZAI+Gemini quota). This is the runaway "
+        "early-warning the freshness/silence probe (`nightly_wiki_persistent_silence`) "
+        "structurally cannot catch — it only fires when the lane goes QUIET. "
+        "Motivated by the 2026-06-14 incident: one intended wiki ballooned into "
+        "~130 NotebookLM notebooks via an all-day re-dispatch storm."
     ),
     severity="critical",
     runbook_command=(
@@ -1031,12 +1034,16 @@ def proactive_brief_task_funnel(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
     },
 )
 def nightly_wiki_artifact_volume_anomaly(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Fire when nightly_wiki has written too many artifact files today.
+    """Fire when nightly_wiki has written too many DATED wiki artifact files today.
 
-    Counts files matching ``*_wiki_*`` under ``nightly_wikis/`` whose mtime falls
-    in the current Houston calendar day; more than
-    ``UA_NIGHTLY_WIKI_VOLUME_CEILING`` (default ``NIGHTLY_WIKI_DAILY_VOLUME_CEILING``)
-    means the lane is looping. Read-only, fails open when the dir is absent.
+    Counts dated wiki artifacts (``<date>_wiki_<type>_<slug>.<ext>``) under
+    ``nightly_wikis/`` whose mtime falls in the current Houston calendar day,
+    EXCLUDING the per-run index file ``nightly_wiki_<date>.md`` (which also matches
+    the ``*_wiki_*`` glob but is a run log, not an artifact — counting it inflated
+    every day by 1 and tripped the ceiling on any legitimate 2-wiki night). More
+    than ``UA_NIGHTLY_WIKI_VOLUME_CEILING`` (default
+    ``NIGHTLY_WIKI_DAILY_VOLUME_CEILING``, ≈ the 3/day wiki cap × 3 files) means the
+    lane breached the cap or is looping. Read-only, fails open when the dir is absent.
     """
     artifacts_dir = ctx.get("artifacts_dir")
     if artifacts_dir is None:
@@ -1049,7 +1056,12 @@ def nightly_wiki_artifact_volume_anomaly(ctx: Dict[str, Any]) -> Optional[Dict[s
     cutoff = today_start.timestamp()
     today_files = [
         p for p in base.glob("*_wiki_*")
-        if p.is_file() and p.stat().st_mtime >= cutoff
+        # Exclude the per-run index file `nightly_wiki_<date>.md`: it matches the
+        # glob but is a run log, not a wiki artifact (counting it inflated the
+        # daily total by 1 and false-fired on any legitimate 2-wiki night).
+        if p.is_file()
+        and not p.name.startswith("nightly_wiki_")
+        and p.stat().st_mtime >= cutoff
     ]
     count = len(today_files)
     if count > ceiling:
@@ -1061,15 +1073,17 @@ def nightly_wiki_artifact_volume_anomaly(ctx: Dict[str, Any]) -> Optional[Dict[s
                 "samples": sorted(p.name for p in today_files)[:10],
             },
             "message": (
-                f"nightly_wiki produced {count} artifact files today "
-                f"(ceiling {ceiling}; ~2-3 expected for one wiki). The lane is "
-                "looping — almost certainly the wiki rescue driver re-dispatching "
-                "failed missions, each re-running the NotebookLM pipeline and "
-                "burning ZAI + Gemini quota. Pause the lane "
-                "(`systemctl disable --now universal-agent-nightly-wiki.timer`) "
-                "and inspect the rescue chain."
+                f"nightly_wiki wrote {count} dated wiki artifact files today "
+                f"(ceiling {ceiling} ≈ 3 wikis × 3 files, the NotebookLM 3/day cap; "
+                "the daily index file is excluded). A normal night is 1-2 wikis "
+                "(3-6 files), so this overage means the 3/day cap was breached or a "
+                "proactive_wiki mission is looping. Check `proactive_wiki` mission "
+                "status and recent Simone-heartbeat wiki generation; if "
+                "UA_WIKI_RESCUE_ENABLED is on, inspect the rescue re-dispatch chain "
+                "(each re-dispatch re-runs the NotebookLM pipeline, burning "
+                "ZAI+Gemini quota) before pausing the lane."
             ),
-            "threshold_text": f"≤ {ceiling} nightly_wiki artifact files per calendar day",
+            "threshold_text": f"≤ {ceiling} dated nightly_wiki artifact files per calendar day",
         }
     return None
 

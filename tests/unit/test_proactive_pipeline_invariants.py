@@ -922,7 +922,7 @@ def _make_wiki_files(base: Path, *, n: int, mtime_ts: float) -> None:
 
 
 def test_wiki_volume_anomaly_fires_critical_on_flood(tmp_path: Path, monkeypatch) -> None:
-    """14 files in one day (the 2026-06-14 shape) > ceiling 6 → critical."""
+    """14 files in one day (the 2026-06-14 shape) > ceiling 9 → critical."""
     now_dt = datetime(2026, 6, 14, 17, 0, tzinfo=HOUSTON)
     _set_now(monkeypatch, now_dt)
     base = tmp_path / "artifacts"
@@ -936,7 +936,7 @@ def test_wiki_volume_anomaly_fires_critical_on_flood(tmp_path: Path, monkeypatch
 
 
 def test_wiki_volume_anomaly_quiet_within_ceiling(tmp_path: Path, monkeypatch) -> None:
-    """One legit wiki (≈2-3 files) ≤ ceiling 6 → quiet."""
+    """One legit wiki (≈2-3 files) ≤ ceiling 9 → quiet."""
     now_dt = datetime(2026, 6, 14, 8, 0, tzinfo=HOUSTON)
     _set_now(monkeypatch, now_dt)
     base = tmp_path / "artifacts"
@@ -969,6 +969,45 @@ def test_wiki_volume_anomaly_env_override(tmp_path: Path, monkeypatch) -> None:
 
 def test_wiki_volume_anomaly_quiet_without_artifacts_dir() -> None:
     findings = run_invariants({"artifacts_dir": None})
+    assert _only(findings, "nightly_wiki_artifact_volume_anomaly") == []
+
+
+def test_wiki_volume_anomaly_two_wikis_plus_index_quiet(tmp_path: Path, monkeypatch) -> None:
+    """The live 2026-06-30 shape: 2 legitimate wikis (6 dated files) + the daily
+    index file → 6 ≤ ceiling 9 → quiet. Regression for the false-positive CRITICAL
+    that fired when the index file was counted and the ceiling assumed 1 wiki/night."""
+    now_dt = datetime(2026, 6, 30, 10, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now_dt)
+    base = tmp_path / "artifacts"
+    wiki = base / "nightly_wikis"
+    wiki.mkdir(parents=True, exist_ok=True)
+    ts = now_dt.timestamp() - 3600
+    for topic in ("agent_skills", "ai_code_security"):
+        for kind in ("report", "infographic", "podcast"):
+            f = wiki / f"2026-06-30_wiki_{kind}_{topic}.md"
+            f.write_text("# wiki")
+            os.utime(f, (ts, ts))
+    idx = wiki / "nightly_wiki_2026-06-30.md"
+    idx.write_text("# index")
+    os.utime(idx, (ts, ts))
+    findings = run_invariants({"artifacts_dir": base})
+    assert _only(findings, "nightly_wiki_artifact_volume_anomaly") == []
+
+
+def test_wiki_volume_anomaly_excludes_daily_index(tmp_path: Path, monkeypatch) -> None:
+    """The daily `nightly_wiki_<date>.md` index file is not counted as an artifact.
+    With the ceiling pinned to 3, one wiki (3 dated files) + the index = 4 raw glob
+    matches but only 3 counted → quiet. Without the exclusion this would fire (4 > 3)."""
+    now_dt = datetime(2026, 6, 30, 10, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now_dt)
+    monkeypatch.setenv("UA_NIGHTLY_WIKI_VOLUME_CEILING", "3")
+    base = tmp_path / "artifacts"
+    ts = now_dt.timestamp() - 3600
+    _make_wiki_files(base, n=3, mtime_ts=ts)
+    idx = base / "nightly_wikis" / "nightly_wiki_2026-06-30.md"
+    idx.write_text("# index")
+    os.utime(idx, (ts, ts))
+    findings = run_invariants({"artifacts_dir": base})
     assert _only(findings, "nightly_wiki_artifact_volume_anomaly") == []
 
 

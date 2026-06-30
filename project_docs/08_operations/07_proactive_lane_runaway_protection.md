@@ -76,7 +76,7 @@ flowchart LR
 
 | Invariant (`::symbol`) | Fires when | Signal source | Severity |
 |---|---|---|---|
-| `nightly_wiki_artifact_volume_anomaly` | > `NIGHTLY_WIKI_DAILY_VOLUME_CEILING` (6) `*_wiki_*` files written under `artifacts/nightly_wikis/` in one Houston day | filesystem | critical |
+| `nightly_wiki_artifact_volume_anomaly` | > `NIGHTLY_WIKI_DAILY_VOLUME_CEILING` (9 ≈ the 3/day wiki cap × 3 files) dated `<date>_wiki_*` files written under `artifacts/nightly_wikis/` in one Houston day — the daily `nightly_wiki_<date>.md` index file is excluded | filesystem | critical |
 | `proactive_mission_dispatch_storm` | a low-frequency `mission_type` exceeds its cap in `PROACTIVE_MISSION_DISPATCH_CEILINGS` over 24h | `task_hub_items` `source_kind='vp_mission'`, grouped by metadata `mission_type` | critical |
 | `vp_rescue_chain_storm` | any `rescue_chain_id` reaches `VP_RESCUE_CHAIN_FAILURE_CEILING` (4) failure rows / `failure_count` in 24h (past the bounded rescue budget) | `task_hub_items` `source_kind='vp_mission_failure'`, grouped by metadata `rescue_chain_id` | critical |
 
@@ -85,7 +85,7 @@ Design choices:
 - **Filesystem + dispatch + rescue, three angles.** The notebooks themselves are created on Google's side via
   MCP and leave no row in `proactive_artifacts`, so a generic artifact-table probe would have missed this. The
   three probes triangulate on the traces that *do* exist locally: downloaded files, `vp_mission` rows, and
-  `vp_mission_failure` rows. On the 2026-06-14 data the volume probe (14 files > 6) and the dispatch probe
+  `vp_mission_failure` rows. On the 2026-06-14 data the volume probe (14 files > 9) and the dispatch probe
   (4 `proactive_wiki` missions > 3) both fire; the rescue-chain probe is the lane-agnostic net for worse storms.
 - **`vp_rescue_chain_storm` is intentionally lane-agnostic** — it catches the same re-dispatch-storm shape in
   *any* mission type (briefings, proactive reports, atlas direct dispatch), per the audit that flagged those
@@ -95,7 +95,11 @@ Design choices:
   once/twice-daily proactive lanes are capped.
 - **Tunable without a deploy.** `UA_NIGHTLY_WIKI_VOLUME_CEILING` and `UA_VP_RESCUE_CHAIN_FAILURE_CEILING`
   override the defaults (`proactive_pipeline_invariants.py::_int_env`). Raise the volume ceiling if you ever
-  raise `UA_DAILY_PROACTIVE_WIKI_COUNT`.
+  raise `UA_DAILY_PROACTIVE_WIKI_COUNT`. The default `9` tolerates a normal night of 1-2 wikis (the scheduled
+  VP run plus an optional supplementary wiki Simone generates during her heartbeat), each ≈3 files
+  (report+infographic+podcast), bounded by the NotebookLM 3/day wiki cap; the daily `nightly_wiki_<date>.md`
+  index file is **not** counted (counting it inflated every day by 1 and false-fired on any 2-wiki night — the
+  2026-06-30 false positive).
 
 ### Operating response when a probe fires
 
