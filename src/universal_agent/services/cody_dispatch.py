@@ -22,6 +22,10 @@ import sqlite3
 from typing import Any
 
 from universal_agent import task_hub
+from universal_agent.feature_flags import (
+    proactive_demo_factory_script,
+    proactive_use_demo_factory,
+)
 from universal_agent.services.proactive_artifacts import upsert_artifact
 
 logger = logging.getLogger(__name__)
@@ -78,9 +82,32 @@ def dispatch_cody_demo_task(
         f"- Source entity: {entity_path}"
     )
 
+    # Consolidation seam (flag UA_PROACTIVE_DEMO_ENGINE, default OFF): route the
+    # build onto the demo_factory /demo engine instead of the bespoke flow. We
+    # redirect the agentic objective rather than the worker plumbing — lowest blast
+    # radius, fully reversible. The off-path above is byte-for-byte unchanged.
+    if proactive_use_demo_factory():
+        _df = proactive_demo_factory_script()
+        description += (
+            "\n\n── DEMO ENGINE OVERRIDE: demo_factory (the /demo engine) ──\n"
+            "- Build this demo with the demo_factory headless driver, NOT the bespoke flow "
+            "above. The driver runs the full /goal build + verify + fidelity-eval on the good "
+            "engine and lands the demo (and can promote the skill into dragan-plugins).\n"
+            f"- Derive a one-line seed/capability from the entity ({entity_path}) and SOURCES/, then run:\n"
+            f'    python3 {_df} "<one-line seed>" --demo-id {demo_id} '
+            f'--capability "{entity_slug}" --into {workspace_dir} --endpoint-required {endpoint_required}\n'
+            f"- If the driver is missing at {_df}, STOP and record it in BUILD_NOTES.md "
+            "(demo_factory must be cloned on this host first).\n"
+            f"- AFTER it finishes, ensure a UA-schema manifest.json is at the workspace root "
+            f"({workspace_dir}/manifest.json) carrying demo_id={demo_id}, "
+            f"endpoint_required={endpoint_required}, the real endpoint_hit, and acceptance_passed — "
+            "so the UA finalizer reads the outcome correctly."
+        )
+
     metadata: dict[str, Any] = {
         "source": "claude_code_intel_v2",
         "task_kind": SOURCE_KIND_CODY_DEMO_TASK,
+        "build_engine": "demo_factory" if proactive_use_demo_factory() else "bespoke",
         "demo_id": demo_id,
         "entity_slug": entity_slug,
         "entity_path": str(entity_path),

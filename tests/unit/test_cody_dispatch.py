@@ -236,3 +236,50 @@ def test_reissue_keeps_same_task_id_as_initial_dispatch(conn: sqlite3.Connection
         iteration=2,
     )
     assert initial["task_id"] == reissued["task_id"]
+
+
+# ── Demo-engine consolidation seam (UA_PROACTIVE_DEMO_ENGINE) ────────────────
+
+
+def _dispatch(conn, tmp_path, **kw):
+    workspace = tmp_path / "demo"
+    workspace.mkdir(exist_ok=True)
+    entity_path = tmp_path / "skills.md"
+    entity_path.write_text("# Skills\n", encoding="utf-8")
+    return dispatch_cody_demo_task(
+        conn, workspace_dir=workspace, entity_slug="skills",
+        entity_path=entity_path, demo_id="skills__demo-1", **kw,
+    )
+
+
+def test_objective_uses_bespoke_engine_by_default(conn: sqlite3.Connection, tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("UA_PROACTIVE_DEMO_ENGINE", raising=False)
+    monkeypatch.delenv("UA_DISABLE_PROACTIVE_DEMO_ENGINE", raising=False)
+    task = _dispatch(conn, tmp_path)
+    desc = task.get("description") or ""
+    # OFF-path: the objective must NOT mention the demo_factory engine at all.
+    assert "demo_factory" not in desc
+    assert "build_demo.py" not in desc
+    assert (task.get("metadata") or {}).get("build_engine") == "bespoke"
+
+
+def test_objective_routes_to_demo_factory_when_flag_on(conn: sqlite3.Connection, tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("UA_PROACTIVE_DEMO_ENGINE", "1")
+    monkeypatch.delenv("UA_DISABLE_PROACTIVE_DEMO_ENGINE", raising=False)
+    monkeypatch.setenv("UA_PROACTIVE_DEMO_FACTORY_SCRIPT", "/srv/demo_factory/scripts/build_demo.py")
+    task = _dispatch(conn, tmp_path, endpoint_required="zai")
+    desc = task.get("description") or ""
+    assert "DEMO ENGINE OVERRIDE: demo_factory" in desc
+    assert "/srv/demo_factory/scripts/build_demo.py" in desc      # configurable script path threaded
+    assert "--demo-id skills__demo-1" in desc                     # demo_id threaded into the driver call
+    assert f"{task['metadata']['workspace_dir']}/manifest.json" in desc  # UA-schema manifest requirement
+    assert (task.get("metadata") or {}).get("build_engine") == "demo_factory"
+
+
+def test_disable_override_beats_enable(conn: sqlite3.Connection, tmp_path: Path, monkeypatch):
+    # The kill-switch wins even if the enable flag is also set.
+    monkeypatch.setenv("UA_PROACTIVE_DEMO_ENGINE", "1")
+    monkeypatch.setenv("UA_DISABLE_PROACTIVE_DEMO_ENGINE", "1")
+    task = _dispatch(conn, tmp_path)
+    assert "demo_factory" not in (task.get("description") or "")
+    assert (task.get("metadata") or {}).get("build_engine") == "bespoke"
