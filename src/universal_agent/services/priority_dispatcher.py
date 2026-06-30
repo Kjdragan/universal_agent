@@ -33,11 +33,16 @@ retry budget and would push a backlog of capacity-deferred tasks to
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import logging
 import os
 from typing import Any, Optional
 
-from universal_agent.feature_flags import _is_truthy, _read_env_bool
+from universal_agent.feature_flags import (
+    _is_truthy,
+    _read_env_bool,
+    proactive_demo_daily_cap,
+)
 from universal_agent.services.agent_router import (
     AGENT_CODER,
     AGENT_GENERAL,
@@ -279,6 +284,65 @@ def _is_coding(item: dict[str, Any]) -> bool:
     return str(item.get("source_kind") or "").strip().lower() in CODER_LANE_SOURCE_KINDS
 
 
+def _is_tutorial_build(item: dict[str, Any]) -> bool:
+    """True for the proactive demo lane (``source_kind == "tutorial_build"``)."""
+    return str(item.get("source_kind") or "").strip().lower() == "tutorial_build"
+
+
+def _utc_day_start_iso() -> str:
+    """UTC local-midnight as a ``_now_iso``-comparable ISO string (``+00:00``).
+
+    task_hub timestamps are ``datetime.now(timezone.utc).isoformat()``, so the
+    day boundary is lexicographically comparable when emitted the same way.
+    """
+    now = datetime.now(timezone.utc)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def _count_dispatched_tutorial_builds_today(conn) -> int:
+    """Count ``tutorial_build`` builds already DISPATCHED today (UTC).
+
+    The dispatch marks the source task ``delegated`` with
+    ``metadata.delegation.delegated_at`` (the ``perform_task_action`` delegate
+    verb), which persists through the task's later lifecycle — so it is the
+    authoritative per-task "was dispatched today" signal. Counts every
+    tutorial_build row whose delegation timestamp falls on or after today's
+    UTC midnight. json_extract (SQLite 3.38+) with a LIKE fallback, mirroring
+    ``task_hub.find_delegated_task_by_mission_id``.
+    """
+    day_start = _utc_day_start_iso()
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) FROM task_hub_items
+            WHERE source_kind = 'tutorial_build'
+              AND json_extract(metadata_json, '$.delegation.delegated_at') >= ?
+            """,
+            (day_start,),
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception:  # noqa: BLE001 — counting must never break dispatch
+        pass
+    # Fallback: scan tutorial_build rows in Python (older SQLite without JSON1).
+    try:
+        import json as _json
+
+        total = 0
+        for r in conn.execute(
+            "SELECT metadata_json FROM task_hub_items WHERE source_kind = 'tutorial_build'"
+        ).fetchall():
+            try:
+                meta = _json.loads((r[0] if not hasattr(r, "keys") else r["metadata_json"]) or "{}")
+            except Exception:
+                continue
+            delegated_at = str(((meta.get("delegation") or {}).get("delegated_at")) or "")
+            if delegated_at >= day_start:
+                total += 1
+        return total
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # Classification (pure / unit-testable, no LLM, no I/O)
 # ---------------------------------------------------------------------------
@@ -471,9 +535,31 @@ async def dispatch_claimed(
 
     governor = CapacityGovernor.get_instance()
 
+    # Component C — proactive tutorial_build daily BUILD cap (OUTFLOW control).
+    # Independent of UA_DEMO_BUILD_DAILY_CEILING (INFLOW-only). Count the builds
+    # already dispatched today (prior sweeps) once, then track this sweep's
+    # allocations in ``demo_pending`` so the gate sees today + in-flight.
+    demo_daily_cap = proactive_demo_daily_cap()
+    demo_today = (
+        _count_dispatched_tutorial_builds_today(conn)
+        if any(_is_tutorial_build(by_id.get(d.task_id, {})) for d in decisions)
+        else 0
+    )
+    demo_pending = 0
+
     to_dispatch: list[DispatchDecision] = []
     for d in sorted(decisions, key=lambda x: x.priority):
         if not d.is_vp:
+            continue
+        _is_demo_build = _is_tutorial_build(by_id.get(d.task_id, {}))
+        if _is_demo_build and (demo_today + demo_pending) >= demo_daily_cap:
+            # OUTFLOW cap reached — defer (leave queued, never cancel/error).
+            d.deferred = True
+            log.info(
+                "priority_dispatcher: tutorial_build daily cap %d reached "
+                "(%d dispatched today), deferring task=%s",
+                demo_daily_cap, demo_today + demo_pending, d.task_id,
+            )
             continue
         ok, reason = governor.can_dispatch()
         if not ok:
@@ -492,6 +578,8 @@ async def dispatch_claimed(
                 d.deferred = True
                 continue
             coder_used += 1
+            if _is_demo_build:
+                demo_pending += 1
             to_dispatch.append(d)
             continue
         # AGENT_GENERAL -> resolve to a concrete vp_id. An explicit operator pin

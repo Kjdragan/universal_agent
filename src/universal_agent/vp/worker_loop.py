@@ -226,6 +226,55 @@ def _stamp_demo_manifest_build_session(
         )
         return False
 
+
+def _close_tutorial_build_demo_source_task(
+    th_conn,
+    *,
+    source_task_id: str,
+    mission_id: str,
+    vp_id: str,
+    terminal_meta: dict[str, Any],
+    tutorial_finalize: dict[str, Any],
+) -> dict[str, Any]:
+    """Terminal-route a COMPLETED proactive ``tutorial_build`` demo's source task.
+
+    Mirrors the ``cody_demo_task`` terminal branch: persist the terminal metadata
+    + finalize evidence, then complete the source task through the canonical
+    demo-lane completion verb (``perform_task_action('complete')``), which
+    enforces the completion-evidence gate (``vp_terminal_status`` +
+    ``demo_finalize.ok``) AND stamps a non-empty ``completion_token``.
+
+    The completion_token is the head-of-line guard the default ``else`` close
+    never set: without it a retry/exhaustion sweep could revert a finished demo
+    to open and re-claim it ("re-surface"). Callers invoke this only when
+    ``tutorial_finalize.ok`` is truthy; a non-ok finalize stays on the default
+    close path (unchanged). Best-effort: the caller wraps this in its own
+    try/except so a stamp failure never breaks the worker.
+    """
+    from universal_agent import task_hub
+
+    # Persist the terminal disposition + finalize evidence so the demo-lane
+    # completion gate inside perform_task_action can read it from the row.
+    task_hub.upsert_item(
+        th_conn,
+        {
+            "task_id": source_task_id,
+            "metadata": {
+                **terminal_meta,
+                "linked_mission_id": mission_id,
+                "demo_finalize": tutorial_finalize,
+            },
+        },
+    )
+    return task_hub.perform_task_action(
+        th_conn,
+        task_id=source_task_id,
+        action="complete",
+        agent_id=vp_id,
+        reason="tutorial_build demo finalized",
+    )
+
+
 # ── GitHub repo for doc-maintenance PRs ──────────────────────────────────────
 _GH_REPO = os.getenv("UA_GH_REPO", "Kjdragan/universal_agent")
 
@@ -1022,6 +1071,33 @@ class VpWorkerLoop:
                             )
                         except Exception:
                             logger.warning("demo-built notification hook failed", exc_info=True)
+                    elif (
+                        _src_kind == "tutorial_build"
+                        and event_type == "vp.mission.completed"
+                        and bool((_tutorial_finalize or {}).get("ok"))
+                    ):
+                        # Explicit terminal routing for the proactive tutorial_build
+                        # demo lane (mirrors the cody_demo_task branch above). The
+                        # default `else` closed a finished tutorial_build to
+                        # `completed` WITHOUT a completion_token, so the head-of-line
+                        # guard (task_hub completion_token) never engaged and a
+                        # retry/exhaustion sweep could re-open the finished demo
+                        # (→ re-surface / re-dispatch). Complete through the canonical
+                        # demo-lane verb, which stamps a non-empty completion_token.
+                        # A non-ok finalize stays on the default close path below.
+                        _close_tutorial_build_demo_source_task(
+                            th_conn,
+                            source_task_id=_source_task_id,
+                            mission_id=mission_id,
+                            vp_id=self.vp_id,
+                            terminal_meta=_terminal_meta,
+                            tutorial_finalize=_tutorial_finalize,
+                        )
+                        logger.info(
+                            "tutorial_build demo terminal-routed: source_task_id=%s "
+                            "mission=%s → completed (+completion_token)",
+                            _source_task_id, mission_id,
+                        )
                     else:
                         # Default: close the source task. Zombie prevention for every
                         # non-demo delegation, plus demo failed/cancelled missions.
