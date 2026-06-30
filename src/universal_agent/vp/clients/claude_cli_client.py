@@ -667,6 +667,49 @@ async def _run_goal_loop_mission(
     )
 
 
+def _count_tool_transitions(event: dict[str, Any]) -> tuple[int, int]:
+    """Count ``(tool_started, tool_finished)`` in a single stream-json event.
+
+    Handles both shapes ``claude --print --output-format stream-json`` emits:
+    the nested form (``assistant``/``user`` messages whose ``content`` is a list
+    of blocks — ``tool_use`` blocks live on ``assistant`` messages, ``tool_result``
+    blocks on ``user`` messages) and the flat top-level ``tool_use`` /
+    ``tool_result`` event form.
+
+    Used to keep the LivenessWatchdog's in-flight-tool counter accurate. The CLI
+    emits NO stream output between a ``tool_use`` and its ``tool_result``, so a
+    long, quiet tool (e.g. a multi-minute eval/build subprocess) would otherwise
+    trip the no-progress idle kill while it is legitimately working. Feeding
+    these transitions to ``watchdog.note_activity(tool_started=/tool_finished=)``
+    exempts idle time *while a tool is in flight* — matching the SDK lane
+    (``vp/clients/base.py``) and the watchdog's documented contract. A wedged
+    tool that never returns is still caught by the lane's absolute wall-clock
+    backstop below.
+    """
+    started = 0
+    finished = 0
+    event_type = str(event.get("type") or "")
+    if event_type in ("assistant", "message", "user"):
+        msg = event.get("message")
+        if not isinstance(msg, dict):
+            msg = event
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "tool_use":
+                    started += 1
+                elif block_type == "tool_result":
+                    finished += 1
+    elif event_type == "tool_use":
+        started += 1
+    elif event_type == "tool_result":
+        finished += 1
+    return started, finished
+
+
 async def _monitor_cli_output(
     *,
     proc: asyncio.subprocess.Process,
@@ -831,6 +874,19 @@ async def _monitor_cli_output(
                 if _sid:
                     cli_session_id = _sid
 
+            # Keep the liveness watchdog's in-flight-tool counter accurate so a
+            # mission actively waiting on a long, quiet tool (eval/build) is NOT
+            # killed by the no-progress idle kill. note_activity() above already
+            # recorded this line as a sign of life; here we only adjust the tool
+            # counter. tool_calls is counted here too (centrally) so tool calls
+            # arriving as assistant-message blocks are no longer undercounted.
+            _tool_started, _tool_finished = _count_tool_transitions(event)
+            tool_calls += _tool_started
+            for _ in range(_tool_started):
+                watchdog.note_activity(tool_started=True)
+            for _ in range(_tool_finished):
+                watchdog.note_activity(tool_finished=True)
+
             if event_type == "result":
                 # Final result from the CLI
                 result_data = event.get("result") or event.get("text") or ""
@@ -869,7 +925,6 @@ async def _monitor_cli_output(
                             _rl_write(f"[{_rl_ts()}] 📦 TOOL RESULT ({tc_size} bytes)")
 
             elif event_type == "tool_use":
-                tool_calls += 1
                 tool_name = str(event.get("name") or "unknown")
                 _rl_write(f"[{_rl_ts()}] 🔧 TOOL CALL: {tool_name}")
 
