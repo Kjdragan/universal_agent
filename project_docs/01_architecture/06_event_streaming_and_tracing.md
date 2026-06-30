@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/api/process_turn_bridge.py
   - src/universal_agent/trace_utils.py
   - src/universal_agent/trace_catalog.py
-last_verified: 2026-06-22
+last_verified: 2026-06-30
 ---
 
 # Event Streaming & Tracing
