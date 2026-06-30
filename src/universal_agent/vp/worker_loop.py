@@ -993,6 +993,35 @@ class VpWorkerLoop:
                                 "Curated demo → pending_review: source_task_id=%s mission=%s",
                                 _source_task_id, mission_id,
                             )
+
+                        # Deterministic "demo built" notification (best-effort, never
+                        # raises): email the operator a FYI with a playable explainer
+                        # video link when one was rendered, else the exhibit/workspace.
+                        # Engine-agnostic (bespoke + demo_factory). The demo lane had NO
+                        # notification before; fires for both direct and curated demos.
+                        try:
+                            from universal_agent.services.demo_built_notifier import (
+                                notify_demo_built,
+                            )
+                            _notif_ws = (
+                                str(_src_meta.get("workspace_dir") or "").strip()
+                                or str((outcome.payload or {}).get("cli_workspace_dir") or "").strip()
+                                or (
+                                    str(outcome.result_ref).removeprefix("workspace://").strip()
+                                    if str(outcome.result_ref or "").startswith("workspace://")
+                                    else ""
+                                )
+                            )
+                            await notify_demo_built(
+                                demo_id=str(_src_meta.get("demo_id") or _source_task_id),
+                                title=str((_src_item or {}).get("title") or _source_task_id),
+                                capability=str(_src_meta.get("entity_slug") or ""),
+                                workspace_dir=_notif_ws,
+                                build_engine=str(_src_meta.get("build_engine") or "bespoke"),
+                                review_required=bool(_src_meta.get("review_required")),
+                            )
+                        except Exception:
+                            logger.warning("demo-built notification hook failed", exc_info=True)
                     else:
                         # Default: close the source task. Zombie prevention for every
                         # non-demo delegation, plus demo failed/cancelled missions.
