@@ -672,3 +672,30 @@ def gpu_demo_desktop_approval_enabled(default: bool = False) -> bool:
     if _is_truthy(os.getenv("UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED")):
         return True
     return default
+
+
+def proactive_use_demo_factory(default: bool = False) -> bool:
+    """Route proactive `cody_demo_task` builds onto the demo_factory `/demo` engine
+    (its headless `build_demo.py` driver) instead of the bespoke Cody build flow.
+
+    Default OFF — the bespoke path is byte-for-byte unchanged when this is False.
+    Set ``UA_PROACTIVE_DEMO_ENGINE=1`` to route to demo_factory; override-off with
+    ``UA_DISABLE_PROACTIVE_DEMO_ENGINE=1``. Flipping this ON requires demo_factory
+    cloned on the runtime host (see :func:`proactive_demo_factory_script`) and
+    Anthropic-Max auth available (the build runs Opus, which bills the plan).
+    """
+    if _is_truthy(os.getenv("UA_DISABLE_PROACTIVE_DEMO_ENGINE")):
+        return False
+    if _is_truthy(os.getenv("UA_PROACTIVE_DEMO_ENGINE")):
+        return True
+    return default
+
+
+def proactive_demo_factory_script(
+    default: str = "/home/ua/lrepos/demo_factory/scripts/build_demo.py",
+) -> str:
+    """Absolute path to demo_factory's headless `build_demo.py` driver on the
+    runtime host. Used only when :func:`proactive_use_demo_factory` is on.
+    Override with ``UA_PROACTIVE_DEMO_FACTORY_SCRIPT``.
+    """
+    return (os.getenv("UA_PROACTIVE_DEMO_FACTORY_SCRIPT") or "").strip() or default
