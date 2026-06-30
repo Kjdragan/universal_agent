@@ -95,7 +95,10 @@ def _read_manifest(vault_path: Path) -> dict[str, Any]:
     try:
         payload = json.loads((vault_path / VAULT_MANIFEST).read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
-    except Exception:
+    except (OSError, ValueError):
+        # Missing manifest (TOCTOU between dir listing and read), permission
+        # error, or corrupt/non-utf-8 JSON -> treat as empty manifest. Any
+        # other failure is unexpected and should propagate.
         return {}
 
 

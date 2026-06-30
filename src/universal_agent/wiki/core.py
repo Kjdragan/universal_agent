@@ -184,8 +184,13 @@ def _load_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
     try:
+        # OSError covers TOCTOU deletion / permission errors between the
+        # exists() check and read_text(); ValueError covers json.JSONDecodeError
+        # (malformed JSON) and UnicodeDecodeError (non-utf-8 bytes), both of
+        # which subclass ValueError. Anything else is a real bug and should
+        # propagate rather than be silently masked as "missing file".
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, ValueError):
         return default
 
 
@@ -213,8 +218,13 @@ def _frontmatter_and_body(path: Path) -> tuple[dict[str, Any], str]:
         parts = raw.split("---\n", 2)
         if len(parts) >= 3:
             try:
+                # yaml.YAMLError is the base of every PyYAML parse/construct
+                # failure (ScannerError, ParserError, ConstructorError, ...).
+                # safe_load never raises on valid YAML that isn't a mapping, so
+                # this catches exactly "malformed frontmatter" and lets real
+                # bugs surface.
                 meta = yaml.safe_load(parts[1]) or {}
-            except Exception:
+            except yaml.YAMLError:
                 meta = {}
             if not isinstance(meta, dict):
                 meta = {}
