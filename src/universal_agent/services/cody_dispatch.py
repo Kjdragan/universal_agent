@@ -95,7 +95,10 @@ def dispatch_cody_demo_task(
             "engine and lands the demo (and can promote the skill into dragan-plugins).\n"
             f"- Derive a one-line seed/capability from the entity ({entity_path}) and SOURCES/, then run:\n"
             f'    python3 {_df} "<one-line seed>" --demo-id {demo_id} '
-            f'--capability "{entity_slug}" --into {workspace_dir} --endpoint-required {endpoint_required}\n'
+            f'--capability "{entity_slug}" --into {workspace_dir} --endpoint-required {endpoint_required} '
+            f"--promote --skill-tier library\n"
+            "  (--skill-tier library = the skill graduates into dragan-plugins as a zero-context "
+            "library entry, on-demand via /dragan:<name>; curate to deployed later.)\n"
             f"- If the driver is missing at {_df}, STOP and record it in BUILD_NOTES.md "
             "(demo_factory must be cloned on this host first).\n"
             f"- AFTER it finishes, ensure a UA-schema manifest.json is at the workspace root "
