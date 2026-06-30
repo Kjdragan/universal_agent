@@ -20,10 +20,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from universal_agent.timeout_policy import LivenessWatchdog
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.clients.claude_cli_client import (
     ClaudeCodeCLIClient,
     _build_cli_prompt,
+    _count_tool_transitions,
     _execute_cli_session,
     _is_auth_failure,
     _parse_payload,
@@ -1308,3 +1310,94 @@ async def test_goal_briefing_turn_uses_full_budget_not_900s_clamp(tmp_path: Path
     assert briefing["timeout_seconds"] == 6000
     # The hard-clamp constant is gone.
     assert not hasattr(_mod, "GOAL_BRIEFING_TIMEOUT_SECONDS")
+
+
+# ---------------------------------------------------------------------------
+# _count_tool_transitions + watchdog tool-in-flight exemption (CLI lane)
+#
+# Regression for a real prod incident (2026-06-29, vp-mission-6af516b...): a VP
+# coding mission was killed mid-eval by the no-progress idle watchdog because the
+# CLI lane never told the watchdog a tool was in flight. The CLI emits no stream
+# output between a tool_use and its tool_result, so a long, quiet eval/build
+# subprocess looked like a stall. The fix wires tool_use/tool_result events into
+# the watchdog's in-flight-tool counter (matching vp/clients/base.py).
+# ---------------------------------------------------------------------------
+
+
+def test_count_tool_transitions_assistant_tool_use_block():
+    # `claude --print --output-format stream-json` delivers tool calls as
+    # tool_use blocks on assistant messages (NOT top-level tool_use events) —
+    # the form that previously went uncounted (tool_calls read 0 in the incident).
+    event = {
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "text", "text": "running eval"},
+            {"type": "tool_use", "name": "Bash"},
+        ]},
+    }
+    assert _count_tool_transitions(event) == (1, 0)
+
+
+def test_count_tool_transitions_user_tool_result_block():
+    # tool_result arrives on a `user` message — a type the loop did not even
+    # iterate before, so the counter could never have been decremented.
+    event = {
+        "type": "user",
+        "message": {"content": [{"type": "tool_result", "content": "ok"}]},
+    }
+    assert _count_tool_transitions(event) == (0, 1)
+
+
+def test_count_tool_transitions_parallel_and_flat_forms():
+    parallel = {
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "tool_use", "name": "Bash"},
+            {"type": "tool_use", "name": "Read"},
+        ]},
+    }
+    assert _count_tool_transitions(parallel) == (2, 0)
+    assert _count_tool_transitions({"type": "tool_use", "name": "Bash"}) == (1, 0)
+    assert _count_tool_transitions({"type": "tool_result", "content": "x"}) == (0, 1)
+    # Non-tool events contribute nothing.
+    assert _count_tool_transitions({"type": "result", "result": "done"}) == (0, 0)
+    assert _count_tool_transitions(
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}
+    ) == (0, 0)
+
+
+def test_watchdog_exempts_long_quiet_tool_then_rearms():
+    """An in-flight tool suspends the idle kill; once it finishes, idle re-arms.
+
+    This reproduces the incident at the logic level: tool_use, then >idle_kill
+    seconds of silence (the eval running), must NOT be overdue; after the
+    tool_result and a further silent stretch it SHOULD be overdue.
+    """
+    clock = {"t": 0.0}
+    wd = LivenessWatchdog(idle_kill_seconds=600.0, now=lambda: clock["t"])
+
+    # Tool starts (assistant tool_use block).
+    started, finished = _count_tool_transitions(
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}}
+    )
+    for _ in range(started):
+        wd.note_activity(tool_started=True)
+
+    # 20 minutes of total silence while the eval runs — well past the 600s idle
+    # threshold. With the tool in flight, the watchdog must NOT fire.
+    clock["t"] = 1200.0
+    assert wd.overdue() is None
+
+    # Tool finishes (tool_result on a user message); idle window re-arms from here.
+    started, finished = _count_tool_transitions(
+        {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
+    )
+    for _ in range(finished):
+        wd.note_activity(tool_finished=True)
+
+    # Still under the idle threshold right after the tool returns.
+    clock["t"] = 1700.0
+    assert wd.overdue() is None
+    # Now genuinely idle (no tool) for >600s — this is a real stall: fire.
+    clock["t"] = 1900.0
+    assert wd.overdue() is not None
