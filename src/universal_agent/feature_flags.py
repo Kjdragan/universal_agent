@@ -699,3 +699,19 @@ def proactive_demo_factory_script(
     Override with ``UA_PROACTIVE_DEMO_FACTORY_SCRIPT``.
     """
     return (os.getenv("UA_PROACTIVE_DEMO_FACTORY_SCRIPT") or "").strip() or default
+
+
+def proactive_demo_daily_cap(default: int = 3) -> int:
+    """Max proactive demo BUILDS dispatched per UTC day (the OUTFLOW control).
+
+    Enforced at the dispatch point for ``source_kind == "tutorial_build"``
+    (``services/priority_dispatcher.dispatch_claimed``): once this many
+    tutorial_build builds have been dispatched today, further ones are
+    deferred (left queued, never cancelled). This is distinct from
+    ``UA_DEMO_BUILD_DAILY_CEILING`` (default 10) which only throttled the
+    auto-route INFLOW (queueing) and was bypassed by the bespoke lane.
+
+    Reads ``UA_PROACTIVE_DEMO_DAILY_CAP`` (default 3), clamped to >= 0. A cap
+    of 0 defers every proactive build (nothing auto-dispatches).
+    """
+    return _read_int("UA_PROACTIVE_DEMO_DAILY_CAP", default, minimum=0)
