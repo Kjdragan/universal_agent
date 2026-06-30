@@ -1,0 +1,18 @@
+[Unit]
+Description=Run Universal Agent VP-coder regenerable-artifact reaper daily at 06:25 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor - NEVER monotonic. systemd 255 honors the
+# timezone suffix, so cron `25 6 * * *` America/Chicago is encoded directly
+# (DST handled by systemd). Persistent replays a daily slot missed inside a
+# deploy window. This timer is the SOLE firer: the in-process gateway cron
+# registration no-op'd in prod, and gateway_server._is_migrated_to_systemd now
+# force-disables the in-process row (see SYSTEMD_MIGRATED_SYSTEM_JOBS).
+OnCalendar=*-*-* 06:25:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-vp-coder-regenerable-reap.service
+
+[Install]
+WantedBy=timers.target

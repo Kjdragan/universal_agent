@@ -29,6 +29,19 @@ SYSTEMD_MIGRATED_SYSTEM_JOBS: frozenset[str] = frozenset(
         "vault_lint_contradictions",
         "architecture_canvas_drift",
         "vp_coder_workspace_pruning",
+        # 2026-06-30 -- daily regenerable-artifact reaper migrated off the
+        # in-process gateway cron to a deploy-independent systemd timer
+        # (universal-agent-vp-coder-regenerable-reap.timer), folded into batch 1
+        # as the daily companion to the weekly vp_coder_workspace_pruning job.
+        # The in-process cron registration no-op'd in prod (zero dispatch rows
+        # ever); the timer runs scripts.vp_coder_regenerable_reaper directly, so
+        # that no-op becomes moot. Pure-FS (os.walk + shutil.rmtree) with NO
+        # Infisical-resolved secrets -- same shape as its weekly sibling -- so
+        # the unit needs no initialize_runtime_secrets() (the inline profile
+        # vars are inert, kept only for unit uniformity). Gated via the
+        # _register_system_cron_job(enabled=...) arg in
+        # _ensure_vp_coder_regenerable_reap_cron_job.
+        "vp_coder_workspace_regenerable_reap",
         # Batch 2 — content dailies. NOTE: most are gated via the
         # _register_system_cron_job(enabled=…) arg, BUT ``codie_proactive_cleanup``
         # registers through a bespoke _cron_service.add_job/update_job path, so its

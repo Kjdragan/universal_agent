@@ -31,6 +31,7 @@ UNITS=(
   "universal-agent-vault-lint-contradictions"
   "universal-agent-architecture-canvas-drift"
   "universal-agent-vp-coder-workspace-pruning"
+  "universal-agent-vp-coder-regenerable-reap"
   "universal-agent-cron-workspace-pruning"
 )
 # NOTE: universal-agent-insight-scoring-health was RETIRED 2026-06-21 (zombie

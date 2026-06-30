@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - tests/unit/test_cron_dormancy_defaults.py
   - tests/unit/test_dormancy_schedule_consistency.py
-last_verified: 2026-06-22
+last_verified: 2026-06-30
 ---
 
 # Dormancy & Operating Hours
@@ -159,7 +159,7 @@ field to the active window. Examples (code-verified):
 | `hackernews_snapshot` | `0,30 6-21 * * *` | America/Chicago | half-hourly, active hours only |
 | `vault_lint_contradictions` | `0 7 1 * *` | America/Chicago | monthly, 07:00 Central |
 | `vp_coder_workspace_pruning` | `5 17 * * 0` | America/Chicago | Sunday 5:05 PM |
-| `vp_coder_workspace_regenerable_reap` | `25 6 * * *` | America/Chicago | Daily 06:25 CT — fixed-time (dormancy-exempt) but kept inside the 06:00-21:00 active window so a missed catch-up still lands in the operator's day. Removes only regenerable names (`.venv`, `__pycache__`, `node_modules`, `.pytest_cache`, `.ruff_cache`, `dist`, `build`, `.next`) from each VP-coder mission dir; added 2026-06-25 after the disk-critical incident |
+| `vp_coder_workspace_regenerable_reap` | `25 6 * * *` | America/Chicago | Daily 06:25 CT — fixed-time (dormancy-exempt) but kept inside the 06:00-21:00 active window so a missed catch-up still lands in the operator's day. Removes only regenerable names (`.venv`, `__pycache__`, `node_modules`, `.pytest_cache`, `.ruff_cache`, `dist`, `build`, `.next`) from each VP-coder mission dir; added 2026-06-25 after the disk-critical incident. Migrated to a deploy-independent systemd timer (`universal-agent-vp-coder-regenerable-reap.timer`, 2026-06-30) — schedule + dormancy behavior unchanged |
 
 Each registration carries a `cron_env_var` (e.g. `UA_HACKERNEWS_SNAPSHOT_CRON`) and
 a `timezone_env_var` so an operator can override the schedule via env, plus an
