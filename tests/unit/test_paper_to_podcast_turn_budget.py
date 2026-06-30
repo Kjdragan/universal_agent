@@ -32,20 +32,45 @@ from universal_agent.gateway import (
 
 def test_command_includes_long_audio_poll_window():
     """The poll instruction must (a) name a 40-minute ceiling, (b) forbid
-    ending the run while audio is still in_progress, and (c) require a re-poll
-    if a background poll ends incomplete. The old one-liner ("Poll ... until
-    the audio is completed") left the agent free to cap the poll under 30 min
-    and terminate on slow-audio days."""
+    ending the run while audio is still in_progress, (c) require a FOREGROUND
+    blocking wait, and (d) explicitly forbid `run_in_background` + yielding.
+
+    2026-06-30 recurrence: the prior "background bash loop" phrasing led the
+    cron agent to launch the poll with `run_in_background: true` and YIELD,
+    expecting a harness notification. In an autonomous cron session, yielding
+    ends the turn and the run is torn down — orphaning a podcast that finished
+    on Google's side seconds later ("no audio delivered"). The poll must block
+    the agent's turn in the foreground."""
     body = gateway_server._paper_to_podcast_command()
     assert "UP TO 40 MINUTES" in body, "command must name the 40-minute ceiling"
     assert "DO NOT cap the poll under 30 minutes" in body
     assert "DO NOT end the run while audio is still `in_progress`" in body, (
         "command must forbid terminating mid-poll"
     )
-    assert "start another poll loop rather than terminating" in body, (
-        "command must require a re-poll when a background poll ends incomplete"
+    # The fix: foreground/blocking, with an explicit ban on run_in_background + yield.
+    assert "FOREGROUND" in body, "poll must be a foreground/blocking wait"
+    assert "run_in_background" in body, "command must explicitly forbid run_in_background"
+    assert "orphaned" in body, "command must name the orphaned-audio failure mode"
+    assert "issue ANOTHER blocking poll call" in body, (
+        "command must require a foreground re-poll (not a backgrounded one) when audio is still in_progress"
     )
     assert "sleep 30" in body
+
+
+def test_command_includes_arxiv_resilience():
+    """The arXiv phase must degrade gracefully instead of burning the whole
+    turn budget on a throttled IP (the 2026-06-30 scheduled-run failure, where
+    the run spent its entire 1800s backstop retrying download_paper into a 429
+    and never reached NotebookLM). The prompt must mandate cache reuse, ban a
+    tight 429 retry loop, allow proceeding with >=3 papers, and bound Phase A
+    to ~5 minutes so a clean fast failure recovers on the next daily run."""
+    body = gateway_server._paper_to_podcast_command()
+    assert "already cached at" in body, "must tell the agent to reuse cached papers"
+    assert "lengthens arXiv's per-IP ban" in body, "must forbid retrying into a 429"
+    assert "at least 3 usable papers" in body, "must allow proceeding with a partial set"
+    assert "at most ~5 minutes total on paper discovery" in body, (
+        "must bound Phase A so a throttled IP can't exhaust the turn budget"
+    )
 
 
 def test_command_still_requires_real_m4a_download():

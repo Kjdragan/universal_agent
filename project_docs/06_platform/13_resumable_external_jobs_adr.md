@@ -8,7 +8,7 @@ code_paths:
   - src/universal_agent/gateway_server.py
   - src/universal_agent/cron_service.py
   - tests/gateway/test_cron_ensure_jobs.py
-last_verified: 2026-06-24
+last_verified: 2026-06-30
 ---
 
 # ADR: Resumable External Jobs
@@ -35,6 +35,29 @@ written before the task (`cron_service.py` `_mark_inflight`, before
 `asyncio.create_task(self._run_job(...))`) survives SIGTERM and is kept on a
 cancelled status, and the boot-time requeue re-dispatches the slot
 (`catch_up_on_restart=True` for this job). **But it could not recover this run.**
+
+### 1.1 Second orphan trigger (2026-06-30): an in-session yield, not a deploy kill
+
+A scheduled run on 2026-06-30 reproduced the *same symptom* — audio finished on
+Google's side, nothing downloaded it ("no audio delivered") — with a **different
+trigger**: no deploy restart was involved. The cron agent launched the audio
+poll as a `run_in_background: true` Bash task and then **yielded its turn**,
+expecting the harness to wake it when the background task exited (true in an
+interactive session, false here). In an autonomous cron session, the instant the
+agent's turn ends the run is classified complete and torn down — orphaning the
+poll. The `deep_dive` audio actually completed ~2 minutes later.
+
+The §3 checkpoint is the *backstop* (the next daily run adopts the notebook and
+downloads it); the primary fix closes the trigger. The poll instruction in
+`_paper_to_podcast_command` and the skill (Phase B.5) now mandate a **single
+FOREGROUND (blocking) Bash call** that keeps the agent's turn alive until the
+audio is `completed`/`failed`, and **explicitly forbid** `run_in_background:
+true` + yielding. That morning's *other* scheduled attempt died differently — the
+arXiv search burned the entire turn-budget backstop retrying `download_paper`
+into a transient HTTP 429 on the shared VPS IP — so the prompt also gained an
+**arXiv-resilience** clause: reuse cached papers, never retry into a 429, proceed
+with ≥3 papers, and cap paper discovery at ~5 minutes (fail fast and let the
+daily cadence recover).
 
 ## 2. Root cause — the requeue had nothing to adopt
 
