@@ -1,0 +1,36 @@
+[Unit]
+Description=Universal Agent VP-coder regenerable-artifact reaper (daily; deploy-independent systemd timer - batch-1 companion to the weekly pruner)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-vp-coder-workspace-pruning).
+# vp_coder_regenerable_reaper is pure FS (os.walk + shutil.rmtree) with NO
+# Infisical-resolved secrets; it resolves the workspace root via
+# vp/profiles.py::get_vp_profile("vp.coder.primary").workspace_root (a plain
+# path, env-or-default; no secret fetch) and reads only the plain config knob
+# UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS (env-with-code-default). It therefore
+# does NOT call initialize_runtime_secrets() - same faithful no-secret shape as
+# its weekly sibling. The inline profile vars below are inert for this job and
+# kept only for unit uniformity. .env OVERRIDES these when present.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# Reaps regenerable artifacts (.venv, __pycache__, node_modules, .pytest_cache,
+# .ruff_cache, dist, build, .next) from each VP-coder mission dir. Active
+# missions (mtime within UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS, default 6h) are
+# skipped; the live repo .venv and any activity_state.db are hard-excluded.
+# Always exits 0 (missing root / nothing-to-reap / reaped-all return 0).
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.vp_coder_regenerable_reaper
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

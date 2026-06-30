@@ -37,6 +37,11 @@ BATCH1 = {
     "vault_lint_contradictions",
     "architecture_canvas_drift",
     "vp_coder_workspace_pruning",
+    # Folded into batch 1 on 2026-06-30 as the daily companion to the weekly
+    # vp_coder_workspace_pruning; its units are armed by
+    # install_vps_phase_a_batch1_timers.sh. Mirrored here so the frozenset
+    # equality below stays exact as the registry grows.
+    "vp_coder_workspace_regenerable_reap",
 }
 
 # system_job -> (timer_basename, service_basename, scripts module, TimeoutStartSec|None)

@@ -65,6 +65,13 @@ MIGRATED = {
         "universal-agent-vp-coder-workspace-pruning",
         "vp_coder_workspace_pruner",
     ),
+    # 2026-06-30 -- daily regenerable-artifact reaper folded into batch 1 as the
+    # companion to the weekly vp_coder_workspace_pruning. The existing
+    # parametrized harness below auto-validates its unit files + installer entry.
+    "vp_coder_workspace_regenerable_reap": (
+        "universal-agent-vp-coder-regenerable-reap",
+        "vp_coder_regenerable_reaper",
+    ),
 }
 
 

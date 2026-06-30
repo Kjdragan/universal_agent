@@ -18,9 +18,10 @@ from universal_agent.systemd_migrated_jobs import (
 
 
 def test_registry_has_all_migrated_jobs() -> None:
-    # 19 Phase A jobs + cron_artifact_reminders_sweep (migrated 2026-06-08).
+    # 19 Phase A jobs + cron_artifact_reminders_sweep (2026-06-08)
+    # + vp_coder_workspace_regenerable_reap (folded into batch 1, 2026-06-30).
     # (insight_scoring_health retired 2026-06-21 — zombie monitor, see #1131.)
-    assert len(SYSTEMD_MIGRATED_SYSTEM_JOBS) == 20
+    assert len(SYSTEMD_MIGRATED_SYSTEM_JOBS) == 21
     for job in (
         "scratch_pruning",               # batch 1
         "codie_proactive_cleanup",       # batch 2 (bespoke gate)
