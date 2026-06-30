@@ -194,8 +194,15 @@ Phase B — NotebookLM Content Generation (via the `nlm` CLI — see Required Ca
       attempt `mcp__notebooklm-mcp__studio_create` with `artifact_type="flashcards"` AFTER audio + quiz
       are created — but treat flashcards as optional. If it errors, skip it; never let a flashcards
       failure block or undo the audio.
-5. Poll `nlm studio status <notebook_id> --json` every ~45s until the audio artifact shows
-   `"status":"completed"` (audio takes ~5-10 min; quiz completes faster).
+5. Poll `nlm studio status <notebook_id> --json` until the audio artifact shows
+   `"status":"completed"` (audio usually takes ~5-15 min but can run longer; quiz completes faster).
+   Run the poll as ONE FOREGROUND (blocking) Bash call — a shell loop of `nlm studio status` +
+   `sleep 30` inside a single Bash invocation with a high `timeout` — and keep your turn alive
+   until it returns `completed`/`failed`. Do NOT launch the poll with `run_in_background: true`
+   and do NOT yield/end your turn to wait for a background notification: in an autonomous cron
+   session, ending your turn tears the run down and orphans the finished audio (the "no audio
+   delivered" failure). If one blocking poll call returns with audio still `in_progress`, issue
+   another blocking poll call — never background it, never stop early.
 
 Phase C — Download and Package (sequential, one at a time, via `nlm`):
 1. Audio: `nlm download audio <notebook_id> -o work_products/paper_to_podcast/podcast_audio.m4a --no-progress`
