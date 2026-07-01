@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the Universal Agent end-of-day golden-nuggets demo judge once daily at 23:50 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. Fires once at the very end of
+# the America/Chicago day, AFTER the 3x/day normal demo-build lane (last slot
+# 18:30). DST handled by systemd; Persistent replays a missed slot inside a
+# deploy window (the cron's own budget/idempotence guards make a late replay
+# safe). Verify with `systemd-analyze calendar`.
+OnCalendar=*-*-* 23:50:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-proactive-demo-nuggets.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,35 @@
+[Unit]
+Description=Universal Agent end-of-day golden-nuggets demo judge (Component D — deploy-independent once-daily timer, SECRET-BEARING: Anthropic/ZAI key for the critical-eye judge + build_demo.py land)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-proactive-demo-build-sweep).
+# LOAD BEARING: proactive_demo_nuggets_cron.main() calls
+# initialize_runtime_secrets() and both the critical-eye LLM judge
+# (csi_demo_triage_ranker._call_llm) and the build_demo.py land read the API key
+# from os.environ. As a standalone oneshot it has no gateway parent to inherit
+# keys from, so UA_DEPLOYMENT_PROFILE=vps must drive a strict Infisical
+# production load. .env OVERRIDES these when present. GATED OFF by default:
+# UA_PROACTIVE_DEMO_NUGGETS_ENABLED must be flipped on before this builds
+# anything (the cron no-ops otherwise).
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.proactive_demo_nuggets_cron
+MemoryMax=1G
+# One SQL scan + one bounded LLM judge call + up to nuggets_max (default 2) full
+# demo_factory land builds (Opus /goal, slow). Cap sized to exceed
+# 2 * UA_PROACTIVE_DEMO_NUGGETS_BUILD_TIMEOUT_SECONDS (default 3600) + slack.
+TimeoutStartSec=8100
+
+[Install]
+WantedBy=multi-user.target

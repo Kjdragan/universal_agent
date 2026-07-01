@@ -33,7 +33,6 @@ retry budget and would push a backlog of capacity-deferred tasks to
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import logging
 import os
 from typing import Any, Optional
@@ -54,6 +53,7 @@ from universal_agent.services.vp_capacity import (
     _env_positive_int,
     _vp_active_counts,
 )
+from universal_agent.utils.day_boundary import chicago_day_start_iso
 
 log = logging.getLogger(__name__)
 
@@ -289,28 +289,20 @@ def _is_tutorial_build(item: dict[str, Any]) -> bool:
     return str(item.get("source_kind") or "").strip().lower() == "tutorial_build"
 
 
-def _utc_day_start_iso() -> str:
-    """UTC local-midnight as a ``_now_iso``-comparable ISO string (``+00:00``).
-
-    task_hub timestamps are ``datetime.now(timezone.utc).isoformat()``, so the
-    day boundary is lexicographically comparable when emitted the same way.
-    """
-    now = datetime.now(timezone.utc)
-    return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-
-
 def _count_dispatched_tutorial_builds_today(conn) -> int:
-    """Count ``tutorial_build`` builds already DISPATCHED today (UTC).
+    """Count ``tutorial_build`` builds already DISPATCHED today (America/Chicago).
 
     The dispatch marks the source task ``delegated`` with
     ``metadata.delegation.delegated_at`` (the ``perform_task_action`` delegate
     verb), which persists through the task's later lifecycle — so it is the
     authoritative per-task "was dispatched today" signal. Counts every
-    tutorial_build row whose delegation timestamp falls on or after today's
-    UTC midnight. json_extract (SQLite 3.38+) with a LIKE fallback, mirroring
-    ``task_hub.find_delegated_task_by_mission_id``.
+    tutorial_build row whose delegation timestamp falls on or after the operator's
+    (Houston) local midnight — the SHARED ``chicago_day_start_iso`` boundary used
+    by the inflow ceiling and the golden-nuggets 5/day ceiling, so all three count
+    the same day (the end-of-day nuggets cron fires at 23:50 Chicago, where a UTC
+    boundary would undercount). json_extract (SQLite 3.38+) with a Python fallback.
     """
-    day_start = _utc_day_start_iso()
+    day_start = chicago_day_start_iso()
     try:
         row = conn.execute(
             """
