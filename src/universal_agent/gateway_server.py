@@ -79,6 +79,7 @@ from universal_agent.cron_service import (
     coupling_wake_allowed_jobs,
     coupling_wake_min_interval_seconds,
     coupling_wake_selective_enabled,
+    mark_shutdown_requested as _cron_mark_shutdown_requested,
     parse_run_at,
 )
 from universal_agent.delegation.factory_registry import (
@@ -15725,6 +15726,16 @@ async def lifespan(app: FastAPI):
     yield
     
     # Cleanup
+    # Flag the graceful shutdown BEFORE anything below finalizes — in
+    # particular before the heartbeat drain and `_cron_service.stop()`.
+    # `cron_service._is_deploy_window_active()` treats this flag as an
+    # active deploy/shutdown window regardless of trigger (GHA deploy, the
+    # VPS installer, or an ops `systemctl restart`), so any in-flight LLM/
+    # `!script` cron run that's still finalizing when this process is
+    # SIGTERM'd classifies as `cancelled` (in-flight marker preserved,
+    # requeues on next boot) instead of a silently-lost `success`/`error`.
+    # See the 2026-07-01 paper_to_podcast incident this closes.
+    _cron_mark_shutdown_requested()
     if _digest_expired_sweep_stop is not None:
         _digest_expired_sweep_stop.set()
     if _digest_reminder_dismissal_stop is not None:

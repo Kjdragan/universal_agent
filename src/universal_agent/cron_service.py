@@ -85,6 +85,43 @@ def _process_start_time() -> float:
     return _PROCESS_START_TIME
 
 
+# ── Shutdown-interruption signal (cause-agnostic, not just GHA deploys) ────
+# `_is_deploy_window_active()` originally recognised only GitHub-Actions-
+# driven deploys (flag file) plus a narrow post-boot uptime fallback. The
+# 2026-07-01 incident showed a THIRD trigger it missed entirely: an
+# operator/ops `sudo systemctl restart universal-agent-autonomous-runtime`
+# (no GHA deploy, flag file never written) SIGTERM'd an in-flight
+# `paper_to_podcast_daily` LLM cron run mid-flight. The engine correctly
+# surfaced `metadata["subprocess_terminated"]=True` (see
+# `execution_engine._is_terminated_process_error`), but
+# `_is_deploy_window_active()` returned False (no flag, gateway uptime well
+# past 60s), so the `_is_llm_deploy_kill_result(...) and
+# _is_deploy_window_active()` branch below didn't engage — the run was
+# mis-classified `success`, its in-flight marker was cleared, and it never
+# requeued. This module-level flag makes the recovery ANY-graceful-shutdown
+# aware: set before in-flight cron runs finalize during shutdown, from BOTH
+# `CronService.stop()` and the gateway lifespan's shutdown path.
+_SHUTDOWN_REQUESTED = False
+
+
+def mark_shutdown_requested() -> None:
+    """Flag that a graceful process shutdown/restart is underway.
+
+    Idempotent, process-lifetime-only (never reset — the process is on its
+    way down). Callers: `CronService.stop()` (top of the method) and
+    `gateway_server.lifespan`'s shutdown path (before any in-flight cron run
+    finalizes, i.e. before `_cron_service.stop()` and before the heartbeat
+    drain). Once set, `_is_deploy_window_active()` returns True for the rest
+    of this process's life, so ANY in-flight LLM/`!script` cron run that gets
+    SIGTERM'd during the drain — whether triggered by a GitHub-Actions
+    deploy, the VPS installer, or a manual ops `systemctl restart` — is
+    classified `cancelled` with its in-flight marker preserved instead of a
+    silently-lost `success`/`error`.
+    """
+    global _SHUTDOWN_REQUESTED
+    _SHUTDOWN_REQUESTED = True
+
+
 # ── M4: selective cron→heartbeat coupling policy (shared) ──────────────────
 # The cron→heartbeat coupling historically woke Simone's heartbeat on EVERY
 # autonomous-cron success. That wake is now redundant with the live Python
@@ -169,24 +206,36 @@ def _parse_script_command_argv(raw_command: str) -> list[str]:
 
 
 def _is_deploy_window_active() -> bool:
-    """True iff a deploy is currently in flight or just completed.
+    """True iff any graceful shutdown/restart is currently in flight or just
+    completed — a GitHub-Actions deploy, the VPS installer, or an ops
+    `systemctl restart` alike (NOT only GHA deploys, despite the name kept
+    for call-site continuity).
 
-    Two signals, OR'd:
+    Three signals, OR'd:
 
     1. The deploy-marker flag file (``/tmp/ua-deployment-window``) is
        present. `.github/workflows/deploy.yml` creates this BEFORE the
-       systemctl restart and removes it on EXIT. Primary signal.
+       systemctl restart and removes it on EXIT. Covers GHA-driven deploys.
     2. This gateway process started within the last 60 seconds. Fallback
        when the flag's cleanup ran before the cron's failure-handler
        (rare race), or when the flag wasn't set (manual ops restart that
        happens to look like a deploy).
+    3. `_SHUTDOWN_REQUESTED` is set (``mark_shutdown_requested()`` was
+       called). Set from `CronService.stop()` and the gateway lifespan's
+       shutdown path at the START of shutdown — BEFORE in-flight cron runs
+       finalize — so it's visible when a run classifies during the drain.
+       Added 2026-07-01: a `sudo systemctl restart
+       universal-agent-autonomous-runtime` (an ops restart, not a GHA
+       deploy) SIGTERM'd an in-flight `paper_to_podcast_daily` run. Signals
+       (1) and (2) were both False (no flag file; gateway had been up for
+       hours), so the existing deploy-kill recovery branch never engaged —
+       the run was mis-classified `success`, its in-flight marker cleared,
+       and the podcast was silently lost. Signal (3) closes that gap for
+       ANY graceful-shutdown trigger, cause-agnostically.
 
-    Note (1) covers all GitHub-Actions-driven deploys; (2) widens to
-    cover the rare race + makes the system tolerant of operator-initiated
-    `systemctl restart` for ops reasons. Both signals are conservative:
-    they widen the "treat signal as deploy-cancellation" window, never
-    narrow it. Real failures (OOM, code crash, etc.) outside this window
-    surface loudly as before.
+    All three signals are conservative: they widen the "treat signal as
+    shutdown-cancellation" window, never narrow it. Real failures (OOM,
+    code crash, etc.) outside this window surface loudly as before.
     """
     try:
         if os.path.exists(_DEPLOY_WINDOW_FLAG_PATH):
@@ -199,6 +248,8 @@ def _is_deploy_window_active() -> bool:
             return True
     except Exception:  # noqa: BLE001 — never block cron flow
         pass
+    if _SHUTDOWN_REQUESTED:
+        return True
     return False
 
 
@@ -1101,6 +1152,13 @@ class CronService:
 
     async def stop(self) -> None:
         """Cancel the scheduler loop and wait for it to finish."""
+        # Flag the shutdown BEFORE touching anything else — any LLM/`!script`
+        # cron run still finalizing during this drain (individual per-job
+        # tasks are NOT awaited/cancelled here; only the scheduler loop is)
+        # must see an active deploy/shutdown window so a mid-flight SIGTERM
+        # classifies as `cancelled` (marker kept) instead of `success`/`error`
+        # (marker cleared, silently lost). See `mark_shutdown_requested()`.
+        mark_shutdown_requested()
         if not self.running:
             return
         self.running = False
@@ -3184,36 +3242,74 @@ class CronService:
                     retryable=True,
                 )
             except Exception as exc:
-                record.status = "error"
-                record.finished_at = time.time()
-                record.error = str(exc)
-                logger.error("Chron job %s failed: %s", job.job_id, exc)
-                # Defer rate-limit failures to the next scheduled tick
-                # instead of retrying immediately — see
-                # `_is_rate_limit_exception` docblock for the 2026-05-23
-                # incident shape that motivated this.
-                _retryable = not _is_rate_limit_exception(record.error)
-                _failure_class = (
-                    "rate_limited" if not _retryable else "cron_dispatch_failed"
-                )
-                if not _retryable:
-                    logger.warning(
-                        "Chron job %s hit upstream rate-limit signature; "
-                        "deferring to next scheduled tick (no retry).",
-                        job.job_id,
+                if _is_deploy_window_active():
+                    # Cause-agnostic backstop (2026-07-01): an exception that
+                    # escapes the more specific classification above (e.g.
+                    # the LLM branch's own `_is_llm_deploy_kill_result`
+                    # signature check, which only recognises a swallowed
+                    # "terminated process" exception or an empty result) is
+                    # STILL, most likely, a shutdown-restart casualty if it
+                    # happens while a graceful shutdown/deploy window is
+                    # active. Mirror the `asyncio.CancelledError` branch
+                    # above: mark cancelled and KEEP the in-flight marker so
+                    # the boot-time `catch_up_on_restart` requeue can adopt
+                    # the interrupted slot, instead of marking `error` and
+                    # clearing the marker for what's really a non-event.
+                    # Outside a deploy/shutdown window this branch never
+                    # engages — a real crash/OOM still surfaces loudly below.
+                    record.status = "cancelled"
+                    record.finished_at = time.time()
+                    record.error = (
+                        f"cancelled (deploy/shutdown window active): {exc}"
                     )
-                self._finalize_workflow_attempt(
-                    job=job,
-                    record=record,
-                    scheduled_at=scheduled_at,
-                    reason=reason,
-                    dispatch_key=dispatch_key,
-                    workflow_run_id=workflow_run_id,
-                    workflow_attempt_id=workflow_attempt_id,
-                    failure_reason=record.error,
-                    failure_class=_failure_class,
-                    retryable=_retryable,
-                )
+                    logger.info(
+                        "Chron job %s treated as cancelled — exception "
+                        "during an active deploy/shutdown window: %s",
+                        job.job_id, exc,
+                    )
+                    self._finalize_workflow_attempt(
+                        job=job,
+                        record=record,
+                        scheduled_at=scheduled_at,
+                        reason=reason,
+                        dispatch_key=dispatch_key,
+                        workflow_run_id=workflow_run_id,
+                        workflow_attempt_id=workflow_attempt_id,
+                        failure_reason=record.error,
+                        failure_class="cancelled",
+                        retryable=False,
+                    )
+                else:
+                    record.status = "error"
+                    record.finished_at = time.time()
+                    record.error = str(exc)
+                    logger.error("Chron job %s failed: %s", job.job_id, exc)
+                    # Defer rate-limit failures to the next scheduled tick
+                    # instead of retrying immediately — see
+                    # `_is_rate_limit_exception` docblock for the 2026-05-23
+                    # incident shape that motivated this.
+                    _retryable = not _is_rate_limit_exception(record.error)
+                    _failure_class = (
+                        "rate_limited" if not _retryable else "cron_dispatch_failed"
+                    )
+                    if not _retryable:
+                        logger.warning(
+                            "Chron job %s hit upstream rate-limit signature; "
+                            "deferring to next scheduled tick (no retry).",
+                            job.job_id,
+                        )
+                    self._finalize_workflow_attempt(
+                        job=job,
+                        record=record,
+                        scheduled_at=scheduled_at,
+                        reason=reason,
+                        dispatch_key=dispatch_key,
+                        workflow_run_id=workflow_run_id,
+                        workflow_attempt_id=workflow_attempt_id,
+                        failure_reason=record.error,
+                        failure_class=_failure_class,
+                        retryable=_retryable,
+                    )
             finally:
                 retry_scheduled = record.status == "retry_queued"
                 if not retry_scheduled:

@@ -794,3 +794,137 @@ def test_llm_run_midflight_marker_outside_deploy_window_stays_success(
     assert record.status == "success"
     # No downgrade -> marker clears on the normal success path.
     assert job.job_id not in svc.store.load_inflight()
+
+# --------------------------------------------------------------------------- #
+# 2026-07-01 regression: ops `systemctl restart` (not a GHA deploy) SIGTERM'd
+# an in-flight LLM cron run. No deploy flag file, gateway uptime > 60s, so
+# `_is_deploy_window_active()` returned False and the finalizer mis-classified
+# the mid-flight kill as a clean success — clearing the in-flight marker and
+# silently dropping the nightly paper_to_podcast run. Fix:
+# `cron_service.mark_shutdown_requested()` widens the window for ANY graceful
+# shutdown, not just GHA deploys.
+# --------------------------------------------------------------------------- #
+
+
+def test_shutdown_flag_starts_false(monkeypatch):
+    """Sanity: the module-level flag defaults False (never leaked True from
+    another test/process)."""
+    monkeypatch.setattr(cron_service, "_SHUTDOWN_REQUESTED", False)
+    assert cron_service._SHUTDOWN_REQUESTED is False
+
+
+def test_deploy_window_inactive_without_shutdown_flag_no_flag_file_old_uptime(
+    tmp_path, monkeypatch
+):
+    """Reproduce the EXACT pre-fix conditions live tonight: no deploy flag
+    file, gateway uptime well past the 60s fallback, and no shutdown flagged
+    — `_is_deploy_window_active()` must be False (this is the bug's
+    precondition, not the fix)."""
+    monkeypatch.setattr(
+        cron_service, "_DEPLOY_WINDOW_FLAG_PATH", str(tmp_path / "no-such-file")
+    )
+    monkeypatch.setattr(cron_service, "_process_start_time", lambda: time.time() - 3600)
+    monkeypatch.setattr(cron_service, "_SHUTDOWN_REQUESTED", False)
+    assert _is_deploy_window_active() is False
+
+
+def test_deploy_window_active_when_shutdown_requested_even_without_deploy_flag(
+    tmp_path, monkeypatch
+):
+    """THE FIX: with no deploy flag file and old gateway uptime (both signals
+    False, as they were live tonight), flagging a shutdown via
+    ``mark_shutdown_requested()`` alone must flip ``_is_deploy_window_active()``
+    to True — an ops `systemctl restart` counts the same as a GHA deploy."""
+    monkeypatch.setattr(
+        cron_service, "_DEPLOY_WINDOW_FLAG_PATH", str(tmp_path / "no-such-file")
+    )
+    monkeypatch.setattr(cron_service, "_process_start_time", lambda: time.time() - 3600)
+    monkeypatch.setattr(cron_service, "_SHUTDOWN_REQUESTED", False)
+    assert _is_deploy_window_active() is False  # precondition unchanged
+
+    cron_service.mark_shutdown_requested()
+    assert cron_service._SHUTDOWN_REQUESTED is True
+    assert _is_deploy_window_active() is True
+
+
+async def test_cron_service_stop_marks_shutdown_requested(tmp_path, monkeypatch):
+    """`CronService.stop()` must flag the shutdown BEFORE anything else, so
+    any cron run still finalizing during the drain sees an active window."""
+    monkeypatch.setattr(cron_service, "_SHUTDOWN_REQUESTED", False)
+    svc = _service(tmp_path)
+    await svc.start()
+    assert cron_service._SHUTDOWN_REQUESTED is False
+    await svc.stop()
+    assert cron_service._SHUTDOWN_REQUESTED is True
+
+
+def test_llm_run_midflight_kill_during_ops_restart_marks_cancelled_and_keeps_marker(
+    tmp_path: Path, monkeypatch
+):
+    """END-TO-END regression for the 2026-07-01 incident: a mid-flight
+    deploy-kill-shaped LLM result (``subprocess_terminated`` marker, non-empty
+    text, tool_calls > 0 — exactly the paper_to_podcast shape) occurring
+    while NEITHER the deploy flag file NOR the uptime fallback is active (an
+    ops `systemctl restart`, not a GHA deploy) must still classify
+    ``cancelled`` and KEEP the in-flight marker, once
+    ``mark_shutdown_requested()`` has been called — mirroring the gateway
+    lifespan's shutdown path calling it before `_cron_service.stop()`.
+
+    Without the fix (i.e. asserting on plain ``_is_deploy_window_active``
+    with no shutdown flag) this exact scenario reproduces the live bug:
+    ``record.status == "success"`` and the marker is cleared — see
+    ``test_llm_run_midflight_marker_outside_deploy_window_stays_success``
+    above, which pins that OLD behavior when the predicate is stubbed
+    directly to False. This test proves the NEW real-predicate path recovers
+    it instead.
+    """
+    _isolate_side_paths(monkeypatch, tmp_path)
+    # No GHA deploy flag; gateway "already up" for an hour — both signals
+    # that made `_is_deploy_window_active()` return False live tonight.
+    monkeypatch.setattr(
+        cron_service, "_DEPLOY_WINDOW_FLAG_PATH", str(tmp_path / "no-such-file")
+    )
+    monkeypatch.setattr(cron_service, "_process_start_time", lambda: time.time() - 3600)
+    monkeypatch.setattr(cron_service, "_SHUTDOWN_REQUESTED", False)
+
+    svc = _service(
+        tmp_path,
+        gateway=_StubGateway(
+            SimpleNamespace(
+                response_text=(
+                    "Created notebook 095f0718, added 5 sources, "
+                    "polling audio ee5d49e1..."
+                ),
+                metadata={"subprocess_terminated": True},
+                tool_calls=8,
+            )
+        ),
+    )
+    job = svc.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "ws_llm_ops_restart"),
+        command="Generate the nightly podcast",
+        cron_expr="0 21 * * *",
+        catch_up_on_restart=True,
+        metadata={"skip_task_hub_link": True},
+    )
+    scheduled_at = time.time() - 30
+    svc.running_jobs.add(job.job_id)
+    svc._mark_inflight(job.job_id, scheduled_at)
+
+    # The shutdown path flips the shared flag BEFORE the in-flight run
+    # finalizes (mirrors gateway_server.lifespan calling this at the top of
+    # its shutdown cleanup, before `await _cron_service.stop()`).
+    cron_service.mark_shutdown_requested()
+
+    record = asyncio.run(
+        svc._run_job(job, scheduled_at=scheduled_at, reason="schedule")
+    )
+
+    assert record.status == "cancelled"
+    assert "deploy restart" in (record.error or "")
+    # Recovery: slot requeued to a small positive offset from now.
+    assert job.next_run_at is not None
+    assert 0 < (job.next_run_at - time.time()) <= _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC + 1
+    # Recovery: marker survives so the startup recovery pass can requeue.
+    assert job.job_id in svc.store.load_inflight()

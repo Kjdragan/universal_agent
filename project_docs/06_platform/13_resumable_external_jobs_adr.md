@@ -8,7 +8,8 @@ code_paths:
   - src/universal_agent/gateway_server.py
   - src/universal_agent/cron_service.py
   - tests/gateway/test_cron_ensure_jobs.py
-last_verified: 2026-06-30
+  - tests/unit/test_cron_deploy_cancellation.py
+last_verified: 2026-07-01
 ---
 
 # ADR: Resumable External Jobs
@@ -58,6 +59,67 @@ into a transient HTTP 429 on the shared VPS IP — so the prompt also gained an
 **arXiv-resilience** clause: reuse cached papers, never retry into a 429, proceed
 with ≥3 papers, and cap paper discovery at ~5 minutes (fail fast and let the
 daily cadence recover).
+
+### 1.2 Third orphan trigger (2026-07-01): an ops `systemctl restart`, not a GHA deploy
+
+The `paper_to_podcast_daily` cron started at 02:01 UTC and was killed ~90s later,
+in Phase A. At `02:02:57 UTC` a `sudo systemctl restart
+universal-agent-autonomous-runtime` (an ops action — the `/tmp/ua-deployment-window`
+flag GHA's `deploy.yml` writes was **absent**) SIGTERM'd the claude CLI subprocess
+mid-flight. `execution_engine._is_terminated_process_error` correctly caught the
+death and the engine surfaced `metadata["subprocess_terminated"]=True` on the
+`GatewayResult` exactly as designed (`cron_service._is_llm_deploy_kill_result`
+matched). But `cron_service._is_deploy_window_active()` — at the time — only
+recognised (1) the GHA flag file and (2) a gateway-uptime-under-60s fallback.
+Neither was true (no GHA deploy; the autonomous-runtime process had been up for
+hours), so the `_is_llm_deploy_kill_result(result) and _is_deploy_window_active()`
+guard in `cron_service._run_job` never engaged. The run fell through to the plain
+`success` classification (Task Hub's `_f_rc_equiv_llm=0`, i.e. `clean_exit_zero`),
+which **cleared the in-flight marker** and skipped the boot-time
+`catch_up_on_restart` requeue — the daily podcast was silently lost with zero
+operator signal.
+
+**Fix — cause-agnostic shutdown-interruption recovery**, not another
+deploy-specific special case:
+
+- `cron_service.mark_shutdown_requested()` sets a module-level
+  `_SHUTDOWN_REQUESTED` flag, called from **both** `CronService.stop()` (top of
+  the method) and `gateway_server.lifespan`'s shutdown path (the very start of
+  the post-`yield` cleanup, before the heartbeat drain and before
+  `_cron_service.stop()` — so it is visible to any in-flight cron run still
+  finalizing during the drain; per §1.4 in the sibling
+  [ADR-12](./12_deploy_restart_resilience_adr.md), `CronService.stop()` only
+  cancels the scheduler loop task, not individual in-flight `_run_job` tasks, so
+  those keep finalizing independently during the drain window).
+- `cron_service._is_deploy_window_active()` now ORs in `_SHUTDOWN_REQUESTED` as a
+  **third** signal alongside the GHA flag file and the uptime fallback. This
+  makes the existing deploy-kill classification branch (§1) engage for **any**
+  graceful shutdown/restart — a GHA deploy, the VPS installer, or an ops
+  `systemctl restart` alike — not only GHA-driven ones. The name
+  `_is_deploy_window_active` is kept for call-site continuity; its scope is now
+  "graceful shutdown/restart", documented in its docstring.
+- As a cause-agnostic backstop, the outer catch-all `except Exception` in
+  `cron_service._run_job` (which previously marked **any** escaping exception
+  `error` and cleared the in-flight marker, with zero deploy/shutdown awareness —
+  unlike its sibling `except asyncio.CancelledError` branch right above it, which
+  already special-cased shutdown-time cancellation) now checks
+  `_is_deploy_window_active()` too: an exception that escapes the more specific
+  `_is_llm_deploy_kill_result` signature check (e.g. one whose message doesn't
+  match `execution_engine._is_terminated_process_error`'s token list) during an
+  active deploy/shutdown window is classified `cancelled` (marker preserved)
+  instead of `error` (marker cleared), mirroring the `CancelledError` handling.
+  Outside a deploy/shutdown window, behavior is unchanged — a real crash/OOM
+  still surfaces loudly.
+- `paper_to_podcast_daily` already carries `catch_up_on_restart=True` on both the
+  create and update paths of `gateway_server._ensure_paper_to_podcast_cron_job`
+  (shipped with the 2026-06-16 fix in §1) — no change needed there; it's what
+  lets the now-preserved marker actually requeue on next boot.
+
+Regression coverage: `tests/unit/test_cron_deploy_cancellation.py` reproduces the
+exact live precondition (no GHA flag file, gateway uptime `> 60s`) and proves
+`mark_shutdown_requested()` alone flips `_is_deploy_window_active()` to `True`
+and that a mid-flight `subprocess_terminated` result classifies `cancelled` with
+the marker kept once the shutdown flag is set.
 
 ## 2. Root cause — the requeue had nothing to adopt
 
