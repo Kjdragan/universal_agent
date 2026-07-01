@@ -955,16 +955,29 @@ class VpWorkerLoop:
                     if event_type == "vp.mission.completed" and _src_kind == "tutorial_build":
                         from universal_agent.services.tutorial_demo_finalize import (
                             finalize_tutorial_build_demo,
+                            proactive_demo_slug,
                         )
                         _fin_result_ws = ""
                         if str(outcome.result_ref or "").startswith("workspace://"):
                             _fin_result_ws = str(outcome.result_ref).removeprefix("workspace://").strip()
+                        # The demo_factory engine (UA_PROACTIVE_DEMO_ENGINE) lands the
+                        # real repo at /home/ua/lrepos/demo-proactive-<slug> (or, if the
+                        # land was conceptual and B's rename already ran,
+                        # demo-undemoable-<slug>) — NOT the mission workspace. Resolve it
+                        # FIRST so finalize registers the built repo; the same title-only
+                        # slug the build-time --slug used keeps the two deterministically
+                        # aligned. Non-existent candidates are skipped (safe no-op when the
+                        # bespoke engine ran instead).
+                        _df_slug = proactive_demo_slug(str(_src_meta.get("video_title") or ""))
+                        _df_root = "/home/ua/lrepos"  # matches build_demo.py --workspace-root
                         _tutorial_finalize = finalize_tutorial_build_demo(
                             task_id=_source_task_id,
                             task_meta=_src_meta,
                             mission=dict(mission),
                             mission_id=mission_id,
                             workspace_candidates=[
+                                f"{_df_root}/demo-proactive-{_df_slug}",
+                                f"{_df_root}/demo-undemoable-{_df_slug}",
                                 str(_src_meta.get("workspace_dir") or "").strip(),
                                 str((outcome.payload or {}).get("cli_workspace_dir") or "").strip(),
                                 _fin_result_ws,
@@ -1098,6 +1111,39 @@ class VpWorkerLoop:
                             "mission=%s → completed (+completion_token)",
                             _source_task_id, mission_id,
                         )
+
+                        # Email parity with the cody_demo_task branch: FYI the
+                        # operator that a proactive demo landed, with a playable
+                        # explainer-video link (else exhibit/workspace). Best-effort,
+                        # never raises. Points at the RESOLVED demo_factory repo (the
+                        # renamed dir when the land was conceptual) so the notifier
+                        # finds the EXHIBIT + video.
+                        try:
+                            from universal_agent.services.demo_built_notifier import (
+                                notify_demo_built,
+                            )
+                            _tut_ws = str((_tutorial_finalize or {}).get("workspace_dir") or "").strip()
+                            await notify_demo_built(
+                                demo_id=str(
+                                    (_tutorial_finalize or {}).get("demo_id")
+                                    or _src_meta.get("demo_id")
+                                    or _source_task_id
+                                ),
+                                title=str(
+                                    (_src_item or {}).get("title")
+                                    or _src_meta.get("video_title")
+                                    or _source_task_id
+                                ),
+                                capability=str(_src_meta.get("video_title") or ""),
+                                workspace_dir=_tut_ws,
+                                build_engine="demo_factory",
+                                review_required=False,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "tutorial_build demo-built notification hook failed",
+                                exc_info=True,
+                            )
                     else:
                         # Default: close the source task. Zombie prevention for every
                         # non-demo delegation, plus demo failed/cancelled missions.
