@@ -47,6 +47,14 @@ raw records → durable knowledge blocks → bounded retrieval context → LLM s
 >
 > For the canonical live/parked/paused/retired status of every job and lane named
 > here, see the [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md).
+>
+> **Demo-build behavior is NOT owned here.** This doc's `services/proactive_*.py`
+> glob also matches `services/proactive_demo_nuggets.py` (the end-of-day
+> golden-nuggets demo judge), but the whole proactive **demo-build** lane —
+> `tutorial_build` engine routing onto demo_factory, the 3/day cap, the
+> golden-nuggets judge, save/naming, and the shared Chicago day boundary — is
+> owned by [ADR: Demo / Tutorial Pipeline Redesign](15_demo_tutorial_pipeline_adr.md)
+> § "Engine migration". Change that behavior there, not here.
 
 ---
 
