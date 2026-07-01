@@ -759,13 +759,16 @@ def _demo_factory_override_block(*, video_title: str, video_url: str) -> str:
         "- From the workspace, run this SINGLE command (a full land, not a "
         "build-only pass); it runs build_demo.py under the demo_factory uv venv "
         "(needed for the eval stage's google-genai import — bare python3 lacks "
-        "it):\n"
+        "it). ``--cody-mode zai`` routes both the build and the verify/runtime "
+        "phases through the ZAI/GLM coding-plan proxy (operator decision: "
+        "proactive builds run on ZAI, not Anthropic-Max):\n"
         f'    {run_cmd} "Build a runnable demo of the capability from this '
         f'tutorial: {seed}" \\\n'
         f"      --demo-id {demo_id} --slug proactive-{video_slug} "
         f'--title "{title}" \\\n'
         f"      --workspace-root /home/ua/lrepos{seed_url_flag} \\\n"
-        "      --endpoint-required any --promote --skill-tier library\n"
+        "      --endpoint-required any --promote --skill-tier library "
+        "--cody-mode zai\n"
         f"  → lands the repo at /home/ua/lrepos/demo-proactive-{video_slug} "
         "(--skill-tier library graduates the skill into dragan-plugins as a "
         "zero-context /dragan:<name> library entry).\n"

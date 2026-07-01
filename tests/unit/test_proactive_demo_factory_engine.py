@@ -63,6 +63,10 @@ def test_override_present_when_flag_on(monkeypatch):
     assert "--endpoint-required any" in desc
     assert "--promote" in desc
     assert "--skill-tier library" in desc
+    # Cody's proactive builds default to the ZAI/GLM coding-plan proxy (operator
+    # decision) for both the build and the verify/runtime phases — the operator's
+    # own manual /demo usage is untouched (that path never sets --cody-mode).
+    assert "--cody-mode zai" in desc
 
 
 def test_override_absent_when_flag_off(monkeypatch):
@@ -72,6 +76,7 @@ def test_override_absent_when_flag_off(monkeypatch):
     assert "DEMO ENGINE OVERRIDE" not in desc
     assert "build_demo.py" not in desc
     assert "--slug proactive-" not in desc
+    assert "--cody-mode" not in desc
     # the bespoke objective is intact
     assert "Cody should build a runnable demo" in desc
 

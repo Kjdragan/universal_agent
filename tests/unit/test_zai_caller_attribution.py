@@ -77,10 +77,11 @@ def test_per_tier_fup_tracked_in_all_windows(tmp_path, monkeypatch):
     import time
 
     now = time.time()
+    # glm-4.7 is the haiku wire id since the 2026-07-01 remap (was glm-4.5-air).
     events = [
-        {"ts": now - 5, "category": "rate_limited_429", "model": "glm-4.5-air", "fup_texted": True},
-        {"ts": now - 5, "category": "fup_signal", "model": "glm-4.5-air"},
-        {"ts": now - 5, "category": "ok", "model": "glm-4.5-air"},
+        {"ts": now - 5, "category": "rate_limited_429", "model": "glm-4.7", "fup_texted": True},
+        {"ts": now - 5, "category": "fup_signal", "model": "glm-4.7"},
+        {"ts": now - 5, "category": "ok", "model": "glm-4.7"},
     ]
     (tmp_path / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events))
 
