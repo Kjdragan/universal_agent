@@ -43,6 +43,13 @@ def test_override_present_when_flag_on(monkeypatch):
 
     assert "DEMO ENGINE OVERRIDE: demo_factory" in desc
     assert "build_demo.py" in desc
+    # The driver runs UNDER the demo_factory uv venv (google-genai is imported at
+    # the eval stage; bare /usr/bin/python3 lacks it), NOT bare python3.
+    assert (
+        "uv run --project /home/ua/lrepos/demo_factory python "
+        "/home/ua/lrepos/demo_factory/scripts/build_demo.py" in desc
+    )
+    assert "python3 /home/ua/lrepos/demo_factory" not in desc
     # full land — the driver is invoked WITHOUT --build-only
     assert "--build-only" not in desc
     # distinguishable naming: --slug proactive-<slug> + --demo-id proactive-<slug>

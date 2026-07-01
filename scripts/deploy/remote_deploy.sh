@@ -356,6 +356,16 @@ sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch4_timers.sh" \
 echo "--> Installing proactive demo-build lane sweep timer (3x/day)..."
 sudo bash "$PROD_DIR/scripts/install_proactive_demo_build_sweep_timer.sh" \
   || echo "WARN: install_proactive_demo_build_sweep_timer.sh failed (non-fatal)"
+# End-of-day golden-nuggets demo judge (Component D): once-daily deploy-independent
+# timer that critically re-judges the day's remaining un-built tutorial_build
+# candidates and builds 0-2 EXTRA demos directly via build_demo.py (hard ceiling
+# 5/day). NEW producer-invoker, not a migration — no in-process twin and no
+# double-fire gate. GATED OFF by default (UA_PROACTIVE_DEMO_NUGGETS_ENABLED), so
+# arming the timer builds nothing until the operator validates + flips the flag.
+# Non-fatal.
+echo "--> Installing end-of-day golden-nuggets demo timer (1x/day, gated OFF by default)..."
+sudo bash "$PROD_DIR/scripts/install_proactive_demo_nuggets_timer.sh" \
+  || echo "WARN: install_proactive_demo_nuggets_timer.sh failed (non-fatal)"
 # Desktop->VPS migrated cron timers (backlog-triage + skill-gap-finder). These
 # previously ran ONLY as `systemctl --user` timers on the desktop, violating the
 # desktop=dev / VPS=runtime contract; now canonical VPS units. No in-process

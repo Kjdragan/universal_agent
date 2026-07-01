@@ -12,10 +12,10 @@ from pathlib import Path
 import re
 import sqlite3
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from universal_agent import task_hub
 from universal_agent.feature_flags import (
+    proactive_demo_factory_run_cmd,
     proactive_demo_factory_script,
     proactive_use_demo_factory,
 )
@@ -26,6 +26,7 @@ from universal_agent.services.proactive_artifacts import (
 )
 from universal_agent.services.proactive_task_builder import queue_proactive_task
 from universal_agent.services.tutorial_demo_finalize import proactive_demo_slug
+from universal_agent.utils.day_boundary import chicago_day_start_iso
 
 logger = logging.getLogger(__name__)
 
@@ -738,6 +739,11 @@ def _demo_factory_override_block(*, video_title: str, video_url: str) -> str:
     ``proactive-<video_slug>`` (stable, == the on-disk dir suffix).
     """
     driver = proactive_demo_factory_script()
+    # LOAD BEARING: run build_demo.py UNDER the demo_factory uv venv, not bare
+    # python3. A full land runs the fidelity-eval stage which imports
+    # google-genai; the VPS bare interpreter (/usr/bin/python3) lacks it, so
+    # `python3 build_demo.py` fails at eval — only the demo_factory .venv has it.
+    run_cmd = proactive_demo_factory_run_cmd(driver)
     video_slug = proactive_demo_slug(video_title)
     demo_id = f"proactive-{video_slug}"
     seed = _sanitize_one_line(video_title) or "this tutorial"
@@ -751,8 +757,10 @@ def _demo_factory_override_block(*, video_title: str, video_url: str) -> str:
         "fidelity-eval on the good engine and LANDS the demo — vault entry + "
         "EXHIBIT + private GitHub backup — exactly like the operator's /demo.\n"
         "- From the workspace, run this SINGLE command (a full land, not a "
-        "build-only pass):\n"
-        f'    python3 {driver} "Build a runnable demo of the capability from this '
+        "build-only pass); it runs build_demo.py under the demo_factory uv venv "
+        "(needed for the eval stage's google-genai import — bare python3 lacks "
+        "it):\n"
+        f'    {run_cmd} "Build a runnable demo of the capability from this '
         f'tutorial: {seed}" \\\n'
         f"      --demo-id {demo_id} --slug proactive-{video_slug} "
         f'--title "{title}" \\\n'
@@ -1148,15 +1156,13 @@ def _daily_build_ceiling() -> int:
 def _count_today_tutorial_builds(conn: sqlite3.Connection) -> int:
     """Count tutorial_build rows created since America/Chicago local midnight.
 
-    ``task_hub_items.created_at`` is always ``task_hub._now_iso()`` — a
-    fixed-width UTC ISO-8601 string with a ``+00:00`` offset — so the day
-    boundary is computed in local (Houston) time, converted to the same UTC
-    ``+00:00`` form, and compared lexicographically (valid because both strings
-    are zero-padded ISO UTC).
+    Shares the ONE day boundary (``utils.day_boundary.chicago_day_start_iso``)
+    with the normal-flow build cap and the golden-nuggets ceiling, so the inflow
+    ceiling, the 3/day cap, and the 5/day ceiling all count against the same
+    operator (Houston) day. ``task_hub_items.created_at`` is a ``+00:00`` UTC ISO
+    string, lexicographically comparable to the boundary.
     """
-    local_now = datetime.now(ZoneInfo("America/Chicago"))
-    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_start_utc_iso = local_midnight.astimezone(timezone.utc).isoformat()
+    day_start_utc_iso = chicago_day_start_iso()
     try:
         row = conn.execute(
             "SELECT COUNT(*) FROM task_hub_items WHERE source_kind = ? AND created_at >= ?",

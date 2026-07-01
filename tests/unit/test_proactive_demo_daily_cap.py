@@ -4,7 +4,8 @@ The bespoke proactive demo lane had no real per-day BUILD cap: only the
 auto-route INFLOW ceiling (``UA_DEMO_BUILD_DAILY_CEILING``) throttled queueing,
 and it was bypassed. The cap is enforced at the single dispatch point
 (``priority_dispatcher.dispatch_claimed``): once ``UA_PROACTIVE_DEMO_DAILY_CAP``
-(default 3) tutorial_build builds have been DISPATCHED today (UTC), further ones
+(default 3) tutorial_build builds have been DISPATCHED today (America/Chicago —
+the shared ``utils.day_boundary.chicago_day_start_iso`` boundary), further ones
 are deferred (left queued, never cancelled).
 
 "Dispatched today" is counted from ``metadata.delegation.delegated_at`` — the
@@ -100,7 +101,7 @@ def _make_stub():
 def test_count_helper_only_counts_today(conn):
     _seed_dispatched_today(conn, "tb-today-1")
     _seed_dispatched_today(conn, "tb-today-2")
-    # Yesterday (lexicographically < today's UTC midnight) must not count.
+    # Yesterday (lexicographically < today's America/Chicago midnight) must not count.
     _seed_dispatched_today(
         conn, "tb-yesterday", delegated_at="2000-01-01T00:00:00+00:00"
     )

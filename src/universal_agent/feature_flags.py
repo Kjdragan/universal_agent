@@ -7,6 +7,8 @@ are explicitly enabled. They are intentionally simple and side-effect free.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import shutil
 from typing import Iterable
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -701,12 +703,65 @@ def proactive_demo_factory_script(
     return (os.getenv("UA_PROACTIVE_DEMO_FACTORY_SCRIPT") or "").strip() or default
 
 
+def _demo_factory_project_dir(driver: str) -> str:
+    """The demo_factory repo root (a uv project) for a ``build_demo.py`` driver:
+    ``.../demo_factory/scripts/build_demo.py`` -> ``.../demo_factory``."""
+    return str(Path(driver).parent.parent)
+
+
+def _resolve_uv() -> str:
+    """Resolve the ``uv`` executable for a standalone (non-shell) subprocess.
+
+    Prefer ``PATH`` (``shutil.which``), then the common install locations, then
+    the bare name as a last resort. Override with ``UA_UV_BIN``.
+    """
+    override = (os.getenv("UA_UV_BIN") or "").strip()
+    if override:
+        return override
+    found = shutil.which("uv")
+    if found:
+        return found
+    for cand in ("/usr/local/bin/uv", "/home/ua/.local/bin/uv"):
+        if os.path.exists(cand):
+            return cand
+    return "uv"
+
+
+def proactive_demo_factory_run_argv(driver: str) -> list[str]:
+    """argv PREFIX that runs ``build_demo.py`` UNDER the demo_factory uv venv.
+
+    LOAD BEARING: a full land runs the fidelity-eval stage which imports
+    ``google-genai``; the bare interpreter (``/usr/bin/python3`` on the VPS) does
+    NOT have it, so ``python3 build_demo.py`` fails at eval — only the
+    demo_factory ``.venv`` has it. This returns
+    ``[<uv>, "run", "--project", <demo_factory>, "python", <driver>]``; append the
+    seed + flags after it. Used by the golden-nuggets cron subprocess (``uv`` is
+    resolved for a non-shell exec).
+    """
+    return [
+        _resolve_uv(),
+        "run",
+        "--project",
+        _demo_factory_project_dir(driver),
+        "python",
+        driver,
+    ]
+
+
+def proactive_demo_factory_run_cmd(driver: str) -> str:
+    """String form of :func:`proactive_demo_factory_run_argv` for embedding in an
+    instruction an agent runs in a shell (``uv`` is on ``PATH`` there):
+    ``uv run --project <demo_factory> python <driver>``."""
+    return f"uv run --project {_demo_factory_project_dir(driver)} python {driver}"
+
+
 def proactive_demo_daily_cap(default: int = 3) -> int:
-    """Max proactive demo BUILDS dispatched per UTC day (the OUTFLOW control).
+    """Max proactive demo BUILDS dispatched per America/Chicago day (OUTFLOW control).
 
     Enforced at the dispatch point for ``source_kind == "tutorial_build"``
     (``services/priority_dispatcher.dispatch_claimed``): once this many
-    tutorial_build builds have been dispatched today, further ones are
+    tutorial_build builds have been dispatched today (counted over the shared
+    ``utils.day_boundary.chicago_day_start_iso`` boundary), further ones are
     deferred (left queued, never cancelled). This is distinct from
     ``UA_DEMO_BUILD_DAILY_CEILING`` (default 10) which only throttled the
     auto-route INFLOW (queueing) and was bypassed by the bespoke lane.
@@ -715,3 +770,45 @@ def proactive_demo_daily_cap(default: int = 3) -> int:
     of 0 defers every proactive build (nothing auto-dispatches).
     """
     return _read_int("UA_PROACTIVE_DEMO_DAILY_CAP", default, minimum=0)
+
+
+def proactive_demo_nuggets_enabled(default: bool = False) -> bool:
+    """Master switch for the end-of-day "golden-nuggets" demo cron (Component D).
+
+    Default OFF — the cron runs but no-ops until the operator validates the flow
+    and flips ``UA_PROACTIVE_DEMO_NUGGETS_ENABLED=1``. Override-off with
+    ``UA_DISABLE_PROACTIVE_DEMO_NUGGETS=1``.
+
+    When ON, an end-of-day judge critically re-scores the day's REMAINING
+    un-built ``tutorial_build`` candidates and builds 0-2 EXTRA "golden nugget"
+    demos directly via demo_factory's ``build_demo.py`` (see
+    :mod:`universal_agent.services.proactive_demo_nuggets`), never exceeding the
+    5/day hard ceiling (:func:`proactive_demo_daily_max`).
+    """
+    if _is_truthy(os.getenv("UA_DISABLE_PROACTIVE_DEMO_NUGGETS")):
+        return False
+    if _is_truthy(os.getenv("UA_PROACTIVE_DEMO_NUGGETS_ENABLED")):
+        return True
+    return default
+
+
+def proactive_demo_nuggets_max(default: int = 2) -> int:
+    """Max EXTRA "golden nugget" demos the end-of-day cron may build in one run.
+
+    Reads ``UA_PROACTIVE_DEMO_NUGGETS_MAX`` (default 2), clamped to >= 0. The
+    run-time budget is ``min(this, max(0, daily_max - built_today))`` so the
+    5/day hard ceiling always wins (see
+    :mod:`universal_agent.services.proactive_demo_nuggets`).
+    """
+    return _read_int("UA_PROACTIVE_DEMO_NUGGETS_MAX", default, minimum=0)
+
+
+def proactive_demo_daily_max(default: int = 5) -> int:
+    """Hard ceiling on TOTAL proactive demo builds per day (normal 3 + nuggets 2).
+
+    Reads ``UA_PROACTIVE_DEMO_DAILY_MAX`` (default 5), clamped to >= 0. Distinct
+    from :func:`proactive_demo_daily_cap` (default 3, the NORMAL-flow dispatch
+    cap): this is the absolute end-of-day ceiling the golden-nuggets cron must
+    never exceed (``budget = min(nuggets_max, max(0, daily_max - built_today))``).
+    """
+    return _read_int("UA_PROACTIVE_DEMO_DAILY_MAX", default, minimum=0)
