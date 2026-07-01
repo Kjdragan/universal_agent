@@ -412,6 +412,40 @@ def test_ensure_paper_to_podcast_command_has_deploy_restart_resume(monkeypatch):
     )
 
 
+def test_ensure_paper_to_podcast_requires_synthesis_report(monkeypatch):
+    """Every paper-to-podcast run must produce a synthesis report — a per-paper
+    summary PLUS an integrating cross-paper synthesis — as a durable artifact,
+    gated on disk so it can't silently go missing (operator ask, 2026-07-01).
+    Pin both halves: the command must instruct authoring the report, and the
+    job metadata must declare it (and the audio) as an `expected_artifacts`
+    filesystem gate (cron_service._verify_expected_artifacts)."""
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv("UA_PAPER_TO_PODCAST_ENABLED", "1")
+
+    gateway_server._ensure_paper_to_podcast_cron_job()
+
+    assert len(cron_stub.jobs) == 1
+    job = cron_stub.jobs[0]
+    command = job.command or ""
+    # The command must instruct the report with both required halves.
+    assert "report.html" in command, "command must name the report.html deliverable"
+    assert "SYNTHESIS" in command.upper() and "PER-PAPER" in command.upper(), (
+        "command must require both a per-paper section and an integrating synthesis"
+    )
+    # The gate must declare BOTH headline deliverables at their flat paths.
+    declared = {
+        spec["path"]: spec for spec in (job.metadata.get("expected_artifacts") or [])
+    }
+    assert "work_products/paper_to_podcast/report.html" in declared, (
+        "report.html must be an expected_artifacts filesystem gate"
+    )
+    assert "work_products/paper_to_podcast/podcast_audio.m4a" in declared, (
+        "the audio must also be gated (closes the 2026-06-22 missing-podcast gap)"
+    )
+    assert declared["work_products/paper_to_podcast/report.html"]["min_bytes"] > 0
+
+
 def test_ensure_morning_briefing_declares_ua_ops_token_required(monkeypatch):
     """`briefings_agent.py:23-26` does `sys.exit(1)` when UA_OPS_TOKEN
     is missing, with a generic stderr line.  Declaring the secret in
