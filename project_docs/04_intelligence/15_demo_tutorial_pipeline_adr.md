@@ -1,6 +1,6 @@
 ---
 title: "ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign"
-status: draft
+status: active
 canonical: true
 subsystem: demo-tutorial-pipeline
 code_paths:
@@ -16,6 +16,11 @@ code_paths:
   - src/universal_agent/services/todo_dispatch_service.py
   - src/universal_agent/services/dispatch_service.py
   - src/universal_agent/services/capacity_governor.py
+  - src/universal_agent/services/priority_dispatcher.py
+  - src/universal_agent/services/proactive_demo_nuggets.py
+  - src/universal_agent/services/demo_built_notifier.py
+  - src/universal_agent/scripts/proactive_demo_nuggets_cron.py
+  - src/universal_agent/utils/day_boundary.py
   - src/universal_agent/vp/profiles.py
   - src/universal_agent/vp/worker_loop.py
   - .claude/skills/youtube-tutorial-creation/
@@ -27,17 +32,166 @@ code_paths:
   - src/universal_agent/services/cron_artifact_notifier.py
   - .claude/skills/provision-local-gpu-ollama/
   - .claude/commands/gpu-demo-build.md
-last_verified: 2026-06-22
+last_verified: 2026-07-01
 ---
 
 # ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign
 
-> **STATUS: DESIGN APPROVED — IMPLEMENTATION IN PROGRESS (P0–P6 built; P0–P2 shipped on PR #887, P3–P5 shipped separately, P6 in this PR).** This ADR
-> records the operator-ratified target design from the 2026-06-10 grilling session. It is the canonical
-> spec for the work; phases P0–P5 below carry their own status markers. Sections describing *current*
-> behavior are code-verified (2026-06-09/10); sections describing the *target* are marked **TARGET**.
-> Cross-session handoff: a new session should read this doc, then implement the next unstarted phase,
-> one branch→PR per phase.
+> **STATUS: SHIPPED & LIVE IN PROD.** Phases P0–P7 are built and shipped, and the demo-build lane
+> now runs on the **demo_factory engine** (the `/demo` engine) with real volume governance — see
+> **§ "Engine migration"** below, which is the current shipped reality and supersedes the
+> historical bespoke-`/goal`-on-ZAI build described in the older P6 section. The engine route +
+> its three volume controls are **live in prod** (five Infisical flags, listed in § "Engine
+> migration → LIVE prod config"). This ADR remains the canonical spec for the whole ladder; the
+> phase table and the older phase sections are retained as the historical build record. Sections
+> describing *current* behavior are code-verified (engine migration 2026-07-01; earlier phases
+> 2026-06-09/10). A behavior change to this lane updates **this** doc (it owns the demo-build code
+> paths — see the frontmatter `code_paths`).
+
+## Engine migration — `tutorial_build` builds on the demo_factory engine (SHIPPED 2026-07-01; LIVE)
+
+The proactive demo lane no longer runs a bespoke ZAI/GLM `/goal` build. When the engine flag is on
+it hands the whole build to **demo_factory's headless `build_demo.py` driver** — the same `/demo`
+engine the operator drives by hand — which runs the full `/goal` build **+ deterministic verify +
+fidelity-eval** and **lands** the demo (vault entry + EXHIBIT + private GitHub backup). Shipped in
+three merged PRs (#1230 safety, #1232 the engine switch, #1233 the golden-nuggets judge). This
+section is the current shipped reality; the older "§ /goal build loop + deterministic finalize —
+implemented (P6)" describes the pre-migration bespoke build and is retained only as history.
+
+**Why the migration.** The original `proactive_use_demo_factory` flip was wired only into the
+effectively-dead `cody_demo_task` lane, so ~99% of real proactive demos — which all flow through the
+`tutorial_build` lane — never touched the engine (completed rows carried `build_engine = None`), and
+that lane had **no real per-day build cap** (it ran ~10/day). A completion-bridge defect also
+re-surfaced finished demos.
+
+### Engine routing — the objective override (Component A)
+
+`proactive_tutorial_builds.py::_build_task_description` builds the CODIE mission objective and, when
+`feature_flags.py::proactive_use_demo_factory` is on (`UA_PROACTIVE_DEMO_ENGINE=1`), appends
+`proactive_tutorial_builds.py::_demo_factory_override_block`. That override tells Cody to build with
+the demo_factory driver **instead of** the bespoke instructions above it — a redirect of the agentic
+*objective*, not the worker plumbing (lowest blast radius, fully reversible; the off-path is
+byte-for-byte unchanged when the flag is off). The block emits a single full-land command (NO
+`--build-only`):
+
+```
+uv run --project <demo_factory> python <build_demo.py> "Build a runnable demo of the capability from this tutorial: <seed>" \
+  --demo-id proactive-<slug> --slug proactive-<slug> --title "<title>" \
+  --workspace-root /home/ua/lrepos [--seed-url <video_url>] \
+  --endpoint-required any --promote --skill-tier library
+```
+
+- **Run under the demo_factory uv venv, not bare `python3`** — `feature_flags.py::proactive_demo_factory_run_cmd`
+  (string form) / `::proactive_demo_factory_run_argv` (argv form) prefix the driver with
+  `uv run --project <demo_factory> python`. **Load-bearing:** a full land runs the fidelity-eval
+  stage, which imports `google-genai`; the VPS bare interpreter (`/usr/bin/python3`) lacks it, so a
+  bare `python3 build_demo.py` fails at the land/eval stage — only the demo_factory `.venv` has it.
+- `--promote --skill-tier library` graduates the demo's skill into `dragan-plugins` as a
+  zero-context `/dragan:<name>` library entry; if the driver is missing on the host the block tells
+  Cody to STOP and record it (never fall back to the bespoke flow).
+- No dispatcher change is needed: `priority_dispatcher.py::dispatch_claimed` forwards the description
+  verbatim as the mission objective, so the override rides along.
+
+### Save / finalize unification + naming (Component B)
+
+Working demos land at **`/home/ua/lrepos/demo-proactive-<slug>`**, where `<slug>` is
+`tutorial_demo_finalize.py::proactive_demo_slug` (derived from the video title *alone*, so the
+build-time `--slug` and the finalize-time directory resolution compute the SAME value).
+
+- `vp/worker_loop.py::_execute_mission_logic` (the `tutorial_build` terminal branch) prepends the
+  demo_factory output dir (`demo-proactive-<slug>`, then the conceptual `demo-undemoable-<slug>`) as
+  the **first** `workspace_candidates` entries handed to
+  `tutorial_demo_finalize.py::finalize_tutorial_build_demo`, so finalize registers the real landed
+  repo (not the mission workspace) → `demo_finalize.ok=True` (required by the demo-lane completion
+  gate).
+- **Un-demoable rename:** a conceptual / gate-failing land is renamed
+  `demo-proactive-<slug>` → `demo-undemoable-<slug>` by `tutorial_demo_finalize.py::_rename_to_undemoable`,
+  gated on `tutorial_demo_finalize.py::_manifest_is_undemoable` (the `land_demo.py`-written manifest
+  reports `status='un-demoable'` / `acceptance_passed=False`). This is an honest "this run produced a
+  briefing, not a runnable demo" marker — **not** a build-failure marker; the proactive pipeline
+  legitimately yields conceptual outcomes. The guarded, idempotent rename only touches a
+  `demo-proactive-` dir and never clobbers an existing target. The demo_factory-written
+  `manifest.json` is read first (`tutorial_demo_finalize.py::_read_landed_manifest`) and never
+  clobbered by the bespoke synth.
+- **Email parity:** the `tutorial_build` terminal branch now fires
+  `services/demo_built_notifier.py::notify_demo_built` (previously only `cody_demo_task` did), a
+  deterministic, engine-agnostic, best-effort FYI that prefers a playable explainer-video link, else
+  the exhibit/workspace. It points at the RESOLVED repo (the renamed dir when conceptual) so it finds
+  the EXHIBIT + video.
+
+### Real daily BUILD cap — 3/day (Component C)
+
+`feature_flags.py::proactive_demo_daily_cap` (`UA_PROACTIVE_DEMO_DAILY_CAP`, default **3**) is the
+**OUTFLOW** control, enforced at dispatch in `services/priority_dispatcher.py::dispatch_claimed`:
+once this many `tutorial_build` builds have been dispatched today it defers the rest (leaves them
+queued — never cancels). Today's count comes from
+`services/priority_dispatcher.py::_count_dispatched_tutorial_builds_today`, which counts source tasks
+whose `metadata.delegation.delegated_at` falls on/after the shared Chicago day boundary. This is
+**distinct** from the pre-existing INFLOW ceiling `UA_DEMO_BUILD_DAILY_CEILING` (default 10, in
+`proactive_tutorial_builds.py::remaining_daily_build_budget`), which only throttled auto-route
+*queueing* and was bypassed by the bespoke lane.
+
+### Completion-bridge fix — no more re-surfacing (Component E)
+
+`vp/worker_loop.py::_close_tutorial_build_demo_source_task` gives the `tutorial_build` lane an
+explicit terminal branch (mirroring `cody_demo_task`): on `demo_finalize.ok` it completes the source
+task through the **canonical demo-lane completion verb**, which enforces the completion-evidence gate
+AND stamps a non-empty `completion_token`. Before this, a finished `tutorial_build` fell to the
+default `else` close (`completed` **without** a `completion_token`), so the head-of-line guard never
+engaged and a retry/exhaustion sweep could re-open (re-surface / re-dispatch) an already-finished
+demo. A non-ok finalize stays on the unchanged default close path.
+
+### End-of-day golden-nuggets judge (Component D — SHIPPED, default OFF)
+
+New `services/proactive_demo_nuggets.py::select_and_build_nuggets`, driven by
+`scripts/proactive_demo_nuggets_cron.py` and the systemd pair
+`deployment/systemd/universal-agent-proactive-demo-nuggets.{service,timer}` (fires **23:50
+America/Chicago**, `Persistent=true`, after the normal build lane). Gated by
+`feature_flags.py::proactive_demo_nuggets_enabled` (`UA_PROACTIVE_DEMO_NUGGETS_ENABLED`, default
+**OFF** — the cron runs but no-ops until enabled). When on, a critical-eye LLM judge re-scores the
+day's REMAINING un-built `tutorial_build` candidates and builds **0–2** EXTRA "golden nugget" demos
+**directly** via the same `build_demo.py` engine path as Component A (not the agentic dispatch path,
+so it never fights the 3/day cap). Dark-factory: it builds none if nothing clears the bar. The
+run-time budget is `min(proactive_demo_nuggets_max (default 2), max(0, daily_max − built_today))`, so
+the hard ceiling `feature_flags.py::proactive_demo_daily_max` (`UA_PROACTIVE_DEMO_DAILY_MAX`, default
+**5**) always wins. The installer is wired into `scripts/deploy/remote_deploy.sh`
+(`install_proactive_demo_nuggets_timer.sh`).
+
+### One shared day boundary (America/Chicago)
+
+New `utils/day_boundary.py::chicago_day_start_iso` is the single source of truth for "today": the
+3/day dispatch cap (`priority_dispatcher.py::_count_dispatched_tutorial_builds_today`), the inflow
+ceiling (`proactive_tutorial_builds.py::_count_today_tutorial_builds`), and the golden-nuggets 5/day
+ceiling (`proactive_demo_nuggets.py`) all count over the **operator's Chicago day**, not UTC — the
+nuggets cron fires at 23:50 Chicago, where a UTC boundary would already have rolled over and could
+let the 5/day ceiling be exceeded.
+
+### LIVE prod config (Infisical, `production`)
+
+Set live in prod on the migration:
+
+| Flag | Live value | Effect |
+|---|---|---|
+| `UA_PROACTIVE_DEMO_ENGINE` | `1` | route `tutorial_build` onto the demo_factory engine |
+| `UA_PROACTIVE_DEMO_DAILY_CAP` | `3` | OUTFLOW 3 builds/day cap |
+| `UA_PROACTIVE_DEMO_NUGGETS_ENABLED` | `1` | end-of-day golden-nuggets judge armed |
+| `UA_PROACTIVE_TUTORIAL_AUTO_ROUTE` | `1` | the auto-route lane is producing candidates |
+| `UA_PRIORITY_DISPATCHER_ENABLED` | `1` | VP-direct dispatch (where the 3/day cap lives) is on |
+
+### Pause / re-enable runbook
+
+- **Pause the lane:** set `UA_PROACTIVE_TUTORIAL_AUTO_ROUTE=0` **and** `UA_PRIORITY_DISPATCHER_ENABLED=0`
+  in Infisical, then restart `universal-agent-autonomous-runtime`.
+- **Re-enable:** flip both back to `1` and restart the same unit.
+- Autonomous demo dispatch fires on Simone's periodic heartbeat (not on-demand); once a day's 3/day
+  cap saturates, the lane stays quiet until the Chicago-midnight reset (the golden-nuggets cron can
+  still add up to the 5/day ceiling).
+
+### Known limitation (gotcha, not a fix)
+
+Pure-code demos tend to land **`demo-undemoable`**: the fidelity gate (`evaluate_artifact` / Gemini)
+perceives only media, so a demo that produces no media artifact a judge can watch fails the eval even
+when the code runs. Tuning the eval for code-only demos is a candidate follow-up, not a shipped fix.
 
 ## Context — what exists today (code-verified 2026-06-09/10)
 
@@ -183,6 +337,12 @@ that builds into a fresh `/opt/ua_demos/<id>` dir referenced by neither the sour
 `workspace_dir` nor the mission outcome (`cli_workspace_dir` / `result_ref`) is not stamped.
 
 ### /goal build loop + deterministic finalize — implemented (P6)
+
+> **HISTORICAL — superseded by § "Engine migration" (2026-07-01).** When `UA_PROACTIVE_DEMO_ENGINE=1`
+> (LIVE in prod), the `tutorial_build` objective is redirected to demo_factory's `build_demo.py`
+> (which runs its OWN `/goal` build + verify + fidelity-eval + land), so the bespoke ZAI `/goal`
+> harness below is no longer the build path for proactive demos. The deterministic finalize +
+> completion routing described here still runs (and was extended by the migration's Components B/E).
 
 `tutorial_build` demo builds run the real **/goal loop on ZAI** (verified live 2026-06-10), with a
 deterministic finalize step that lands every completed build on the dashboard demo surface:
@@ -341,6 +501,7 @@ email, the approve route) lives on the always-on VPS gateway/worker.
 | **P6** | **done** | Real /goal build loop on ZAI + deterministic finalize | `proactive_tutorial_builds.py::queue_tutorial_build_task` (stamps `use_goal_loop`) + `proactive_tutorial_builds.py::DEMO_BUILD_CONTRACT` (runnable + manifest requirements); `vp_orchestration.py::_vp_dispatch_mission_impl` (goal-eligible → `execution_mode="cli"` on ZAI); `claude_cli_client.py::_run_goal_loop_mission` (briefing turn → `claude -p "/goal <condition>"` argv turn); `tutorial_demo_finalize.py::finalize_tutorial_build_demo` (manifest synthesis + mechanical checks + `UA_DEMOS_ROOT` symlink) wired in `vp/worker_loop.py::_execute_mission_logic`; `todo_dispatch_service.py::TODO_DISPATCH_PROMPT` `redirect_to`→`delegate` fix; self-brief-and-attest "Card mode" |
 
 | **P7** | **done** (PR #1152 + #1153; ENABLED in prod 2026-06-22) | GPU-bound demos gated to the desktop GPU via operator email approval (default-OFF flag, contract-safe) | `feature_flags.py::gpu_demo_desktop_approval_enabled`; `proactive_tutorial_builds.py::gpu_bound_from_candidate` + `::classify_and_gate_gpu_demo` (wired in `::queue_tutorial_builds_with_ceiling`) + `::_send_gpu_demo_approval_email` + `::finalize_desktop_gpu_demo`; `cron_artifact_notifier.py::sign_gpu_demo_token`/`::verify_gpu_demo_token`; `gateway_server.py::gpu_demo_approve_get`; `.claude/skills/provision-local-gpu-ollama/` + `.claude/commands/gpu-demo-build.md`. See § "GPU-bound demos — desktop-build approval gate". |
+| **Engine migration** | **done & LIVE** (PR #1230 + #1232 + #1233; five flags set in prod 2026-07-01) | Move the `tutorial_build` build onto the demo_factory `/demo` engine + real volume governance (3/day cap, 5/day ceiling, golden-nuggets judge, one Chicago day boundary) | `proactive_tutorial_builds.py::_build_task_description` + `::_demo_factory_override_block`; `feature_flags.py::proactive_use_demo_factory`/`::proactive_demo_factory_run_cmd`/`::proactive_demo_daily_cap`/`::proactive_demo_nuggets_enabled`/`::proactive_demo_daily_max`; `tutorial_demo_finalize.py::proactive_demo_slug` + `::_rename_to_undemoable` + `::_manifest_is_undemoable`; `priority_dispatcher.py::dispatch_claimed` + `::_count_dispatched_tutorial_builds_today`; `vp/worker_loop.py::_close_tutorial_build_demo_source_task`; `services/proactive_demo_nuggets.py::select_and_build_nuggets` + `scripts/proactive_demo_nuggets_cron.py` + `deployment/systemd/universal-agent-proactive-demo-nuggets.{service,timer}`; `services/demo_built_notifier.py::notify_demo_built`; `utils/day_boundary.py::chicago_day_start_iso`. See § "Engine migration". |
 
 **Post-P2 tuning (operator-required):** validate the worthiness scoring produces the right *volume* (not too
 few, not a flood) and the right *type* of candidates; tune the threshold/judge to surface the demos the

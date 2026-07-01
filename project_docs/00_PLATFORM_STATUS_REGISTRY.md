@@ -183,7 +183,7 @@ verified `active waiting`, none failed, 2026-06-22.
 
 Plus host/infra + CSI-ingester timers not in the frozenset but live on the box: `service-watchdog`
 (30s), `oom-alert` (1m), `proactive-health` (10m), `session-reaper`, `uv-cache-prune`,
-`proactive-signal-card-sync`, `proactive-demo-build-sweep`, `backlog-triage`, `skill-gap-finder`,
+`proactive-signal-card-sync`, `proactive-demo-build-sweep`, `proactive-demo-nuggets` (23:50 America/Chicago end-of-day golden-nuggets demo judge; `UA_PROACTIVE_DEMO_NUGGETS_ENABLED` code-default OFF, **set `1` in prod 2026-07-01**), `backlog-triage`, `skill-gap-finder`,
 `csi-rss-semantic-enrich` (4h), `csi-threads-semantic-enrich` (4h), `csi-youtube-transcript-canary`
 (hourly), `csi-replay-dlq` (4h), `csi-daily-summary`, `csi-db-backup`, `csi-threads-token-refresh-sync`,
 `m3-token-delta` (weekly, never-fired-yet). Global rollback: `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1`.
@@ -289,6 +289,7 @@ status index.
 | Simone ideation (morning_ideation_report → reflection_engine) | LIVE ✅ | `services/reflection_engine.py` | [`04_intelligence/10`](04_intelligence/10_proactive_pipeline.md) |
 | hourly_intel_digest (the intel-brief delivery path) | LIVE ✅ | systemd timer; `scripts/hourly_intel_digest_cron.py::run_once` | [`04_intelligence/13`](04_intelligence/13_insight_pipeline_build_plan.md) |
 | Demo triage → auto-promoter → tutorial/demo build | LIVE ✅ | `services/csi_demo_triage.py`, `services/intel_auto_promoter.py` | [`04_intelligence/06`](04_intelligence/06_demo_triage.md), [`04_intelligence/15`](04_intelligence/15_demo_tutorial_pipeline_adr.md) |
+| Proactive demo build → **demo_factory engine** (`tutorial_build` lane) | LIVE ✅ | `proactive_tutorial_builds.py::_demo_factory_override_block` (routing), `priority_dispatcher.py::dispatch_claimed` (3/day OUTFLOW cap), `proactive_demo_nuggets.py::select_and_build_nuggets` (end-of-day 0–2 extra, 5/day ceiling) | [`04_intelligence/15`](04_intelligence/15_demo_tutorial_pipeline_adr.md) § "Engine migration" |
 | LLM wiki / vault (per-slug-nested paths) | LIVE ✅ | `nightly_wiki` timer; `services/vault_*` | [`04_intelligence/07`](04_intelligence/07_llm_wiki.md) |
 | LivenessWatchdog (idle/no-progress kill — **never a hard wall-clock cap**) | LIVE ✅ | `timeout_policy.py::LivenessWatchdog` | [`02_execution_core/01`](02_execution_core/01_gateway_sessions_execution.md) |
 | Mission-control sweeper (own service) | LIVE ✅ | `services/mission_control_sweeper_main.py` | [`04_intelligence/11`](04_intelligence/11_mission_control_intelligence.md) |
@@ -296,6 +297,17 @@ status index.
 | URW HarnessOrchestrator / URWOrchestrator | SCAFFOLDING 🏗️ | operator-CLI / dormant on prod (0 `.urw` dirs) | [`02_execution_core/04`](02_execution_core/04_urw_orchestration.md) |
 | Agent College (self-improvement loop) | RETIRED 🌑 | vestigial; never wired into the prod gateway runtime | [`03_agents/06`](03_agents/06_agent_college.md) |
 | Reddit ingestion | RETIRED 🌑 | de-scoped, no code residue (#707) | [`01_architecture/07`](01_architecture/07_task_type_registry.md) §6 |
+
+**Proactive demo engine — five live flags (Infisical `production`, set 2026-07-01):**
+`UA_PROACTIVE_DEMO_ENGINE=1` (route `tutorial_build` onto the demo_factory `/demo` engine, code-default OFF),
+`UA_PROACTIVE_DEMO_DAILY_CAP=3` (OUTFLOW 3 builds/day, code-default 3),
+`UA_PROACTIVE_DEMO_NUGGETS_ENABLED=1` (end-of-day golden-nuggets judge, code-default OFF),
+`UA_PROACTIVE_TUTORIAL_AUTO_ROUTE=1`, `UA_PRIORITY_DISPATCHER_ENABLED=1`. Distinct INFLOW ceiling
+`UA_DEMO_BUILD_DAILY_CEILING` (default 10) still gates auto-route *queueing*. All count "today" over the
+shared `utils/day_boundary.py::chicago_day_start_iso` boundary. **Pause the lane:** set
+`UA_PROACTIVE_TUTORIAL_AUTO_ROUTE=0` + `UA_PRIORITY_DISPATCHER_ENABLED=0` and restart
+`universal-agent-autonomous-runtime`; re-enable by flipping both back. Details:
+[`04_intelligence/15`](04_intelligence/15_demo_tutorial_pipeline_adr.md) § "Engine migration".
 
 The full per-task-type / mission-system catalog + the **Decommission Register** (why each dead system
 was turned off) lives in [`01_architecture/07_task_type_registry.md`](01_architecture/07_task_type_registry.md) — this registry covers the *platform* axis;

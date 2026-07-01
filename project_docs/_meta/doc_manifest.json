@@ -588,7 +588,7 @@
         "src/universal_agent/vp/profiles.py"
       ],
       "legacy_refs": [],
-      "scope": "Brief→Tutorial→Demo ladder; demo = runnable mini-app of the video's capability (native stack or Claude Agent SDK); gated auto-build (~10/day) + uncapped approve button; converge the two YouTube lanes; Cody-on-ZAI; session-linked manifests. Design approved 2026-06-10, phases P0-P5."
+      "scope": "Brief→Tutorial→Demo ladder; demo = runnable mini-app of the video's capability, now built on the demo_factory /demo engine with a real 3/day build cap + end-of-day golden-nuggets judge; session-linked manifests. SHIPPED & LIVE in prod (engine migration 2026-07-01)."
     },
     {
       "id": "chan-email",
