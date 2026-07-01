@@ -53,11 +53,12 @@ def test_per_tier_buckets_collapse_model_to_tier(events_file):
         events.append(_ev(change_ts - 600 + i, "ok", model="glm-5-turbo"))
     for i in range(200):
         events.append(_ev(change_ts - 590 + i, "rate_limited_429", model="glm-5-turbo", fup_texted=True))
-    # haiku traffic in the before window
+    # haiku traffic in the before window (glm-4.7 is the haiku wire id since
+    # the 2026-07-01 remap; was glm-4.5-air)
     for i in range(40):
-        events.append(_ev(change_ts - 500 + i, "ok", model="glm-4.5-air"))
+        events.append(_ev(change_ts - 500 + i, "ok", model="glm-4.7"))
     for i in range(10):
-        events.append(_ev(change_ts - 500 + i, "rate_limited_429", model="glm-4.5-air"))
+        events.append(_ev(change_ts - 500 + i, "rate_limited_429", model="glm-4.7"))
     # AFTER window — much lower sonnet 429 rate
     for i in range(600):
         events.append(_ev(now - 600 + i, "ok", model="glm-5-turbo"))
@@ -75,7 +76,7 @@ def test_per_tier_buckets_collapse_model_to_tier(events_file):
     assert bt["sonnet"]["r429"] == 200
     assert bt["sonnet"]["total"] == 800  # 600 ok + 200 r429
     assert at["sonnet"]["r429"] == 12
-    # haiku (glm-4.5-air) collapsed correctly in the before window.
+    # haiku (glm-4.7) collapsed correctly in the before window.
     assert bt["haiku"]["r429"] == 10
     assert bt["haiku"]["total"] == 50
 

@@ -24,7 +24,8 @@ from universal_agent.execution_engine import _tier_for_model
     ("glm-5.2", "opus"),        # current opus flagship
     ("glm-5.3", "opus"),        # a future opus flagship — migration-proof
     ("glm-5-turbo", "sonnet"),  # DASH = sonnet, must NOT be read as opus
-    ("glm-4.5-air", "haiku"),
+    ("glm-4.7", "haiku"),       # haiku wire id since the 2026-07-01 remap
+    ("glm-4.5-air", "sonnet"),  # orphaned old haiku wire id (was glm-4.5-air pre-2026-07-01) -> safe default
     ("claude-opus-4-8", "opus"),
     ("claude-sonnet-4-6", "sonnet"),
     ("claude-haiku-4-5", "haiku"),
