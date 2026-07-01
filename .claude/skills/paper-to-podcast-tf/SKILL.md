@@ -21,6 +21,7 @@ Given a research topic, produce a complete learning package sourced from the top
 - Audio overview podcast (~15 min deep dive)
 - Multiple-choice quiz
 - Study flashcards
+- A synthesis report (HTML): a summary of each paper PLUS an integrating cross-paper synthesis
 - All artifacts downloaded and saved to work_products/
 
 ## Success Criteria
@@ -30,7 +31,8 @@ Given a research topic, produce a complete learning package sourced from the top
 - Audio overview podcast generated and downloaded as a real `.m4a` — REQUIRED (the headline deliverable)
 - Quiz generated and downloaded — REQUIRED
 - Flashcard set generated and downloaded — best-effort (skip cleanly if NotebookLM cannot produce it)
-- All files saved to CURRENT_RUN_WORKSPACE/work_products/paper_to_podcast/
+- A synthesis report written to `work_products/paper_to_podcast/report.html` — REQUIRED — with a per-paper summary section AND an integrating synthesis section (cross-paper trends, tensions, and new integrative conclusions drawn from the papers as one body of work)
+- All files saved to CURRENT_RUN_WORKSPACE/work_products/paper_to_podcast/ (flat — no dated subdirectory)
 - A manifest.json written listing all outputs with paths and metadata
 
 ## Constraints
@@ -209,9 +211,29 @@ Phase C — Download and Package (sequential, one at a time, via `nlm`):
    Verify the file exists and is > 100 KB (a real `.m4a`). This is the primary success signal.
 2. Quiz: `nlm download quiz <notebook_id> -o work_products/paper_to_podcast/quiz.json`
 3. Flashcards (only if generated in B4c): `nlm download flashcards <notebook_id> -o work_products/paper_to_podcast/flashcards.json`
-4. Write manifest.json with: topic, papers, notebook_id, and each artifact's path + size. Note any
-   skipped flashcards as a gap — that is acceptable; a missing audio podcast is NOT.
-5. Once manifest.json is written and the audio `.m4a` is verified present, DELETE
+4. SYNTHESIS REPORT — REQUIRED (a headline deliverable alongside the audio). Author a
+   self-contained, **light-mode** HTML file at `work_products/paper_to_podcast/report.html`
+   containing:
+   - A header: the topic, the date, and the NotebookLM notebook link.
+   - **Per-paper summaries** — one block per paper (title + authors) with a 3–5 sentence
+     summary: the problem it tackles, its method/approach, its key finding or result, and why
+     it matters.
+   - **Integrating synthesis** — a substantive section (several paragraphs) that treats ALL the
+     papers as ONE body of work. Draw out the cross-cutting themes and trends, where the papers
+     reinforce or tension with one another, what the collection points to that no single paper
+     states, and any NEW integrative observations, implications, or open questions that emerge
+     only from reading them together. This section is the point of the report — it must ADD
+     cross-paper insight, not restate the abstracts.
+   Light mode is mandatory (the operator often reads on a dark-mode phone). A clean styled HTML
+   page is enough. Then publish it to the tailnet scratchpad for easy viewing and capture the URL
+   (best-effort — if publishing fails, continue; the report file is the required artifact):
+
+       URL=$(/opt/universal_agent/scripts/publish_scratch.sh work_products/paper_to_podcast/report.html paper-to-podcast)
+
+5. Write manifest.json with: topic, papers, notebook_id, the report path + scratchpad URL, and
+   each artifact's path + size. Note any skipped flashcards as a gap — that is acceptable; a
+   missing audio podcast or a missing report.html is NOT.
+6. Once manifest.json is written and the audio `.m4a` + `report.html` are verified present, DELETE
    `.nlm_resume.json` (the run is complete; the next day's run must not adopt this
    notebook). If deletion fails for any reason, set its `status` to `"done"`.
 
@@ -223,6 +245,8 @@ Phase C — Download and Package (sequential, one at a time, via `nlm`):
 - Do NOT download artifacts in parallel. Sequential only — parallel downloads cause cascading cancellation.
 - Do NOT skip the manifest.json — it proves the pipeline completed.
 - Do NOT pass entire raw papers as text sources — use `nlm source add <nb> --file <pdf>` to upload the PDF directly.
+- Do NOT ship a synthesis report whose "synthesis" is just the per-paper summaries concatenated, or the abstracts restated. The integrating section must draw cross-paper trends, tensions, and new observations from the papers taken as one body of work — that synthesis IS the point of the report.
+- Do NOT nest artifacts in a dated subdirectory (e.g. `work_products/paper_to_podcast/rag_20260701/`). Write them flat in `work_products/paper_to_podcast/` with the exact names below — the post-run artifact guard checks those exact paths.
 
 ## Output Structure
 
@@ -230,5 +254,6 @@ Phase C — Download and Package (sequential, one at a time, via `nlm`):
     ├── manifest.json
     ├── papers_metadata.json
     ├── podcast_audio.m4a
+    ├── report.html          # per-paper summaries + integrating synthesis
     ├── quiz.json
     └── flashcards.json
