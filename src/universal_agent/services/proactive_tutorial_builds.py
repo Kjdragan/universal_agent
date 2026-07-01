@@ -15,12 +15,17 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from universal_agent import task_hub
+from universal_agent.feature_flags import (
+    proactive_demo_factory_script,
+    proactive_use_demo_factory,
+)
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
     make_artifact_id,
     upsert_artifact,
 )
 from universal_agent.services.proactive_task_builder import queue_proactive_task
+from universal_agent.services.tutorial_demo_finalize import proactive_demo_slug
 
 logger = logging.getLogger(__name__)
 
@@ -696,7 +701,70 @@ def _build_task_description(
     )
     if preference_context:
         base = f"{base}\n\nPreference context:\n{preference_context}"
+
+    # ── Consolidation seam (flag UA_PROACTIVE_DEMO_ENGINE, default OFF) ──
+    # Route the proactive tutorial_build onto the demo_factory /demo engine (its
+    # headless build_demo.py driver) instead of the bespoke /goal instructions
+    # above. Mirrors services/cody_dispatch.py's cody_demo_task override: we
+    # redirect the agentic OBJECTIVE (Cody runs the driver), not the worker
+    # plumbing — lowest blast radius, fully reversible. The off-path above is
+    # byte-for-byte unchanged when the flag is off.
+    if proactive_use_demo_factory():
+        base = f"{base}\n\n{_demo_factory_override_block(video_title=video_title, video_url=video_url)}"
     return base
+
+
+def _sanitize_one_line(text: str) -> str:
+    """Collapse to one shell-safe line for embedding in the double-quoted driver
+    argument: no double-quotes (→ single), and no chars that expand inside double
+    quotes (``$`` ``` ` ``` ``\\``) so a video title like "$100k SaaS" can't
+    shell-break or mangle the command Cody assembles."""
+    one_line = " ".join(str(text or "").split()).replace('"', "'")
+    for ch in ("$", "`", "\\"):
+        one_line = one_line.replace(ch, "")
+    return one_line[:200]
+
+
+def _demo_factory_override_block(*, video_title: str, video_url: str) -> str:
+    """DEMO ENGINE OVERRIDE block appended to the tutorial_build objective when
+    ``UA_PROACTIVE_DEMO_ENGINE`` is on (mirrors cody_dispatch.py:91-108).
+
+    NO ``--build-only`` → a FULL land (vault entry + EXHIBIT + private GitHub
+    backup) exactly like the operator's /demo. ``video_slug`` is
+    ``proactive_demo_slug(video_title)`` — the SAME title-only slug
+    tutorial_demo_finalize uses to resolve (and, if conceptual, rename) the
+    landed repo — so the on-disk dir is deterministically
+    ``/home/ua/lrepos/demo-proactive-<video_slug>``. ``demo_id`` is
+    ``proactive-<video_slug>`` (stable, == the on-disk dir suffix).
+    """
+    driver = proactive_demo_factory_script()
+    video_slug = proactive_demo_slug(video_title)
+    demo_id = f"proactive-{video_slug}"
+    seed = _sanitize_one_line(video_title) or "this tutorial"
+    title = _sanitize_one_line(video_title) or demo_id
+    seed_url = str(video_url or "").strip()
+    seed_url_flag = f" --seed-url {seed_url}" if seed_url else ""
+    return (
+        "── DEMO ENGINE OVERRIDE: demo_factory (the /demo engine) ──\n"
+        "- Build this demo with the demo_factory headless driver, NOT the bespoke "
+        "instructions above. The driver runs the full /goal build + verify + "
+        "fidelity-eval on the good engine and LANDS the demo — vault entry + "
+        "EXHIBIT + private GitHub backup — exactly like the operator's /demo.\n"
+        "- From the workspace, run this SINGLE command (a full land, not a "
+        "build-only pass):\n"
+        f'    python3 {driver} "Build a runnable demo of the capability from this '
+        f'tutorial: {seed}" \\\n'
+        f"      --demo-id {demo_id} --slug proactive-{video_slug} "
+        f'--title "{title}" \\\n'
+        f"      --workspace-root /home/ua/lrepos{seed_url_flag} \\\n"
+        "      --endpoint-required any --promote --skill-tier library\n"
+        f"  → lands the repo at /home/ua/lrepos/demo-proactive-{video_slug} "
+        "(--skill-tier library graduates the skill into dragan-plugins as a "
+        "zero-context /dragan:<name> library entry).\n"
+        f"- If the driver is missing at {driver}, STOP and record it in "
+        "BUILD_NOTES.md (demo_factory must be cloned on this host first) — do "
+        "NOT fall back to the bespoke flow."
+    )
 
 
 def _preference_context(conn: sqlite3.Connection, *, task_type: str, topic_tags: list[str]) -> str:

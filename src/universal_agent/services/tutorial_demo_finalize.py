@@ -49,6 +49,70 @@ def _slugify(text: str, *, fallback: str) -> str:
     return slug or fallback
 
 
+def proactive_demo_slug(video_title: str) -> str:
+    """Deterministic on-disk slug for a proactive demo repo, derived from the
+    video title ALONE — so the build-time ``--slug proactive-<slug>`` (see
+    services/proactive_tutorial_builds._demo_factory_override_block) and the
+    finalize-time dir resolution / undemoable-rename compute the SAME value.
+    Reuses this module's ``_slugify`` with a stable title-only fallback."""
+    return _slugify(str(video_title or ""), fallback="tutorial")
+
+
+def _read_landed_manifest(workspace: Path) -> dict[str, Any] | None:
+    """Read a demo_factory-landed ``manifest.json`` (if one already exists) to
+    read its ``status`` / ``acceptance_passed``. Returns the parsed dict or None.
+
+    Called BEFORE ``_synthesize_manifest`` on purpose: the bespoke synth writes
+    ``acceptance_passed=True`` and no ``status``, which would mask a real land
+    outcome. Only ``land_demo.py`` writes a manifest (with ``status``) ahead of
+    finalize, so a present manifest here == a demo_factory land.
+    """
+    from universal_agent.services.cody_implementation import resolve_demo_artifacts_dir
+
+    mpath = resolve_demo_artifacts_dir(workspace) / "manifest.json"
+    if not mpath.is_file():
+        return None
+    try:
+        data = json.loads(mpath.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _manifest_is_undemoable(manifest: dict[str, Any]) -> bool:
+    """True when a landed manifest reports a conceptual / un-demoable outcome.
+
+    ``land_demo.py`` writes ``status='un-demoable'`` + ``acceptance_passed=False``
+    when a gate did not pass (an honest "briefing, not a runnable demo" marker —
+    NOT a build failure)."""
+    if str(manifest.get("status") or "").strip().lower() in {"un-demoable", "undemoable"}:
+        return True
+    return "acceptance_passed" in manifest and manifest.get("acceptance_passed") is False
+
+
+def _rename_to_undemoable(workspace: Path) -> Path:
+    """Rename ``demo-proactive-<slug>`` → ``demo-undemoable-<slug>`` in place.
+
+    Guarded + idempotent: only a dir whose name starts with ``demo-proactive-``
+    is renamed (a bespoke mission workspace is left untouched); if the undemoable
+    target already exists (a prior finalize ran), that target is returned. Any
+    OSError is swallowed and the original path returned (never raises)."""
+    name = workspace.name
+    if not name.startswith("demo-proactive-"):
+        return workspace
+    target = workspace.with_name("demo-undemoable-" + name[len("demo-proactive-"):])
+    if target == workspace:
+        return workspace
+    try:
+        if target.exists():
+            return target if target.is_dir() else workspace
+        os.rename(str(workspace), str(target))
+        return target
+    except OSError as exc:
+        logger.warning("undemoable rename failed %s -> %s: %s", workspace, target, exc)
+        return workspace
+
+
 def _readme_has_run_instructions(workspace: Path) -> bool:
     readme = workspace / "README.md"
     if not readme.is_file():
@@ -166,6 +230,17 @@ def finalize_tutorial_build_demo(
         if workspace is None:
             result["reason"] = "no_workspace_dir"
             return result
+
+        # Demo_factory land outcome: a conceptual / un-demoable result renames the
+        # repo demo-proactive-<slug> -> demo-undemoable-<slug> BEFORE registration
+        # (an honest "briefing, not a runnable demo" marker, not a failure). Read
+        # the landed manifest ahead of _synthesize_manifest so the bespoke synth
+        # (acceptance_passed=True, no `status`) can't mask the real outcome. The
+        # rename is a no-op for a bespoke mission workspace (name guard inside).
+        _landed = _read_landed_manifest(workspace)
+        if _landed is not None and _manifest_is_undemoable(_landed):
+            workspace = _rename_to_undemoable(workspace)
+            result["undemoable"] = True
         result["workspace_dir"] = str(workspace)
 
         from universal_agent.services.cody_mode import resolve_from_payload
@@ -198,6 +273,14 @@ def finalize_tutorial_build_demo(
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
             if isinstance(payload, dict):
                 payload["mechanical_checks"] = checks
+                # Gateway demos walker (_claude_code_intel_demos) sorts + renders
+                # on `timestamp` and `marker_verified`; a demo_factory manifest
+                # carries `ts` + `acceptance_passed` instead. Minimal aliasing for
+                # dashboard fidelity — never clobbers an existing key.
+                if payload.get("ts") and not payload.get("timestamp"):
+                    payload["timestamp"] = payload["ts"]
+                if "marker_verified" not in payload:
+                    payload["marker_verified"] = bool(payload.get("acceptance_passed"))
                 manifest_path.write_text(
                     json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
                     encoding="utf-8",
