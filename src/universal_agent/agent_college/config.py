@@ -13,5 +13,5 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 @lru_cache()
-def get_settings():
+def get_settings() -> Settings:
     return Settings()
