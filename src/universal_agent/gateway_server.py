@@ -2519,6 +2519,25 @@ _activity_evaluations_retention_days = max(
     3,
     int(os.getenv("UA_ACTIVITY_EVALUATIONS_RETENTION_DAYS", "7") or 7),
 )
+# Per-task retention cap for task_hub_evaluations. The age-based TTL above
+# bounds rows to the last N days, but hot cron / vp-mission tasks still pile up
+# thousands of near-identical evals inside that window (observed ~10K rows/task
+# over 7d, driving the table to 1.34GB / 3.73M rows). This keeps only the
+# newest ``_activity_evaluations_max_per_task`` rows per task_id. Every per-task
+# reader uses LIMIT <= 10, and global readers compute decision ratios (robust to
+# a decision-agnostic cap), so no consumer needs more than latest-N per task.
+_activity_evaluations_max_per_task = max(
+    10,
+    int(os.getenv("UA_ACTIVITY_EVALUATIONS_MAX_PER_TASK", "500") or 500),
+)
+# The per-task cap DELETE does a ROW_NUMBER() scan over the whole table, so it
+# is time-gated rather than run on every activity-event write that invokes
+# _activity_prune_old. Default 10 min. The first call after process start always
+# runs (ts starts at 0.0) so the cap self-enforces immediately on deploy.
+_activity_eval_cap_prune_interval_seconds = max(
+    60, int(os.getenv("UA_ACTIVITY_EVAL_CAP_PRUNE_INTERVAL_SECONDS", "600") or 600)
+)
+_last_eval_cap_prune_ts: float = 0.0
 _dashboard_events_sse_enabled = (
     os.getenv("UA_DASHBOARD_EVENTS_SSE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 )
@@ -10235,18 +10254,48 @@ def _activity_prune_old(conn: sqlite3.Connection) -> None:
         "DELETE FROM task_hub_evaluations WHERE evaluated_at < datetime('now', ?)",
         (f"-{int(_activity_evaluations_retention_days)} days",),
     )
+    # Per-task cap: keep only the newest N evaluations per task_id. Hot cron /
+    # vp-mission tasks accumulate thousands of near-identical evals inside the
+    # TTL window; no reader consumes more than latest-N per task (per-task
+    # readers use LIMIT <= 10; global readers compute decision ratios that are
+    # robust to a decision-agnostic cap). The ROW_NUMBER() scan is whole-table,
+    # so it is time-gated rather than run on every write-path invocation; the
+    # first call after start always runs so the cap self-heals on deploy.
+    eval_cap_deleted = 0
+    global _last_eval_cap_prune_ts
+    if time.monotonic() - _last_eval_cap_prune_ts >= _activity_eval_cap_prune_interval_seconds:
+        try:
+            eval_cap_cur = task_hub.prune_task_hub_evaluations_to_cap(
+                conn, max_per_task=_activity_evaluations_max_per_task
+            )
+            eval_cap_deleted = eval_cap_cur
+        except sqlite3.OperationalError as exc:
+            logger.debug("task_hub_evaluations per-task cap prune skipped: %s", exc)
+        _last_eval_cap_prune_ts = time.monotonic()
     conn.commit()
-    changed = (auto_read.rowcount or 0) + (expired_now.rowcount or 0) + (c1.rowcount or 0) + (c2.rowcount or 0) + (c3.rowcount or 0)
+    changed = (
+        (auto_read.rowcount or 0)
+        + (expired_now.rowcount or 0)
+        + (c1.rowcount or 0)
+        + (c2.rowcount or 0)
+        + (c3.rowcount or 0)
+        + eval_cap_deleted
+    )
     if changed > 0:
         try:
             # Reclaim pages incrementally to prevent locking the database
-            # globally rather than doing a full VACUUM sweep.
+            # globally rather than doing a full VACUUM sweep. Bump the budget
+            # when the per-task cap just freed many rows so a large prune
+            # returns pages to the OS promptly over a few maintenance cycles
+            # instead of the 500-page (~2MB) trickle.
             conn.execute("PRAGMA auto_vacuum = INCREMENTAL;")
-            conn.execute("PRAGMA incremental_vacuum(500);")
+            vacuum_budget = 50000 if eval_cap_deleted > 1000 else 500
+            conn.execute(f"PRAGMA incremental_vacuum({vacuum_budget});")
             logger.info(
-                "Activity DB lifecycle maintenance changed %d rows (auto_read=%d)",
+                "Activity DB lifecycle maintenance changed %d rows (auto_read=%d, eval_cap=%d)",
                 changed,
                 auto_read.rowcount or 0,
+                eval_cap_deleted,
             )
         except Exception as exc:
             logger.debug("Activity DB incremental_vacuum skipped: %s", exc)

@@ -1666,6 +1666,50 @@ def _record_evaluation(
     )
 
 
+def prune_task_hub_evaluations_to_cap(
+    conn: sqlite3.Connection,
+    *,
+    max_per_task: int,
+) -> int:
+    """Delete ``task_hub_evaluations`` rows beyond the newest ``max_per_task`` per task_id.
+
+    Returns the number of rows deleted. The TTL in
+    ``gateway_server._activity_prune_old`` bounds rows by age; this bounds them
+    per task so a hot cron / vp-mission task cannot pile up thousands of
+    near-identical evals inside the TTL window (observed ~10K rows/task over 7d).
+
+    Reader audit (why this is safe):
+      - Every per-task reader uses ``LIMIT <= 10`` (task-detail fetch,
+        auto-investigator, needs-review script) or only tests ``COUNT(*) > 0``
+        (``_apply_stale_policy``). Keeping newest N (N >= 10) preserves all of them.
+      - The only global readers compute decision *ratios* (seize vs reject) over
+        the table. The cap is decision-agnostic (keeps newest N regardless of
+        decision), so those ratios stay representative; only absolute volume
+        stats under-count for the hottest tasks.
+
+    Uses ``ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY evaluated_at DESC)``
+    (SQLite >= 3.25). ``idx_task_hub_eval_task_time`` covers the partition/sort.
+    Callers on a write path should time-gate it; the inner scan is whole-table.
+    """
+    cur = conn.execute(
+        """
+        DELETE FROM task_hub_evaluations
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY task_id
+                           ORDER BY evaluated_at DESC
+                       ) AS _rn
+                FROM task_hub_evaluations
+            ) WHERE _rn > ?
+        )
+        """,
+        (int(max_per_task),),
+    )
+    return int(cur.rowcount or 0)
+
+
 def _apply_stale_policy(conn: sqlite3.Connection, task: dict[str, Any], policy: TaskHubPolicy) -> tuple[str, dict[str, Any], Optional[str]]:
     status = str(task.get("status") or TASK_STATUS_OPEN)
     metadata = dict(task.get("metadata") or {})
