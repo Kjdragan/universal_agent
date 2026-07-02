@@ -30,7 +30,7 @@ from universal_agent.utils.model_resolution import (
 
 # The Z.AI API requires lowercase model identifiers. If these names drift,
 # agents will get error 1211 "Unknown Model, please check the model code."
-KNOWN_ZAI_MODELS = {"glm-4.5-air", "glm-4.7", "glm-5-turbo", "glm-5.2", "glm-5.1"}
+KNOWN_ZAI_MODELS = {"glm-4.5-air", "glm-5-turbo", "glm-5.2", "glm-5.1"}
 
 
 class TestZaiModelMap:
@@ -120,13 +120,13 @@ class TestConvenienceHelpers:
         monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
         assert resolve_haiku() == ZAI_MODEL_MAP["haiku"]
 
-    def test_resolve_haiku_is_glm_4_7(self, monkeypatch):
-        """The 2026-06-05 operator lock on glm-4.5-air was intentionally lifted
-        by Kevin on 2026-07-01: the haiku tier now maps to glm-4.7. This guard
-        fails loudly if someone reverts the mapping to glm-5-turbo (or anything
-        else) without an equally deliberate, explicit decision."""
+    def test_resolve_haiku_is_glm_4_5_air(self, monkeypatch):
+        """OPERATOR LOCK (Kevin, 2026-06-05): the haiku tier MUST map to
+        glm-4.5-air. glm-4.5-air has been tested repeatedly and works;
+        do not remap it. This guard fails loudly if someone reverts the
+        mapping to glm-5-turbo (or anything else)."""
         monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
-        assert resolve_haiku() == "glm-4.7"
+        assert resolve_haiku() == "glm-4.5-air"
 
     def test_resolve_sonnet_returns_real_sonnet(self, monkeypatch):
         """Previously this had a forced override returning opus —
@@ -244,18 +244,8 @@ def clean_tier_env(monkeypatch):
 
 class TestModelIdToTier:
     # Rule 1 — exact reverse ZAI_MODEL_MAP match (wire identity).
-    def test_glm47_is_haiku(self, clean_tier_env):
-        """haiku's wire id since the 2026-07-01 remap (was glm-4.5-air)."""
-        assert model_id_to_tier("glm-4.7") == "haiku"
-
-    def test_old_air_literal_now_falls_back_to_default(self, clean_tier_env):
-        """glm-4.5-air was haiku's wire id until the 2026-07-01 remap to
-        glm-4.7. It no longer appears anywhere in ZAI_MODEL_MAP, so Rule 1
-        no longer claims it and it is not a Rule-2 mid-tier literal either —
-        it now falls through to the Rule 4 safe default (sonnet), NOT haiku.
-        If some caller still emits this literal wire id directly, it will be
-        misclassified as sonnet for rate-limiter tiering purposes."""
-        assert model_id_to_tier("glm-4.5-air") == "sonnet"
+    def test_air_is_haiku(self, clean_tier_env):
+        assert model_id_to_tier("glm-4.5-air") == "haiku"
 
     def test_turbo_is_sonnet(self, clean_tier_env):
         assert model_id_to_tier("glm-5-turbo") == "sonnet"
@@ -269,14 +259,9 @@ class TestModelIdToTier:
         assert model_id_to_tier("Glm-5-Turbo") == "sonnet"
 
     # Rule 2 — literal mid-tier ids that bypass ZAI_MODEL_MAP.
-    #
-    # NOTE (2026-07-01): glm-4.7 was ALSO the literal MISSION_CONTROL_DEFAULT_MODEL
-    # that this Rule 2 bucket exists for. Now that ZAI_MODEL_MAP["haiku"] ==
-    # "glm-4.7" too, Rule 1 (wire identity) wins and glm-4.7 classifies as
-    # "haiku", not "mid" — see test_glm47_is_haiku above. Mission Control's
-    # rate-limiter/timeout bucketing for glm-4.7 calls therefore now shares the
-    # haiku tier instead of the isolated mid tier this bucket was built for.
-    # glm-4.6 is unaffected and still isolates cleanly as "mid".
+    def test_glm47_is_mid(self, clean_tier_env):
+        assert model_id_to_tier("glm-4.7") == "mid"
+
     def test_glm46_is_mid(self, clean_tier_env):
         assert model_id_to_tier("glm-4.6") == "mid"
 
@@ -341,28 +326,23 @@ class TestModelIdToTier:
 
     def test_tier_set_matches_timeout_tiers_plus_mid(self):
         """The tier set is {opus, sonnet, mid, haiku} — model_call_timeout_seconds
-        tiers (opus/sonnet/haiku) plus the new mid.
-
-        Uses glm-4.6 (not glm-4.7) as the mid-tier probe: since the 2026-07-01
-        haiku remap, glm-4.7 is claimed by Rule 1 (wire identity) as "haiku",
-        not "mid" — see the note above test_glm46_is_mid.
-        """
+        tiers (opus/sonnet/haiku) plus the new mid."""
         produced = {
             model_id_to_tier("glm-5.2"),
             model_id_to_tier("glm-5-turbo"),
+            model_id_to_tier("glm-4.5-air"),
             model_id_to_tier("glm-4.7"),
-            model_id_to_tier("glm-4.6"),
         }
         assert produced == {"opus", "sonnet", "haiku", "mid"}
 
 
 # ── resolve_goal_eval_model ──────────────────────────────────────────────────
 #
-# Upgrades the built-in Claude Code /goal completion evaluator off the weak
-# haiku tier (glm-4.7 since 2026-07-01; was glm-4.5-air) onto the opus tier
-# (glm-5.2) on ZAI — scoped per-subprocess by the CLI client, never a global
-# remap. (Default moved sonnet→opus on 2026-06-21: glm-5-turbo was stalling
-# the evaluator; glm-5.2 is the reliable flagship.)
+# Upgrades the built-in Claude Code /goal completion evaluator off the
+# operator-locked weak haiku tier (glm-4.5-air) onto the opus tier (glm-5.2)
+# on ZAI — scoped per-subprocess by the CLI client, never a global remap.
+# (Default moved sonnet→opus on 2026-06-21: glm-5-turbo was stalling the
+# evaluator; glm-5.2 is the reliable flagship.)
 
 
 class TestResolveGoalEvalModel:
@@ -391,16 +371,15 @@ class TestResolveGoalEvalModel:
     )
     def test_opt_out_tokens_disable_override(self, monkeypatch, token):
         """An opt-out token → no override (fall back to the built-in
-        haiku/small-fast evaluator, glm-4.7)."""
+        haiku/small-fast evaluator, glm-4.5-air)."""
         monkeypatch.setenv("UA_GOAL_EVAL_MODEL", token)
         assert resolve_goal_eval_model("zai") is None
 
-    def test_does_not_touch_the_haiku_tier_mapping(self, monkeypatch):
-        """Calling the resolver never mutates the global haiku tier — reading
-        ZAI_MODEL_MAP['haiku'] (glm-4.7 since 2026-07-01; was glm-4.5-air) is
-        read-only here."""
+    def test_does_not_touch_the_haiku_operator_lock(self, monkeypatch):
+        """Calling the resolver never mutates the global haiku tier — the
+        operator lock (ZAI_MODEL_MAP['haiku']=glm-4.5-air) is read-only here."""
         monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
         monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
         resolve_goal_eval_model("zai")
-        assert ZAI_MODEL_MAP["haiku"] == "glm-4.7"
-        assert resolve_haiku() == "glm-4.7"
+        assert ZAI_MODEL_MAP["haiku"] == "glm-4.5-air"
+        assert resolve_haiku() == "glm-4.5-air"

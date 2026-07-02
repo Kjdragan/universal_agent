@@ -12,13 +12,15 @@ logger = logging.getLogger(__name__)
 # Ref: https://docs.z.ai/scenario-example/develop-tools/claude.md
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# The 2026-06-05 operator lock on the haiku tier (glm-4.5-air) was lifted by
-# Kevin on 2026-07-01: the haiku tier now maps to glm-4.7. This was a
-# deliberate, authorized change — not a silent drift — see git history for
-# the prior lock rationale if it's ever needed again.
+# OPERATOR LOCK — the haiku tier maps to glm-4.5-air. DO NOT CHANGE THIS, EVER.
+# History: locked 2026-06-05 (Kevin) after glm-4.5-air proved reliable in
+# production. Kevin lifted the lock 2026-07-01 to try glm-4.7 — which turned
+# out to collide with Mission Control Intelligence's pre-existing "mid"-tier
+# wire-id (also glm-4.7), silently merging the two lanes' rate limits. Kevin
+# reverted back to glm-4.5-air the same day once that collision was found.
 # ─────────────────────────────────────────────────────────────────────────────
 ZAI_MODEL_MAP = {
-    "haiku": "glm-4.7",         # Updated 2026-07-01 (Kevin, operator-approved; was glm-4.5-air).
+    "haiku": "glm-4.5-air",     # OPERATOR-LOCKED — never change (see note above).
     "sonnet": "glm-5-turbo",    # Z.AI standard model.
     "opus": "glm-5.2",          # Z.AI flagship (migrated 5.1→5.2 2026-06-13; NOT glm-5-2 — dash breaks it).
 }
@@ -45,10 +47,11 @@ def resolve_model(tier: str = "sonnet") -> str:
 
 
 def resolve_haiku() -> str:
-    """Resolve the haiku-tier model — `glm-4.7` by default.
+    """Resolve the haiku-tier model — `glm-4.5-air` by default.
 
-    Updated 2026-07-01 (Kevin, operator-approved) from the prior 2026-06-05
-    lock on glm-4.5-air (see the note on ``ZAI_MODEL_MAP``). Only the
+    The haiku tier is OPERATOR-LOCKED to glm-4.5-air (see the note on
+    ``ZAI_MODEL_MAP`` for the 2026-06-05 lock and the brief 2026-07-01
+    glm-4.7 attempt / same-day revert); do not remap it. Only the
     ``ANTHROPIC_DEFAULT_HAIKU_MODEL`` env var can override at runtime.
     """
     return resolve_model("haiku")
@@ -78,9 +81,10 @@ def resolve_goal_eval_model(cody_mode: str = "zai") -> str | None:
     turn with its "small fast model" — which current Claude Code collapses
     onto ``ANTHROPIC_DEFAULT_HAIKU_MODEL`` (``ANTHROPIC_SMALL_FAST_MODEL`` is
     deprecated; ref https://code.claude.com/docs/en/model-config). On the Z.AI
-    routing the haiku tier maps to ``glm-4.7`` (updated 2026-07-01; was
-    ``glm-4.5-air``) — too weak to adjudicate demo-build acceptance conditions
-    reliably.
+    routing the haiku tier is operator-locked to ``glm-4.5-air`` (see the
+    ``ZAI_MODEL_MAP`` note for the brief 2026-07-01 glm-4.7 attempt and
+    same-day revert) — too weak to adjudicate demo-build acceptance
+    conditions reliably.
 
     This resolves a STRONGER evaluator model (opus tier → ``glm-5.2``)
     to be injected into the ``/goal`` work-turn subprocess ENV ONLY (see
@@ -117,7 +121,7 @@ def resolve_goal_eval_model(cody_mode: str = "zai") -> str | None:
     if not raw:
         return resolve_opus()  # default ON: glm-5.2 for the ZAI /goal evaluator
     if raw.lower() in {"off", "none", "default", "haiku", "disable", "disabled"}:
-        return None  # explicit opt-out → built-in haiku/small-fast (glm-4.7)
+        return None  # explicit opt-out → built-in haiku/small-fast (glm-4.5-air)
     return raw  # explicit operator-pinned model id
 
 
