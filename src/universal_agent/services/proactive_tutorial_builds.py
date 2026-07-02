@@ -1222,6 +1222,13 @@ _GPU_BOUND_KEYWORDS = (
 
 _GPU_DEFAULT_MODEL = "qwen2.5-coder:7b"
 
+# gpu_approval.state values that represent a terminal decision the sweep must
+# not overwrite: an operator's explicit approve/reject (stamped by
+# gateway_server.gpu_demo_approve_get) and the post-approval "built" state
+# (finalize_desktop_gpu_demo). Only "pending" is re-visitable. Keep in sync with
+# the state strings written in this module and gateway_server.
+_GPU_APPROVAL_TERMINAL_STATES = frozenset({"approved", "rejected", "built"})
+
 
 def gpu_bound_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     """Deterministic keyword pre-filter — returns classification dict.
@@ -1271,6 +1278,37 @@ def gpu_bound_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _persisted_gpu_approval_state(
+    conn: sqlite3.Connection, video_id: str
+) -> tuple[dict[str, Any] | None, str]:
+    """Return ``(existing_item, gpu_approval.state)`` for a video's deterministic
+    tutorial-build task, or ``(None, "")`` when no row exists.
+
+    task_id is derived the same way as ``queue_tutorial_build_task`` (sha256 of
+    the video_id), so a sweep can read a prior operator decision before it would
+    otherwise re-queue/re-stamp the row.
+    """
+    clean = str(video_id or "").strip()
+    if not clean:
+        return None, ""
+    task_id = f"tutorial-build:{hashlib.sha256(clean.encode()).hexdigest()[:16]}"
+    try:
+        item = task_hub.get_item(conn, task_id)
+    except Exception:  # noqa: BLE001 — a lookup failure must not block queueing
+        return None, ""
+    if not item:
+        return None, ""
+    meta = item.get("metadata")
+    if not isinstance(meta, dict):
+        try:
+            meta = json.loads(meta) if meta else {}
+        except Exception:  # noqa: BLE001
+            meta = {}
+    gpu_approval = meta.get("gpu_approval")
+    state = str(gpu_approval.get("state") or "").strip().lower() if isinstance(gpu_approval, dict) else ""
+    return item, state
+
+
 def classify_and_gate_gpu_demo(
     conn: sqlite3.Connection,
     *,
@@ -1291,6 +1329,26 @@ def classify_and_gate_gpu_demo(
     verdict = gpu_bound_from_candidate(candidate)
     if not verdict["gpu_bound"]:
         return None
+
+    # Respect a terminal operator decision across sweeps. Once the operator has
+    # approved/rejected this GPU demo via the emailed one-click link
+    # (gateway_server.gpu_demo_approve_get stamps gpu_approval.state), or the
+    # build has finished (finalize_desktop_gpu_demo -> state="built"), the 3x/day
+    # sweep must NOT reset gpu_approval back to "pending" nor re-send the
+    # approval email (force_send=True). Returning non-None keeps the caller on
+    # its "handled — skip normal ceiling-queue" branch, so a rejected build is
+    # never resurrected as an auto-dispatch either. Only "pending" is re-visited.
+    existing_item, existing_state = _persisted_gpu_approval_state(
+        conn, str(candidate.get("video_id") or "").strip()
+    )
+    if existing_state in _GPU_APPROVAL_TERMINAL_STATES:
+        logger.info(
+            "classify_and_gate_gpu_demo: %s has terminal gpu_approval.state=%r — "
+            "not re-queuing or re-emailing (operator decision preserved)",
+            str(candidate.get("video_id") or "").strip() or "<no video_id>",
+            existing_state,
+        )
+        return {"task": existing_item, "artifact": None, "skipped_terminal_state": existing_state}
 
     # GPU-bound + flag ON: queue pending-approval and send the operator an email.
     result = queue_tutorial_build_task(
