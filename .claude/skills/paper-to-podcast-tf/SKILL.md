@@ -119,9 +119,14 @@ Pin the profile ONCE before any NotebookLM step — some subcommands (e.g. `down
 
     export NLM_PROFILE=default
 
-- `nlm login --check` → verify auth (rc=0 = valid). If rc!=0 the cookies are genuinely expired:
+- **Auth check — use a REAL operation, NOT `nlm login --check`.** On the VPS, `nlm login --check`
+  RELIABLY returns a FALSE "Credentials have expired" — its live google.com probe gets
+  redirect-flagged from the datacenter IP even when auth is perfectly valid. The reliable signal is
+  `nlm notebook list`: if it returns a JSON array of notebooks, auth WORKS — proceed. Treat the
+  cookies as genuinely expired ONLY if `nlm notebook list` itself fails (auth error / empty); then
   STOP, do not fabricate anything (see Anti-Patterns), and report that a desktop `nlm login` re-auth
-  is needed.
+  is needed (`nlm login` on the desktop, then `scripts/sync_nlm_cookies.sh`). Do NOT abort on a
+  `nlm login --check` "expired" alone.
 - `nlm notebook create "<title>" --json` → create the notebook; parse `notebook_id` from the JSON.
 - `nlm source add <nb> --file <pdf> --wait` → add a PDF source (one call per paper).
 - `nlm audio create <nb> --format deep_dive --confirm` → generate the audio overview (headline deliverable).
@@ -165,8 +170,10 @@ Phase B — NotebookLM Content Generation (via the `nlm` CLI — see Required Ca
    Look for `.nlm_resume.json` in the workspace root. If it exists, parse it, and
    if its `status` is not `"done"` AND `run_started_at` is within the last 24
    hours:
-   a. `export NLM_PROFILE=default`, then `nlm login --check` (if it fails, STOP
-      per Anti-Patterns — never fabricate).
+   a. `export NLM_PROFILE=default`, then verify auth with `nlm notebook list`
+      (NOT `nlm login --check` — it false-fails on the VPS; see Required
+      Capabilities). If `nlm notebook list` itself fails, STOP per Anti-Patterns
+      — never fabricate.
    b. Run `nlm studio status <notebook_id> --json` for the checkpoint's
       `notebook_id`.
       - If the notebook is valid and its audio is `completed` or still
@@ -178,7 +185,8 @@ Phase B — NotebookLM Content Generation (via the `nlm` CLI — see Required Ca
         fall through to step 1 (fresh run).
    If there is no checkpoint, or it is stale (>24h) or already `"done"`, proceed
    to step 1.
-1. `export NLM_PROFILE=default`, then `nlm login --check`. If it fails, STOP per Anti-Patterns
+1. `export NLM_PROFILE=default`, then verify auth with `nlm notebook list` (NOT `nlm login --check`,
+   which false-fails on the VPS). Only if `nlm notebook list` itself fails, STOP per Anti-Patterns
    (report that desktop re-auth is needed — never fabricate audio/quiz/flashcards).
 2. `nlm notebook create "Paper to Podcast: {topic}" --json` → capture `notebook_id` from the JSON.
    IMMEDIATELY write the resume checkpoint `.nlm_resume.json` at the workspace
