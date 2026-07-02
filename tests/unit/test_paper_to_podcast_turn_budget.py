@@ -81,6 +81,19 @@ def test_command_still_requires_real_m4a_download():
     assert "real .m4a" in body
 
 
+def test_command_auth_gate_uses_real_operation_not_login_check():
+    """The auth gate must verify with a REAL op (`nlm notebook list`), not
+    `nlm login --check` — the latter reliably returns a FALSE 'expired' from the
+    VPS IP (its live google.com probe gets redirect-flagged) and aborted the
+    2026-07-02 run even though `nlm notebook list` returned 256 notebooks. The
+    prompt must gate on the real op and explicitly not abort on --check alone."""
+    body = gateway_server._paper_to_podcast_command()
+    assert "nlm notebook list" in body, "auth gate must use a real operation"
+    assert "false-negative" in body.lower() or "false 'credentials have expired'" in body.lower(), (
+        "must name that nlm login --check false-fails on the VPS"
+    )
+
+
 # ── Fix 2a: the request-metadata → max_iterations resolver ──────────────────
 
 def test_resolve_max_turns_override_valid_values():
