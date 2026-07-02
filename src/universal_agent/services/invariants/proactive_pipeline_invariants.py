@@ -38,9 +38,12 @@ MORNING_BRIEFING_MAX_AGE_HOURS = 4.0
 # csi_convergence_sync writes `convergence_candidates` sporadically (only when a
 # real convergence/ideation is detected) on an hourly active-hours cron — NOT the
 # decommissioned `proactive_convergence_events` table on a 30-min 24/7 cadence the
-# old probe assumed. 3h ≈ a few active-hour cron cycles of grace absorbs natural
-# detection lulls; the active-hours gate below absorbs the overnight no-cron window.
-CSI_CONVERGENCE_MAX_AGE_MINUTES = 180.0
+# old probe assumed. Candidates land in bursts of ~7-10 every 2-4h (cadence
+# ~11/13/17/21 UTC); a 3h window flapped across the observed 4h max intra-day burst
+# gap. 5h ≈ p75 burst-gap (4h) + margin: absorbs the bursty cadence during active
+# hours while still flagging a genuine multi-hour signal drought. The active-hours
+# gate below absorbs the overnight no-cron window (the ~10h gaps).
+CSI_CONVERGENCE_MAX_AGE_MINUTES = 300.0
 CSI_CONVERGENCE_ACTIVE_HOUR_MIN = 8  # cron is `0 6-21`; allow 2 post-6AM cycles to produce
 CSI_CONVERGENCE_ACTIVE_HOUR_MAX = 21
 PROACTIVE_DIGEST_MAX_AGE_HOURS = 30.0  # 24h + 6h grace
@@ -321,7 +324,7 @@ def proactive_artifact_digest_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str
 
 @invariant(
     id="csi_convergence_sync_freshness",
-    title="CSI convergence candidate created within last 3h (active hours)",
+    title="CSI convergence candidate created within last 5h (active hours)",
     description=(
         "Cron `csi_convergence_sync` runs hourly 06:00–21:00 America/Chicago "
         "(`UA_CSI_CONVERGENCE_CRON_EXPR`, default `0 6-21 * * *`) and writes "
@@ -330,7 +333,7 @@ def proactive_artifact_digest_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str
         "`convergence_candidates` table — the legacy `proactive_convergence_events` "
         "table was DECOMMISSIONED 2026-05-28 (frozen), so the old probe that read it "
         "fired a permanent false-RED while the pipeline was healthy. If no candidate "
-        "has been created in 3h during active hours, the sync is failing or upstream "
+        "has been created in 5h during active hours, the sync is failing or upstream "
         "CSI signal has dried up. Quiet outside active hours (no overnight cron)."
     ),
     severity="warn",
@@ -346,7 +349,7 @@ def proactive_artifact_digest_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str
     },
 )
 def csi_convergence_sync_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Fire when no ``convergence_candidates`` row has appeared in ~3h (active hours).
+    """Fire when no ``convergence_candidates`` row has appeared in ~5h (active hours).
 
     Reads the newest ``created_at`` from the LIVE ``convergence_candidates``
     table (not the decommissioned ``proactive_convergence_events``) and flags
