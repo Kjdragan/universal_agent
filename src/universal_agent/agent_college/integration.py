@@ -6,7 +6,7 @@ from .common import AGENT_COLLEGE_NOTES_BLOCK
 
 logger = logging.getLogger(__name__)
 
-def setup_agent_college(memory_manager: MemoryManager):
+def setup_agent_college(memory_manager: MemoryManager) -> None:
     """
     Initializes the Agent College subsystems.
     1. Ensures the 'Sandbox' memory block exists.

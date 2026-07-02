@@ -38,7 +38,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 
-async def main():
+async def main() -> None:
     logger.info("🎓 Agent College Worker Starting...")
     
     # 1. Initialize Memory
