@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/services/todo_dispatch_service.py
   - src/universal_agent/services/execution_run_service.py
   - src/universal_agent/durable/db.py
-last_verified: 2026-06-22
+last_verified: 2026-07-02
 ---
 
 # Task Lifecycle End-to-End
