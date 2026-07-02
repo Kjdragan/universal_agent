@@ -106,7 +106,24 @@ def _count_papers_in_json(path: Path) -> Optional[int]:
     return None
 
 
-def evaluate_paper_to_podcast_run(workspace_dir: str | Path) -> PaperToPodcastRunResult:
+def _is_fresh(path: Path, run_started_at: Optional[float]) -> bool:
+    """True iff ``path`` was written by THIS run — mtime at/after the run start.
+
+    When ``run_started_at`` is None (caller didn't pass it), freshness is NOT
+    enforced (legacy behavior). 2s slack absorbs fs/rounding jitter.
+    """
+    if run_started_at is None:
+        return True
+    try:
+        return path.stat().st_mtime >= float(run_started_at) - 2
+    except OSError:
+        return False
+
+
+def evaluate_paper_to_podcast_run(
+    workspace_dir: str | Path,
+    run_started_at: Optional[float] = None,
+) -> PaperToPodcastRunResult:
     """Inspect a paper_to_podcast run\'s work products for success evidence.
 
     Pure: reads the filesystem under ``workspace_dir`` only. Never raises —
@@ -126,8 +143,12 @@ def evaluate_paper_to_podcast_run(workspace_dir: str | Path) -> PaperToPodcastRu
     failure_sentinel_path = work_products / _FAILURE_SENTINEL_FILENAME
 
     # Explicit failure signal from the skill (Phase A step 5) — the agent
-    # wrote FAILURE.txt declaring zero papers downloaded. Honour it.
-    if failure_sentinel_path.is_file():
+    # wrote FAILURE.txt declaring zero papers downloaded. Honour it ONLY if it
+    # is from THIS run: a STALE FAILURE.txt left by an earlier failed run must
+    # NOT flip a later successful run to failed. (2026-07-02: a morning
+    # auth-fail sentinel tripped the evening success run → a false
+    # "[ERROR] Autonomous Task Failed" email even though a real podcast landed.)
+    if failure_sentinel_path.is_file() and _is_fresh(failure_sentinel_path, run_started_at):
         try:
             detail = failure_sentinel_path.read_text(encoding="utf-8").strip()[:300]
         except OSError:
@@ -138,8 +159,14 @@ def evaluate_paper_to_podcast_run(workspace_dir: str | Path) -> PaperToPodcastRu
         )
         return PaperToPodcastRunResult(is_failure=True, reason=reason, usable_paper_count=0)
 
-    # Success evidence: manifest.json with >=1 paper.
-    manifest_count = _count_papers_in_json(manifest_path)
+    # Success evidence: manifest.json with >=1 paper — but only if THIS run
+    # wrote it (a stale manifest from a prior success must not vouch for a run
+    # that produced nothing this time).
+    manifest_count = (
+        _count_papers_in_json(manifest_path)
+        if _is_fresh(manifest_path, run_started_at)
+        else None
+    )
     if manifest_count is not None and manifest_count >= 1:
         return PaperToPodcastRunResult(
             is_failure=False,
@@ -147,8 +174,12 @@ def evaluate_paper_to_podcast_run(workspace_dir: str | Path) -> PaperToPodcastRu
             usable_paper_count=manifest_count,
         )
 
-    # Fallback success evidence: papers_metadata.json with >=1 paper.
-    meta_count = _count_papers_in_json(papers_meta_path)
+    # Fallback success evidence: papers_metadata.json with >=1 paper (fresh only).
+    meta_count = (
+        _count_papers_in_json(papers_meta_path)
+        if _is_fresh(papers_meta_path, run_started_at)
+        else None
+    )
     if meta_count is not None and meta_count >= 1:
         return PaperToPodcastRunResult(
             is_failure=False,
