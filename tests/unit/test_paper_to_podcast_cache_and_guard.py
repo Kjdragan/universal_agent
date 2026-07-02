@@ -16,7 +16,9 @@ Covers two fixes for the 2026-06-22 silent no-op:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import time
 
 import pytest
 
@@ -202,6 +204,52 @@ class TestEvaluatePaperToPodcastRun:
         result = evaluate_paper_to_podcast_run(tmp_path)
         assert result.is_failure is True
         assert "FAILURE.txt sentinel" in result.reason
+
+    def test_stale_failure_sentinel_ignored_when_run_produced_fresh_output(self, tmp_path):
+        """A FAILURE.txt left by an EARLIER run must NOT flip a later success.
+
+        Regression for the 2026-07-02 false "[ERROR] Autonomous Task Failed":
+        a morning auth-fail sentinel was still in the workspace and tripped the
+        evening SUCCESS run (which delivered a real podcast). With
+        ``run_started_at`` set, a sentinel older than the run start is ignored
+        and the fresh manifest wins.
+        """
+        wp = tmp_path / "work_products" / "paper_to_podcast"
+        wp.mkdir(parents=True)
+        run_start = time.time()
+        stale = wp / "FAILURE.txt"
+        stale.write_text("PARTIAL FAILURE (NotebookLM auth)", encoding="utf-8")
+        os.utime(stale, (run_start - 3600, run_start - 3600))  # 1h before run start
+        (wp / "manifest.json").write_text(
+            json.dumps({"papers": [{"id": "2512.11668"}]}), encoding="utf-8"
+        )  # fresh (written now, i.e. >= run_start)
+        result = evaluate_paper_to_podcast_run(tmp_path, run_started_at=run_start)
+        assert result.is_failure is False
+        assert "manifest.json" in result.reason
+
+    def test_fresh_failure_sentinel_still_honoured(self, tmp_path):
+        """A FAILURE.txt from THIS run is still an explicit failure signal."""
+        wp = tmp_path / "work_products" / "paper_to_podcast"
+        wp.mkdir(parents=True)
+        run_start = time.time() - 60
+        fresh = wp / "FAILURE.txt"
+        fresh.write_text("zero papers downloaded", encoding="utf-8")
+        os.utime(fresh, (run_start + 10, run_start + 10))  # after run start
+        result = evaluate_paper_to_podcast_run(tmp_path, run_started_at=run_start)
+        assert result.is_failure is True
+        assert "FAILURE.txt sentinel" in result.reason
+
+    def test_stale_manifest_does_not_vouch_for_a_produced_nothing_run(self, tmp_path):
+        """A stale manifest from a prior success must not pass a run that
+        produced no fresh output this time."""
+        wp = tmp_path / "work_products" / "paper_to_podcast"
+        wp.mkdir(parents=True)
+        run_start = time.time()
+        stale = wp / "manifest.json"
+        stale.write_text(json.dumps({"papers": [{"id": "x"}]}), encoding="utf-8")
+        os.utime(stale, (run_start - 3600, run_start - 3600))
+        result = evaluate_paper_to_podcast_run(tmp_path, run_started_at=run_start)
+        assert result.is_failure is True
 
     def test_manifest_one_paper_exactly_is_success(self, tmp_path):
         """The minimum bar: exactly 1 usable paper is a clean run."""

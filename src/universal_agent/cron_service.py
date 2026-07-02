@@ -2894,7 +2894,10 @@ class CronService:
                                                             evaluate_paper_to_podcast_run as _f_eval_p2p,
                                                         )
                                                         _f_p2p_result = _f_eval_p2p(
-                                                            job.workspace_dir
+                                                            job.workspace_dir,
+                                                            run_started_at=getattr(
+                                                                record, "started_at", None
+                                                            ),
                                                         )
                                                         if _f_p2p_result.is_failure:
                                                             logger.warning(
