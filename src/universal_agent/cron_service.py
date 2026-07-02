@@ -3497,7 +3497,11 @@ class CronService:
         real failure instead of a clean completed no-op.
 
         ``expected_artifacts`` shape: list[dict] of
-        ``{"path": <rel-to-workspace>, "min_bytes": int, "label": str}``.
+        ``{"path": <rel-to-workspace>, "min_bytes": int, "label": str,
+        "newer_than_run_start": bool}``. When ``newer_than_run_start`` is set,
+        the artifact must have been (re)written by THIS run (mtime at/after
+        ``record.started_at``) — a nightly job must produce TODAY's artifact,
+        not pass on a stale copy left in the workspace by a prior day's run.
 
         Only downgrades ``success`` -> ``error``. Never clobbers an existing
         ``error`` / ``cancelled`` / ``auth_required`` / ``retry_queued``. Returns
@@ -3521,6 +3525,11 @@ class CronService:
                     continue
                 min_bytes = int(spec.get("min_bytes", 1))
                 label = str(spec.get("label") or rel)
+                # When set, the artifact must have been (re)written by THIS run —
+                # mtime at/after the run start — so a stale copy from a prior
+                # day/run can't satisfy the check (the whole point of a nightly:
+                # verify TODAY's report, not last week's). 2s slack for jitter.
+                fresh_required = bool(spec.get("newer_than_run_start"))
                 candidate = (workspace / rel).resolve()
                 # Path-escape guard: declared paths are workspace-relative.
                 if candidate != workspace and workspace not in candidate.parents:
@@ -3528,6 +3537,12 @@ class CronService:
                     continue
                 if not candidate.is_file() or candidate.stat().st_size < min_bytes:
                     missing.append(f"{label} ({rel})")
+                elif fresh_required and record.started_at and (
+                    candidate.stat().st_mtime < float(record.started_at) - 2
+                ):
+                    missing.append(
+                        f"{label} (stale — not produced by this run; {rel})"
+                    )
             except Exception as spec_exc:  # noqa: BLE001
                 logger.debug(
                     "expected-artifact check skipped spec %r for job %s: %s",

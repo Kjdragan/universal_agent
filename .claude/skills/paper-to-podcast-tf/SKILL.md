@@ -246,6 +246,7 @@ Phase C — Download and Package (sequential, one at a time, via `nlm`):
 - Do NOT skip the manifest.json — it proves the pipeline completed.
 - Do NOT pass entire raw papers as text sources — use `nlm source add <nb> --file <pdf>` to upload the PDF directly.
 - Do NOT ship a synthesis report whose "synthesis" is just the per-paper summaries concatenated, or the abstracts restated. The integrating section must draw cross-paper trends, tensions, and new observations from the papers taken as one body of work — that synthesis IS the point of the report.
+- Do NOT merely announce the report ("Now I'll author the report…") and then end the turn. WRITE `report.html` with a tool call on THIS run, confirm it exists and is non-trivial, THEN write the manifest and send the email. The run is not complete until report.html (this run), manifest.json, and the email are all done — if turns run short, drop nice-to-haves (flashcards) and finish those three. A stale prior-day report.html left in the workspace does NOT count: the post-run guard requires it to be produced by this run.
 - Do NOT nest artifacts in a dated subdirectory (e.g. `work_products/paper_to_podcast/rag_20260701/`). Write them flat in `work_products/paper_to_podcast/` with the exact names below — the post-run artifact guard checks those exact paths.
 
 ## Output Structure

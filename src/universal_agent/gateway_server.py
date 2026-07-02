@@ -20211,7 +20211,8 @@ def _paper_to_podcast_command() -> str:
             "POLL THE AUDIO WITH A LONG, FOREGROUND, BLOCKING WAIT — orphaning a finished podcast is the single most common way this run fails. The `deep_dive` audio can take UP TO 40 MINUTES. Run the poll as ONE foreground (blocking) Bash call whose own shell loop runs `nlm studio status <nb> --json` then `sleep 30` between checks, with the Bash `timeout` set high enough to cover the whole wait (e.g. 2400000 ms). The loop runs INSIDE that one blocking call and the call does not return until the audio artifact is `completed`/`failed`. CRITICAL: do NOT launch the poll with `run_in_background: true`, and do NOT yield / end your turn to 'wait for a background notification' — this is an autonomous cron session, so the instant your turn ends the whole run is torn down and the audio is orphaned (it finishes on Google's side but nobody downloads it — exactly the 'no audio delivered' failure). DO NOT cap the poll under 30 minutes. DO NOT end the run while audio is still `in_progress` — if one blocking poll call returns with audio still `in_progress`, immediately issue ANOTHER blocking poll call in the foreground; never background it, never yield, never stop. Only once audio is `completed`, download all artifacts to work_products/paper_to_podcast/ via `nlm download audio|quiz|flashcards <nb> -o <path>` (the audio MUST be a real .m4a).",
             "If `nlm login --check` fails, the credentials are genuinely expired — STOP and report that desktop re-auth is needed. NEVER fabricate the audio podcast or write a text 'podcast transcript' as a substitute.",
             "Save ALL artifacts flat in work_products/paper_to_podcast/ with these exact names — do NOT create a dated subdirectory: podcast_audio.m4a, quiz.json, flashcards.json, report.html, manifest.json. The post-run artifact guard checks those exact paths.",
-            "AUTHOR A SYNTHESIS REPORT — REQUIRED, a headline deliverable alongside the audio. Write a self-contained, LIGHT-MODE HTML file to work_products/paper_to_podcast/report.html with THREE parts: (1) a header — topic, date, and the NotebookLM notebook link; (2) PER-PAPER SUMMARIES — one block per paper (title + authors) with a 3-5 sentence summary covering the problem it tackles, its method/approach, its key finding or result, and why it matters; (3) an INTEGRATING SYNTHESIS section — several substantive paragraphs that treat ALL the papers as ONE body of work: the cross-cutting themes and trends, where the papers reinforce or tension with one another, what the collection points to that no single paper states, and any NEW integrative observations, implications, or open questions that emerge only from reading them together. This synthesis is the point of the report — it must ADD cross-paper insight, NOT restate the abstracts. Light mode is mandatory (the operator reads on a dark-mode phone). Follow the skill's Phase C report spec exactly.",
+            "AUTHOR A SYNTHESIS REPORT — REQUIRED, a headline deliverable alongside the audio. Write a self-contained, LIGHT-MODE HTML file to work_products/paper_to_podcast/report.html with THREE parts: (1) a header — topic, date, and the NotebookLM notebook link; (2) PER-PAPER SUMMARIES — one block per paper (title + authors) with a 3-5 sentence summary covering the problem it tackles, its method/approach, its key finding or result, and why it matters; (3) an INTEGRATING SYNTHESIS section — several substantive paragraphs that treat ALL the papers as ONE body of work: the cross-cutting themes and trends, where the papers reinforce or tension with one another, what the collection points to that no single paper states, and any NEW integrative observations, implications, or open questions that emerge only from reading them together. This synthesis is the point of the report — it must ADD cross-paper insight, NOT restate the abstracts. Light mode is mandatory (the operator reads on a dark-mode phone). Follow the skill's Phase C report spec exactly. CRITICAL: actually WRITE report.html with a tool call on THIS run and then confirm the file exists and is non-trivial before continuing — do NOT merely state that you will write it and then end your turn (a run that announced the report but never wrote it, and passed on a stale prior-day report.html, is exactly the 2026-07-02 failure this guards against).",
+            "COMPLETENESS: the run is NOT done until, for TODAY's topic and THIS run, you have (a) written report.html, (b) written manifest.json, and (c) sent the email. If you are running low on turns, SKIP the flashcards and any nice-to-haves and prioritize finishing report.html + manifest + email — those are the required close-out. Do not end your turn after only downloading the media artifacts.",
             "Publish the report to the tailnet scratchpad and capture the URL (best-effort — if it fails, still send the email and note the report is in the run workspace): URL=$(/opt/universal_agent/scripts/publish_scratch.sh work_products/paper_to_podcast/report.html paper-to-podcast)",
             "Write a manifest.json listing all outputs INCLUDING report.html and the scratchpad URL (note any skipped flashcards as a gap; a missing audio podcast OR a missing report.html is a failure).",
             "Then compose a summary email with:",
@@ -20266,16 +20267,23 @@ def _ensure_paper_to_podcast_cron_job() -> Optional[dict[str, Any]]:
         # include a per-paper + integrating-synthesis report); wiring the audio
         # here too closes the latent gap this guard was originally built for
         # (the 2026-06-22 missing-podcast RCA).
+        # `newer_than_run_start` (2026-07-02): the gate must verify TODAY's
+        # deliverable, not a stale copy left by a prior run — the 2026-07-02
+        # run ended before writing report.html yet passed because a Jun-30
+        # report.html was still on disk. Requiring mtime >= run start makes the
+        # check day/run-specific.
         "expected_artifacts": [
             {
                 "path": "work_products/paper_to_podcast/podcast_audio.m4a",
                 "min_bytes": 100000,
                 "label": "Audio podcast (.m4a)",
+                "newer_than_run_start": True,
             },
             {
                 "path": "work_products/paper_to_podcast/report.html",
                 "min_bytes": 2000,
                 "label": "Synthesis report (per-paper summaries + integrating synthesis)",
+                "newer_than_run_start": True,
             },
         ],
     }

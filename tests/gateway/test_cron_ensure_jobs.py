@@ -444,6 +444,10 @@ def test_ensure_paper_to_podcast_requires_synthesis_report(monkeypatch):
         "the audio must also be gated (closes the 2026-06-22 missing-podcast gap)"
     )
     assert declared["work_products/paper_to_podcast/report.html"]["min_bytes"] > 0
+    # Day-specific: both deliverables must be verified as produced by THIS run,
+    # not satisfied by a stale copy from a prior day (2026-07-02 regression).
+    assert declared["work_products/paper_to_podcast/report.html"].get("newer_than_run_start") is True
+    assert declared["work_products/paper_to_podcast/podcast_audio.m4a"].get("newer_than_run_start") is True
 
 
 def test_ensure_morning_briefing_declares_ua_ops_token_required(monkeypatch):
