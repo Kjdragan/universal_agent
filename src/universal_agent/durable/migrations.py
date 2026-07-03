@@ -243,6 +243,22 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 """
 
 
+# SQLite column-type declarations passed to ``_add_column_if_missing`` during
+# additive migrations. Named (not inline) so each type and each sentinel
+# default has exactly one source of truth: these args are only exercised when
+# migrating a PRE-EXISTING database that predates the column, so a typo in an
+# inline literal would silently create a mistyped/mis-defaulted column with no
+# fresh-DB test catching it. Values are byte-identical to the inline literals
+# they replace.
+_COL_TEXT = "TEXT"
+_COL_INTEGER = "INTEGER"
+_COL_INTEGER_DEFAULT_ZERO = "INTEGER DEFAULT 0"
+_COL_INTEGER_DEFAULT_100 = "INTEGER DEFAULT 100"
+_COL_TEXT_DEFAULT_GATEWAY = "TEXT DEFAULT 'gateway'"
+_COL_TEXT_NOT_NULL_DEFAULT_REPLAY_EXACT = "TEXT NOT NULL DEFAULT 'REPLAY_EXACT'"
+_COL_TEXT_NOT_NULL_DEFAULT_BACKGROUND = "TEXT NOT NULL DEFAULT 'background'"
+
+
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return any(row[1] == column for row in rows)
@@ -302,50 +318,50 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             if cache_key in _SCHEMA_READY_PATHS:
                 return
     conn.executescript(SCHEMA_SQL)
-    _add_column_if_missing(conn, "runs", "workspace_dir", "TEXT")
-    _add_column_if_missing(conn, "runs", "run_kind", "TEXT")
-    _add_column_if_missing(conn, "runs", "trigger_source", "TEXT")
-    _add_column_if_missing(conn, "runs", "dedup_key", "TEXT")
-    _add_column_if_missing(conn, "runs", "run_policy", "TEXT")
-    _add_column_if_missing(conn, "runs", "interrupt_policy", "TEXT")
-    _add_column_if_missing(conn, "runs", "terminal_reason", "TEXT")
-    _add_column_if_missing(conn, "runs", "attempt_count", "INTEGER DEFAULT 0")
-    _add_column_if_missing(conn, "runs", "latest_attempt_id", "TEXT")
-    _add_column_if_missing(conn, "runs", "last_success_attempt_id", "TEXT")
-    _add_column_if_missing(conn, "runs", "canonical_attempt_id", "TEXT")
-    _add_column_if_missing(conn, "runs", "external_origin", "TEXT")
-    _add_column_if_missing(conn, "runs", "external_origin_id", "TEXT")
-    _add_column_if_missing(conn, "runs", "external_correlation_id", "TEXT")
-    _add_column_if_missing(conn, "runs", "run_mode", "TEXT")
-    _add_column_if_missing(conn, "runs", "job_path", "TEXT")
-    _add_column_if_missing(conn, "runs", "last_job_prompt", "TEXT")
-    _add_column_if_missing(conn, "runs", "provider_session_id", "TEXT")
-    _add_column_if_missing(conn, "runs", "provider_session_forked_from", "TEXT")
-    _add_column_if_missing(conn, "runs", "provider_session_last_seen_at", "TEXT")
-    _add_column_if_missing(conn, "runs", "parent_run_id", "TEXT")
-    _add_column_if_missing(conn, "runs", "lease_owner", "TEXT")
-    _add_column_if_missing(conn, "runs", "lease_expires_at", "TEXT")
-    _add_column_if_missing(conn, "runs", "last_heartbeat_at", "TEXT")
-    _add_column_if_missing(conn, "runs", "cancel_requested_at", "TEXT")
-    _add_column_if_missing(conn, "runs", "cancel_reason", "TEXT")
-    _add_column_if_missing(conn, "tool_calls", "raw_tool_name", "TEXT")
+    _add_column_if_missing(conn, "runs", "workspace_dir", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "run_kind", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "trigger_source", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "dedup_key", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "run_policy", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "interrupt_policy", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "terminal_reason", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "attempt_count", _COL_INTEGER_DEFAULT_ZERO)
+    _add_column_if_missing(conn, "runs", "latest_attempt_id", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "last_success_attempt_id", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "canonical_attempt_id", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "external_origin", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "external_origin_id", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "external_correlation_id", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "run_mode", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "job_path", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "last_job_prompt", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "provider_session_id", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "provider_session_forked_from", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "provider_session_last_seen_at", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "parent_run_id", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "lease_owner", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "lease_expires_at", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "last_heartbeat_at", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "cancel_requested_at", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "cancel_reason", _COL_TEXT)
+    _add_column_if_missing(conn, "tool_calls", "raw_tool_name", _COL_TEXT)
     _add_column_if_missing(
-        conn, "tool_calls", "replay_policy", "TEXT NOT NULL DEFAULT 'REPLAY_EXACT'"
+        conn, "tool_calls", "replay_policy", _COL_TEXT_NOT_NULL_DEFAULT_REPLAY_EXACT
     )
-    _add_column_if_missing(conn, "tool_calls", "replay_status", "TEXT")
-    _add_column_if_missing(conn, "tool_calls", "policy_matched", "INTEGER")
-    _add_column_if_missing(conn, "tool_calls", "policy_rule_id", "TEXT")
-    _add_column_if_missing(conn, "runs", "iteration_count", "INTEGER DEFAULT 0")
-    _add_column_if_missing(conn, "runs", "max_iterations", "INTEGER")
-    _add_column_if_missing(conn, "runs", "completion_promise", "TEXT")
-    _add_column_if_missing(conn, "runs", "total_tokens", "INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "tool_calls", "replay_status", _COL_TEXT)
+    _add_column_if_missing(conn, "tool_calls", "policy_matched", _COL_INTEGER)
+    _add_column_if_missing(conn, "tool_calls", "policy_rule_id", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "iteration_count", _COL_INTEGER_DEFAULT_ZERO)
+    _add_column_if_missing(conn, "runs", "max_iterations", _COL_INTEGER)
+    _add_column_if_missing(conn, "runs", "completion_promise", _COL_TEXT)
+    _add_column_if_missing(conn, "runs", "total_tokens", _COL_INTEGER_DEFAULT_ZERO)
     # Corpus cache for sub-agent context restoration
-    _add_column_if_missing(conn, "checkpoints", "corpus_data", "TEXT")
-    _add_column_if_missing(conn, "vp_missions", "mission_type", "TEXT")
-    _add_column_if_missing(conn, "vp_missions", "payload_json", "TEXT")
-    _add_column_if_missing(conn, "vp_missions", "priority", "INTEGER DEFAULT 100")
+    _add_column_if_missing(conn, "checkpoints", "corpus_data", _COL_TEXT)
+    _add_column_if_missing(conn, "vp_missions", "mission_type", _COL_TEXT)
+    _add_column_if_missing(conn, "vp_missions", "payload_json", _COL_TEXT)
+    _add_column_if_missing(conn, "vp_missions", "priority", _COL_INTEGER_DEFAULT_100)
     _add_column_if_missing(
-        conn, "vp_missions", "priority_tier", "TEXT NOT NULL DEFAULT 'background'"
+        conn, "vp_missions", "priority_tier", _COL_TEXT_NOT_NULL_DEFAULT_BACKGROUND
     )
     _backfill_vp_mission_priority_tier(conn)
     # Tier-aware indexes — must run AFTER priority_tier exists on the (possibly
@@ -358,15 +374,19 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_vp_backlog_history_recent "
         "ON vp_mission_backlog_history(measured_at DESC, vp_id, priority_tier)"
     )
-    _add_column_if_missing(conn, "vp_missions", "worker_id", "TEXT")
-    _add_column_if_missing(conn, "vp_missions", "claim_expires_at", "TEXT")
-    _add_column_if_missing(conn, "vp_missions", "cancel_requested", "INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "vp_missions", "worker_id", _COL_TEXT)
+    _add_column_if_missing(conn, "vp_missions", "claim_expires_at", _COL_TEXT)
+    _add_column_if_missing(
+        conn, "vp_missions", "cancel_requested", _COL_INTEGER_DEFAULT_ZERO
+    )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_vp_missions_vp_claim ON vp_missions(vp_id, claim_expires_at)"
     )
     # Phase 3a: Redis→SQLite bridge columns
-    _add_column_if_missing(conn, "vp_missions", "source", "TEXT DEFAULT 'gateway'")
-    _add_column_if_missing(conn, "vp_missions", "result_published", "INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "vp_missions", "source", _COL_TEXT_DEFAULT_GATEWAY)
+    _add_column_if_missing(
+        conn, "vp_missions", "result_published", _COL_INTEGER_DEFAULT_ZERO
+    )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_vp_missions_bridge_results "
         "ON vp_missions(source, result_published, status)"
