@@ -12,19 +12,47 @@ Properties:
   demo completion.
 
 The explainer video is rendered by demo_factory/ClearSpring as
-``<workspace>/video/<demo-id>-explainer.mp4`` — but only when ClearSpring + its
-toolchain are present (today desktop-only). So the video link is best-effort:
-present when the mp4 exists (then published to the tailnet scratchpad for a playable
-URL), otherwise the email links the exhibit/workspace and notes the video is pending.
+``<workspace>/video/<demo-id>-explainer.mp4``. The video line is state-aware at
+compose time, not a static "pending" placeholder: if the mp4 already exists it's
+published to the tailnet scratchpad and linked; if it doesn't exist but the
+ClearSpring toolchain is present on this host, a render may still be in flight
+(the email says so and names the expected path); otherwise the email says plainly
+that ClearSpring isn't installed here, so no render will happen on this host.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _known_video_path(workspace: Path, demo_id: str) -> Path:
+    """The deterministic path demo_factory/ClearSpring writes the explainer to."""
+    return workspace / "video" / f"{demo_id}-explainer.mp4"
+
+
+def _clearspring_builder_present() -> bool:
+    """Best-effort: is the ClearSpring video toolchain installed on this host?
+
+    Checked via ``CLEARSPRING_DIR`` (if set) or the default checkout location,
+    looking for its build script.
+    """
+    candidates = []
+    env_dir = os.environ.get("CLEARSPRING_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir))
+    candidates.append(Path.home() / "lrepos" / "clearspring-studio")
+    for base in candidates:
+        try:
+            if (base / "scripts" / "build_demo_video.py").is_file():
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _find_explainer_video(workspace: Path) -> Optional[Path]:
@@ -73,8 +101,21 @@ def compose_demo_built_email(
     exhibit_url: str,
     workspace_dir: str,
     review_required: bool,
+    video_status: str = "",
+    video_local_path: str = "",
 ) -> tuple[str, str, str]:
-    """Pure: build (subject, text, html). No I/O — unit-testable."""
+    """Pure: build (subject, text, html). No I/O — unit-testable.
+
+    ``video_status``/``video_local_path`` are pre-computed by the caller (which
+    does the filesystem/env I/O) and only used here for wording when
+    ``video_url`` is empty:
+    - ``"found_unpublished"``: the mp4 exists locally (at ``video_local_path``)
+      but publishing it failed — mention the local path.
+    - ``"rendering"``: no mp4 yet, but the ClearSpring toolchain is present on
+      this host — a render may be in flight; name the expected path.
+    - anything else (default ``""``): ClearSpring isn't installed on this
+      host, so no render will happen here.
+    """
     review_note = (
         "Curated demo — awaiting your review." if review_required
         else "Direct demo — auto-finalized on the endpoint check."
@@ -88,11 +129,27 @@ def compose_demo_built_email(
             'style="background:#1f6f50;color:#fff;padding:10px 18px;border-radius:8px;'
             'text-decoration:none;font-weight:600">▶ Watch the explainer video</a></p>'
         )
-    else:
-        video_text = "Explainer video: not rendered on this host yet (ClearSpring pending).\n"
+    elif video_status == "found_unpublished":
+        video_text = (
+            f"Explainer video: rendered but not yet published — {video_local_path}\n"
+        )
         video_html = (
-            '<p style="margin:16px 0;color:#9a5b00">Explainer video: not rendered on this '
-            'host yet (ClearSpring video toolchain pending on the VPS).</p>'
+            '<p style="margin:16px 0;color:#9a5b00">Explainer video: rendered but not yet '
+            f'published — <code>{video_local_path}</code>.</p>'
+        )
+    elif video_status == "rendering":
+        video_text = (
+            f"Explainer video: rendering in background — check {video_local_path} shortly.\n"
+        )
+        video_html = (
+            '<p style="margin:16px 0;color:#9a5b00">Explainer video: rendering in background '
+            f'— check <code>{video_local_path}</code> shortly.</p>'
+        )
+    else:
+        video_text = "Explainer video: not rendered — ClearSpring toolchain not installed on this host.\n"
+        video_html = (
+            '<p style="margin:16px 0;color:#9a5b00">Explainer video: not rendered — '
+            'ClearSpring toolchain not installed on this host.</p>'
         )
 
     exhibit_text = f"Exhibit: {exhibit_url}\n" if exhibit_url else ""
@@ -197,10 +254,21 @@ async def notify_demo_built(
         result["video_url"] = video_url
         result["exhibit_url"] = exhibit_url
 
+        video_status = ""
+        video_local_path = ""
+        if not video_url:
+            if video is not None:
+                video_status = "found_unpublished"
+                video_local_path = str(video)
+            elif _clearspring_builder_present():
+                video_status = "rendering"
+                video_local_path = str(_known_video_path(ws, demo_id))
+
         subject, text, html = compose_demo_built_email(
             title=title or demo_id, capability=capability, build_engine=build_engine,
             video_url=video_url, exhibit_url=exhibit_url, workspace_dir=str(workspace_dir),
             review_required=review_required,
+            video_status=video_status, video_local_path=video_local_path,
         )
 
         from universal_agent.services.agentmail_service import AgentMailService

@@ -337,7 +337,10 @@ def _build_argv(cand: dict[str, Any], *, root: Path) -> list[str]:
     seed_url = str(cand.get("video_url") or "").strip()
     if seed_url:
         argv += ["--seed-url", seed_url]
-    argv += ["--endpoint-required", "any", "--promote", "--skill-tier", "library"]
+    argv += [
+        "--endpoint-required", "any", "--promote", "--skill-tier", "library",
+        "--cody-mode", "hybrid", "--video",
+    ]
     return argv
 
 
