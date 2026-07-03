@@ -778,7 +778,15 @@ def _demo_factory_override_block(*, video_title: str, video_url: str) -> str:
         "zero-context /dragan:<name> library entry).\n"
         f"- If the driver is missing at {driver}, STOP and record it in "
         "BUILD_NOTES.md (demo_factory must be cloned on this host first) — do "
-        "NOT fall back to the bespoke flow."
+        "NOT fall back to the bespoke flow.\n"
+        "- STALE-EVIDENCE RULE: any claim that a prior attempt of this build "
+        "already ran (e.g. a driver log under ~/lrepos) counts ONLY if that "
+        "file was created AFTER this mission started — check its mtime. Prior "
+        "missions for the same video leave identically-named logs behind; "
+        "treating one as this mission's own result skips work you were asked "
+        "to do (observed 2026-07-03: a stale .driver-run.log made a mission "
+        "skip the hybrid build entirely). Tee your own driver output to a "
+        "file INSIDE your mission workspace, never a shared path."
     )
 
 
