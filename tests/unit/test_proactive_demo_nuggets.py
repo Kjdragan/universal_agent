@@ -151,6 +151,10 @@ def test_build_argv_runs_under_demo_factory_uv_venv(monkeypatch):
     assert argv[argv.index("--slug") + 1] == "proactive-foo-bar"
     assert argv[argv.index("--workspace-root") + 1] == "/home/ua/lrepos"
     assert "--promote" in argv and "--skill-tier" in argv
+    # operator decision 2026-07-02: proactive builds default to hybrid
+    # (build on Anthropic-Max, verify/runtime on ZAI) and render the video
+    assert argv[argv.index("--cody-mode") + 1] == "hybrid"
+    assert "--video" in argv
 
 
 # ── FIX 2: built_today counted over the America/Chicago day, disjoint sets ─────

@@ -63,10 +63,14 @@ def test_override_present_when_flag_on(monkeypatch):
     assert "--endpoint-required any" in desc
     assert "--promote" in desc
     assert "--skill-tier library" in desc
-    # Cody's proactive builds default to the ZAI/GLM coding-plan proxy (operator
-    # decision) for both the build and the verify/runtime phases — the operator's
-    # own manual /demo usage is untouched (that path never sets --cody-mode).
-    assert "--cody-mode zai" in desc
+    # Cody's proactive builds default to hybrid mode (operator decision
+    # 2026-07-02): the build (/goal loop) runs on Anthropic-Max for
+    # higher-quality code, verify/runtime inference runs on ZAI/GLM for cheap
+    # demo inference — the operator's own manual /demo usage is untouched
+    # (that path never sets --cody-mode). --video fires the ClearSpring
+    # explainer render (degrades harmlessly if the toolchain is absent).
+    assert "--cody-mode hybrid" in desc
+    assert "--video" in desc
 
 
 def test_override_absent_when_flag_off(monkeypatch):
