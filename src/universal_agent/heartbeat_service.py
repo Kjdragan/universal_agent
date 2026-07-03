@@ -2410,6 +2410,14 @@ class HeartbeatService:
                             if (_prune_res.get("items") or 0) > 0:
                                 logger.info("Periodic background prune completed: %s", _prune_res)
                             task_hub._last_pruned_timestamp = time.time()
+                            # Guarded VACUUM: only fires when UA_TASK_VACUUM_ENABLED is set and
+                            # the throttle/window lets it through. Returns vacuumed=False otherwise.
+                            try:
+                                _vac_res = task_hub.vacuum_activity_db()
+                                if _vac_res.get("vacuumed"):
+                                    logger.info("Periodic activity-db VACUUM completed: %s", _vac_res)
+                            except Exception as _vac_err:
+                                logger.error("Activity-db VACUUM failed: %s", _vac_err)
                         except Exception as _prune_err:
                             logger.error("Task Hub background pruning failed: %s", _prune_err)
 

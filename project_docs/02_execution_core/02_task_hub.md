@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/services/worker_exit_classifier.py
   - src/universal_agent/services/cron_task_hub_link.py
   - src/universal_agent/vp/clients/claude_cli_client.py
-last_verified: 2026-06-21
+last_verified: 2026-07-03
 ---
 
 # Task Hub & Dispatch
@@ -545,11 +545,64 @@ into Task Hub rather than running invisibly. The canonical helpers:
 5. **Protocol-violation routing** — `park_task_for_protocol_violation`.
 6. **Standard recovery** — the B.1 unstick verbs, not hand-rolled SQL reapers.
 
+## Maintenance: pruning & VACUUM
+
+`activity_state.db` grows monotonically: SQLite ``DELETE`` marks pages free
+internally but never returns them to the OS, so a multi-GB Task Hub DB only
+shrinks after an explicit ``VACUUM``. Two functions handle this, both wired into
+the daily prune block of the Simone heartbeat tick (`heartbeat_service.py`):
+
+* **`task_hub.py::prune_settled_tasks`** — deletes terminal-status rows older
+  than their retention windows, plus their child rows, then sweeps orphaned
+  run history.
+  * `completed` / `parked` — pruned after `retention_days` (default 21; the
+    heartbeat calls it with 21).
+  * `cancelled` — pruned after `cancelled_retention_days` (default 30, env
+    `UA_TASK_PRUNE_CANCELLED_DAYS`); pass `0` to opt out. Before this change the
+    pruner skipped `cancelled` entirely, so cancelled rows accumulated forever.
+  * `task_hub_evaluations` and `task_hub_assignments` for the pruned tasks are
+    removed first (cleanup by task_id; there is no SQL foreign key here).
+  * **Orphaned `task_hub_runs`** — after the task deletes, any run whose
+    `task_id` no longer exists is removed
+    (`DELETE FROM task_hub_runs WHERE task_id NOT IN (SELECT task_id FROM task_hub_items)`).
+    This catches runs that belonged to tasks just pruned *and* historically
+    orphaned rows.
+  * Returns `{items, assignments, evaluations, runs}` counts.
+
+* **`task_hub.py::vacuum_activity_db`** — a heavily-guarded ``VACUUM`` that
+  actually returns freed pages to the OS. ``VACUUM`` rewrites the whole file
+  under an exclusive lock, so it is **off by default** and gated by:
+  * `UA_TASK_VACUUM_ENABLED` (default off) — must be truthy to run at all.
+  * `UA_TASK_VACUUM_MIN_INTERVAL_HOURS` (default 24) — at most once per N
+    hours; the last-run timestamp persists in `task_hub_settings` key
+    `activity_db_last_vacuum` so the throttle survives restarts.
+  * `UA_TASK_VACUUM_WINDOW` (default unset) — optional `"<start>-<end>"` local
+    hour range (e.g. `22-6`) restricting VACUUM to the dormant/low-write
+    window. Unset = any time; the throttle alone gates it.
+  * Runs on a standalone `connect_runtime_db` connection (`isolation_level=None`
+    → autocommit) because ``VACUUM`` cannot execute inside a transaction; a
+    best-effort `PRAGMA wal_checkpoint(TRUNCATE)` first folds WAL pages in.
+  * Logs before/after file size and never raises on a locked DB (returns
+    `vacuumed=False, reason="locked"`) so the heartbeat tick is undisturbed.
+
+`connect_runtime_db` sets `PRAGMA auto_vacuum=INCREMENTAL`, so a lighter
+`PRAGMA incremental_vacuum` pass is a possible future optimization; the full
+``VACUUM`` here is the thorough reclaim.
+
 ## Gotchas
 
 - **DB path:** canonical store is `activity_state.db` via
   `get_activity_db_path()`, **not** `task_hub.db`. (Multiple prior handoffs got
   this wrong.)
+- **Pruning covers `cancelled`; VACUUM is a separate, gated step.**
+  `task_hub.py::prune_settled_tasks` prunes `cancelled` rows (30d default,
+  `UA_TASK_PRUNE_CANCELLED_DAYS`) alongside `completed`/`parked` (21d) and
+  sweeps orphaned `task_hub_runs`. But pruning alone does **not** shrink
+  `activity_state.db` — SQLite `DELETE` never returns pages to the OS. The
+  actual file reclamation needs `task_hub.py::vacuum_activity_db`, which is
+  OFF by default (`UA_TASK_VACUUM_ENABLED`). Enable it in prod only with an
+  off-hours `UA_TASK_VACUUM_WINDOW`, since `VACUUM` takes an exclusive lock
+  and rewrites the whole file.
 - **Stale-task parking is OFF by default.** `UA_TASK_STALE_ENABLED` defaults to
   `0`; only the *assignment* stale-release sweep
   (`UA_DISPATCH_STALE_SWEEP_ENABLED`) defaults ON in prod. Don't conflate the
@@ -605,3 +658,7 @@ into Task Hub rather than running invisibly. The canonical helpers:
 | `UA_TASK_HUB_TODO_MAX_RETRIES` | 3 | ToDo retry budget |
 | `UA_TASK_DEFAULT_MAX_RUNTIME_SECONDS` | 7200 | Per-task wall-clock timeout fallback |
 | `UA_CODY_DEFAULT_MODE` | (see Cody docs) | Default Cody execution mode when `cody_mode` is NULL |
+| `UA_TASK_PRUNE_CANCELLED_DAYS` | 30 | Cancelled-task retention before pruning (0 = skip cancelled) |
+| `UA_TASK_VACUUM_ENABLED` | `0` (off) | Gate the periodic `activity_state.db` VACUUM |
+| `UA_TASK_VACUUM_MIN_INTERVAL_HOURS` | 24 | Max VACUUM frequency (throttle) |
+| `UA_TASK_VACUUM_WINDOW` | unset | Optional off-hours local hour range, e.g. `22-6` |

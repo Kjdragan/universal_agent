@@ -8,7 +8,7 @@ import os
 import re
 import sqlite3
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 import uuid
 
 from universal_agent.feature_flags import task_hub_missions_enabled
@@ -4532,63 +4532,283 @@ def prune_settled_tasks(
     conn: sqlite3.Connection,
     *,
     retention_days: int = 21,
+    cancelled_retention_days: Optional[int] = None,
 ) -> dict[str, int]:
-    """Delete completed/parked tasks older than *retention_days* and their related rows."""
+    """Delete settled tasks older than their retention windows and related rows.
+
+    Terminal statuses are pruned on independent schedules so ``cancelled`` rows
+    (often retained longer for audit) age out separately from
+    ``completed``/``parked``:
+
+    * ``completed`` / ``parked`` — pruned after ``retention_days`` (default 21).
+    * ``cancelled`` — pruned after ``cancelled_retention_days`` (default 30, env
+      ``UA_TASK_PRUNE_CANCELLED_DAYS``). Pass ``0`` to skip cancelled pruning.
+
+    Related ``task_hub_evaluations`` and ``task_hub_assignments`` rows are
+    removed before the task rows. After the task deletes, orphaned
+    ``task_hub_runs`` rows (whose parent task no longer exists — including runs
+    belonging to tasks pruned in this same pass) are removed. SQLite ``DELETE``
+    never returns pages to the OS, so pair this with :func:`vacuum_activity_db`
+    (wired in the heartbeat) to actually shrink ``activity_state.db``.
+    """
     ensure_schema(conn)
     retention_days = max(1, int(retention_days))
+    if cancelled_retention_days is None:
+        cancelled_retention_days = _safe_int(os.getenv("UA_TASK_PRUNE_CANCELLED_DAYS"), 30)
+    cancelled_retention_days = max(0, int(cancelled_retention_days))
 
-    # 1. Delete evaluations associated with eligible settled tasks
-    c_eval = conn.execute(
-        """
-        DELETE FROM task_hub_evaluations
-        WHERE task_id IN (
-            SELECT task_id FROM task_hub_items
-            WHERE status IN (?, ?)
+    deleted_evaluations = 0
+    deleted_assignments = 0
+    deleted_items = 0
+
+    # Each (statuses, days) group is pruned independently so cancelled can age
+    # out on its own (longer) schedule than completed/parked.
+    prune_groups = [((TASK_STATUS_COMPLETED, TASK_STATUS_PARKED), retention_days)]
+    if cancelled_retention_days > 0:
+        prune_groups.append(((TASK_STATUS_CANCELLED,), cancelled_retention_days))
+
+    for statuses, days in prune_groups:
+        placeholders = ",".join("?" for _ in statuses)
+        cutoff = f"-{days} days"
+        deleted_evaluations += conn.execute(
+            f"""
+            DELETE FROM task_hub_evaluations
+            WHERE task_id IN (
+                SELECT task_id FROM task_hub_items
+                WHERE status IN ({placeholders})
+                AND updated_at < datetime('now', ?)
+            )
+            """,
+            (*statuses, cutoff),
+        ).rowcount or 0
+        deleted_assignments += conn.execute(
+            f"""
+            DELETE FROM task_hub_assignments
+            WHERE task_id IN (
+                SELECT task_id FROM task_hub_items
+                WHERE status IN ({placeholders})
+                AND updated_at < datetime('now', ?)
+            )
+            """,
+            (*statuses, cutoff),
+        ).rowcount or 0
+        deleted_items += conn.execute(
+            f"""
+            DELETE FROM task_hub_items
+            WHERE status IN ({placeholders})
             AND updated_at < datetime('now', ?)
-        )
-        """,
-        (TASK_STATUS_COMPLETED, "parked", f"-{retention_days} days"),
-    )
-    deleted_evaluations = c_eval.rowcount or 0
+            """,
+            (*statuses, cutoff),
+        ).rowcount or 0
 
-    # 2. Delete assignments associated with eligible settled tasks
-    c_assign = conn.execute(
+    # Fold in orphaned task_hub_runs: any run whose parent task no longer
+    # exists. Runs belonging to tasks pruned above became orphans in the same
+    # pass; this also sweeps historically orphaned rows.
+    deleted_runs = conn.execute(
         """
-        DELETE FROM task_hub_assignments
-        WHERE task_id IN (
-            SELECT task_id FROM task_hub_items
-            WHERE status IN (?, ?)
-            AND updated_at < datetime('now', ?)
-        )
-        """,
-        (TASK_STATUS_COMPLETED, "parked", f"-{retention_days} days"),
-    )
-    deleted_assignments = c_assign.rowcount or 0
-
-    # 3. Delete the tasks themselves
-    c_items = conn.execute(
+        DELETE FROM task_hub_runs
+        WHERE task_id NOT IN (SELECT task_id FROM task_hub_items)
         """
-        DELETE FROM task_hub_items
-        WHERE status IN (?, ?)
-        AND updated_at < datetime('now', ?)
-        """,
-        (TASK_STATUS_COMPLETED, "parked", f"-{retention_days} days"),
-    )
-    deleted_items = c_items.rowcount or 0
+    ).rowcount or 0
 
     conn.commit()
-    
-    if deleted_items > 0:
+
+    if deleted_items > 0 or deleted_runs > 0:
         logger.info(
-            "Pruned %d tasks, %d assignments, %d evaluations older than %d days.",
-            deleted_items, deleted_assignments, deleted_evaluations, retention_days
+            "Pruned %d tasks, %d assignments, %d evaluations, %d orphaned runs "
+            "(completed/parked > %dd, cancelled > %dd).",
+            deleted_items, deleted_assignments, deleted_evaluations, deleted_runs,
+            retention_days, cancelled_retention_days,
         )
 
     return {
         "items": deleted_items,
         "assignments": deleted_assignments,
         "evaluations": deleted_evaluations,
+        "runs": deleted_runs,
     }
+
+
+# task_hub_settings key persisting the last successful activity-db VACUUM so
+# the throttle survives process restarts.
+_VACUUM_SETTING_KEY = "activity_db_last_vacuum"
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, "")).strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _fmt_bytes(n: int) -> str:
+    """Human-readable byte count for log lines."""
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024.0 or unit == "TB":
+            return f"{int(n)} B" if unit == "B" else f"{size:.2f} {unit}"
+        size /= 1024.0
+    return f"{int(n)} B"
+
+
+def _db_file_size(db_path: str) -> int:
+    try:
+        return os.path.getsize(db_path)
+    except OSError:
+        return 0
+
+
+def _default_vacuum_window_check() -> Callable[[], bool]:
+    """Build the default off-hours window predicate from ``UA_TASK_VACUUM_WINDOW``.
+
+    The env value is ``"<start>-<end>"`` in 24h local hours, e.g. ``"22-6"``
+    allows VACUUM only between 22:00 and 06:00 local (the dormant window with
+    the fewest contending writes). Unset or malformed → always-True, so the
+    throttle alone gates it and tests stay deterministic.
+    """
+    raw = str(os.getenv("UA_TASK_VACUUM_WINDOW", "")).strip()
+    if not raw or "-" not in raw:
+        return lambda: True
+    try:
+        start_s, end_s = raw.split("-", 1)
+        start_h = int(start_s.strip()) % 24
+        end_h = int(end_s.strip()) % 24
+    except ValueError:
+        return lambda: True
+
+    def _in_window() -> bool:
+        hour = datetime.now().hour
+        if start_h <= end_h:
+            return start_h <= hour < end_h
+        # Wraps midnight (e.g. 22-6).
+        return hour >= start_h or hour < end_h
+
+    return _in_window
+
+
+def vacuum_activity_db(
+    db_path: Optional[str] = None,
+    *,
+    enabled: Optional[bool] = None,
+    min_interval_hours: Optional[float] = None,
+    within_window: Optional[Callable[[], bool]] = None,
+    now_iso: Optional[str] = None,
+) -> dict[str, Any]:
+    """Run a guarded ``VACUUM`` on ``activity_state.db`` to return freed pages to the OS.
+
+    SQLite ``DELETE`` (used by :func:`prune_settled_tasks`) marks pages free
+    internally but never truncates the file, so a multi-GB ``activity_state.db``
+    only shrinks after a ``VACUUM``. ``VACUUM`` rewrites the whole file under an
+    exclusive lock, so it is heavily guarded:
+
+    * **Env gate** — off unless ``UA_TASK_VACUUM_ENABLED`` is truthy.
+    * **Throttle** — at most once per ``UA_TASK_VACUUM_MIN_INTERVAL_HOURS``
+      (default 24h). The last-run timestamp persists in ``task_hub_settings``
+      (key ``activity_db_last_vacuum``) so it survives restarts.
+    * **Off-hours window** — optional; ``UA_TASK_VACUUM_WINDOW`` (e.g.
+      ``"22-6"``) restricts the run to that local hour range. Unset = any time.
+    * **Autocommit connection** — ``VACUUM`` cannot run inside a transaction,
+      so it runs on a fresh ``connect_runtime_db`` (``isolation_level=None``),
+      and a best-effort ``wal_checkpoint(TRUNCATE)`` first folds WAL pages in.
+
+    Returns a dict (``vacuumed``/``reason``/``before_bytes``/``after_bytes``/
+    ``reclaimed_bytes``). Never raises on a locked/failed VACUUM — logs and
+    returns ``vacuumed=False`` so the heartbeat tick is not disturbed.
+    """
+    from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+
+    if db_path is None:
+        db_path = get_activity_db_path()
+    if enabled is None:
+        enabled = _env_bool("UA_TASK_VACUUM_ENABLED", False)
+    if min_interval_hours is None:
+        min_interval_hours = max(
+            1.0, _safe_float(os.getenv("UA_TASK_VACUUM_MIN_INTERVAL_HOURS"), 24.0)
+        )
+
+    result: dict[str, Any] = {"db_path": db_path, "enabled": enabled}
+    if not enabled:
+        result["vacuumed"] = False
+        result["reason"] = "disabled"
+        return result
+
+    if within_window is None:
+        within_window = _default_vacuum_window_check()
+    if not within_window():
+        result["vacuumed"] = False
+        result["reason"] = "outside_window"
+        return result
+
+    # Throttle: read last successful VACUUM timestamp from task_hub_settings.
+    stamp_conn = connect_runtime_db(db_path)
+    try:
+        last = _get_setting(stamp_conn, _VACUUM_SETTING_KEY).get("last_vacuum_at")
+    finally:
+        stamp_conn.close()
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+            now_dt = datetime.fromisoformat(
+                (now_iso or _now_iso()).replace("Z", "+00:00")
+            )
+            if now_dt - last_dt < timedelta(hours=min_interval_hours):
+                result["vacuumed"] = False
+                result["reason"] = "throttled"
+                result["last_vacuum_at"] = last
+                return result
+        except (ValueError, TypeError):
+            logger.warning(
+                "Unparseable %s stamp %r; proceeding.", _VACUUM_SETTING_KEY, last
+            )
+
+    before_bytes = _db_file_size(db_path)
+    try:
+        vconn = connect_runtime_db(db_path)
+        try:
+            # Fold WAL pages into the main file first so VACUUM can compact them.
+            try:
+                vconn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError:
+                pass
+            vconn.execute("VACUUM")
+        finally:
+            vconn.close()
+    except sqlite3.OperationalError as _vac_err:
+        logger.warning("VACUUM of %s failed (likely locked): %s", db_path, _vac_err)
+        result["vacuumed"] = False
+        result["reason"] = "locked"
+        result["error"] = str(_vac_err)
+        return result
+
+    after_bytes = _db_file_size(db_path)
+    reclaimed = max(0, before_bytes - after_bytes)
+
+    stamp_conn = connect_runtime_db(db_path)
+    try:
+        _set_setting(
+            stamp_conn, _VACUUM_SETTING_KEY, {"last_vacuum_at": now_iso or _now_iso()}
+        )
+    finally:
+        stamp_conn.close()
+
+    logger.info(
+        "VACUUM of %s reclaimed %s (before=%s, after=%s).",
+        db_path,
+        _fmt_bytes(reclaimed),
+        _fmt_bytes(before_bytes),
+        _fmt_bytes(after_bytes),
+    )
+    result.update(
+        {
+            "vacuumed": True,
+            "before_bytes": before_bytes,
+            "after_bytes": after_bytes,
+            "reclaimed_bytes": reclaimed,
+        }
+    )
+    return result
 
 
 def release_stale_assignments(
