@@ -63,6 +63,29 @@ def test_load_watchlist_falls_back_on_wrong_shape(
     assert svc._load_watchlist() == svc.DEFAULT_TOPICS
 
 
+# ─── _cli_env (secret isolation for the third-party binary) ─────────────
+
+
+def test_cli_env_excludes_process_secrets(monkeypatch) -> None:
+    """The third-party CLI must never inherit runtime secrets from os.environ."""
+    monkeypatch.setenv("ZAI_API_KEY", "secret-should-not-leak")
+    monkeypatch.setenv("INFISICAL_CLIENT_SECRET", "also-secret")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-should-not-leak")
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    env = svc._cli_env()
+
+    # No secret-bearing var leaks through.
+    assert "ZAI_API_KEY" not in env
+    assert "INFISICAL_CLIENT_SECRET" not in env
+    assert "GITHUB_TOKEN" not in env
+    # Only the allow-listed operational vars + explicit overrides are present.
+    assert env["PATH"] == "/usr/bin"
+    assert env["HOME"] == str(svc.CLI_HOME)
+    assert env["HACKERNEWS_NO_COLOR"] == "1"
+    assert set(env) <= set(svc._CLI_ENV_ALLOWLIST) | {"HOME", "HACKERNEWS_NO_COLOR"}
+
+
 # ─── _run_cli ──────────────────────────────────────────────────────────
 
 
