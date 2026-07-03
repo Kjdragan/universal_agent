@@ -84,8 +84,12 @@ erDiagram
 - **`task_hub_dispatch_queue`** — a **snapshot** of one ranking pass, keyed by
   `(queue_build_id, task_id)`. Holds `rank`, `eligible`, `skip_reason`. Fully
   rebuilt (`DELETE` + reinsert) on each `rebuild_dispatch_queue`.
-- **`task_hub_evaluations`** — append-only audit of every scoring/claim/action
-  decision (`decision` ∈ defer/seize/reject/complete/...).
+- **`task_hub_evaluations`** — audit of every scoring/claim/action decision
+  (`decision` ∈ defer/seize/reject/complete/...). Redundant consecutive
+  `defer` rows are collapsed by `task_hub.py::_record_evaluation` (see
+  "Dispatch queue rebuild"): a defer that repeats the prior `(decision, reason)`
+  for the same task is skipped, so a task re-deferred on every rebuild leaves
+  one row, not thousands.
 - **`task_hub_comments`, `task_hub_question_queue`, `task_hub_workstreams`,
   `task_hub_settings`, `task_hub_notifications`, `task_hub_delivery_evidence`,
   `cody_token_usage`** — supporting tables (comments, operator Q&A, multi-task
@@ -176,8 +180,16 @@ memory signals, clamped to `0.35–0.95`.
      before the agent's block commits).
    - CSI tasks are only eligible when their inferred routing state is
      `agent_actionable`.
-4. Records a `defer` evaluation per scored task (skipping the always-deferred
-   statuses to avoid evaluation-row spam).
+4. Records a `defer` evaluation per scored task via
+   `task_hub.py::_record_evaluation` (skipping the always-deferred statuses to
+   avoid evaluation-row spam). `_record_evaluation` further collapses a defer
+   that repeats the most recent evaluation for the same task (same decision AND
+   same reason) — so rebuilding the queue N times for a task that stays put
+   writes one row, not N. A defer whose reason changes, or any non-defer
+   decision (`seize`/`reject`/`review`/…), always persists. This dedup is the
+   write-rate fix at the source; without it the rebuild loop filled
+   `task_hub_evaluations` with millions of identical `defer`/`dispatch_rebuild`
+   rows in days.
 5. Sorts with `_sort_key` — a lexicographic tuple. Priority lanes, highest
    first:
    `immediate trigger → system_schedule → must_complete → approval-project →
@@ -588,6 +600,16 @@ the daily prune block of the Simone heartbeat tick (`heartbeat_service.py`):
 `connect_runtime_db` sets `PRAGMA auto_vacuum=INCREMENTAL`, so a lighter
 `PRAGMA incremental_vacuum` pass is a possible future optimization; the full
 ``VACUUM`` here is the thorough reclaim.
+
+A second, independent age-based retention path applies to
+`task_hub_evaluations` specifically: `gateway_server.py::_activity_prune_old`
+runs on gateway request and heartbeat paths and `DELETE`s evaluation rows
+older than `UA_ACTIVITY_EVALUATIONS_RETENTION_DAYS` (default 7, floor 3)
+followed by a `PRAGMA incremental_vacuum(500)`. Age retention alone was not
+enough — every evaluation was under 8 days old even at 4.2M+ rows — which is
+why the source-side dedup in `task_hub.py::_record_evaluation` is the real
+fix. The two are complementary: dedup caps the write rate at the source,
+age retention bounds the history window.
 
 ## Gotchas
 

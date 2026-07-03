@@ -1646,6 +1646,35 @@ def _record_evaluation(
     score_confidence: Optional[float] = None,
     judge_payload: Optional[dict[str, Any]] = None,
 ) -> None:
+    """Persist a task-routing evaluation row, collapsing redundant defers.
+
+    A ``defer`` that repeats the most recent evaluation for the same task
+    (same decision AND same reason) carries no new information, so it is
+    skipped. This is what keeps ``rebuild_dispatch_queue`` — which re-defers
+    every dispatchable task on every rebuild — from writing millions of
+    identical ``dispatch_rebuild`` rows (4.2M+ rows / ~2.8 GB observed on
+    2026-07-03, >99.99% of them identical ``defer``/``dispatch_rebuild``
+    written by the ``scorer`` agent at ~725k rows/day).
+
+    Only evaluation STATE CHANGES are persisted: a defer whose reason differs
+    from the prior row still writes, and any non-defer decision
+    (seize/delegate/approve/review/redirect_to/request_revision/re_evaluate/\u2026)
+    ALWAYS writes. This dedup targets the runaway write rate at the source;
+    the independent age-based retention pruner (``_activity_prune_old``) still
+    runs on its own schedule.
+    """
+    if str(decision).strip().lower() == "defer":
+        prior = conn.execute(
+            "SELECT decision, reason FROM task_hub_evaluations "
+            "WHERE task_id = ? ORDER BY evaluated_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if prior is not None:
+            prev_decision = str(prior["decision"] or "").strip().lower()
+            prev_reason = str(prior["reason"] or "")
+            if prev_decision == "defer" and prev_reason == (reason or ""):
+                return
+
     conn.execute(
         """
         INSERT INTO task_hub_evaluations (
