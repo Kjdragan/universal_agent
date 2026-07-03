@@ -49,8 +49,22 @@ SNAPSHOT_RING_DEPTH = 48
 DEFAULT_TOPICS = ["claude", "agent", "codex", "llm", "harness", "agentic"]
 
 
+# hackernews-pp-cli is a THIRD-PARTY prebuilt binary (github.com/mvanhorn/
+# printing-press-library) — auto-generated Go, source not built locally. At
+# startup `initialize_runtime_secrets()` injects the full Infisical project
+# secret set (ZAI keys, tokens, Infisical machine-identity creds) into this
+# process's os.environ, and subprocesses inherit the parent environment by
+# default. So we must NOT hand this binary os.environ.copy(): a hostile or
+# compromised build could read every secret from its inherited env. Pass an
+# explicit allow-list of only the non-secret vars a CLI needs to run; HOME is
+# overridden to CLI_HOME regardless. See issue: subprocess-env least-privilege.
+_CLI_ENV_ALLOWLIST = (
+    "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR",
+)
+
+
 def _cli_env() -> dict[str, str]:
-    env = os.environ.copy()
+    env = {k: os.environ[k] for k in _CLI_ENV_ALLOWLIST if k in os.environ}
     env["HOME"] = str(CLI_HOME)
     env["HACKERNEWS_NO_COLOR"] = "1"
     return env
