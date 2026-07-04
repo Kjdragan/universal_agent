@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 import time
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _project_root() -> Path:
@@ -25,6 +28,11 @@ def _load_payload() -> dict[str, Any]:
     try:
         return json.loads(path.read_text())
     except Exception:
+        logger.warning(
+            "Failed to load approvals state from %s; returning empty default",
+            path,
+            exc_info=True,
+        )
         return {"approvals": []}
 
 

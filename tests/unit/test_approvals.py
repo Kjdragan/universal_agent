@@ -1,6 +1,7 @@
 """Tests for universal_agent.approvals — file-based approval CRUD."""
 
 import json
+import logging
 import time
 
 import pytest
@@ -70,6 +71,32 @@ class TestListApprovals:
     def test_corrupt_file_returns_empty(self, approvals_file):
         approvals_file.write_text("NOT JSON{{{")
         assert list_approvals() == []
+
+    def test_corrupt_file_logs_warning_with_context(self, approvals_file, caplog):
+        """A corrupt approvals state file must not silently look empty.
+
+        The parse failure is logged at WARNING naming the path and preserving
+        the traceback (``exc_info=True`` — house idiom, see
+        ``test_hooks_service_logging_context``) so operators can diagnose the
+        corruption instead of watching records vanish.
+        """
+        approvals_file.write_text("NOT JSON{{{")
+        with caplog.at_level(logging.WARNING, logger="universal_agent.approvals"):
+            result = list_approvals()
+        # Behaviour unchanged: parse failure -> safe empty default.
+        assert result == []
+        matching = [
+            record for record in caplog.records
+            if "approvals state" in record.getMessage()
+        ]
+        assert matching, "expected a warning naming the approvals state file"
+        record = matching[0]
+        assert record.levelno == logging.WARNING
+        assert str(approvals_file) in record.getMessage()
+        assert record.exc_info is not None, (
+            "warning dropped the exception context — exc_info=True should be "
+            "passed so the traceback explaining the parse failure is captured"
+        )
 
 
 # ---------------------------------------------------------------------------

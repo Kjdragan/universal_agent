@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 import time
 from typing import Any, Optional
 import uuid
+
+logger = logging.getLogger(__name__)
 
 VALID_DECISIONS = {"promote", "iterate", "archive"}
 _DECISION_STATUS_MAP = {
@@ -39,6 +42,11 @@ def _load_payload() -> dict[str, Any]:
             return {"threads": []}
         return payload
     except Exception:
+        logger.warning(
+            "Failed to load work threads state from %s; returning empty default",
+            path,
+            exc_info=True,
+        )
         return {"threads": []}
 
 
