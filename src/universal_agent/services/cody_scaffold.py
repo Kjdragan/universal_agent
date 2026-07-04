@@ -111,6 +111,57 @@ def find_vault_entity(slug_or_name: str, vault_root: Path) -> Path | None:
     return None
 
 
+class PrerequisiteMissingError(RuntimeError):
+    """No entity page AND no usable source page — the scaffold cannot proceed.
+
+    Signals the caller (Simone, or a Cody mission she delegated) to PARK the
+    task immediately with a structured reason rather than dithering. The
+    tier-3 signal can't be scaffolded until upstream materializes an entity
+    or a source page exists to degrade to. See cody-scaffold-builder
+    SKILL.md → "Missing entity → degrade or park". Raising a distinct type
+    (not bare FileNotFoundError) is what lets the caller fast-park instead of
+    burning a wall-clock budget deciding what to do.
+    """
+
+
+def find_demo_source(vault_root: Path, hint: str | Path | None) -> Path | None:
+    """Locate a raw/source page to scaffold from when no entity page exists.
+
+    Degradation path: source pages under ``vault/sources/`` and ``vault/raw/``
+    are materialized reliably at ingest, while the synthesized ``entities/``
+    page depends on a later Memex synthesis pass that can lag. When the entity
+    is missing we build the scaffold from the source doc instead of dropping
+    the demo. ``hint`` is either a direct path to a source page (the reliable
+    case — Simone already located it) or a post_id / slug substring matched
+    against source filenames.
+    """
+    if hint is None:
+        return None
+    if isinstance(hint, Path):
+        return hint if hint.exists() and hint.is_file() else None
+    raw_hint = str(hint).strip()
+    if not raw_hint:
+        return None
+    # A hint that is itself a path string.
+    as_path = Path(raw_hint)
+    if as_path.exists() and as_path.is_file():
+        return as_path
+    needle = (as_path.stem or raw_hint).lower()  # tolerate a trailing ".md"
+    for sub in ("sources", "raw"):
+        base = vault_root / sub
+        if not base.exists():
+            continue
+        direct = base / f"{needle}.md"
+        if direct.exists():
+            return direct
+        # Substring match; cap the needle like select_relevant_sources does
+        # for long source_ids so a post_id doesn't over-constrain.
+        for path in sorted(base.rglob("*.md")):
+            if needle[:24] in path.stem.lower():
+                return path
+    return None
+
+
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     if not text.startswith("---\n"):
         return {}, text
@@ -214,6 +265,8 @@ class ScaffoldArtifacts:
     business_relevance_path: Path
     sources_dir: Path
     sources_copied: tuple[Path, ...]
+    degraded: bool = False
+    source_derived_from: Path | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the artifact paths to a JSON-compatible dict."""
@@ -224,6 +277,10 @@ class ScaffoldArtifacts:
             "business_relevance_path": str(self.business_relevance_path),
             "sources_dir": str(self.sources_dir),
             "sources_copied": [str(p) for p in self.sources_copied],
+            "degraded": self.degraded,
+            "source_derived_from": (
+                str(self.source_derived_from) if self.source_derived_from else None
+            ),
         }
 
 
@@ -236,6 +293,7 @@ def write_brief_template(
     workspace: Path,
     entity: VaultEntity,
     sources_copied: list[Path],
+    degraded: bool = False,
 ) -> Path:
     """Write the starting BRIEF.md for Simone to refine.
 
@@ -243,6 +301,10 @@ def write_brief_template(
     (title, summary, source_ids, tags, body excerpt) plus a list of
     the files Simone has to read in SOURCES/. Simone should refine
     the prose; the structure is pre-authored.
+
+    When ``degraded`` is set, the scaffold was built from a raw source page
+    because no synthesized entity existed yet — the banner tells Simone/Cody
+    this is lower-confidence input to refine more heavily.
     """
     target = workspace / "BRIEF.md"
 
@@ -251,15 +313,26 @@ def write_brief_template(
     if len(body_excerpt) > 4000:
         body_excerpt = body_excerpt[:4000] + "\n\n_(truncated; see entity page for full content)_"
 
+    origin = "raw source page" if degraded else "vault entity"
     lines: list[str] = [
         f"# Feature Briefing: {entity.title}",
         "",
-        f"_Authored from vault entity `{entity.slug}` on {_now_iso()}._",
+        f"_Authored from {origin} `{entity.slug}` on {_now_iso()}._",
         "_Simone: refine this prose. Cody reads this first; she trusts what's here._",
         "",
+    ]
+    if degraded:
+        lines.extend([
+            "> ⚠️ **Degraded scaffold — no synthesized entity page existed.** This was",
+            "> built directly from the raw source page in SOURCES/. Treat the body below",
+            "> as unsynthesized: read the source carefully and expect to author more of",
+            "> the BRIEF/ACCEPTANCE prose than usual before dispatching Cody.",
+            "",
+        ])
+    lines.extend([
         "## What is this feature?",
         "",
-    ]
+    ])
     if summary:
         lines.extend([summary, ""])
     else:
@@ -422,15 +495,47 @@ def build_demo_scaffold(
     demos_root: Path | None = None,
     overwrite: bool = False,
     source_limit: int = 6,
+    source_hint: str | Path | None = None,
 ) -> ScaffoldArtifacts:
     """Full scaffold flow: read entity → provision workspace → copy SOURCES → write templates.
 
     `demo_id` is the slug under `/opt/ua_demos/`. Caller chooses it (typically
     `<entity-slug>__<short-id>` to avoid collisions across multiple demos
     of the same feature).
+
+    Entity resolution (fixes the 2026-07-03 54-min scaffold timeout):
+
+    - If ``entity_path`` exists, build from the synthesized entity (default).
+    - Else degrade to a raw source page resolved from ``source_hint`` (a
+      source-page path, or a post_id / slug), so a lagging Memex pass doesn't
+      drop the demo. The result is marked ``degraded=True``.
+    - Else raise ``PrerequisiteMissingError`` so the caller PARKS immediately
+      instead of dithering into the wall-clock backstop.
     """
-    entity = read_entity(entity_path)
+    if entity_path.exists():
+        entity = read_entity(entity_path)
+        degraded = False
+        source_derived_from: Path | None = None
+    else:
+        source_path = find_demo_source(vault_root, source_hint or entity_path.stem)
+        if source_path is None:
+            raise PrerequisiteMissingError(
+                f"no entity page at {entity_path} and no source page resolvable from "
+                f"hint {source_hint!r} under {vault_root}/(sources|raw). Park this task "
+                "with reason vault_entity_missing; do not retry until an entity or "
+                "source page exists (see cody-scaffold-builder SKILL.md)."
+            )
+        entity = read_entity(source_path)
+        degraded = True
+        source_derived_from = source_path
+
     sources = select_relevant_sources(entity, vault_root=vault_root, limit=source_limit)
+    # In degraded mode, guarantee the origin source doc is bundled for Cody.
+    if source_derived_from is not None:
+        resolved = {s.resolve() for s in sources}
+        if source_derived_from.resolve() not in resolved:
+            sources.insert(0, source_derived_from)
+        sources = sources[:source_limit]
 
     provision_result: WorkspaceProvisionResult = provision_demo_workspace(
         demo_id,
@@ -444,6 +549,7 @@ def build_demo_scaffold(
         workspace=workspace,
         entity=entity,
         sources_copied=sources_written,
+        degraded=degraded,
     )
     acceptance_path = write_acceptance_template(workspace=workspace, entity=entity)
     business_relevance_path = write_business_relevance_template(
@@ -458,4 +564,6 @@ def build_demo_scaffold(
         business_relevance_path=business_relevance_path,
         sources_dir=workspace / "SOURCES",
         sources_copied=tuple(sources_written),
+        degraded=degraded,
+        source_derived_from=source_derived_from,
     )

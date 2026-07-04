@@ -8,9 +8,11 @@ import pytest
 import yaml
 
 from universal_agent.services.cody_scaffold import (
+    PrerequisiteMissingError,
     ScaffoldArtifacts,
     VaultEntity,
     build_demo_scaffold,
+    find_demo_source,
     find_vault_entity,
     populate_workspace_sources,
     read_entity,
@@ -19,6 +21,18 @@ from universal_agent.services.cody_scaffold import (
     write_brief_template,
     write_business_relevance_template,
 )
+
+
+def _write_source(vault_root: Path, name: str, body: str, frontmatter: dict | None = None) -> Path:
+    sources = vault_root / "sources"
+    sources.mkdir(parents=True, exist_ok=True)
+    path = sources / f"{name}.md"
+    if frontmatter:
+        fm = yaml.safe_dump(frontmatter, sort_keys=False).strip()
+        path.write_text(f"---\n{fm}\n---\n\n{body}\n", encoding="utf-8")
+    else:
+        path.write_text(body + "\n", encoding="utf-8")
+    return path
 
 # ── Vault entity loading ────────────────────────────────────────────────────
 
@@ -327,3 +341,68 @@ def test_build_demo_scaffold_refuses_to_clobber(tmp_path: Path, monkeypatch):
     build_demo_scaffold(entity_path=entity_path, demo_id="skills__demo-1", vault_root=vault)
     with pytest.raises(FileExistsError):
         build_demo_scaffold(entity_path=entity_path, demo_id="skills__demo-1", vault_root=vault)
+
+
+# ── Missing-entity degradation & fast-park (2026-07-03 scaffold timeout fix) ──
+
+
+def test_find_demo_source_resolves_by_post_id_substring(tmp_path: Path):
+    vault = tmp_path / "vault"
+    src = _write_source(vault, "claudedevs-post-2027535815648416052", "raw post body")
+    # A post_id hint (no path, no extension) resolves via filename substring.
+    assert find_demo_source(vault, "2027535815648416052") == src
+
+
+def test_find_demo_source_accepts_direct_path(tmp_path: Path):
+    vault = tmp_path / "vault"
+    src = _write_source(vault, "some-source", "body")
+    assert find_demo_source(vault, src) == src
+
+
+def test_find_demo_source_returns_none_when_nothing_matches(tmp_path: Path):
+    vault = tmp_path / "vault"
+    (vault / "sources").mkdir(parents=True)
+    assert find_demo_source(vault, "no-such-post") is None
+    assert find_demo_source(vault, None) is None
+
+
+def test_build_demo_scaffold_degrades_to_source_when_entity_missing(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("UA_DEMOS_ROOT", str(tmp_path / "demos"))
+    vault = tmp_path / "vault"
+    # Only the source page exists — the entity was never materialized.
+    src = _write_source(
+        vault,
+        "claudedevs-post-2027535815648416052",
+        "@bcherny: submit multiple PRs in parallel",
+        {"title": "Parallel PRs", "action_type": "demo_task"},
+    )
+    missing_entity = vault / "entities" / "parallel-prs.md"  # does NOT exist
+
+    result = build_demo_scaffold(
+        entity_path=missing_entity,
+        demo_id="parallel-prs__demo-1",
+        vault_root=vault,
+        source_hint="2027535815648416052",
+    )
+    assert result.degraded is True
+    assert result.source_derived_from == src
+    # Origin source doc is bundled for Cody.
+    assert (result.sources_dir / src.name).exists()
+    # Degraded banner is present so Simone/Cody knows this is lower-confidence.
+    brief = result.brief_path.read_text(encoding="utf-8")
+    assert "Degraded scaffold" in brief
+    assert result.to_dict()["degraded"] is True
+
+
+def test_build_demo_scaffold_parks_when_no_entity_and_no_source(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("UA_DEMOS_ROOT", str(tmp_path / "demos"))
+    vault = tmp_path / "vault"
+    (vault / "entities").mkdir(parents=True)
+    (vault / "sources").mkdir(parents=True)
+    with pytest.raises(PrerequisiteMissingError):
+        build_demo_scaffold(
+            entity_path=vault / "entities" / "ghost.md",
+            demo_id="ghost__demo-1",
+            vault_root=vault,
+            source_hint="nothing-here",
+        )

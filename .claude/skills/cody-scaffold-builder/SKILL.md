@@ -21,7 +21,10 @@ description: >
 
 ## When to use
 
-- A `vault/entities/<feature>.md` page exists (created by Phase 1's Memex pass).
+- A `vault/entities/<feature>.md` page exists (created by Phase 1's Memex pass),
+  **OR** only the raw `vault/sources/<...>.md` page exists — see
+  "Missing entity → degrade or park" below. The entity is preferred but no
+  longer a hard precondition.
 - Simone has decided the entity is **demo_worthy** (not informational, not deferred).
 - The endpoint required is `anthropic_native` (Claude Code feature demo) — for
   category-2 (raw Anthropic API) demos see [Demo Execution Environments](../../../docs/06_Deployment_And_Environments/09_Demo_Execution_Environments.md).
@@ -93,6 +96,37 @@ print(result.to_dict())
 
 Output: `ScaffoldArtifacts` dataclass with `workspace_dir`, `brief_path`,
 `acceptance_path`, `business_relevance_path`, `sources_dir`, `sources_copied`.
+
+## Missing entity → degrade or park (fast; never dither)
+
+**Why this exists:** on 2026-07-03 a delegated Cody scaffold mission burned
+**54 minutes and produced nothing** because the entity page for the source
+had never been materialized (only the source page existed), and there was no
+scripted next move — so the model dithered until idle-kill. Source pages
+materialize reliably at ingest; the synthesized entity page depends on a
+later Memex pass that can lag. Handle the gap in your **first ~2 tool calls**:
+
+1. **Entity exists** → normal flow (invoke against the entity path).
+2. **Only the source page exists** → **degrade**. Pass `source_hint` to
+   `build_demo_scaffold` (a source-page path, or the post_id / slug):
+
+   ```python
+   build_demo_scaffold(
+       entity_path=Path(".../entities/parallel-prs.md"),   # may not exist
+       demo_id="parallel-prs__demo-1",
+       vault_root=Path(".../claude-code-intelligence"),
+       source_hint="2027535815648416052",                  # post_id or source path
+   )
+   ```
+
+   The builder reads the source page instead, returns `degraded=True`, bundles
+   the source doc into `SOURCES/`, and stamps a "Degraded scaffold" banner in
+   `BRIEF.md`. Refine the prose more heavily than usual (the input is
+   unsynthesized).
+3. **Neither entity nor source page exists** → `build_demo_scaffold` raises
+   `PrerequisiteMissingError`. **Park the task in ~30 seconds** with reason
+   `vault_entity_missing:<post_id>`. Do NOT try to materialize the entity
+   yourself, do NOT keep searching, do NOT loop.
 
 ## Demo ID convention
 

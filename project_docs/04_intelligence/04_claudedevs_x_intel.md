@@ -6,6 +6,7 @@ subsystem: intel-claudedevs
 code_paths:
   - src/universal_agent/services/claude_code_intel.py
   - src/universal_agent/services/claude_code_intel_replay.py
+  - src/universal_agent/services/cody_scaffold.py
   - src/universal_agent/services/csi_url_judge.py
   - src/universal_agent/services/csi_intelligence_pass.py
   - src/universal_agent/services/csi_intelligence_persistence.py
@@ -13,7 +14,7 @@ code_paths:
   - src/universal_agent/scripts/claude_code_intel_sync.py
   - src/universal_agent/scripts/claude_code_intel_run_report.py
   - src/universal_agent/config/intel_lanes.yaml
-last_verified: 2026-06-21
+last_verified: 2026-07-03
 ---
 
 # ClaudeDevs X Intelligence
@@ -275,7 +276,23 @@ identical payloads):
 
 - **tier 3 →** `cody_scaffold_request`. Simone scaffolds a workspace and then
   *she* enqueues a `cody_demo_task` for Cody downstream. This is the canonical
-  path as of 2026-05-09.
+  path as of 2026-05-09. The scaffold brief is built by
+  `claude_code_intel.py::_scaffold_task_description`.
+  - **Missing-entity degradation / fast-park (2026-07-03):** the scaffold
+    depends on a `vault/entities/<feature>.md` page, but that page is written
+    by a later Memex pass that can lag behind ingest, while the raw
+    `vault/sources/` page is always present. Previously
+    `cody_scaffold.py::build_demo_scaffold` hard-required the entity
+    (`read_entity` → `FileNotFoundError`) and the brief scripted no "entity
+    absent" branch — a delegated Cody mission dithered until idle-kill (54 min,
+    zero output). Now `build_demo_scaffold` accepts a `source_hint`: with the
+    entity missing it degrades to the source page via
+    `cody_scaffold.py::find_demo_source` (result marked `degraded=True`, source
+    doc bundled, banner in `BRIEF.md`); with *neither* entity nor source it
+    raises `cody_scaffold.py::PrerequisiteMissingError` so the caller parks in
+    ~30s instead of burning the wall-clock backstop. The brief's step **1b**
+    and `cody-scaffold-builder` SKILL.md ("Missing entity → degrade or park")
+    tell the executor to make this call within ~2 tool calls.
 - **tier 4 →** `claude_code_kb_update` (Atlas / general analysis).
 - The legacy direct `claude_code_demo_task` is gated behind
   `UA_CSI_DIRECT_DEMO_FALLBACK` (default off) as an emergency lever only.
