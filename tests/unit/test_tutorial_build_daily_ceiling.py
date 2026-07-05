@@ -279,9 +279,10 @@ def test_ceiling_zero_queues_everything_pending(tmp_path, monkeypatch):
         assert _build_row(conn, "vid_2")["agent_ready"] is False
 
 
-def test_ceiling_default_is_ten_when_env_unset(monkeypatch):
+def test_ceiling_default_is_zero_when_env_unset(monkeypatch):
+    # Fully-gated posture (2026-07-05): default 0 → nothing auto-dispatches.
     monkeypatch.delenv("UA_DEMO_BUILD_DAILY_CEILING", raising=False)
-    assert ptb._daily_build_ceiling() == 10
+    assert ptb._daily_build_ceiling() == 0
 
 
 def test_ceiling_clamps_negative_to_zero(monkeypatch):
@@ -291,4 +292,4 @@ def test_ceiling_clamps_negative_to_zero(monkeypatch):
 
 def test_ceiling_invalid_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("UA_DEMO_BUILD_DAILY_CEILING", "not-a-number")
-    assert ptb._daily_build_ceiling() == 10
+    assert ptb._daily_build_ceiling() == 0

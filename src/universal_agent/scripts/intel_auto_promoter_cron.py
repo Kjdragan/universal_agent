@@ -39,7 +39,10 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     initialize_runtime_secrets(profile=args.profile or None)
 
-    if os.getenv("UA_INTEL_AUTO_PROMOTE_ENABLED", "1").strip().lower() not in {"1", "true", "yes", "on"}:
+    # Fully-gated posture (operator decision 2026-07-05): default OFF so the
+    # X/ClaudeDevs-intel lane never auto-promotes a scaffold_request into a build
+    # without operator approval. Set UA_INTEL_AUTO_PROMOTE_ENABLED=1 to re-enable.
+    if os.getenv("UA_INTEL_AUTO_PROMOTE_ENABLED", "0").strip().lower() not in {"1", "true", "yes", "on"}:
         return _emit({"ok": True, "skipped": "disabled_by_env"})
 
     result = promote_top_candidates(dry_run=True if args.dry_run else None)

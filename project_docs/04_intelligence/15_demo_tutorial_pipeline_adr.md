@@ -121,15 +121,23 @@ build-time `--slug` and the finalize-time directory resolution compute the SAME 
 
 ### Real daily BUILD cap — 3/day (Component C)
 
-`feature_flags.py::proactive_demo_daily_cap` (`UA_PROACTIVE_DEMO_DAILY_CAP`, default **3**) is the
-**OUTFLOW** control, enforced at dispatch in `services/priority_dispatcher.py::dispatch_claimed`:
-once this many `tutorial_build` builds have been dispatched today it defers the rest (leaves them
-queued — never cancels). Today's count comes from
+> **UPDATE 2026-07-05 — fully-gated posture (operator decision).** Autonomous auto-build is now
+> **off by default**: `UA_DEMO_BUILD_DAILY_CEILING` defaults to **0** (INFLOW), `UA_PROACTIVE_DEMO_DAILY_CAP`
+> defaults to **0** (OUTFLOW), and the X/ClaudeDevs-intel auto-promoter (`UA_INTEL_AUTO_PROMOTE_ENABLED`)
+> defaults to **off** — so *no* demo builds without explicit operator approval. Every buildable candidate is
+> queued pending-approval and surfaced for approval; a curation/value-score + twice-daily digest email is the
+> intended approval surface (in progress). The default numbers below (`3`, `10`) describe the prior posture;
+> the mechanics are unchanged, only the defaults moved to 0.
+
+`feature_flags.py::proactive_demo_daily_cap` (`UA_PROACTIVE_DEMO_DAILY_CAP`, default **0** — fully gated;
+was 3) is the **OUTFLOW** control, enforced at dispatch in
+`services/priority_dispatcher.py::dispatch_claimed`: once this many `tutorial_build` builds have been
+dispatched today it defers the rest (leaves them queued — never cancels). Today's count comes from
 `services/priority_dispatcher.py::_count_dispatched_tutorial_builds_today`, which counts source tasks
 whose `metadata.delegation.delegated_at` falls on/after the shared Chicago day boundary. This is
-**distinct** from the pre-existing INFLOW ceiling `UA_DEMO_BUILD_DAILY_CEILING` (default 10, in
-`proactive_tutorial_builds.py::remaining_daily_build_budget`), which only throttled auto-route
-*queueing* and was bypassed by the bespoke lane.
+**distinct** from the INFLOW ceiling `UA_DEMO_BUILD_DAILY_CEILING` (default **0** — fully gated; was 10, in
+`proactive_tutorial_builds.py::remaining_daily_build_budget`), which only throttles auto-route
+*queueing*.
 
 ### Completion-bridge fix — no more re-surfacing (Component E)
 
@@ -294,9 +302,10 @@ The Demo is a runnable mini-app of the video's **capability**, not a reproductio
 - **Two sources both feed the ladder:** the Daily Digest (curated playlists) and the Proactive-signals lane
   (broad CSI `youtube_channel_rss`). Dedupe by `video_id` across both.
 - **Gate (Tutorial → Demo):** auto score-threshold **OR** the operator's one-click button.
-- **Throttle:** auto-build the top-ranked (by `value_score`) up to **~10 Demos/day** (a safety/volume guard,
-  **not** a cost limit); the rest queue for the button. **The button launches demos beyond the 10 (uncapped
-  manual).** Classification (Brief/Tutorial/Demo) = existing worthiness signals
+- **Throttle:** as of **2026-07-05** the ceiling defaults to **0 (fully gated)** — *nothing* auto-builds; every
+  candidate queues for approval. (The historical design was auto-build the top-ranked by `value_score` up to
+  ~10/day; set `UA_DEMO_BUILD_DAILY_CEILING=N` to restore N auto-builds/day.) **The approval path launches demos
+  uncapped.** Classification (Brief/Tutorial/Demo) = existing worthiness signals
   (`youtube_daily_digest.py::_is_demo_worthy`, `value_score`, `code_implementation_prospect`) + an LLM
   tier-judge.
 - **Scan cadence:** curated lane piggybacks the 06:00 digest; broad-RSS lane scans **3×/day** on a systemd
