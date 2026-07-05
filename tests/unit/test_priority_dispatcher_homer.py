@@ -50,6 +50,10 @@ def _reset_governor_and_flags(monkeypatch):
     # Prefer-ATLAS must be ON for general tasks to route to the VP pool at all.
     monkeypatch.setenv("UA_DISPATCHER_PREFER_ATLAS", "1")
     monkeypatch.delenv("UA_VP_ENABLED_IDS", raising=False)
+    # HOMER/CODER capacity-routing tests, not the proactive-demo OUTFLOW cap
+    # (own suite: test_proactive_demo_daily_cap). Its fully-gated default of 0
+    # (2026-07-05) would defer every tutorial_build; pin non-binding here.
+    monkeypatch.setenv("UA_PROACTIVE_DEMO_DAILY_CAP", "100")
     CapacityGovernor.reset_instance()
     yield
     CapacityGovernor.reset_instance()
