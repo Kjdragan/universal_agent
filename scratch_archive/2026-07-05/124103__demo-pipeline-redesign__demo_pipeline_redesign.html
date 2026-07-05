@@ -1,0 +1,139 @@
+<title>Autonomous Demo Pipeline — Current State & Curation Redesign</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1a1d21; --muted:#5b6470;
+    --line:#e3e7ec; --accent:#3b6ef5; --accent-soft:#eef3ff;
+    --good:#1f9d55; --warn:#c26a00; --bad:#c8322f; --bad-soft:#fdecec;
+    --good-soft:#eaf7ef; --warn-soft:#fdf3e6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-text-size-adjust:100%;}
+  .wrap{max-width:820px;margin:0 auto;padding:28px 18px 80px;}
+  header h1{font-size:26px;line-height:1.2;margin:0 0 6px;letter-spacing:-.02em;}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 4px;}
+  .stamp{color:var(--muted);font-size:12.5px;margin:0 0 22px;}
+  h2{font-size:18px;margin:34px 0 12px;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;}
+  h2 .n{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;
+    background:var(--accent);color:#fff;border-radius:7px;font-size:13px;font-weight:700;flex:none;}
+  p{margin:0 0 12px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 18px;margin:0 0 14px;}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:0 0 6px;}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 14px;}
+  .kpi .v{font-size:23px;font-weight:750;letter-spacing:-.02em;}
+  .kpi .l{font-size:12.5px;color:var(--muted);margin-top:2px;}
+  .kpi.warn .v{color:var(--warn)} .kpi.bad .v{color:var(--bad)} .kpi.good .v{color:var(--good)}
+  .flow{display:flex;flex-direction:column;gap:0;margin:6px 0 2px;}
+  .step{position:relative;background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:12px 14px;margin:0;}
+  .step .t{font-weight:650;font-size:14.5px;}
+  .step .d{font-size:13px;color:var(--muted);margin-top:2px;}
+  .arrow{align-self:center;color:var(--muted);font-size:15px;line-height:1;margin:5px 0;}
+  .arrow small{font-size:11.5px;}
+  .flag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;vertical-align:middle;margin-left:6px;}
+  .flag.bad{background:var(--bad-soft);color:var(--bad)}
+  .flag.warn{background:var(--warn-soft);color:var(--warn)}
+  .flag.good{background:var(--good-soft);color:var(--good)}
+  .step.bad{border-color:#f2c9c7;background:var(--bad-soft)}
+  .step.good{border-color:#bfe6cd;background:var(--good-soft)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:650;}
+  td.tick{color:var(--good);font-weight:700;white-space:nowrap;}
+  td.cross{color:var(--bad);font-weight:700;white-space:nowrap;}
+  .callout{border-left:4px solid var(--accent);background:var(--accent-soft);border-radius:0 10px 10px 0;
+    padding:12px 14px;margin:0 0 14px;font-size:14.5px;}
+  .callout.warn{border-color:var(--warn);background:var(--warn-soft);}
+  .callout b{font-weight:700;}
+  code{background:#eef1f5;padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  ul.tight{margin:4px 0 12px;padding-left:20px;} ul.tight li{margin:5px 0;}
+  .rec{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--good);
+    border-radius:0 12px 12px 0;padding:14px 16px;margin:0 0 12px;}
+  .rec .h{font-weight:700;margin-bottom:4px;}
+  .muted{color:var(--muted);font-size:13px;}
+  @media (max-width:560px){ header h1{font-size:22px} .kpi .v{font-size:20px} }
+</style>
+
+<div class="wrap">
+<header>
+  <h1>Autonomous Demo Pipeline</h1>
+  <p class="sub">Current state, the real limits, and a curation-first redesign</p>
+  <p class="stamp">Code-verified against deployed prod (<code>/opt/universal_agent</code>) · 2026-07-05</p>
+</header>
+
+<div class="callout">
+  <b>The one-line answer:</b> the limit is <b>10 auto-built demos/day</b> (a self-imposed volume guard, <i>not</i> a paid rate limit — they build on the flat-rate ZAI/GLM plan). You get <b>one email per finished demo</b>, which is the phone flood. Meanwhile <b>~350 candidates sit unseen</b> in a pending-approval graveyard, ranking is by <i>recency not quality</i>, and no demo ever becomes a reusable skill. Your instinct to gate + curate is right — and it's <b>half-built already</b>.
+</div>
+
+<h2><span class="n">1</span>What the limit actually is</h2>
+<div class="kpis">
+  <div class="kpi"><div class="v">10<span style="font-size:14px">/day</span></div><div class="l">auto-build ceiling (<code>UA_DEMO_BUILD_DAILY_CEILING</code>, default)</div></div>
+  <div class="kpi"><div class="v">3×/day</div><div class="l">producer sweep · 08:30 / 13:30 / 18:30 CT</div></div>
+  <div class="kpi warn"><div class="v">7–11</div><div class="l">demos actually built &amp; emailed per day</div></div>
+  <div class="kpi bad"><div class="v">~350</div><div class="l">candidates stuck in pending-approval, invisible</div></div>
+</div>
+<p class="muted">The ceiling counts across all three sweeps combined (per Houston calendar-day). It's exhausted by mid-afternoon most days; everything after that overflows to a queue you never see. The overflow queue currently holds ~350 rows that will <i>never</i> build unless someone approves them in the dashboard — which nobody does.</p>
+
+<h2><span class="n">2</span>How it's kicked off (today's flow)</h2>
+<div class="flow">
+  <div class="step"><div class="t">CSI ingests YouTube-channel RSS</div><div class="d">Every new video from watched channels → <code>csi.db</code></div></div>
+  <div class="arrow">↓ <small>cheap keyword prefilter</small></div>
+  <div class="step"><div class="t">Binary buildability judge <span class="flag warn">yes / no only</span></div><div class="d"><code>glm-4.5-air</code> decides "is this demoable?" — <b>no quality score</b>. A graded 0–100 scorer exists in code but its score is thrown away.</div></div>
+  <div class="arrow">↓ <small>rank by (transcript-ok, newest) — <b>recency, not value</b></small></div>
+  <div class="step"><div class="t">Daily ceiling = 10 → top 10 auto-build</div><div class="d">Systemd timer <code>proactive-demo-build-sweep</code> runs the producer <code>sync_build_oriented_csi_videos</code></div></div>
+  <div class="arrow">↓ <small>everything past 10 →</small></div>
+  <div class="step bad"><div class="t">Pending-approval overflow <span class="flag bad">~350 stuck, unseen</span></div><div class="d">status=open, <code>agent_ready=0</code>. Approvable only via a dashboard button nobody opens. Silent graveyard.</div></div>
+  <div class="arrow">↓ <small>(top 10 only)</small></div>
+  <div class="step"><div class="t">Cody builds it on ZAI/GLM → <code>/opt/ua_demos/&lt;id&gt;/</code></div><div class="d">Real, runnable, verified (manifest.json + endpoint check), ~2 concurrent. Ideally on the Claude Agent SDK per the build contract.</div></div>
+  <div class="arrow">↓</div>
+  <div class="step"><div class="t">📧 One "🎬 Demo built" email → your phone</div><div class="d"><b>Per demo, not batched</b> → ~7–11 pings/day. This is the flood you're seeing.</div></div>
+  <div class="arrow">↓</div>
+  <div class="step bad"><div class="t">Reusable skill extracted? <span class="flag bad">no — north-star gap</span></div><div class="d">The demo + a vault link is all that's left behind. <code>skill-creator</code> never runs. Only the <i>interactive</i> <code>/demo</code> factory distills a reusable skill today.</div></div>
+</div>
+
+<h2><span class="n">3</span>Three things worth correcting</h2>
+<div class="callout warn">
+  <b>1. No paid rate limit is being burned.</b> Autonomous demos build on the flat-rate <b>ZAI/GLM</b> plan, not Anthropic Max. So "spending the whole morning's rate limit" isn't what's happening — the 10/day is a <i>self-imposed volume guard</i>. The real problem is <b>volume + weak curation + phone noise</b>, which is 100% valid.
+</div>
+<div class="callout warn">
+  <b>2. Curation is basically absent.</b> A binary yes/no judge + a recency sort decides what gets built. There's no notion of "which of these is most <i>interesting / useful / worth learning</i>." A real 0–100 value score is computed and then discarded.
+</div>
+<div class="callout warn">
+  <b>3. Demos don't compound.</b> Each one is a one-off app. The north star — demo → Agent SDK script → <b>reusable Claude Code skill</b> — never happens in the autonomous lane. That extraction step exists only when you run <code>/demo</code> by hand.
+</div>
+
+<h2><span class="n">4</span>Your idea vs. what already exists</h2>
+<p>Your proposal — collate candidates over the day, email them with a recommendation, approve a subset — maps almost exactly onto machinery that's <b>already built</b>, just not wired together for this lane:</p>
+<div class="card" style="padding:4px 4px;">
+<table>
+  <tr><th>Piece you'd want</th><th>Status</th><th>Where</th></tr>
+  <tr><td>Overflow / pending-approval queue</td><td class="tick">✓ exists</td><td>producer already parks everything past the ceiling</td></tr>
+  <tr><td>Approve endpoints (uncapped)</td><td class="tick">✓ exists</td><td><code>/dashboard/tutorials/pending-builds/…/approve</code></td></tr>
+  <tr><td>Real value score + rationale (4 axes)</td><td class="tick">✓ exists</td><td>on the <i>X-intel</i> lane (<code>csi_demo_triage_ranker</code>) — never applied to YouTube demos</td></tr>
+  <tr><td>Score-thresholded auto-promote + daily cap</td><td class="tick">✓ exists</td><td><code>intel_auto_promoter</code> (X-intel lane)</td></tr>
+  <tr><td>Email-with-approve-link (HMAC token)</td><td class="tick">✓ exists</td><td>the GPU-demo desktop-approval email</td></tr>
+  <tr><td>Set auto-build to a low number / zero</td><td class="tick">✓ knob</td><td><code>UA_DEMO_BUILD_DAILY_CEILING=0</code> gates everything</td></tr>
+  <tr><td><b>Digest email of ranked candidates + recommendation</b></td><td class="cross">✗ missing</td><td>the one genuinely net-new primitive</td></tr>
+  <tr><td><b>Approve-a-subset from that email</b></td><td class="cross">✗ missing</td><td>wire the HMAC-link pattern to the approve endpoint</td></tr>
+  <tr><td><b>Persist the value score for the YouTube lane</b></td><td class="cross">✗ missing</td><td>the graded scorer already runs — stop discarding its output</td></tr>
+  <tr><td><b>Skill-extraction step after a good demo</b></td><td class="cross">✗ missing</td><td>run <code>skill-creator</code> + promote, matching interactive <code>/demo</code></td></tr>
+</table>
+</div>
+
+<h2><span class="n">5</span>Recommended shape</h2>
+<div class="rec">
+  <div class="h">Curate → gate → digest → approve → build → distill</div>
+  <ul class="tight">
+    <li><b>Score, don't just judge.</b> Turn the already-computed 0–100 value score back on for the YouTube lane so candidates rank by <i>worth</i>, not upload date.</li>
+    <li><b>Lower the auto-gate.</b> Drop the ceiling so few/none auto-build; the rest wait for you.</li>
+    <li><b>One ranked digest email</b> per block with <i>my</i> recommendation (which to build, which to skip, why) and tap-to-approve links — replacing ~7–11 per-demo pings with one curated slate.</li>
+    <li><b>Approve a subset from the email;</b> approved demos build (uncapped) on ZAI/GLM as they do now.</li>
+    <li><b>Distill the winners.</b> A passing demo runs <code>skill-creator</code> and promotes a reusable skill into <code>dragan-plugins</code> — so the pipeline finally compounds into your capability library.</li>
+  </ul>
+  <p class="muted" style="margin-bottom:0">Roughly: one net-new digest/email primitive, one score-persistence fix, one config change, and (optionally) porting the skill-extraction step from the interactive factory. Most of it is wiring existing parts, not new machinery.</p>
+</div>
+
+<p class="muted">Full evidence: producer <code>proactive_tutorial_builds.py::sync_build_oriented_csi_videos</code>; timer <code>universal-agent-proactive-demo-build-sweep</code>; notifier <code>demo_built_notifier.py::notify_demo_built</code>; contract <code>DEMO_BUILD_CONTRACT</code>; reusable ranker <code>csi_demo_triage_ranker.py</code> + <code>intel_auto_promoter.py</code>.</p>
+</div>
