@@ -12,7 +12,7 @@ above `min_score`, it calls the canonical `csi_demo_triage.approve_candidate`
 helper — the same one the dashboard button uses — so the resulting Task Hub
 row is byte-identical to operator-approved promotions. Gating:
 
-  - `UA_INTEL_AUTO_PROMOTE_ENABLED`        — kill switch (default "1")
+  - `UA_INTEL_AUTO_PROMOTE_ENABLED`        — kill switch (default "0" — fully gated)
   - `UA_INTEL_AUTO_PROMOTE_MIN_SCORE`      — score threshold 0-10 (default 7.5)
   - `UA_INTEL_AUTO_PROMOTE_DAILY_CAP`      — max promotions per UTC day (default 2)
   - `UA_INTEL_AUTO_PROMOTE_DRY_RUN`        — report-only mode (default "0")

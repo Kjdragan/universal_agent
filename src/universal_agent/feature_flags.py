@@ -755,7 +755,7 @@ def proactive_demo_factory_run_cmd(driver: str) -> str:
     return f"uv run --project {_demo_factory_project_dir(driver)} python {driver}"
 
 
-def proactive_demo_daily_cap(default: int = 3) -> int:
+def proactive_demo_daily_cap(default: int = 0) -> int:
     """Max proactive demo BUILDS dispatched per America/Chicago day (OUTFLOW control).
 
     Enforced at the dispatch point for ``source_kind == "tutorial_build"``
@@ -763,11 +763,14 @@ def proactive_demo_daily_cap(default: int = 3) -> int:
     tutorial_build builds have been dispatched today (counted over the shared
     ``utils.day_boundary.chicago_day_start_iso`` boundary), further ones are
     deferred (left queued, never cancelled). This is distinct from
-    ``UA_DEMO_BUILD_DAILY_CEILING`` (default 10) which only throttled the
-    auto-route INFLOW (queueing) and was bypassed by the bespoke lane.
+    ``UA_DEMO_BUILD_DAILY_CEILING`` (default 0) which only throttles the
+    auto-route INFLOW (queueing).
 
-    Reads ``UA_PROACTIVE_DEMO_DAILY_CAP`` (default 3), clamped to >= 0. A cap
-    of 0 defers every proactive build (nothing auto-dispatches).
+    Fully-gated posture (operator decision 2026-07-05): default is 0 so that even
+    any pre-existing ``agent_ready`` tutorial_build rows are deferred, not
+    dispatched — the OUTFLOW backstop for the ceiling. Reads
+    ``UA_PROACTIVE_DEMO_DAILY_CAP`` (default 0), clamped to >= 0. A cap of 0
+    defers every proactive build (nothing auto-dispatches).
     """
     return _read_int("UA_PROACTIVE_DEMO_DAILY_CAP", default, minimum=0)
 

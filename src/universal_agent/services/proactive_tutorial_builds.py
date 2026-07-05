@@ -235,8 +235,8 @@ def remaining_daily_build_budget(conn: sqlite3.Connection) -> tuple[int, int, in
     """Return ``(remaining, ceiling, today_count)`` for the demo-build daily ceiling.
 
     Single home for the boundary math P2a introduced: ceiling from
-    ``UA_DEMO_BUILD_DAILY_CEILING`` (default 10), ``today_count`` over
-    America/Chicago local-midnight (``_count_today_tutorial_builds``).
+    ``UA_DEMO_BUILD_DAILY_CEILING`` (default 0 — fully gated), ``today_count``
+    over America/Chicago local-midnight (``_count_today_tutorial_builds``).
     """
     ceiling = _daily_build_ceiling()
     today_count = _count_today_tutorial_builds(conn)
@@ -352,8 +352,8 @@ def sync_build_oriented_csi_videos(
 ) -> dict[str, int]:
     """Queue CODIE tutorial build tasks for build-oriented CSI RSS videos.
 
-    A daily ceiling (``UA_DEMO_BUILD_DAILY_CEILING``, default 10) caps how many
-    builds are auto-dispatched per America/Chicago day. Buildable candidates are
+    A daily ceiling (``UA_DEMO_BUILD_DAILY_CEILING``, default 0 — fully gated)
+    caps how many builds are auto-dispatched per America/Chicago day. Buildable candidates are
     ranked (transcript-ok first, then newest upload); the top ``remaining`` are
     queued dispatch-eligible (``agent_ready=True``), and the rest are queued as
     pending-approval rows (``agent_ready=False``) that a one-field flip can
@@ -1149,15 +1149,19 @@ def _auto_route_disabled() -> bool:
     return raw in {"0", "false", "no", "off"}
 
 
-_DEFAULT_DAILY_BUILD_CEILING = 10
+# Fully-gated posture (operator decision 2026-07-05): the default is 0 so NO
+# demo auto-dispatches. Every buildable candidate is queued pending-approval and
+# surfaced in the twice-daily curation digest for the operator to approve a
+# subset. Set ``UA_DEMO_BUILD_DAILY_CEILING=N`` to re-enable N auto-builds/day.
+_DEFAULT_DAILY_BUILD_CEILING = 0
 
 
 def _daily_build_ceiling() -> int:
     """Max tutorial builds auto-dispatched per America/Chicago day.
 
-    Reads ``UA_DEMO_BUILD_DAILY_CEILING`` (default 10), clamped to >= 0. A
-    ceiling of 0 means every buildable candidate is queued as pending-approval
-    (nothing auto-dispatches) until an operator promotes it.
+    Reads ``UA_DEMO_BUILD_DAILY_CEILING`` (default 0 — fully gated), clamped to
+    >= 0. A ceiling of 0 means every buildable candidate is queued as
+    pending-approval (nothing auto-dispatches) until an operator promotes it.
     """
     raw = str(os.getenv("UA_DEMO_BUILD_DAILY_CEILING", "") or "").strip()
     if not raw:
