@@ -30,6 +30,12 @@ def _reset_governor_and_flags(monkeypatch):
     # Keep prefer-ATLAS off unless a test opts in; reset the global governor so
     # one test's backoff/api_down state can't leak into the next.
     monkeypatch.delenv("UA_DISPATCHER_PREFER_ATLAS", raising=False)
+    # These tests exercise dispatcher routing/capacity/idempotency, not the
+    # proactive-demo OUTFLOW daily cap (own suite: test_proactive_demo_daily_cap).
+    # Its default is now 0 (fully-gated posture, 2026-07-05) which would defer
+    # every tutorial_build; pin it non-binding so these tests see the free-slot
+    # dispatch path they were written against.
+    monkeypatch.setenv("UA_PROACTIVE_DEMO_DAILY_CAP", "100")
     CapacityGovernor.reset_instance()
     yield
     CapacityGovernor.reset_instance()
