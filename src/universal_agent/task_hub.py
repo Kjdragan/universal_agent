@@ -5578,7 +5578,7 @@ def _emit_kanban_terminal_intelligence(
 # tutorial_demo_finalize); an LLM calling the generic `complete` verb on
 # the source task bypasses all of it — see perform_task_action's gate.
 DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS = frozenset(
-    {"tutorial_build", "cody_demo_task"}
+    {"tutorial_build", "cody_demo_task", "directed_build"}
 )
 
 

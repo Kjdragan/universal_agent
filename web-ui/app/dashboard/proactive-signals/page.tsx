@@ -98,6 +98,9 @@ export default function ProactiveSignalsPage() {
   const [feedbackOpenId, setFeedbackOpenId] = useState("");
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackTags, setFeedbackTags] = useState<string[]>([]);
+  const [directedSeed, setDirectedSeed] = useState("");
+  const [directedBusy, setDirectedBusy] = useState(false);
+  const [directedMsg, setDirectedMsg] = useState("");
 
   const saveFilterPrefs = useCallback((overrides?: { source?: string; status?: string }) => {
     const prefs = {
@@ -231,6 +234,35 @@ export default function ProactiveSignalsPage() {
     }
   }, [feedbackOpenId, feedbackTags, feedbackText, load]);
 
+  // Operator-directed demo build (S5): "Kevin says: build X". POSTs the free
+  // text to the gateway directed-demo intake via the token-injecting proxy —
+  // no buildability judge, flows through the demo_factory engine path.
+  const submitDirected = useCallback(async () => {
+    const seed = directedSeed.trim();
+    if (!seed) return;
+    setDirectedBusy(true);
+    setDirectedMsg("");
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/directed-demo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seed }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        setDirectedMsg("Directed demo lane is disabled (UA_DIRECTED_DEMO_ENABLED off).");
+        return;
+      }
+      if (!res.ok) throw new Error((data && data.detail) || `Request failed (${res.status})`);
+      setDirectedMsg(`Queued: ${data.slug || "?"} (directed lane)`);
+      setDirectedSeed("");
+    } catch (err) {
+      setDirectedMsg((err as Error).message || "Failed to queue directed demo build.");
+    } finally {
+      setDirectedBusy(false);
+    }
+  }, [directedSeed]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -282,6 +314,31 @@ export default function ProactiveSignalsPage() {
             {item}
           </button>
         ))}
+      </div>
+
+      <div className="border border-primary/25 bg-primary/5 p-3">
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-primary/80">Build a demo of…</label>
+        <div className="flex flex-wrap gap-2">
+          <input
+            type="text"
+            value={directedSeed}
+            onChange={(event) => setDirectedSeed(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submitDirected(); } }}
+            placeholder="e.g. a runnable demo of the Claude Code --json-schema structured-output flag"
+            className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
+          />
+          <button
+            type="button"
+            onClick={() => void submitDirected()}
+            disabled={directedBusy || !directedSeed.trim()}
+            className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-primary hover:bg-primary/20 disabled:opacity-50"
+          >
+            {directedBusy ? "Queuing..." : "Build demo"}
+          </button>
+        </div>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Operator-directed build — flows through the demo_factory engine (no buildability judge).{directedMsg && <span className="text-primary"> {directedMsg}</span>}
+        </p>
       </div>
 
       {error && <div className="border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</div>}

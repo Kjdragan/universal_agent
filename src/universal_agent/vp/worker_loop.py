@@ -952,7 +952,10 @@ class VpWorkerLoop:
                     # demo on the dashboard demo surface (UA_DEMOS_ROOT
                     # symlink the _claude_code_intel_demos walker picks up).
                     _tutorial_finalize: dict[str, Any] = {}
-                    if event_type == "vp.mission.completed" and _src_kind == "tutorial_build":
+                    if event_type == "vp.mission.completed" and _src_kind in (
+                        "tutorial_build",
+                        "directed_build",
+                    ):
                         from universal_agent.services.tutorial_demo_finalize import (
                             finalize_tutorial_build_demo,
                             proactive_demo_slug,
@@ -960,23 +963,35 @@ class VpWorkerLoop:
                         _fin_result_ws = ""
                         if str(outcome.result_ref or "").startswith("workspace://"):
                             _fin_result_ws = str(outcome.result_ref).removeprefix("workspace://").strip()
-                        # The demo_factory engine (UA_PROACTIVE_DEMO_ENGINE) lands the
-                        # real repo at /home/ua/lrepos/demo-proactive-<slug> (or, if the
-                        # land was conceptual and B's rename already ran,
-                        # demo-undemoable-<slug>) — NOT the mission workspace. Resolve it
-                        # FIRST so finalize registers the built repo; the same title-only
-                        # slug the build-time --slug used keeps the two deterministically
-                        # aligned. Non-existent candidates are skipped (safe no-op when the
-                        # bespoke engine ran instead).
-                        _df_slug = proactive_demo_slug(str(_src_meta.get("video_title") or ""))
+                        # The demo_factory engine lands the real repo at
+                        # /home/ua/lrepos/demo-<prefix>-<slug> (proactive for the
+                        # tutorial_build lane, directed for the operator-directed
+                        # lane), or demo-undemoable-<slug> if the land was
+                        # conceptual and B's rename already ran — NOT the mission
+                        # workspace. Resolve it FIRST so finalize registers the
+                        # built repo; the same slug the build-time --slug used
+                        # keeps the two deterministically aligned. Non-existent
+                        # candidates are skipped (safe no-op when the bespoke
+                        # engine ran instead).
+                        if _src_kind == "directed_build":
+                            _df_slug = str(_src_meta.get("directed_slug") or "").strip() or proactive_demo_slug(
+                                str(_src_meta.get("directed_seed") or _source_task_id)
+                            )
+                            _landed_prefix = "directed"
+                            _finalize_slug = _df_slug
+                        else:
+                            _df_slug = proactive_demo_slug(str(_src_meta.get("video_title") or ""))
+                            _landed_prefix = "proactive"
+                            _finalize_slug = ""  # tutorial_build derives its own slug
                         _df_root = "/home/ua/lrepos"  # matches build_demo.py --workspace-root
                         _tutorial_finalize = finalize_tutorial_build_demo(
                             task_id=_source_task_id,
                             task_meta=_src_meta,
                             mission=dict(mission),
                             mission_id=mission_id,
+                            slug=_finalize_slug,
                             workspace_candidates=[
-                                f"{_df_root}/demo-proactive-{_df_slug}",
+                                f"{_df_root}/demo-{_landed_prefix}-{_df_slug}",
                                 f"{_df_root}/demo-undemoable-{_df_slug}",
                                 str(_src_meta.get("workspace_dir") or "").strip(),
                                 str((outcome.payload or {}).get("cli_workspace_dir") or "").strip(),
@@ -994,6 +1009,7 @@ class VpWorkerLoop:
                     if event_type == "vp.mission.completed" and _src_kind in (
                         "cody_demo_task",
                         "tutorial_build",
+                        "directed_build",
                     ):
                         _dispatch_meta = (
                             _src_meta.get("dispatch")
@@ -1085,19 +1101,20 @@ class VpWorkerLoop:
                         except Exception:
                             logger.warning("demo-built notification hook failed", exc_info=True)
                     elif (
-                        _src_kind == "tutorial_build"
+                        _src_kind in ("tutorial_build", "directed_build")
                         and event_type == "vp.mission.completed"
                         and bool((_tutorial_finalize or {}).get("ok"))
                     ):
                         # Explicit terminal routing for the proactive tutorial_build
-                        # demo lane (mirrors the cody_demo_task branch above). The
-                        # default `else` closed a finished tutorial_build to
-                        # `completed` WITHOUT a completion_token, so the head-of-line
-                        # guard (task_hub completion_token) never engaged and a
-                        # retry/exhaustion sweep could re-open the finished demo
-                        # (→ re-surface / re-dispatch). Complete through the canonical
-                        # demo-lane verb, which stamps a non-empty completion_token.
-                        # A non-ok finalize stays on the default close path below.
+                        # AND operator-directed directed_build demo lanes (mirrors
+                        # the cody_demo_task branch above). The default `else` closed
+                        # a finished build to `completed` WITHOUT a completion_token,
+                        # so the head-of-line guard (task_hub completion_token) never
+                        # engaged and a retry/exhaustion sweep could re-open the
+                        # finished demo (→ re-surface / re-dispatch). Complete through
+                        # the canonical demo-lane verb, which stamps a non-empty
+                        # completion_token. A non-ok finalize stays on the default
+                        # close path below.
                         _close_tutorial_build_demo_source_task(
                             th_conn,
                             source_task_id=_source_task_id,
@@ -1107,9 +1124,9 @@ class VpWorkerLoop:
                             tutorial_finalize=_tutorial_finalize,
                         )
                         logger.info(
-                            "tutorial_build demo terminal-routed: source_task_id=%s "
+                            "%s demo terminal-routed: source_task_id=%s "
                             "mission=%s → completed (+completion_token)",
-                            _source_task_id, mission_id,
+                            _src_kind, _source_task_id, mission_id,
                         )
 
                         # Email parity with the cody_demo_task branch: FYI the
@@ -1132,9 +1149,14 @@ class VpWorkerLoop:
                                 title=str(
                                     (_src_item or {}).get("title")
                                     or _src_meta.get("video_title")
+                                    or _src_meta.get("directed_seed")
                                     or _source_task_id
                                 ),
-                                capability=str(_src_meta.get("video_title") or ""),
+                                capability=str(
+                                    _src_meta.get("video_title")
+                                    or _src_meta.get("directed_seed")
+                                    or ""
+                                ),
                                 workspace_dir=_tut_ws,
                                 build_engine="demo_factory",
                                 review_required=False,

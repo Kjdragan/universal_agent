@@ -39,7 +39,7 @@ _TERMINAL_MISSION_STATUSES = {"completed", "failed", "cancelled"}
 # dispatch stole a freshly-approved ``tutorial_build`` card's linkage and
 # falsely closed it at mission completion).
 _CODER_LANE_SOURCE_KINDS = frozenset(
-    {"tutorial_build", "cody_demo_task", "cody_scaffold_request"}
+    {"tutorial_build", "cody_demo_task", "cody_scaffold_request", "directed_build"}
 )
 _TEXT_EXTENSIONS = {
     ".md",

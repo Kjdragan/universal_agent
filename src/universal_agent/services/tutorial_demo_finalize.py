@@ -90,17 +90,27 @@ def _manifest_is_undemoable(manifest: dict[str, Any]) -> bool:
     return "acceptance_passed" in manifest and manifest.get("acceptance_passed") is False
 
 
-def _rename_to_undemoable(workspace: Path) -> Path:
-    """Rename ``demo-proactive-<slug>`` → ``demo-undemoable-<slug>`` in place.
+# On-disk prefixes a demo_factory land uses before finalize: the proactive
+# (tutorial_build) lane lands demo-proactive-<slug>; the operator-directed lane
+# (services/directed_demo_builds) lands demo-directed-<slug>. Either renames to
+# demo-undemoable-<slug> when the land is conceptual.
+_LANDED_DEMO_PREFIXES = ("demo-proactive-", "demo-directed-")
 
-    Guarded + idempotent: only a dir whose name starts with ``demo-proactive-``
-    is renamed (a bespoke mission workspace is left untouched); if the undemoable
-    target already exists (a prior finalize ran), that target is returned. Any
-    OSError is swallowed and the original path returned (never raises)."""
+
+def _rename_to_undemoable(workspace: Path) -> Path:
+    """Rename ``demo-proactive-<slug>`` / ``demo-directed-<slug>`` →
+    ``demo-undemoable-<slug>`` in place.
+
+    Guarded + idempotent: only a dir whose name starts with one of
+    ``_LANDED_DEMO_PREFIXES`` is renamed (a bespoke mission workspace is left
+    untouched); if the undemoable target already exists (a prior finalize ran),
+    that target is returned. Any OSError is swallowed and the original path
+    returned (never raises)."""
     name = workspace.name
-    if not name.startswith("demo-proactive-"):
+    matched = next((p for p in _LANDED_DEMO_PREFIXES if name.startswith(p)), None)
+    if not matched:
         return workspace
-    target = workspace.with_name("demo-undemoable-" + name[len("demo-proactive-"):])
+    target = workspace.with_name("demo-undemoable-" + name[len(matched):])
     if target == workspace:
         return workspace
     try:
@@ -218,8 +228,14 @@ def finalize_tutorial_build_demo(
     mission: dict[str, Any],
     mission_id: str,
     workspace_candidates: list[str],
+    slug: str = "",
 ) -> dict[str, Any]:
-    """Deterministic tutorial_build demo finalize. Never raises."""
+    """Deterministic demo finalize for the tutorial_build / directed_build lanes.
+
+    ``slug`` overrides the dashboard registration slug when non-empty (the
+    operator-directed lane passes its ``directed_slug`` here); the proactive
+    tutorial_build lane leaves it empty and the slug is derived from
+    ``video_title`` / ``video_id`` as before. Never raises."""
     result: dict[str, Any] = {"ok": False, "task_id": task_id, "mission_id": mission_id}
     try:
         workspace: Path | None = None
@@ -253,11 +269,11 @@ def finalize_tutorial_build_demo(
             mission_payload if isinstance(mission_payload, dict) else None
         )
 
-        slug = _slugify(
+        demo_slug = str(slug or "").strip() or _slugify(
             str(task_meta.get("video_title") or ""),
             fallback=_slugify(str(task_meta.get("video_id") or ""), fallback=f"tutorial-{mission_id[-8:]}"),
         )
-        demo_id, demo_link = _register_demo_symlink(workspace, slug)
+        demo_id, demo_link = _register_demo_symlink(workspace, demo_slug)
 
         manifest_path = _synthesize_manifest(
             workspace=workspace,

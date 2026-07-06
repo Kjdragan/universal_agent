@@ -1011,7 +1011,9 @@ async def _monitor_cli_output(
 # finalize it — so the protocol-violation PARK is suppressed (the _close_run
 # classification is still written for observability). Must stay in sync with
 # the ``_src_kind in (...)`` set in ``vp/worker_loop.py``.
-_WORKER_LOOP_FINALIZED_SOURCE_KINDS = frozenset({"tutorial_build", "cody_demo_task"})
+_WORKER_LOOP_FINALIZED_SOURCE_KINDS = frozenset(
+    {"tutorial_build", "cody_demo_task", "directed_build"}
+)
 
 
 def _classify_and_route_cli_exit(

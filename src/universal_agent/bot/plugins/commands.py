@@ -1,5 +1,6 @@
 
 from datetime import datetime, timezone
+import logging
 import os
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -8,6 +9,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
 from ..core.context import BotContext
 from universal_agent.artifacts import resolve_artifacts_dir
+
+logger = logging.getLogger(__name__)
 
 
 async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]) -> None:
@@ -223,6 +226,63 @@ async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[N
             pass # fallback to implicit handling
         ctx.abort()
         return
+
+    # /demo <seed>  |  build [me] a demo of <seed>  — operator-DIRECTED demo lane (S5)
+    # UA already owns the single always-on Telegram getUpdates consumer (this
+    # bot), so the directed lane rides it as a command handler — no second
+    # poller. Gated by the master flag UA_DIRECTED_DEMO_ENABLED (the same flag
+    # that gates the gateway + dashboard doors); the reply matches the design's
+    # ack contract "queued: <slug> (directed lane)". The Telegram allow-list
+    # (auth_middleware / TELEGRAM_ALLOWED_USER_IDS) already ran upstream, so the
+    # sender is trusted here.
+    try:
+        from universal_agent.services.directed_demo_builds import (
+            is_directed_demo_command,
+            parse_directed_demo_seed,
+        )
+
+        _is_explicit_demo_cmd = is_directed_demo_command(text)
+        _directed_seed = parse_directed_demo_seed(text)
+    except Exception:
+        _is_explicit_demo_cmd = False
+        _directed_seed = None
+    if _directed_seed or _is_explicit_demo_cmd:
+        from universal_agent.feature_flags import directed_demo_enabled
+
+        if not directed_demo_enabled():
+            # Lane off: intercept only the explicit /demo command (tell the
+            # operator); let natural-language "build a demo of ..." fall through
+            # to the normal agent so we don't silently hijack it.
+            if _is_explicit_demo_cmd:
+                await msg.reply_text(
+                    "⚠️ Directed demo lane is disabled (UA_DIRECTED_DEMO_ENABLED off)."
+                )
+                ctx.abort()
+                return
+        else:
+            if not _directed_seed:
+                await msg.reply_text(
+                    "⚠️ Use: `/demo <what to build>`", parse_mode="Markdown"
+                )
+                ctx.abort()
+                return
+            try:
+                from universal_agent.services.directed_demo_builds import (
+                    queue_directed_demo_build,
+                )
+
+                result = queue_directed_demo_build(
+                    _directed_seed,
+                    requested_by=f"telegram:{user_id}",
+                    channel="telegram",
+                )
+                slug = result.get("slug") or "?"
+                await msg.reply_text(f"🏗️ queued: {slug} (directed lane)")
+            except Exception as exc:
+                logger.error("directed demo queue failed: %s", exc)
+                await msg.reply_text("⚠️ Could not queue the directed demo build.")
+            ctx.abort()
+            return
 
     # /agent or implicit
     prompt = None

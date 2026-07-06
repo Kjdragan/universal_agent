@@ -726,6 +726,43 @@ def _sanitize_one_line(text: str) -> str:
     return one_line[:200]
 
 
+def build_demo_factory_command_line(
+    *,
+    prompt: str,
+    demo_id: str,
+    slug: str,
+    title: str,
+    seed_url: str = "",
+) -> str:
+    """The SINGLE demo_factory ``build_demo.py`` invocation — shared by the
+    proactive ``tutorial_build`` lane (this module's
+    ``_demo_factory_override_block``) and the operator-directed
+    ``directed_build`` lane (``services/directed_demo_builds``) so the flag set
+    (``--endpoint-required any --promote --skill-tier library --cody-mode hybrid
+    --video``), the ``--seed-url`` conditional, and ``--workspace-root`` can
+    never drift between the two lanes.
+
+    ``prompt`` is the positional seed the /goal loop builds toward; ``demo_id``
+    and ``slug`` bind the DEMO_VERIFY token and the on-disk ``demo-<slug>`` dir
+    (``--workspace-root /home/ua/lrepos`` ⇒ ``/home/ua/lrepos/demo-<slug>``);
+    ``seed_url`` is appended as ``--seed-url`` only when non-empty (threads the
+    original source to the fidelity judge). Runs under the demo_factory uv venv
+    (``proactive_demo_factory_run_cmd``) so the eval stage's google-genai import
+    resolves — bare ``/usr/bin/python3`` lacks it. Indented to sit inside the
+    numbered instruction block of an override objective.
+    """
+    run_cmd = proactive_demo_factory_run_cmd(proactive_demo_factory_script())
+    clean_url = str(seed_url or "").strip()
+    seed_url_flag = f" --seed-url {clean_url}" if clean_url else ""
+    return (
+        f'    {run_cmd} "{prompt}" \\\n'
+        f'      --demo-id {demo_id} --slug {slug} --title "{title}" \\\n'
+        f"      --workspace-root /home/ua/lrepos{seed_url_flag} \\\n"
+        "      --endpoint-required any --promote --skill-tier library "
+        "--cody-mode hybrid --video"
+    )
+
+
 def _demo_factory_override_block(*, video_title: str, video_url: str) -> str:
     """DEMO ENGINE OVERRIDE block appended to the tutorial_build objective when
     ``UA_PROACTIVE_DEMO_ENGINE`` is on (mirrors cody_dispatch.py:91-108).
@@ -739,17 +776,23 @@ def _demo_factory_override_block(*, video_title: str, video_url: str) -> str:
     ``proactive-<video_slug>`` (stable, == the on-disk dir suffix).
     """
     driver = proactive_demo_factory_script()
-    # LOAD BEARING: run build_demo.py UNDER the demo_factory uv venv, not bare
-    # python3. A full land runs the fidelity-eval stage which imports
-    # google-genai; the VPS bare interpreter (/usr/bin/python3) lacks it, so
-    # `python3 build_demo.py` fails at eval — only the demo_factory .venv has it.
-    run_cmd = proactive_demo_factory_run_cmd(driver)
     video_slug = proactive_demo_slug(video_title)
     demo_id = f"proactive-{video_slug}"
     seed = _sanitize_one_line(video_title) or "this tutorial"
     title = _sanitize_one_line(video_title) or demo_id
-    seed_url = str(video_url or "").strip()
-    seed_url_flag = f" --seed-url {seed_url}" if seed_url else ""
+    # LOAD BEARING: the single build_demo.py invocation is factored into the
+    # shared ``build_demo_factory_command_line`` so the flag set + --seed-url
+    # conditional + --workspace-root never drift from the operator-directed
+    # lane (services/directed_demo_builds). It runs UNDER the demo_factory uv
+    # venv, not bare python3: a full land's fidelity-eval imports google-genai,
+    # which the VPS /usr/bin/python3 lacks.
+    command = build_demo_factory_command_line(
+        prompt=f"Build a runnable demo of the capability from this tutorial: {seed}",
+        demo_id=demo_id,
+        slug=f"proactive-{video_slug}",
+        title=title,
+        seed_url=video_url,
+    )
     return (
         "── DEMO ENGINE OVERRIDE: demo_factory (the /demo engine) ──\n"
         "- Build this demo with the demo_factory headless driver, NOT the bespoke "
@@ -766,13 +809,7 @@ def _demo_factory_override_block(*, video_title: str, video_url: str) -> str:
         "fires the ClearSpring explainer render after a passing land — it "
         "degrades harmlessly (skipped, not failed) if the ClearSpring "
         "toolchain isn't installed on this host:\n"
-        f'    {run_cmd} "Build a runnable demo of the capability from this '
-        f'tutorial: {seed}" \\\n'
-        f"      --demo-id {demo_id} --slug proactive-{video_slug} "
-        f'--title "{title}" \\\n'
-        f"      --workspace-root /home/ua/lrepos{seed_url_flag} \\\n"
-        "      --endpoint-required any --promote --skill-tier library "
-        "--cody-mode hybrid --video\n"
+        f"{command}\n"
         f"  → lands the repo at /home/ua/lrepos/demo-proactive-{video_slug} "
         "(--skill-tier library graduates the skill into dragan-plugins as a "
         "zero-context /dragan:<name> library entry).\n"
