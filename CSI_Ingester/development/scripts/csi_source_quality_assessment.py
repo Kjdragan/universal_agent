@@ -23,16 +23,16 @@ import sys
 # Ensure csi_ingester package is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from csi_ingester.quality import (
+    score_threads_terms as _score_threads_terms,
+    score_youtube_channels as _score_youtube_channels,
+)
 from csi_ingester.store.source_manager import (
     auto_promote_demote,
     get_source_summary,
     record_quality_assessment,
 )
 from csi_ingester.store.sqlite import connect, ensure_schema
-from csi_ingester.quality import (
-    score_threads_terms as _score_threads_terms,
-    score_youtube_channels as _score_youtube_channels,
-)
 
 logging.basicConfig(
     level=logging.INFO,

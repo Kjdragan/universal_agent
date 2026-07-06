@@ -3,8 +3,8 @@ aged archive entries (archiving alone — a same-FS move — frees nothing)."""
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
+import time
 
 from universal_agent.scripts.vp_coder_workspace_pruner import (
     _hard_delete_aged_archive,

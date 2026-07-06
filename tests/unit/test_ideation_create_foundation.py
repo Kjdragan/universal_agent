@@ -14,9 +14,9 @@ import asyncio
 import sqlite3
 
 from universal_agent import task_hub
+from universal_agent.services.reflection_engine import _format_reflection_prompt
 from universal_agent.tools import task_hub_bridge
 from universal_agent.tools.internal_registry import get_core_internal_tools
-from universal_agent.services.reflection_engine import _format_reflection_prompt
 
 
 def test_create_tool_is_registered():
