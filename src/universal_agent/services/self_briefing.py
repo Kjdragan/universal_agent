@@ -36,6 +36,7 @@ GOAL_ELIGIBLE_SOURCE_KINDS = frozenset({
     "cody_scaffold_request",
     "tutorial_build",
     "tutorial_build_task",
+    "directed_build",
 })
 
 

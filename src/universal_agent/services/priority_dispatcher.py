@@ -40,6 +40,8 @@ from typing import Any, Optional
 from universal_agent.feature_flags import (
     _is_truthy,
     _read_env_bool,
+    directed_demo_daily_cap,
+    directed_demo_enabled,
     proactive_demo_daily_cap,
 )
 from universal_agent.services.agent_router import (
@@ -68,7 +70,7 @@ try:  # pragma: no cover - exercised in prod; fallback only for minimal import e
     )
 except Exception:  # pragma: no cover
     CODER_LANE_SOURCE_KINDS = frozenset(
-        {"tutorial_build", "cody_demo_task", "cody_scaffold_request"}
+        {"tutorial_build", "cody_demo_task", "cody_scaffold_request", "directed_build"}
     )
 
 # Chat source_kinds that address Simone herself. Verified live against
@@ -289,6 +291,11 @@ def _is_tutorial_build(item: dict[str, Any]) -> bool:
     return str(item.get("source_kind") or "").strip().lower() == "tutorial_build"
 
 
+def _is_directed_build(item: dict[str, Any]) -> bool:
+    """True for the operator-directed demo lane (``source_kind == "directed_build"``)."""
+    return str(item.get("source_kind") or "").strip().lower() == "directed_build"
+
+
 def _count_dispatched_tutorial_builds_today(conn) -> int:
     """Count ``tutorial_build`` builds already DISPATCHED today (America/Chicago).
 
@@ -322,6 +329,48 @@ def _count_dispatched_tutorial_builds_today(conn) -> int:
         total = 0
         for r in conn.execute(
             "SELECT metadata_json FROM task_hub_items WHERE source_kind = 'tutorial_build'"
+        ).fetchall():
+            try:
+                meta = _json.loads((r[0] if not hasattr(r, "keys") else r["metadata_json"]) or "{}")
+            except Exception:
+                continue
+            delegated_at = str(((meta.get("delegation") or {}).get("delegated_at")) or "")
+            if delegated_at >= day_start:
+                total += 1
+        return total
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _count_dispatched_directed_builds_today(conn) -> int:
+    """Count ``directed_build`` builds already DISPATCHED today (America/Chicago).
+
+    Mirrors :func:`_count_dispatched_tutorial_builds_today` for the operator-
+    directed lane's SEPARATE daily budget (:func:`directed_demo_daily_cap`).
+    Counts every directed_build row whose ``metadata.delegation.delegated_at``
+    falls on or after the SHARED ``chicago_day_start_iso`` boundary. json_extract
+    (SQLite 3.38+) with a Python fallback; counting must never break dispatch.
+    """
+    day_start = chicago_day_start_iso()
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) FROM task_hub_items
+            WHERE source_kind = 'directed_build'
+              AND json_extract(metadata_json, '$.delegation.delegated_at') >= ?
+            """,
+            (day_start,),
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception:  # noqa: BLE001 — counting must never break dispatch
+        pass
+    # Fallback: scan directed_build rows in Python (older SQLite without JSON1).
+    try:
+        import json as _json
+
+        total = 0
+        for r in conn.execute(
+            "SELECT metadata_json FROM task_hub_items WHERE source_kind = 'directed_build'"
         ).fetchall():
             try:
                 meta = _json.loads((r[0] if not hasattr(r, "keys") else r["metadata_json"]) or "{}")
@@ -539,11 +588,33 @@ async def dispatch_claimed(
     )
     demo_pending = 0
 
+    # Component C (directed lane) — operator-directed demo daily BUILD cap. A
+    # SEPARATE budget from the proactive cap above: a directed build never
+    # consumes the tutorial_build cap and vice-versa. Gated OFF by the master
+    # flag — when UA_DIRECTED_DEMO_ENABLED is off the effective cap is 0 so every
+    # directed build defers. Directed builds still SERIALIZE against proactive
+    # builds via the single coder slot in the loop below (shared execution slot,
+    # decoupled daily budgets).
+    directed_daily_cap = directed_demo_daily_cap() if directed_demo_enabled() else 0
+    directed_today = (
+        _count_dispatched_directed_builds_today(conn)
+        if any(_is_directed_build(by_id.get(d.task_id, {})) for d in decisions)
+        else 0
+    )
+    directed_pending = 0
+
     to_dispatch: list[DispatchDecision] = []
-    for d in sorted(decisions, key=lambda x: x.priority):
+    # Within a priority tier, dispatch operator-DIRECTED builds BEFORE proactive
+    # tutorial_build candidates (both are coder-lane P0 competing for the single
+    # coder slot) — the operator's explicit ask wins the slot this cycle.
+    for d in sorted(
+        decisions,
+        key=lambda x: (x.priority, 0 if _is_directed_build(by_id.get(x.task_id, {})) else 1),
+    ):
         if not d.is_vp:
             continue
         _is_demo_build = _is_tutorial_build(by_id.get(d.task_id, {}))
+        _is_dir_build = _is_directed_build(by_id.get(d.task_id, {}))
         if _is_demo_build and (demo_today + demo_pending) >= demo_daily_cap:
             # OUTFLOW cap reached — defer (leave queued, never cancel/error).
             d.deferred = True
@@ -551,6 +622,15 @@ async def dispatch_claimed(
                 "priority_dispatcher: tutorial_build daily cap %d reached "
                 "(%d dispatched today), deferring task=%s",
                 demo_daily_cap, demo_today + demo_pending, d.task_id,
+            )
+            continue
+        if _is_dir_build and (directed_today + directed_pending) >= directed_daily_cap:
+            # Directed OUTFLOW cap reached (or lane disabled) — defer, never cancel.
+            d.deferred = True
+            log.info(
+                "priority_dispatcher: directed_build daily cap %d reached "
+                "(%d dispatched today), deferring task=%s",
+                directed_daily_cap, directed_today + directed_pending, d.task_id,
             )
             continue
         ok, reason = governor.can_dispatch()
@@ -572,6 +652,8 @@ async def dispatch_claimed(
             coder_used += 1
             if _is_demo_build:
                 demo_pending += 1
+            if _is_dir_build:
+                directed_pending += 1
             to_dispatch.append(d)
             continue
         # AGENT_GENERAL -> resolve to a concrete vp_id. An explicit operator pin

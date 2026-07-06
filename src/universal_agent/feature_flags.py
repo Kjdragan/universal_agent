@@ -775,6 +775,45 @@ def proactive_demo_daily_cap(default: int = 0) -> int:
     return _read_int("UA_PROACTIVE_DEMO_DAILY_CAP", default, minimum=0)
 
 
+def directed_demo_enabled(default: bool = False) -> bool:
+    """Master switch for the operator-DIRECTED demo-build lane (S5).
+
+    A directed build is "Kevin says: build X" arriving from anywhere (the
+    gateway ``POST /api/v1/directed-demo`` endpoint, the dashboard free-text
+    form, or the Telegram ``/demo`` command) and flowing through the SAME
+    demo_factory engine path as the proactive ``tutorial_build`` lane —
+    ``source_kind == "directed_build"`` — but with NO buildability judge
+    (operator direction IS the judgment) and its OWN daily cap
+    (:func:`directed_demo_daily_cap`).
+
+    Default OFF so the code lands inert: intake refuses to queue and dispatch
+    defers every directed build until the operator sets
+    ``UA_DIRECTED_DEMO_ENABLED=1``. Reads that env var (truthy 1/true/yes/on).
+    """
+    val = _read_env_bool("UA_DIRECTED_DEMO_ENABLED")
+    return default if val is None else val
+
+
+def directed_demo_daily_cap(default: int = 3) -> int:
+    """Max operator-DIRECTED demo BUILDS dispatched per America/Chicago day.
+
+    The directed lane has its OWN OUTFLOW budget, SEPARATE from
+    :func:`proactive_demo_daily_cap` — a directed build never consumes the
+    proactive lane's cap and vice-versa. Enforced at the dispatch point for
+    ``source_kind == "directed_build"``
+    (``services/priority_dispatcher.dispatch_claimed``) over the shared
+    ``utils.day_boundary.chicago_day_start_iso`` boundary; once this many
+    directed builds have dispatched today, further ones defer (left queued,
+    never cancelled). Directed builds still SERIALIZE against proactive builds
+    via the single coder VP slot — the separate cap only decouples the two
+    daily budgets, not the one-build-at-a-time execution.
+
+    Default 3 (a modest hands-off ceiling). Reads ``UA_DIRECTED_DEMO_DAILY_CAP``
+    (clamped to >= 0). A cap of 0 defers every directed build.
+    """
+    return _read_int("UA_DIRECTED_DEMO_DAILY_CAP", default, minimum=0)
+
+
 def proactive_demo_nuggets_enabled(default: bool = False) -> bool:
     """Master switch for the end-of-day "golden-nuggets" demo cron (Component D).
 

@@ -2137,6 +2137,10 @@ class ProactiveSignalActionRequest(BaseModel):
     feedback_text: Optional[str] = None
 
 
+class DirectedDemoRequest(BaseModel):
+    seed: str
+
+
 class ProactiveArtifactFeedbackRequest(BaseModel):
     score: Optional[int] = None
     feedback_text: Optional[str] = None
@@ -19395,6 +19399,54 @@ async def dashboard_proactive_signal_action(
         background_tasks.add_task(distill_feedback_to_rules, card, str(payload.feedback_text or ""), payload.feedback_tags)
 
     return {"status": "ok", "card": card, "task_id": (card.get("selected_action") or {}).get("task_id")}
+
+
+@app.post("/api/v1/directed-demo")
+async def directed_demo_intake(request: Request, payload: DirectedDemoRequest):
+    """Operator-DIRECTED demo build intake (S5) — "Kevin says: build X" from
+    anywhere.
+
+    Queues a ``source_kind="directed_build"`` Task Hub row that flows through the
+    demo_factory engine path (dispatch → /goal build → verify + fidelity-eval →
+    land → demo-built email), with NO buildability judge and its own daily cap.
+    Tailnet-reachable, so the operator can fire a build from a phone browser.
+
+    Auth matches every other mutating dashboard endpoint (``_require_ops_auth`` —
+    ops JWT / ``Authorization: Bearer`` / ``x-ua-ops-token``, fail-open only when
+    no ops token is configured, i.e. tailnet-trusted). The dashboard free-text
+    form reaches this via the same token-injecting ``/api/dashboard/gateway``
+    proxy. Gated by the master flag ``UA_DIRECTED_DEMO_ENABLED`` — returns 409
+    when the lane is off.
+    """
+    _require_ops_auth(request)
+    from universal_agent.services.directed_demo_builds import queue_directed_demo_build
+
+    seed = str(payload.seed or "").strip()
+    if not seed:
+        raise HTTPException(status_code=400, detail="seed is required")
+    actor = _activity_actor_from_request(request)
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            result = queue_directed_demo_build(
+                seed, requested_by=actor, channel="gateway_api", conn=conn
+            )
+        finally:
+            conn.close()
+    status = str(result.get("status") or "")
+    if status == "disabled":
+        raise HTTPException(
+            status_code=409,
+            detail="directed demo lane disabled (UA_DIRECTED_DEMO_ENABLED off)",
+        )
+    if status == "invalid":
+        raise HTTPException(status_code=400, detail="seed is required")
+    return {
+        "status": "ok",
+        "task_id": result.get("task_id"),
+        "slug": result.get("slug"),
+        "message": f"queued: {result.get('slug')} (directed lane)",
+    }
 
 
 @app.get("/api/v1/dashboard/proactive-task-history")

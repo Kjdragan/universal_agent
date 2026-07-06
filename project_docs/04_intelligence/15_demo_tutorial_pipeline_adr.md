@@ -6,6 +6,7 @@ subsystem: demo-tutorial-pipeline
 code_paths:
   - src/universal_agent/scripts/youtube_daily_digest.py
   - src/universal_agent/services/proactive_tutorial_builds.py
+  - src/universal_agent/services/directed_demo_builds.py
   - src/universal_agent/services/tutorial_demo_finalize.py
   - src/universal_agent/services/self_briefing.py
   - src/universal_agent/vp/clients/claude_cli_client.py
@@ -34,7 +35,9 @@ code_paths:
   - src/universal_agent/services/cron_artifact_notifier.py
   - .claude/skills/provision-local-gpu-ollama/
   - .claude/commands/gpu-demo-build.md
-last_verified: 2026-07-01
+  - web-ui/app/dashboard/proactive-signals/
+  - src/universal_agent/bot/plugins/commands.py
+last_verified: 2026-07-05
 ---
 
 # ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign
@@ -227,6 +230,61 @@ Set live in prod on the migration:
 Pure-code demos tend to land **`demo-undemoable`**: the fidelity gate (`evaluate_artifact` / Gemini)
 perceives only media, so a demo that produces no media artifact a judge can watch fails the eval even
 when the code runs. Tuning the eval for code-only demos is a candidate follow-up, not a shipped fix.
+
+## Directed-build lane — "Kevin says: build X" from anywhere (SHIPPED S5, default OFF)
+
+A **sibling** of the proactive `tutorial_build` lane for **operator-directed** builds: the operator
+names a demo to build, from anywhere, and it flows through the **same demo_factory engine path** with
+**zero desktop involvement**. It is a new `source_kind == "directed_build"`
+(`services/directed_demo_builds.py::queue_directed_demo_build`) that differs from the proactive lane in
+exactly two ways — **no buildability judge** (operator direction *is* the judgment: the intake writes
+the Task Hub row directly via `task_hub.upsert_item`, bypassing the preference gate that
+`proactive_task_builder.py::queue_proactive_task` applies) and its **own daily budget**
+(`feature_flags.py::directed_demo_daily_cap`, `UA_DIRECTED_DEMO_DAILY_CAP`, default 3). Everything
+downstream is **shared** with the proactive lane.
+
+- **Master flag:** `feature_flags.py::directed_demo_enabled` (`UA_DIRECTED_DEMO_ENABLED`, default **OFF**)
+  gates BOTH intake (the intake returns `disabled` and writes nothing) AND dispatch (the dispatcher's
+  effective directed cap is 0 → every directed build defers) — so the merge is inert until the operator
+  flips it.
+- **Shared build command:** `proactive_tutorial_builds.py::build_demo_factory_command_line` is the ONE
+  `build_demo.py` invocation both lanes use (the fixed full-land flag set `--endpoint-required any
+  --promote --skill-tier library --cody-mode hybrid --video`, the `--seed-url` conditional, and
+  `--workspace-root /home/ua/lrepos`), so the flags can't drift between lanes. `--seed-url` is passed
+  only when the seed parses as a URL (else the seed text is the positional prompt). The directed lane
+  lands at `/home/ua/lrepos/demo-directed-<slug>` (`--slug directed-<slug>`).
+- **Dispatch (Component C, directed):** `services/priority_dispatcher.py::dispatch_claimed` counts
+  directed builds via `_count_dispatched_directed_builds_today` over the SAME
+  `utils/day_boundary.py::chicago_day_start_iso` boundary, against the SEPARATE `directed_demo_daily_cap`
+  budget — a directed build never consumes the `tutorial_build` cap and vice-versa. Within the coder-lane
+  P0 tier, directed builds sort BEFORE `tutorial_build` candidates, so the operator's explicit ask wins
+  the single coder slot this cycle. They still **serialize** against proactive builds via that one coder
+  slot (`UA_MAX_CONCURRENT_VP_CODER=1`) — separate budgets, shared execution slot.
+- **Completion parity:** `directed_build` is a member of every demo-lane `source_kind` set —
+  `vp_orchestration.py::_CODER_LANE_SOURCE_KINDS` (coder routing + link-theft guard),
+  `self_briefing.py::GOAL_ELIGIBLE_SOURCE_KINDS`, `task_hub.py::DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS`,
+  and `claude_cli_client.py::_WORKER_LOOP_FINALIZED_SOURCE_KINDS` — so `vp/worker_loop.py::_execute_mission_logic`
+  finalizes it exactly like `tutorial_build` (the finalize trigger, P5 manifest stamp, and the
+  `_close_tutorial_build_demo_source_task` completion-token close all treat the two together). The
+  `demo-directed-<slug>` → `demo-undemoable-<slug>` conceptual rename is handled by
+  `tutorial_demo_finalize.py::_rename_to_undemoable` (generalized to both prefixes), and the demo-built
+  email fires via the shared `demo_built_notifier.py::notify_demo_built`.
+- **Intake doors** (all POST the same `queue_directed_demo_build`):
+  1. **Gateway HTTP** (the reliable core): `gateway_server.py::directed_demo_intake` —
+     `POST /api/v1/directed-demo {seed}`, authed by `_require_ops_auth` (ops JWT / bearer /
+     `x-ua-ops-token`) like every mutating dashboard endpoint; returns 409 when the lane is off.
+     Tailnet-reachable, so the operator can fire a build from a phone browser.
+  2. **Dashboard form:** a "Build a demo of…" free-text box on the proactive-signals surface
+     (`web-ui/app/dashboard/proactive-signals/page.tsx`) that POSTs through the token-injecting
+     `/api/dashboard/gateway` proxy to the same endpoint.
+  3. **Telegram `/demo <seed>`** (or `build a demo of <seed>`): a command handler in the EXISTING
+     always-on Telegram consumer `bot/plugins/commands.py::commands_middleware` (UA already owns the
+     single `getUpdates` poller — `bot/main.py::run_bot`; no second poller is added). The allow-list
+     (`bot/core/middleware_impl.py::auth_middleware`, `TELEGRAM_ALLOWED_USER_IDS`) already gates the
+     sender; the seed parser is `directed_demo_builds.py::parse_directed_demo_seed`. Acks
+     `queued: <slug> (directed lane)`.
+- **Prod config:** `UA_DIRECTED_DEMO_ENABLED=1` + `UA_DIRECTED_DEMO_DAILY_CAP=3` in Infisical
+  `production` arm the lane; leaving them unset keeps it dormant.
 
 ## Context — what exists today (code-verified 2026-06-09/10)
 
