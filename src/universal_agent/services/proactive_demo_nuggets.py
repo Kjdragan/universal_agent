@@ -287,8 +287,14 @@ def _judge_candidates(
     if n == 0:
         return verdicts
     call = call_llm or _default_call_llm
+    # Eureka bias: append demo_factory's capability shelf so the golden-nuggets
+    # judge prefers landmark leftovers over me-toos. Fail-safe — an empty block
+    # leaves the system prompt byte-identical to before.
+    from universal_agent.services.demo_shelf_context import capability_shelf_block
+
+    system = _JUDGE_SYSTEM_PROMPT + capability_shelf_block()
     try:
-        raw = call(_JUDGE_SYSTEM_PROMPT, _build_judge_user_message(candidates))
+        raw = call(system, _build_judge_user_message(candidates))
     except Exception as exc:  # noqa: BLE001 — a judge failure drops everything, never builds
         logger.warning("nuggets judge: LLM call failed: %s", exc)
         for v in verdicts:
