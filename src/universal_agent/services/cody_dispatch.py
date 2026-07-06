@@ -86,6 +86,17 @@ def dispatch_cody_demo_task(
     # build onto the demo_factory /demo engine instead of the bespoke flow. We
     # redirect the agentic objective rather than the worker plumbing — lowest blast
     # radius, fully reversible. The off-path above is byte-for-byte unchanged.
+    #
+    # SCOPE (PR #1232 — proactive demo engine migration): this seam governs ONLY
+    # the LIVE CSI/Simone cody_demo_task lane (this module — invoked every heartbeat
+    # cycle via cody-scaffold-builder → cody-task-dispatcher, and the
+    # scripts/dispatch_direct_demo.py ops path). The PROACTIVE YouTube-tutorial lane
+    # was moved OFF cody_demo_task onto tutorial_build + demo_factory; its engine
+    # seam is proactive_tutorial_builds.py::_demo_factory_override_block. Do NOT add
+    # new proactive-engine flag wiring here — add it there. (PR #1232 called the
+    # proactive path through this module "the dead cody_demo_task lane" because 0
+    # PROACTIVE demos/day flowed through it — that is a statement about proactive
+    # VOLUME, not about this module, which remains live for CSI demos.)
     if proactive_use_demo_factory():
         _df = proactive_demo_factory_script()
         description += (
