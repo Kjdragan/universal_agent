@@ -1,8 +1,10 @@
 """demo_built_notifier.py — deterministic "demo built" operator notification.
 
 When a proactive demo build completes (`cody_demo_task` → `vp.mission.completed`),
-email the operator a FYI with a link to the **playable explainer video** when one
-exists, falling back to the exhibit / workspace otherwise.
+email the operator a FYI with links to **both demo videos** when they exist — the
+narrated **explainer** (how it was built and what it does) and the **run
+screen-capture** (the demo actually running) — falling back to the exhibit /
+workspace otherwise. Both links ride in the SAME email; there is no second send.
 
 Properties:
 - **Deterministic** — called from the worker_loop completion seam, NOT dependent on
@@ -18,6 +20,10 @@ published to the tailnet scratchpad and linked; if it doesn't exist but the
 ClearSpring toolchain is present on this host, a render may still be in flight
 (the email says so and names the expected path); otherwise the email says plainly
 that ClearSpring isn't installed here, so no render will happen on this host.
+
+The run screen-capture is written by demo_factory's verify gate to
+``<demo-dir>/run_screencast.mp4``; when present it is published the same way and
+linked as a second line beneath the explainer (omitted entirely when absent).
 """
 from __future__ import annotations
 
@@ -77,6 +83,27 @@ def _find_explainer_video(workspace: Path) -> Optional[Path]:
     return max(cands, key=lambda p: p.stat().st_size if p.exists() else 0)
 
 
+def _find_run_screencast(workspace: Path) -> Optional[Path]:
+    """Best-effort: find the run screen-capture mp4 under the workspace.
+
+    demo_factory's verify gate writes ``<demo-dir>/run_screencast.mp4`` (the demo
+    dir may be the workspace itself or a ``demo-<slug>/`` subdir), so search
+    recursively but bounded. Prefer the largest on multiple hits.
+    """
+    if not workspace.is_dir():
+        return None
+    cands: list[Path] = []
+    try:
+        for p in workspace.rglob("run_screencast.mp4"):
+            if p.is_file():
+                cands.append(p)
+    except OSError:
+        return None
+    if not cands:
+        return None
+    return max(cands, key=lambda p: p.stat().st_size if p.exists() else 0)
+
+
 def _read_manifest_url(workspace: Path) -> str:
     """Best-effort: pull ``exhibit_url`` from the demo's manifest.json (root or one
     level down). Returns '' when absent."""
@@ -103,6 +130,9 @@ def compose_demo_built_email(
     review_required: bool,
     video_status: str = "",
     video_local_path: str = "",
+    screencast_url: str = "",
+    screencast_status: str = "",
+    screencast_local_path: str = "",
 ) -> tuple[str, str, str]:
     """Pure: build (subject, text, html). No I/O — unit-testable.
 
@@ -115,6 +145,13 @@ def compose_demo_built_email(
       this host — a render may be in flight; name the expected path.
     - anything else (default ``""``): ClearSpring isn't installed on this
       host, so no render will happen here.
+
+    ``screencast_url``/``screencast_status``/``screencast_local_path`` are the run
+    screen-capture equivalents. When ``screencast_url`` is set, a second link line
+    ("the demo actually running") is added beneath the explainer. When it's empty
+    but ``screencast_status == "found_unpublished"``, the local path is mentioned
+    (mirroring the explainer's found-unpublished wording). Otherwise the screencast
+    line is omitted entirely — there is no "rendering"/"not installed" state for it.
     """
     review_note = (
         "Curated demo — awaiting your review." if review_required
@@ -123,11 +160,12 @@ def compose_demo_built_email(
     subject = f"🎬 Demo built: {title}"
 
     if video_url:
-        video_text = f"▶ Watch the explainer video:\n  {video_url}\n"
+        video_text = f"▶ Explainer video — how it was built and what it does:\n  {video_url}\n"
         video_html = (
             f'<p style="margin:16px 0"><a href="{video_url}" '
             'style="background:#1f6f50;color:#fff;padding:10px 18px;border-radius:8px;'
-            'text-decoration:none;font-weight:600">▶ Watch the explainer video</a></p>'
+            'text-decoration:none;font-weight:600">▶ Explainer video — how it was built '
+            'and what it does</a></p>'
         )
     elif video_status == "found_unpublished":
         video_text = (
@@ -152,6 +190,26 @@ def compose_demo_built_email(
             'ClearSpring toolchain not installed on this host.</p>'
         )
 
+    if screencast_url:
+        screencast_text = f"🎬 Screen capture — the demo actually running:\n  {screencast_url}\n"
+        screencast_html = (
+            f'<p style="margin:16px 0"><a href="{screencast_url}" '
+            'style="background:#1f6f50;color:#fff;padding:10px 18px;border-radius:8px;'
+            'text-decoration:none;font-weight:600">🎬 Screen capture — the demo actually '
+            'running</a></p>'
+        )
+    elif screencast_status == "found_unpublished":
+        screencast_text = (
+            f"Screen capture: rendered but not yet published — {screencast_local_path}\n"
+        )
+        screencast_html = (
+            '<p style="margin:16px 0;color:#9a5b00">Screen capture: rendered but not yet '
+            f'published — <code>{screencast_local_path}</code>.</p>'
+        )
+    else:
+        screencast_text = ""
+        screencast_html = ""
+
     exhibit_text = f"Exhibit: {exhibit_url}\n" if exhibit_url else ""
     exhibit_html = (
         f'<p>Exhibit: <a href="{exhibit_url}">{exhibit_url}</a></p>' if exhibit_url else ""
@@ -164,6 +222,7 @@ def compose_demo_built_email(
         f"Engine: {build_engine}\n"
         f"{review_note}\n\n"
         f"{video_text}"
+        f"{screencast_text}"
         f"{exhibit_text}"
         f"Workspace: {workspace_dir}\n\n"
         f"— UA proactive demo pipeline"
@@ -176,6 +235,7 @@ def compose_demo_built_email(
         f'<p style="color:#5d5d57;margin:2px 0"><b>Engine:</b> {build_engine}</p>'
         f'<p style="color:#5d5d57;margin:2px 0">{review_note}</p>'
         f"{video_html}"
+        f"{screencast_html}"
         f"{exhibit_html}"
         f'<p style="color:#888;font-size:12px;margin-top:14px">Workspace: {workspace_dir}<br>'
         f"— UA proactive demo pipeline</p></div>"
@@ -205,6 +265,25 @@ def _publish_video(video: Path, demo_id: str) -> str:
         return str(url or "")
     except Exception:
         logger.warning("demo-built: video publish failed for %s", demo_id, exc_info=True)
+        return ""
+
+
+def _publish_screencast(screencast: Path, demo_id: str) -> str:
+    """Publish the run screen-capture mp4 to the tailnet scratchpad; return its URL
+    or ''. Mirrors ``_publish_video`` with a distinct ``-screencast`` slug so the
+    two videos never share an artifact id. Best-effort."""
+    try:
+        from universal_agent.services.scratch_publish import publish_file_to_scratch
+        url = publish_file_to_scratch(
+            screencast,
+            slug=f"demo-video-{demo_id}-screencast",
+            title=f"Screen capture: {demo_id}",
+            description="Auto-captured screen recording of the demo running.",
+            artifact_id=f"demo-video-{demo_id}-screencast",
+        )
+        return str(url or "")
+    except Exception:
+        logger.warning("demo-built: screencast publish failed for %s", demo_id, exc_info=True)
         return ""
 
 
@@ -245,13 +324,18 @@ async def notify_demo_built(
     review_required: bool = False,
 ) -> dict[str, Any]:
     """Send the deterministic 'demo built' email (best-effort, never raises)."""
-    result: dict[str, Any] = {"emailed": False, "video_url": "", "exhibit_url": ""}
+    result: dict[str, Any] = {
+        "emailed": False, "video_url": "", "screencast_url": "", "exhibit_url": "",
+    }
     try:
         ws = Path(str(workspace_dir or "")).expanduser()
         video = _find_explainer_video(ws) if workspace_dir else None
         video_url = _publish_video(video, demo_id) if video else ""
+        screencast = _find_run_screencast(ws) if workspace_dir else None
+        screencast_url = _publish_screencast(screencast, demo_id) if screencast else ""
         exhibit_url = _read_manifest_url(ws) if workspace_dir else ""
         result["video_url"] = video_url
+        result["screencast_url"] = screencast_url
         result["exhibit_url"] = exhibit_url
 
         video_status = ""
@@ -264,11 +348,19 @@ async def notify_demo_built(
                 video_status = "rendering"
                 video_local_path = str(_known_video_path(ws, demo_id))
 
+        screencast_status = ""
+        screencast_local_path = ""
+        if not screencast_url and screencast is not None:
+            screencast_status = "found_unpublished"
+            screencast_local_path = str(screencast)
+
         subject, text, html = compose_demo_built_email(
             title=title or demo_id, capability=capability, build_engine=build_engine,
             video_url=video_url, exhibit_url=exhibit_url, workspace_dir=str(workspace_dir),
             review_required=review_required,
             video_status=video_status, video_local_path=video_local_path,
+            screencast_url=screencast_url, screencast_status=screencast_status,
+            screencast_local_path=screencast_local_path,
         )
 
         from universal_agent.services.agentmail_service import AgentMailService

@@ -120,9 +120,12 @@ build-time `--slug` and the finalize-time directory resolution compute the SAME 
   clobbered by the bespoke synth.
 - **Email parity:** the `tutorial_build` terminal branch now fires
   `services/demo_built_notifier.py::notify_demo_built` (previously only `cody_demo_task` did), a
-  deterministic, engine-agnostic, best-effort FYI that prefers a playable explainer-video link, else
-  the exhibit/workspace. It points at the RESOLVED repo (the renamed dir when conceptual) so it finds
-  the EXHIBIT + video.
+  deterministic, engine-agnostic, best-effort FYI that links **both demo videos** in one email — the
+  narrated **explainer** (`<workspace>/video/<demo-id>-explainer.mp4`, via `_find_explainer_video`)
+  and the **run screen-capture** (`<demo-dir>/run_screencast.mp4`, via `_find_run_screencast`, written
+  by demo_factory's verify gate) — each published to the tailnet scratchpad under a distinct slug
+  (`_publish_video` / `_publish_screencast`), else the exhibit/workspace. It points at the RESOLVED
+  repo (the renamed dir when conceptual) so it finds the EXHIBIT + videos.
 
 ### Real daily BUILD cap — 3/day (Component C)
 
