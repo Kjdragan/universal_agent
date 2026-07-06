@@ -18,6 +18,8 @@ code_paths:
   - src/universal_agent/services/capacity_governor.py
   - src/universal_agent/services/priority_dispatcher.py
   - src/universal_agent/services/proactive_demo_nuggets.py
+  - src/universal_agent/services/demo_shelf_context.py
+  - src/universal_agent/services/llm_classifier.py
   - src/universal_agent/services/demo_built_notifier.py
   - src/universal_agent/scripts/proactive_demo_nuggets_cron.py
   - src/universal_agent/utils/day_boundary.py
@@ -164,6 +166,31 @@ run-time budget is `min(proactive_demo_nuggets_max (default 2), max(0, daily_max
 the hard ceiling `feature_flags.py::proactive_demo_daily_max` (`UA_PROACTIVE_DEMO_DAILY_MAX`, default
 **5**) always wins. The installer is wired into `scripts/deploy/remote_deploy.sh`
 (`install_proactive_demo_nuggets_timer.sh`).
+
+### Capability-shelf eureka bias (candidate judges)
+
+Both candidate judges — the buildability judge
+(`llm_classifier.py::classify_tutorial_buildability` + its batched twin
+`::classify_tutorial_buildability_batched`, invoked by
+`proactive_tutorial_builds.py::is_video_buildable_with_judge`) and the end-of-day
+golden-nuggets judge (`proactive_demo_nuggets.py::_judge_candidates`) — are handed
+demo_factory's **existing capability shelf** as extra prompt context, so they can
+prefer LANDMARK candidates (a "eureka" implement: impressive alone AND radiating
+several future directions) over incremental me-toos, down-rank a candidate that
+duplicates a capability family already on the shelf, and up-rank one that would
+EXTEND a high-reuse skill or fill obvious white space.
+
+The shelf is built by `services/demo_shelf_context.py::capability_shelf_block`:
+skill name + reuse count (`skills/_reuse.json`) + a one-line description (from each
+`skills/*/SKILL.md` frontmatter), read from the demo_factory checkout resolved the
+SAME way the engine override resolves it (`feature_flags.py::proactive_demo_factory_script`
+→ repo root), highest-reuse-first, bounded, per-process cached. It is **additive and
+fail-safe**: the block is appended to each judge's system prompt unconditionally, and
+ANY failure (no checkout on this host, unreadable frontmatter, missing `_reuse.json`)
+returns `""`, leaving the judge's prompt — and its verdict — byte-identical to before.
+It is a prompt **hint only**: it never changes a judge's score scale or pass/reject
+threshold (the block's own wording says so). Covered by `tests/unit/test_demo_shelf_context.py`
+and `tests/unit/test_demo_shelf_injection.py`.
 
 ### One shared day boundary (America/Chicago)
 

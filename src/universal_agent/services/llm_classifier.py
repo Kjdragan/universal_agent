@@ -979,6 +979,12 @@ async def classify_tutorial_buildability(
         threshold = _tutorial_build_threshold()
         graded = threshold is not None
         system = _TUTORIAL_BUILDABILITY_GRADED_SYSTEM if graded else _TUTORIAL_BUILDABILITY_SYSTEM
+        # Eureka bias: append demo_factory's capability shelf so the judge prefers
+        # landmark candidates over me-toos. Fail-safe — an empty block leaves the
+        # system prompt (and thus the verdict) byte-identical to before.
+        from universal_agent.services.demo_shelf_context import capability_shelf_block
+
+        system = system + capability_shelf_block()
         temperature = _resolve_judge_temperature("UA_TUTORIAL_BUILD_TEMPERATURE")
         raw = await _call_llm(
             system=system,
@@ -1075,6 +1081,10 @@ async def classify_tutorial_buildability_batched(
     graded = threshold is not None
     temperature = _resolve_judge_temperature("UA_TUTORIAL_BUILD_TEMPERATURE")
     system = _TUTORIAL_BUILDABILITY_GRADED_BATCH_SYSTEM if graded else _TUTORIAL_BUILDABILITY_BATCH_SYSTEM
+    # Eureka bias (same shelf as the single-video path). Fail-safe: "" is a no-op.
+    from universal_agent.services.demo_shelf_context import capability_shelf_block
+
+    system = system + capability_shelf_block()
 
     def build_prompt(chunk: list[dict[str, Any]]) -> str:
         return json.dumps(
