@@ -18,7 +18,7 @@ code_paths:
   - src/universal_agent/proactive_signals.py
   - src/universal_agent/services/ideation_report.py
   - src/universal_agent/scripts/morning_ideation_report.py
-last_verified: 2026-06-22
+last_verified: 2026-07-06
 ---
 
 # Proactive Pipeline
