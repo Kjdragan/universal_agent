@@ -37,6 +37,14 @@ TASK_LABEL_AGENT_READY = "agent-ready"
 # deferred / abandoned work. See docs/03_Operations/107_Task_Hub_Master_Reference.
 STALE_STATE_DASHBOARD_HIDDEN = "dashboard_hidden"
 
+# stale_state marker for a `blocked` task that has aged past the staleness
+# threshold. Unlike every other aging non-terminal task (which the stale policy
+# demotes to ``parked``), a stuck blocked task must be SURFACED for operator
+# attention, never silently parked — parking hides exactly the stalled work a
+# human needs to unblock. This value carries "surface me" semantics: the row
+# keeps ``status = blocked`` and is flagged for the morning/staleness report.
+STALE_STATE_BLOCKED_SURFACED = "stale_blocked"
+
 TERMINAL_STATUSES = {TASK_STATUS_COMPLETED, TASK_STATUS_PARKED, TASK_STATUS_CANCELLED}
 ACTIVE_STATUSES = {
     TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED,
@@ -1709,6 +1717,30 @@ def _apply_stale_policy(conn: sqlite3.Connection, task: dict[str, Any], policy: 
     if bool(task.get("must_complete")):
         metadata["stale_missed_cycles"] = 0
         return "must_complete", metadata, None
+
+    if status == TASK_STATUS_BLOCKED:
+        # A `blocked` task that ages past the staleness threshold is SURFACED,
+        # not parked: parking would hide the stuck work that most needs a human
+        # to unblock it. We reuse the same age/cycle thresholds but emit the
+        # distinct ``stale_blocked`` stale_state and force NO status change
+        # (force_status stays None, so rebuild_dispatch_queue leaves status =
+        # blocked). Blocked rows deliberately skip per-cycle evaluation
+        # recording (see rebuild_dispatch_queue), so this branch does NOT gate
+        # on eval_count the way the generic aging path below does. Whether the
+        # morning/staleness report acts on ``stale_blocked`` — e.g. escalates
+        # it to the operator — is a SEPARATE operator decision; this only marks
+        # the row. All of it remains behind ``UA_TASK_STALE_ENABLED`` (checked
+        # above), so enabling blocked-staleness surfacing is its own opt-in and
+        # does not change default prod behavior.
+        cycles = _safe_int(metadata.get("stale_missed_cycles"), 0) + 1
+        metadata["stale_missed_cycles"] = cycles
+        age_minutes = 0.0
+        created_dt = _parse_iso(task.get("created_at"))
+        if created_dt is not None:
+            age_minutes = max(0.0, (datetime.now(timezone.utc) - created_dt).total_seconds() / 60.0)
+        if cycles >= policy.stale_min_cycles and age_minutes >= float(policy.stale_min_age_minutes):
+            return STALE_STATE_BLOCKED_SURFACED, metadata, None
+        return "aging", metadata, None
 
     eval_row = conn.execute(
         "SELECT COUNT(*) AS c FROM task_hub_evaluations WHERE task_id = ?",
