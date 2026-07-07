@@ -31,6 +31,9 @@ from universal_agent.feature_flags import (
     vp_worker_max_uptime_seconds,
 )
 from universal_agent.services.dag_governor import DagConcurrencyGovernor
+from universal_agent.services.inference_health_tracker import (
+    InferenceHealthTracker,
+)
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.clients.claude_code_client import ClaudeCodeClient
 from universal_agent.vp.clients.claude_generalist_client import ClaudeGeneralistClient
@@ -71,6 +74,44 @@ _WORKSPACE_GUARD_MARKERS_LOWER = (
     "workspace guard",
     "outside approved",
 )
+# Markers that signal the *inference provider* itself is degraded (5xx / 429 /
+# overloaded / timeout), as opposed to a task-level failure. These feed the
+# InferenceHealthTracker circuit breaker so a run of provider failures HOLDS new
+# VP dispatch instead of spawning predestined-to-fail missions.
+_INFERENCE_DEGRADED_MARKERS_LOWER = (
+    "429",
+    "too many requests",
+    "overloaded",
+    "rate limit",
+    "rate_limit",
+    "503",
+    "502",
+    "500 internal",
+    "internal server error",
+    "service unavailable",
+    "timed out",
+    "timeout",
+)
+
+
+def _outcome_signals_inference_degradation(outcome) -> bool:
+    """True when a mission outcome's error text points at provider degradation.
+
+    Best-effort substring probe over the outcome message + final_text. Used only
+    to feed the dispatch circuit breaker — never raises.
+    """
+    if outcome is None:
+        return False
+    try:
+        msg = str(getattr(outcome, "message", "") or "")
+        payload = getattr(outcome, "payload", {}) or {}
+        final_text = str(payload.get("final_text") or "")
+        haystack = (msg + " " + final_text).lower()
+    except Exception:  # noqa: BLE001
+        return False
+    if not haystack:
+        return False
+    return any(marker in haystack for marker in _INFERENCE_DEGRADED_MARKERS_LOWER)
 
 
 def _resolve_source_task_id_from_payload(mission_payload: Any) -> str:
@@ -594,6 +635,14 @@ class VpWorkerLoop:
                             f"vp_{self.vp_id}", error=exc
                         )
                     )
+                    # Feed the dispatch circuit breaker: a provider-overload
+                    # signal observed here counts toward the degrade window.
+                    try:
+                        InferenceHealthTracker.get_instance().record_failure(
+                            "vp_tick_overload"
+                        )
+                    except Exception:  # noqa: BLE001 — never break the tick loop
+                        pass
 
                 logger.exception("VP worker tick failed: vp_id=%s err=%s", self.vp_id, exc)
                 update_vp_session_status(
@@ -607,6 +656,45 @@ class VpWorkerLoop:
         release_vp_session_lease(self.conn, vp_id=self.vp_id, lease_owner=self.worker_id)
         self._upsert_session(status="idle")
         logger.info("VP worker stopped: vp_id=%s worker_id=%s", self.vp_id, self.worker_id)
+
+    def _maybe_hold_for_degraded_inference(self) -> bool:
+        """Return True when new dispatch should be HELD (breaker tripped).
+
+        Reads the process-wide :class:`InferenceHealthTracker`. On the tick that
+        first trips the hold, emits ONE health signal — a WARNING log plus a
+        ``vp.dispatch.held`` VP event — so a degraded episode is visible without
+        spamming. Best-effort: any failure here must not block a tick, so it
+        fails OPEN (returns False → dispatch proceeds).
+        """
+        try:
+            decision = InferenceHealthTracker.get_instance().should_hold_dispatch()
+        except Exception as exc:  # noqa: BLE001 — breaker must fail open
+            logger.debug("Inference breaker check failed (failing open): %s", exc)
+            return False
+        if not decision.hold:
+            return False
+        if decision.alert is not None:
+            # Transition into a new degraded episode → emit exactly one signal.
+            logger.warning(
+                "VP dispatch HELD (inference degraded): vp_id=%s %s",
+                self.vp_id, decision.alert.get("message", ""),
+            )
+            try:
+                append_vp_event(
+                    self.conn,
+                    event_id=f"vp-event-{uuid.uuid4().hex}",
+                    mission_id="",
+                    vp_id=self.vp_id,
+                    event_type="vp.dispatch.held",
+                    payload={
+                        "worker_id": self.worker_id,
+                        "category": "proactive_health",
+                        **decision.alert,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 — signal best-effort
+                logger.debug("Failed to emit vp.dispatch.held event: %s", exc)
+        return True
 
     async def _tick(self) -> None:
         # Code-currency self-restart (between missions only). If a deploy
@@ -636,6 +724,18 @@ class VpWorkerLoop:
                 logger.info("VP worker recovered from degraded: vp_id=%s", self.vp_id)
         except Exception:
             pass  # Non-critical; don't let recovery check block the tick
+
+        # ── Upstream-health circuit breaker ───────────────────────────
+        # When the inference provider is degraded (a run of 5xx / timeout /
+        # 429-overload failures in the rolling window), HOLD new dispatch
+        # rather than claim a mission that is predestined to fail. Held work
+        # stays QUEUED (the mission row is untouched) and dispatch auto-resumes
+        # once the hold window clears. Exactly one alert is emitted per episode.
+        # Fully env-gated (UA_INFERENCE_DEGRADE_ENABLED); disabled → no hold.
+        if self._maybe_hold_for_degraded_inference():
+            await asyncio.sleep(self.poll_interval_seconds)
+            return
+
         claimed = claim_next_vp_mission(
             self.conn,
             vp_id=self.vp_id,
@@ -839,6 +939,21 @@ class VpWorkerLoop:
         else:
             finalize_vp_mission(self.conn, mission_id, "completed", result_ref=outcome.result_ref)
             event_type = "vp.mission.completed"
+
+        # Feed the dispatch circuit breaker with this mission's inference-health
+        # signal: a failed mission whose error text points at provider
+        # degradation (5xx / 429 / overloaded / timeout) counts toward the
+        # degrade window; a completed mission records a healthy outcome. Never
+        # let this bookkeeping break mission finalization.
+        try:
+            _tracker = InferenceHealthTracker.get_instance()
+            if outcome.status == "failed" and _outcome_signals_inference_degradation(outcome):
+                _tracker.record_failure("vp_mission_inference_degraded")
+            elif outcome.status not in ("failed", "cancelled"):
+                # Mirrors the "completed" finalize branch above.
+                _tracker.record_success()
+        except Exception:  # noqa: BLE001
+            pass
 
         # Deterministic wiki-rescue (flag-gated UA_WIKI_RESCUE_ENABLED, bounded,
         # best-effort): fire immediately on a genuine failure so a failed nightly
