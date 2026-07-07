@@ -127,3 +127,35 @@ def test_disabled_never_holds(monkeypatch):
     d = t.should_hold_dispatch(now=now + 21)
     assert d.hold is False
     assert d.alert is None
+
+
+# --- marker precision: the mission-outcome-text degradation probe ------------
+
+class _FakeOutcome:
+    def __init__(self, message="", final_text=""):
+        self.message = message
+        self.payload = {"final_text": final_text}
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Error: overloaded_error from provider", "HTTP 429 Too Many Requests",
+     "anthropic 529 overloaded", "rate limit exceeded", "quota exceeded"],
+)
+def test_degradation_markers_match_provider_overload(text):
+    from universal_agent.vp.worker_loop import _outcome_signals_inference_degradation
+    assert _outcome_signals_inference_degradation(_FakeOutcome(message=text)) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["scraped page returned 503 service unavailable",
+     "playwright navigation timeout after 30s",
+     "the API returned 500 internal server error while fetching the article",
+     "connection timed out to example.com"],
+)
+def test_degradation_markers_ignore_generic_task_failures(text):
+    """Generic 5xx/timeout text a task might surface must NOT count as provider
+    degradation — otherwise unrelated task failures help trip a dispatch hold."""
+    from universal_agent.vp.worker_loop import _outcome_signals_inference_degradation
+    assert _outcome_signals_inference_degradation(_FakeOutcome(final_text=text)) is False
