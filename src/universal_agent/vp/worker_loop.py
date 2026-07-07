@@ -15,6 +15,7 @@ import uuid
 from universal_agent.durable.state import (
     acquire_vp_session_lease,
     append_vp_event,
+    append_vp_session_event,
     claim_next_vp_mission,
     finalize_vp_mission,
     get_vp_mission,
@@ -74,23 +75,21 @@ _WORKSPACE_GUARD_MARKERS_LOWER = (
     "workspace guard",
     "outside approved",
 )
-# Markers that signal the *inference provider* itself is degraded (5xx / 429 /
-# overloaded / timeout), as opposed to a task-level failure. These feed the
-# InferenceHealthTracker circuit breaker so a run of provider failures HOLDS new
-# VP dispatch instead of spawning predestined-to-fail missions.
+# Markers that signal the *inference provider* itself is overloaded/rate-limited,
+# as opposed to a task-level failure. Kept HIGH-PRECISION on purpose: this is only
+# a supplementary feed to the InferenceHealthTracker breaker (the primary, clean
+# signal is the is_rate_limit tick-exception path). Generic strings like "timeout",
+# "503", or "internal server error" were deliberately dropped — a mission that
+# merely scrapes a 503 page or hits its own tool timeout would otherwise be
+# miscounted as provider degradation and help trip a HOLD on all VP dispatch.
 _INFERENCE_DEGRADED_MARKERS_LOWER = (
     "429",
+    "529",
     "too many requests",
     "overloaded",
     "rate limit",
     "rate_limit",
-    "503",
-    "502",
-    "500 internal",
-    "internal server error",
-    "service unavailable",
-    "timed out",
-    "timeout",
+    "quota exceeded",
 )
 
 
@@ -680,10 +679,13 @@ class VpWorkerLoop:
                 self.vp_id, decision.alert.get("message", ""),
             )
             try:
-                append_vp_event(
+                # A dispatch hold is a session/worker-level event, not tied to a
+                # mission — use vp_session_events (keyed on vp_id only). Emitting
+                # to vp_events with mission_id="" violates its NOT NULL mission_id
+                # FK and is silently swallowed, defeating the observability signal.
+                append_vp_session_event(
                     self.conn,
                     event_id=f"vp-event-{uuid.uuid4().hex}",
-                    mission_id="",
                     vp_id=self.vp_id,
                     event_type="vp.dispatch.held",
                     payload={
