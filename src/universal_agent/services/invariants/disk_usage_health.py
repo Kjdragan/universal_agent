@@ -138,8 +138,9 @@ def _dir_size_bounded(path: str, budget: Dict[str, Any]) -> int:
 def _top_consumers(roots: Optional[list[str]] = None) -> List[Dict[str, Any]]:
     """Live, time-bounded scan naming the largest immediate subdirs of ``roots``.
 
-    Returns up to ``_SCAN_TOP_N`` ``{"path", "size_gb"}`` entries sorted largest
-    first, aggregated across all roots. Runs only on the (rare) pressured path.
+    Returns up to ``_SCAN_TOP_N`` ``{"path", "size_bytes", "size_gb"}`` entries
+    sorted largest first (by raw bytes; ``size_gb`` is a rounded display value),
+    aggregated across all roots. Runs only on the (rare) pressured path.
     Missing roots are skipped; the whole scan shares one wall-clock deadline and
     entry-visit budget and returns whatever it measured if it runs out — it never
     raises.
@@ -167,8 +168,11 @@ def _top_consumers(roots: Optional[list[str]] = None) -> List[Dict[str, Any]]:
             except (OSError, ValueError):
                 continue
             size = _dir_size_bounded(entry.path, budget)
-            consumers.append({"path": entry.path, "size_gb": _gb(size)})
-    consumers.sort(key=lambda c: c["size_gb"], reverse=True)
+            # Keep raw bytes for ordering; size_gb (rounded to 2 decimals) is for
+            # display only — sorting on it makes sub-10MB dirs tie and fall back to
+            # nondeterministic filesystem order.
+            consumers.append({"path": entry.path, "size_bytes": size, "size_gb": _gb(size)})
+    consumers.sort(key=lambda c: c["size_bytes"], reverse=True)
     return consumers[:_SCAN_TOP_N]
 
 
@@ -358,8 +362,9 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "per-mission workspaces, and dangling Docker layers."
         ),
         # Technical recommendation (for Claude / handoff). Names reclaim
-        # CATEGORIES + commands, largest-first — NOT point-in-time GB figures,
-        # which go stale (see the 2026-06-25 design_note).
+        # CATEGORIES + commands, plus a LIVE largest-first scan measured at
+        # evaluation time (live_consumer_text) — not the hardcoded point-in-time
+        # GB figures that go stale (see the 2026-06-25 design_note).
         "message": (
             f"Disk pressure on {len(pressured)} mount(s): {', '.join(mount_names)}. "
             f"Worst {worst_pct}%. {live_consumer_text}"
