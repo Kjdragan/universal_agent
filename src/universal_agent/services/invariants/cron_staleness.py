@@ -53,6 +53,29 @@ STALENESS_MULTIPLIER = 2.0
 # instead. Prevents `*/1 * * * *` crons from firing on 2-min lag.
 MIN_STALENESS_SECONDS = 300.0  # 5 min
 
+# last_outcome values that are NOT a per-run failure. Beyond literal success
+# labels this includes benign no-op/skip outcomes: a high-frequency cron that
+# legitimately does nothing on most fires (e.g. simone_chat_auto_complete
+# reporting "no_op"/"skipped" — 1417 runs/24h, 0 failures) is healthy, not
+# "in trouble". Without these, a single non-success-labelled last_outcome
+# false-positives here as `last_outcome_error`. Genuine failures are NOT
+# suppressed: any real error label still falls outside this set (surfaced
+# here), and a multi-run failure streak is caught independently by the
+# cron_consecutive_failures invariant reading task_hub_assignments directly.
+BENIGN_OUTCOMES = {
+    # success synonyms
+    "success",
+    "ok",
+    "clean_exit_zero",
+    "completed",
+    # benign no-op / intentional-skip synonyms
+    "no_op",
+    "noop",
+    "no-op",
+    "skipped",
+    "skip",
+}
+
 # Window for sampling fires when deriving the expected interval. We collect
 # fires until they span at least this long (so a full day — DST-safe — of an
 # asymmetric schedule's gaps is observed) before taking the MAX gap. 26h
@@ -214,7 +237,7 @@ def _evaluate_cron(cron: Dict[str, Any], now: datetime) -> Optional[Dict[str, An
         }
 
     # Case 3: ran on time but outcome was an error
-    if last_outcome and last_outcome not in {"success", "ok", "clean_exit_zero", "completed"}:
+    if last_outcome and last_outcome not in BENIGN_OUTCOMES:
         return {
             "job_id": job_id,
             "reason": "last_outcome_error",

@@ -149,6 +149,43 @@ def test_error_outcome_fires_even_with_recent_last_run() -> None:
     assert any(s["job_id"] == "erroring" and s.get("reason") == "last_outcome_error" for s in stale)
 
 
+@pytest.mark.parametrize("outcome", ["no_op", "noop", "no-op", "skipped", "skip"])
+def test_benign_noop_outcome_not_flagged(outcome: str) -> None:
+    """A high-frequency all-success cron whose fresh last_outcome is a benign
+    no-op/skip label (e.g. simone_chat_auto_complete: 1417 runs/24h, 0
+    failures, reporting "no_op") must NOT be flagged "in trouble".
+
+    Regression for the watchdog false-positive: before broadening the benign
+    set, any last_outcome outside {success,ok,clean_exit_zero,completed}
+    tripped `last_outcome_error` even with zero real failures."""
+    crons = [
+        _cron_dict(
+            "simone_chat_auto_complete", cron_expr="*/1 * * * *",
+            last_run_at=_now_epoch() - 30,  # fresh — fired seconds ago
+            last_outcome=outcome,
+        ),
+    ]
+    findings = run_invariants({"cron_jobs": crons})
+    matches = [f for f in findings if f.metric_key == "cron_staleness"]
+    assert matches == []
+
+
+def test_genuine_error_outcome_still_fires() -> None:
+    """Broadening the benign set must not suppress a real failure label."""
+    crons = [
+        _cron_dict(
+            "broken", cron_expr="*/1 * * * *",
+            last_run_at=_now_epoch() - 30,
+            last_outcome="failed",
+        ),
+    ]
+    findings = run_invariants({"cron_jobs": crons})
+    matches = [f for f in findings if f.metric_key == "cron_staleness"]
+    assert len(matches) == 1
+    stale = (matches[0].observed_value or {}).get("stale_crons") or []
+    assert any(s["job_id"] == "broken" and s.get("reason") == "last_outcome_error" for s in stale)
+
+
 def test_never_run_with_past_next_run_fires() -> None:
     """A cron that has never run AND its first scheduled time was in the
     past (cron was registered hours ago but hasn't fired) → fires."""

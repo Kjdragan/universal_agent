@@ -31,6 +31,35 @@ MIN_CRON_INTERVAL_SECONDS = 60
 _CRON_DB_LOCK_RETRY_DELAY_SECONDS = 1.0
 _CRON_DB_LOCK_RETRY_MAX = 5
 
+# cron_runs.jsonl growth bound. The run-history log is append-only with no
+# rotation; a high-frequency cron drove it to 122 MB / ~120k lines in prod.
+# When the active log exceeds this many bytes it is rolled to
+# cron_runs.jsonl.1 (exactly one rollover kept — the prior .1 is discarded)
+# and a fresh empty log starts on the next append. read_runs reads the
+# rollover then the active log, so recent lines survive a rotation boundary.
+# Env-tunable via UA_CRON_RUNS_MAX_BYTES; <= 0 disables rotation entirely.
+_CRON_RUNS_MAX_BYTES_DEFAULT = 50 * 1024 * 1024
+
+
+def _cron_runs_max_bytes() -> int:
+    """Resolve the cron_runs.jsonl rotation cap (bytes) from the environment.
+
+    Falls back to the 50 MB default when unset, blank, or unparseable so a
+    malformed override can never disable the growth bound by accident.
+    """
+    raw = os.environ.get("UA_CRON_RUNS_MAX_BYTES")
+    if raw is None or not raw.strip():
+        return _CRON_RUNS_MAX_BYTES_DEFAULT
+    try:
+        return int(raw.strip())
+    except ValueError:
+        logger.warning(
+            "Ignoring invalid UA_CRON_RUNS_MAX_BYTES=%r; using default %d",
+            raw,
+            _CRON_RUNS_MAX_BYTES_DEFAULT,
+        )
+        return _CRON_RUNS_MAX_BYTES_DEFAULT
+
 # Deploy-window detection — `.github/workflows/deploy.yml` touches this
 # file just before `systemctl restart` and removes it on EXIT (or after
 # a 25-minute safety timer). When a cron subprocess is SIGTERM'd inside
@@ -939,28 +968,66 @@ class CronStore:
         self.inflight_path.parent.mkdir(parents=True, exist_ok=True)
         self.inflight_path.write_text(json.dumps({"inflight": markers}, indent=2))
 
+    def _rollover_path(self) -> Path:
+        """Path of the single kept rollover of the run-history log."""
+        return self.runs_path.with_name(self.runs_path.name + ".1")
+
+    def _maybe_rotate_runs(self) -> None:
+        """Roll cron_runs.jsonl to .1 once it exceeds the byte cap.
+
+        Bounds the otherwise-unbounded run-history log (it reached 122 MB in
+        prod). Keeps exactly one rollover: the current log is renamed to
+        cron_runs.jsonl.1 (atomically replacing any prior .1) so a fresh empty
+        log starts on the next append. Best-effort — any stat/rename failure is
+        logged and swallowed so it can never block a run from being recorded.
+        Called from append_run before the write, matching the writer's
+        existing no-explicit-lock guarding (cron dispatch is single-process).
+        """
+        cap = _cron_runs_max_bytes()
+        if cap <= 0:
+            return
+        try:
+            size = self.runs_path.stat().st_size
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            logger.warning("cron_runs rotation: stat failed: %s", exc)
+            return
+        if size < cap:
+            return
+        try:
+            os.replace(self.runs_path, self._rollover_path())
+        except OSError as exc:
+            logger.warning("cron_runs rotation: rename failed: %s", exc)
+
     def append_run(self, record: CronRunRecord) -> None:
         self.runs_path.parent.mkdir(parents=True, exist_ok=True)
+        self._maybe_rotate_runs()
         with self.runs_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record.to_dict()) + "\n")
 
     def read_runs(self, job_id: Optional[str] = None, limit: int = 200) -> list[dict[str, Any]]:
-        """Read run records, optionally filtered by job_id, newest last."""
-        if not self.runs_path.exists():
-            return []
+        """Read run records, optionally filtered by job_id, newest last.
+
+        Reads the rollover (older) then the active log so recent history stays
+        contiguous and newest-last across a rotation boundary.
+        """
         rows: list[dict[str, Any]] = []
-        try:
-            with self.runs_path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    try:
-                        data = json.loads(line.strip())
-                    except json.JSONDecodeError:
-                        continue
-                    if job_id and data.get("job_id") != job_id:
-                        continue
-                    rows.append(data)
-        except Exception as exc:
-            logger.error("Failed reading cron runs: %s", exc)
+        for path in (self._rollover_path(), self.runs_path):
+            if not path.exists():
+                continue
+            try:
+                with path.open("r", encoding="utf-8") as handle:
+                    for line in handle:
+                        try:
+                            data = json.loads(line.strip())
+                        except json.JSONDecodeError:
+                            continue
+                        if job_id and data.get("job_id") != job_id:
+                            continue
+                        rows.append(data)
+            except Exception as exc:
+                logger.error("Failed reading cron runs from %s: %s", path, exc)
         return rows[-limit:]
 
 
