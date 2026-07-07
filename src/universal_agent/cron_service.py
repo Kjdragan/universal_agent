@@ -205,6 +205,42 @@ def _parse_script_command_argv(raw_command: str) -> list[str]:
     return [module, *tokens[1:]]
 
 
+def _resolve_dispatch_command(job: "CronJob", raw_command: str) -> str:
+    """Resolve the command string to dispatch for a cron job at run time.
+
+    Most jobs replay their stored ``command`` verbatim — the command is
+    registered once at ensure-time and is intentionally immutable. The
+    ``paper_to_podcast_daily`` system job is the exception: its topic is
+    derived from ``datetime.now().tm_yday`` and was being frozen into the
+    stored command at cron-ensure time (gateway boot), so a long-lived
+    gateway process kept replaying the SAME topic across multiple days
+    (stuck on "Diffusion" for 2026-07-05/06/07 even though the cron ran
+    daily). Re-rendering the command here — just before dispatch — makes
+    ``tm_yday`` resolve to the actual run date so the topic rotates as
+    intended.
+
+    Lazy-imports ``gateway_server`` to avoid the module-cycle
+    (gateway_server imports cron_service at top level).
+    """
+    system_job = ""
+    try:
+        system_job = str((getattr(job, "metadata", None) or {}).get("system_job") or "")
+    except Exception:
+        system_job = ""
+    if system_job == "paper_to_podcast_daily":
+        try:
+            from universal_agent.gateway_server import _paper_to_podcast_command
+
+            return _paper_to_podcast_command()
+        except Exception as exc:  # noqa: BLE001 — never block dispatch on a re-render
+            logger.warning(
+                "paper_to_podcast_daily command re-render failed (%s); "
+                "falling back to stored command (topic may be stale)",
+                exc,
+            )
+    return raw_command
+
+
 def _is_deploy_window_active() -> bool:
     """True iff any graceful shutdown/restart is currently in flight or just
     completed — a GitHub-Actions deploy, the VPS installer, or an ops
@@ -2566,13 +2602,21 @@ class CronService:
                                     _artifacts_dir = str(resolve_artifacts_dir())
                                 except Exception:
                                     _artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip()
+                                # Re-render the stored command at dispatch time so a job
+                                # whose command embeds a run-date value (e.g.
+                                # paper_to_podcast_daily's tm_yday-derived topic)
+                                # resolves against the ACTUAL run date instead of
+                                # the value frozen in at cron-ensure time. Falls
+                                # through to the stored command verbatim for any
+                                # job that doesn't opt into per-run re-render.
+                                _dispatch_base_command = _resolve_dispatch_command(job, job.command)
                                 if _artifacts_dir:
                                     resolved_command = (
                                         f"[SYSTEM CONTEXT: UA_ARTIFACTS_DIR={_artifacts_dir}]\n\n"
-                                        + job.command
+                                        + _dispatch_base_command
                                     )
                                 else:
-                                    resolved_command = job.command
+                                    resolved_command = _dispatch_base_command
 
                                 # Hermes Phase F site-wiring (cron LLM path).
                                 # Mirrors the `!script` branch above: ensure a

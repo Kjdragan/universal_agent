@@ -9,7 +9,7 @@ code_paths:
   - src/universal_agent/cron_service.py
   - tests/gateway/test_cron_ensure_jobs.py
   - tests/unit/test_cron_deploy_cancellation.py
-last_verified: 2026-07-01
+last_verified: 2026-07-07
 ---
 
 # ADR: Resumable External Jobs
@@ -168,6 +168,16 @@ Implementation for `paper_to_podcast` (no shared-code changes — see §5):
   uses the checkpoint's `topic`. Otherwise it falls through to a normal
   from-scratch run. Resume is strictly additive: a missing/stale/unreadable
   checkpoint yields exactly today's behavior.
+- **Dispatch-time topic re-render (2026-07-07).** The topic is derived from
+  `datetime.now().timetuple().tm_yday` inside
+  `gateway_server.py::_paper_to_podcast_command`. Originally that ran only at
+  cron-ensure time (gateway boot), so the topic was frozen into the stored
+  `job.command` and a long-lived gateway replayed the SAME topic across days
+  (stuck on "Diffusion" for 2026-07-05/06/07). `cron_service.py::_resolve_dispatch_command`
+  now re-renders the command for the `paper_to_podcast_daily` system job just
+  before each dispatch, so `tm_yday` resolves to the actual run date and the
+  topic rotates as intended without relying on a deploy/restart. Falls back to
+  the stored command if the re-render raises (never block dispatch).
 
 ## 4. Why not the obvious bandaids
 
