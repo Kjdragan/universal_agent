@@ -73,6 +73,39 @@ def test_command_includes_arxiv_resilience():
     )
 
 
+def test_command_arxiv_resilience_does_not_instruct_sleep_or_background_wait():
+    """The cooldown guidance must be executable inside the autonomous harness.
+
+    2026-07-07 failure: the prompt told the agent to wait ~60s and retry
+    once on an arXiv 429. Foreground sleep is blocked by the harness
+    guardrail and run_in_background sleep tears down the autonomous cron
+    session (yielding ends the turn). The agent burned its turn budget
+    oscillating on the impossible wait, retrieved zero papers, and never
+    reached NotebookLM. The resilience clause must NOT instruct the agent to
+    sleep or background a wait for cooldown -- it must direct an immediate
+    single retry (arxiv-mcp-server backs off internally) and otherwise move
+    on cleanly."""
+    body = gateway_server._paper_to_podcast_command()
+    start = body.find("ARXIV RESILIENCE")
+    assert start != -1, "resilience clause must exist"
+    end = body.find("For ALL NotebookLM steps", start)
+    if end == -1:
+        end = len(body)
+    resilience_clause = body[start:end]
+    assert "do NOT use `sleep`" in resilience_clause, (
+        "resilience clause must explicitly forbid `sleep` as a cooldown wait"
+    )
+    assert "run_in_background` to wait" in resilience_clause, (
+        "resilience clause must explicitly forbid run_in_background as a wait"
+    )
+    assert "foreground `sleep` is blocked" in resilience_clause, (
+        "resilience clause must explain WHY foreground sleep is not viable"
+    )
+    assert "wait ~60s" not in resilience_clause, (
+        "resilience clause must not instruct an unexecutable ~60s wait"
+    )
+
+
 def test_command_still_requires_real_m4a_download():
     """Guard against the fix accidentally dropping the 'real .m4a' requirement
     (the headline deliverable). Fabricated audio / a text transcript substitute
