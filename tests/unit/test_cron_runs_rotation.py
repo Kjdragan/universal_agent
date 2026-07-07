@@ -56,10 +56,19 @@ def test_rotation_triggers_at_cap_and_preserves_recent_lines(
     active_lines = store.runs_path.read_text().count("\n")
     assert 0 < active_lines < total
 
-    # read_runs stitches rollover + active log: every appended run is still
-    # visible and in newest-last order (recent lines preserved).
+    # read_runs stitches the rollover + active log. Since only ONE rollover is
+    # kept (the growth bound), the *most recent* lines are preserved — a
+    # contiguous, newest-last tail of the append sequence ending at the latest
+    # run — while older lines beyond one rollover are intentionally dropped.
     rows = store.read_runs(limit=1000)
-    assert [r["run_id"] for r in rows] == [f"run-{n}" for n in range(total)]
+    run_ids = [r["run_id"] for r in rows]
+    full_seq = [f"run-{n}" for n in range(total)]
+    # The newest append is always present and last (recent lines preserved).
+    assert run_ids[-1] == full_seq[-1]
+    # What survives is a contiguous suffix of the full sequence, in order.
+    assert run_ids == full_seq[total - len(run_ids):]
+    # Stitching actually pulled from the rollover, not just the active log.
+    assert len(run_ids) > active_lines
 
 
 def test_only_one_rollover_kept(
