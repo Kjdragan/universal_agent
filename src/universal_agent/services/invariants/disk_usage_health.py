@@ -49,7 +49,8 @@ import logging
 import os
 from pathlib import Path
 import shutil
-from typing import Any, Dict, Optional
+import time
+from typing import Any, Dict, List, Optional
 
 from universal_agent.services.pipeline_invariants import invariant
 
@@ -69,6 +70,106 @@ def _default_mounts() -> list[str]:
 
 def _gb(num_bytes: int) -> float:
     return round(num_bytes / (1024 ** 3), 2)
+
+
+def _consumer_roots() -> list[str]:
+    """The heavy directory roots whose immediate subdirs the live scan measures.
+
+    Overridable via UA_DISK_HEALTH_ROOTS (comma-separated). Defaults to the
+    known-heavy trees on the production VPS. Missing paths degrade gracefully.
+    Naming these live at evaluation time is what keeps the finding honest — the
+    design_note's own lesson is "name CATEGORIES, not point-in-time GB, because
+    those go stale"; this probe supplies the real GB at the moment it fires.
+    """
+    raw = (os.getenv("UA_DISK_HEALTH_ROOTS") or "").strip()
+    if raw:
+        return [p.strip() for p in raw.split(",") if p.strip()]
+    return [
+        os.getenv(
+            "UA_REMOTE_WORKSPACES_DIR",
+            "/opt/universal_agent/AGENT_RUN_WORKSPACES",
+        ),
+        "/opt/universal_agent/AGENT_RUN_WORKSPACES_ARCHIVE",
+        "/opt/ua_demos",
+        "/home/ua/ua_scratch_archive",
+    ]
+
+
+# Bounds for the live scan — keep it cheap so a pressured heartbeat never blocks.
+_SCAN_DEADLINE_S = float(os.getenv("UA_DISK_HEALTH_SCAN_DEADLINE_S", "2.0"))
+_SCAN_MAX_ENTRIES = int(os.getenv("UA_DISK_HEALTH_SCAN_MAX_ENTRIES", "50000"))
+_SCAN_TOP_N = int(os.getenv("UA_DISK_HEALTH_SCAN_TOP_N", "5"))
+
+
+def _dir_size_bounded(path: str, budget: Dict[str, Any]) -> int:
+    """Best-effort recursive byte size of ``path``, sharing a global budget.
+
+    Stops early (returning the partial sum measured so far) when the shared
+    wall-clock deadline passes or the entry-visit cap is hit, so one huge tree
+    can't blow the scan's time bound. Symlinks are not followed; unreadable
+    entries are skipped. Never raises.
+    """
+    total = 0
+    stack = [path]
+    while stack:
+        if time.monotonic() > budget["deadline"] or budget["entries"] >= _SCAN_MAX_ENTRIES:
+            break
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    budget["entries"] += 1
+                    if budget["entries"] >= _SCAN_MAX_ENTRIES or time.monotonic() > budget["deadline"]:
+                        break
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except (OSError, ValueError):
+                        continue
+        except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
+            continue
+    return total
+
+
+def _top_consumers(roots: Optional[list[str]] = None) -> List[Dict[str, Any]]:
+    """Live, time-bounded scan naming the largest immediate subdirs of ``roots``.
+
+    Returns up to ``_SCAN_TOP_N`` ``{"path", "size_gb"}`` entries sorted largest
+    first, aggregated across all roots. Runs only on the (rare) pressured path.
+    Missing roots are skipped; the whole scan shares one wall-clock deadline and
+    entry-visit budget and returns whatever it measured if it runs out — it never
+    raises.
+    """
+    roots = roots if roots is not None else _consumer_roots()
+    budget: Dict[str, Any] = {
+        "deadline": time.monotonic() + _SCAN_DEADLINE_S,
+        "entries": 0,
+    }
+    consumers: List[Dict[str, Any]] = []
+    for root in roots:
+        if time.monotonic() > budget["deadline"] or budget["entries"] >= _SCAN_MAX_ENTRIES:
+            break
+        try:
+            children = list(os.scandir(root))
+        except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
+            continue
+        for entry in children:
+            if time.monotonic() > budget["deadline"] or budget["entries"] >= _SCAN_MAX_ENTRIES:
+                break
+            budget["entries"] += 1
+            try:
+                if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                    continue
+            except (OSError, ValueError):
+                continue
+            size = _dir_size_bounded(entry.path, budget)
+            consumers.append({"path": entry.path, "size_gb": _gb(size)})
+    consumers.sort(key=lambda c: c["size_gb"], reverse=True)
+    return consumers[:_SCAN_TOP_N]
 
 
 def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
@@ -166,7 +267,14 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
             "absolute point-in-time GB (those go stale); the runbook surfaces "
             "live `du -sh`. (Docker/containerd also occupies ~59G on the VPS "
             "but is mostly LIVE running containers — only a few GB dangling is "
-            "actually reclaimable.)"
+            "actually reclaimable.) "
+            "2026-07-07: the finding now ALSO carries a live, time-bounded "
+            "top-subdir scan (_top_consumers, run only on the pressured path) "
+            "so the message names the REAL current consumers with fresh GB at "
+            "evaluation time — no more static point-in-time driver claim. The "
+            "scan shares a wall-clock deadline + entry-visit cap and degrades "
+            "to a partial/empty result rather than blocking the heartbeat; "
+            "roots are overridable via UA_DISK_HEALTH_ROOTS."
         ),
         "thresholds": {
             "warn_pct": WARN_THRESHOLD_PCT,
@@ -205,11 +313,36 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     mount_names = sorted(m["mount"] for m in pressured)
     worst_free_gb = min((m["free_gb"] for m in pressured), default=0.0)
+
+    # Live, bounded scan of the heavy roots — runs ONLY here, on the (rare)
+    # pressured path, so the healthy heartbeat stays a pure syscall. This names
+    # the REAL current top consumers at evaluation time instead of a static
+    # point-in-time claim (the design_note's own lesson). Never raises.
+    try:
+        top_consumers = _top_consumers()
+    except Exception:  # noqa: BLE001 — fail-open: a scan hiccup must not drop the finding
+        logger.debug("disk_usage_health: top-consumer scan failed", exc_info=True)
+        top_consumers = []
+
+    if top_consumers:
+        live_consumer_text = (
+            "Live scan of the heavy roots right now: "
+            + ", ".join(f"{c['path']} ({c['size_gb']}G)" for c in top_consumers)
+            + ". "
+        )
+    else:
+        live_consumer_text = (
+            "Live top-consumer scan found nothing under the known roots (paths "
+            "absent on this host or the scan budget was hit) — run the runbook "
+            "for `du -sh`. "
+        )
+
     return {
         "observed_value": {
             "pressured_mounts": pressured,
             "healthy_mounts": healthy,
             "worst_used_pct": worst_pct,
+            "top_consumers": top_consumers,
         },
         "threshold_text": (
             f"every monitored mount used_pct ≤ {WARN_THRESHOLD_PCT}% "
@@ -229,7 +362,8 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # which go stale (see the 2026-06-25 design_note).
         "message": (
             f"Disk pressure on {len(pressured)} mount(s): {', '.join(mount_names)}. "
-            f"Worst {worst_pct}%. Top reclaimable consumers under sustained "
+            f"Worst {worst_pct}%. {live_consumer_text}"
+            "Top reclaimable consumers under sustained "
             "VP-coder load are the per-mission .venv / __pycache__ / "
             "node_modules trees under "
             "AGENT_RUN_WORKSPACES/vp_coder_primary_external (the daily "

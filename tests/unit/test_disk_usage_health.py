@@ -227,3 +227,91 @@ def test_message_does_not_contains_stale_not_the_driver_literal():
     assert "NOT the driver" not in src, (
         "no occurrence of 'NOT the driver' allowed anywhere in the module"
     )
+
+
+def test_top_consumers_names_real_subdirs(tmp_path, monkeypatch):
+    """The live probe returns the largest immediate subdirs by real byte size."""
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    root = tmp_path / "workspaces"
+    root.mkdir()
+    (root / "big").mkdir()
+    (root / "big" / "blob.bin").write_bytes(b"\0" * (5 * 1024 * 1024))  # 5 MiB
+    (root / "small").mkdir()
+    (root / "small" / "tiny.txt").write_bytes(b"\0" * 1024)  # 1 KiB
+    monkeypatch.setenv("UA_DISK_HEALTH_ROOTS", str(root))
+
+    consumers = duh._top_consumers()
+    assert consumers, "expected at least one consumer"
+    paths = [c["path"] for c in consumers]
+    assert str(root / "big") == paths[0]  # largest first
+    assert consumers[0]["size_gb"] >= consumers[-1]["size_gb"]
+
+
+def test_top_consumers_handles_missing_roots(monkeypatch):
+    """A root that doesn't exist degrades to an empty result, never raises."""
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    monkeypatch.setenv(
+        "UA_DISK_HEALTH_ROOTS",
+        "/definitely/not/a/real/path/xyz,/another/missing/one",
+    )
+    assert duh._top_consumers() == []
+
+
+def test_top_consumers_does_not_follow_symlink_loops(tmp_path, monkeypatch):
+    """A self-referential symlink under a root must not hang or raise — the
+    bounded scan skips symlinks and stays finite."""
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    root = tmp_path / "ws"
+    root.mkdir()
+    real = root / "real"
+    real.mkdir()
+    (real / "f.bin").write_bytes(b"\0" * 2048)
+    # Self-loop symlink inside the measured subtree.
+    (real / "loop").symlink_to(real, target_is_directory=True)
+    monkeypatch.setenv("UA_DISK_HEALTH_ROOTS", str(root))
+
+    consumers = duh._top_consumers()  # must return, not hang
+    assert any(c["path"] == str(real) for c in consumers)
+
+
+def test_pressured_finding_embeds_live_top_consumers(tmp_path, monkeypatch):
+    """End-to-end: when a mount is pressured, the finding's message + observed
+    value name the live-scanned top consumers with fresh GB — proving the
+    narrative is measured at evaluation time, not a hardcoded assumption."""
+    root = tmp_path / "AGENT_RUN_WORKSPACES"
+    root.mkdir()
+    (root / "vp_coder_primary_external").mkdir()
+    (root / "vp_coder_primary_external" / "hog.bin").write_bytes(
+        b"\0" * (7 * 1024 * 1024)
+    )
+    monkeypatch.setenv("UA_DISK_HEALTH_ROOTS", str(root))
+
+    with _mock_disk_usage({
+        "/": DiskUsage(_gb(100), _gb(88), _gb(12)),  # 88% pressured
+    }):
+        from universal_agent.services.invariants import disk_usage_health
+        importlib.reload(disk_usage_health)
+        result = disk_usage_health.disk_usage_health({})
+    assert result is not None
+    obs = result.get("observed_value") or {}
+    top = obs.get("top_consumers") or []
+    assert any("vp_coder_primary_external" in c["path"] for c in top)
+    assert "vp_coder_primary_external" in (result.get("message") or "")
+
+
+def test_finding_message_handles_absent_roots_gracefully(tmp_path, monkeypatch):
+    """When every consumer root is absent, the finding still emits and the
+    message says the scan found nothing (no crash, no stale claim)."""
+    monkeypatch.setenv("UA_DISK_HEALTH_ROOTS", "/no/such/root/here")
+    with _mock_disk_usage({
+        "/": DiskUsage(_gb(100), _gb(91), _gb(9)),  # 91% critical
+    }):
+        from universal_agent.services.invariants import disk_usage_health
+        importlib.reload(disk_usage_health)
+        result = disk_usage_health.disk_usage_health({})
+    assert result is not None
+    assert (result.get("observed_value") or {}).get("top_consumers") == []
+    assert "Live top-consumer scan found nothing" in (result.get("message") or "")
