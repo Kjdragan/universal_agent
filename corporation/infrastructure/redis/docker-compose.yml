@@ -4,7 +4,10 @@ services:
     container_name: universal_agent_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      # Bind loopback only: consumers are all on-box, and Docker publishes to
+      # 0.0.0.0 by default which bypasses ufw (public exposure). Loopback keeps
+      # Redis off every non-local interface. See also the DOCKER-USER firewall.
+      - "127.0.0.1:6379:6379"
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD before starting Redis}
     volumes:
@@ -17,8 +20,8 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-    # Note: Ensure REDIS_PASSWORD is sourced from Infisical secret injection.
-    # and restrict port 6379 via UFW firewall on the VPS to only allow known Factory IPs.
+    # Note: REDIS_PASSWORD is sourced from Infisical secret injection.
+    # Port 6379 is loopback-bound above; no external/tailnet consumers exist.
 
 volumes:
   redis_data:
