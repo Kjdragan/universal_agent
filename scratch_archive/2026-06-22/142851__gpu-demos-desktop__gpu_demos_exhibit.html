@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desktop GPU for Local-Ollama Demos</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#fff; --ink:#1b1f24; --muted:#5b6675; --line:#e3e8ee;
+    --accent:#1a7f37; --accent2:#0969da; --warn:#9a6700; --bad:#cf222e;
+    --chip:#eef2f6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:920px;margin:0 auto;padding:28px 20px 64px}
+  h1{font-size:26px;line-height:1.2;margin:0 0 6px}
+  .sub{color:var(--muted);margin:0 0 22px;font-size:15px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:18px 20px;margin:16px 0;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  h2{font-size:18px;margin:2px 0 12px;display:flex;align-items:center;gap:8px}
+  h2 .n{display:inline-flex;width:24px;height:24px;border-radius:50%;background:var(--accent2);
+    color:#fff;font-size:13px;align-items:center;justify-content:center;flex:0 0 auto}
+  p{margin:8px 0}
+  .muted{color:var(--muted)}
+  code{background:var(--chip);padding:1px 6px;border-radius:5px;font-size:13.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.03em}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+  .ok{background:#e6f4ea;color:var(--accent)}
+  .no{background:#fbe9e7;color:var(--bad)}
+  .warnp{background:#fdf3d8;color:var(--warn)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  .flow{display:flex;flex-direction:column;gap:0}
+  .step{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px dashed var(--line)}
+  .step:last-child{border-bottom:0}
+  .step .dot{flex:0 0 auto;width:26px;height:26px;border-radius:7px;background:var(--accent2);color:#fff;
+    font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:2px}
+  .step.vps .dot{background:#0969da}.step.desk .dot{background:#8250df}.step.kevin .dot{background:#1a7f37}
+  .where{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+    padding:1px 7px;border-radius:5px;margin-left:6px;vertical-align:middle}
+  .w-vps{background:#ddf4ff;color:#0969da}.w-desk{background:#f3e8ff;color:#8250df}.w-kevin{background:#e6f4ea;color:#1a7f37}
+  .lead{font-size:15px}
+  .kpi{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0}
+  .kpi div{background:var(--chip);border-radius:9px;padding:8px 12px;font-size:13px}
+  .kpi b{display:block;font-size:18px;font-variant-numeric:tabular-nums}
+  hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+  .foot{color:var(--muted);font-size:13px;margin-top:24px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Desktop GPU for local-Ollama demos</h1>
+  <p class="sub">Why the Ponytail demo stalled, the real fix (it runs on the GPU now), the standard model + guards, and the email-approval gate. &middot; 2026-06-22</p>
+
+  <div class="card">
+    <h2><span class="n">1</span> What triggered this</h2>
+    <p class="lead">Simone's rescue-evaluator did exactly its job: it independently reproduced a blocked demo and handed back a clean verdict. The <code>ponytail-yagni-ladder-ollama</code> demo was <em>correctly built</em> but could not be <em>verified</em> — its 3 live refactor passes run <code>gemma3:12b</code> at <b>~7 tok/s on CPU</b>, so a full run takes 15&ndash;20 min and every timeout in the system (the 600s no-progress watchdog) killed it mid-pass.</p>
+    <p class="muted">The verdict assumed the only option was a faster/smaller model or buying GPU infra. But there was a wrong premise underneath it.</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">2</span> Root cause: the GPU and the demo live on different machines</h2>
+    <div class="grid2">
+      <table>
+        <tr><th>Desktop (mint-desktop)</th><th></th></tr>
+        <tr><td>GPU</td><td><span class="pill ok">GTX 1660 Ti · 6GB</span></td></tr>
+        <tr><td>Ollama</td><td>now installed (user-local)</td></tr>
+        <tr><td>Role</td><td>Kevin's interactive cockpit</td></tr>
+      </table>
+      <table>
+        <tr><th>VPS (Hostinger)</th><th></th></tr>
+        <tr><td>GPU</td><td><span class="pill no">none — ever</span></td></tr>
+        <tr><td>Ollama</td><td>CPU-only container</td></tr>
+        <tr><td>Role</td><td>the always-on runtime</td></tr>
+      </table>
+    </div>
+    <p>The demo runs on the <b>VPS</b>, which has no GPU and never will. The 6GB GPU is on the <b>desktop</b>. They're decoupled — a desktop GPU can't accelerate VPS inference. So the honest fix isn't "buy GPU for the VPS"; it's <b>run GPU-bound demos on the desktop</b>, and make every demo small enough to fit a 6GB card.</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">3</span> Verified: the demo runs end-to-end on the GPU</h2>
+    <p>Installed Ollama user-local on the desktop (no root), pulled the standard model, and ran the full 3-pass demo on the GTX 1660 Ti. <b>All three passes completed</b> — the run that stalled forever on the VPS finishes in ~4 minutes.</p>
+    <div class="kpi">
+      <div>model<b>qwen2.5-coder:7b</b></div>
+      <div>GPU offload<b>~90%</b></div>
+      <div>VRAM<b>4.7 / 6.1 GB</b></div>
+      <div>full run<b>~253 s</b></div>
+      <div>vs VPS CPU<b>&infin; (killed)</b></div>
+    </div>
+    <table>
+      <tr><th>pass</th><th class="num">total tokens</th><th class="num">output chars</th><th class="num">wall (s)</th></tr>
+      <tr><td>BASELINE</td><td class="num">1246</td><td class="num">5186</td><td class="num">108.3</td></tr>
+      <tr><td>CAVEMAN</td><td class="num">598</td><td class="num">2372</td><td class="num">47.5</td></tr>
+      <tr><td>PONYTAIL_LADDER</td><td class="num">1334</td><td class="num">4478</td><td class="num">97.0</td></tr>
+    </table>
+    <p class="muted">The demo was also made endpoint/model-overridable (<code>OLLAMA_URL</code>/<code>OLLAMA_MODEL</code>) and the canonical VPS artifact was closed with these real completed-run files.</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">4</span> Standard model + the 6GB guards</h2>
+    <p>Picked <b><code>qwen2.5-coder:7b</code></b> as the standard for local-GPU demos: best code quality that stays under 5GB. The new <code>provision-local-gpu-ollama</code> skill provisions the box and <b>refuses</b> (not warns) anything that breaks the limits you set.</p>
+    <table>
+      <tr><th>model</th><th class="num">size</th><th>fit / role</th></tr>
+      <tr><td><b>qwen2.5-coder:7b</b></td><td class="num">4.7 GB</td><td><b>STANDARD</b> — ~90% GPU, completes in budget</td></tr>
+      <tr><td>qwen2.5-coder:3b</td><td class="num">1.9 GB</td><td>fast fallback — 100% GPU, ~3&times; faster</td></tr>
+      <tr><td>gemma3:4b</td><td class="num">3.3 GB</td><td>small/fast generalist</td></tr>
+      <tr><td>gemma3:12b</td><td class="num">8.1 GB</td><td><span class="pill no">over 5GB — refused</span></td></tr>
+    </table>
+    <div class="kpi">
+      <div>per-model cap<b>&le; 5 GB</b></div>
+      <div>models on disk<b>&le; 3</b></div>
+      <div>over-limit pull<b>refused</b></div>
+    </div>
+    <p class="muted">Tested live: <code>gemma3:27b</code> (17.4GB) and an unknown tag are both refused; the standard model passes.</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">5</span> The GPU-demo approval gate <span class="pill warnp" style="margin-left:6px">default OFF</span></h2>
+    <p>Most demos still build on the VPS. A demo that needs a local GPU is detected, parked, and you get an email — nothing builds on the desktop unless you say so. <b>Contract-safe: nothing runs autonomously on the desktop</b>; it only acts when you drive it interactively.</p>
+    <div class="flow">
+      <div class="step vps"><div class="dot">1</div><div><b>Detect &amp; park</b> <span class="where w-vps">VPS</span><br><span class="muted">The demo sweep flags a GPU-bound demo, queues it so CODIE never auto-claims it, and stamps <code>gpu_approval: pending</code>.</span></div></div>
+      <div class="step vps"><div class="dot">2</div><div><b>Email you</b> <span class="where w-vps">VPS</span><br><span class="muted">A specific explanation (what the demo is, why it needs a GPU, VPS-CPU vs desktop-GPU estimate, the model) + an HMAC-signed <b>Approve</b> link.</span></div></div>
+      <div class="step kevin"><div class="dot">3</div><div><b>You click Approve</b> <span class="where w-kevin">YOU</span><br><span class="muted">The always-on VPS gateway verifies the signature, records <code>approved</code>, and shows the exact command to run.</span></div></div>
+      <div class="step desk"><div class="dot">4</div><div><b>Build on the desktop</b> <span class="where w-desk">DESKTOP</span><br><span class="muted">You run <code>/gpu-demo-build &lt;task&gt;</code> interactively → it provisions the GPU model via the skill, builds, and marks the task complete.</span></div></div>
+    </div>
+    <p class="muted" style="margin-top:12px">Master switch <code>UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED</code> (off by default → prod unchanged until you flip it). No desktop daemon, poller, or timer anywhere in the flow.</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">6</span> Status</h2>
+    <table>
+      <tr><td><span class="pill ok">done</span></td><td>Demo runs end-to-end on the desktop GPU; VPS artifact closed with real run files</td></tr>
+      <tr><td><span class="pill ok">done</span></td><td><code>provision-local-gpu-ollama</code> skill + ≤5GB / ≤3-model guards (guard-tested)</td></tr>
+      <tr><td><span class="pill ok">done</span></td><td>Global <code>CLAUDE.md</code> + <code>project_docs</code> GPU section + memory</td></tr>
+      <tr><td><span class="pill warnp">shipping</span></td><td>Approval feature (flag, HMAC route, email, slash command) — default-OFF, on its way to a PR</td></tr>
+    </table>
+  </div>
+
+  <p class="foot">Built on the desktop GPU &middot; numbers are from the live run, not estimates &middot; the approval feature ships behind a default-off flag so production is unchanged until you enable it.</p>
+
+</div>
+</body>
+</html>

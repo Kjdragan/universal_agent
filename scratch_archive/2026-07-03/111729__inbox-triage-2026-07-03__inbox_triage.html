@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Inbox Triage — 2026-07-03</title>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>📥 Inbox Triage</h1>
+  <p class="sub">kevinjdragan@gmail.com · received since <b>9:00 PM CT, Wed Jul 2</b> → <b>Fri Jul 3, 2026</b></p>
+  <div class="stats">
+    <div class="stat"><span class="v">42</span><span class="l">emails</span></div>
+    <div class="stat ok"><span class="v">10</span><span class="l">no issue</span></div>
+    <div class="stat proc"><span class="v">28</span><span class="l">processes built</span></div>
+    <div class="stat att"><span class="v">4</span><span class="l">need attention</span></div>
+  </div>
+  <p class="hint">Tick the box on each row as you clear it — your checks persist in this browser. Work top to bottom; the <b>Need Attention</b> section is last so we can tackle those together.</p>
+</header>
+
+<section>
+  <h2><span class="dot ok"></span>1 · No Issue <span class="cnt">10</span></h2>
+  <p class="sec-sub">Newsletters, promos and notifications. Nothing to action — skim or archive.</p>
+  <table class="news">
+    <thead><tr><th></th><th>#</th><th>Source</th><th>What it is</th></tr></thead>
+    <tbody>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="n1"></td>
+      <td class="num">1</td>
+      <td><div class="subj">LG Electronics</div></td>
+      <td class="func">Marketing: promoting hidden ThinQ TV app features.</td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="n2"></td>
+      <td class="num">2</td>
+      <td><div class="subj">Simplifying AI</div></td>
+      <td class="func">AI newsletter: Grok releases Voice for Agents + daily roundup.</td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="n3"></td>
+      <td class="num">3</td>
+      <td><div class="subj">Allrecipes</div></td>
+      <td class="func">Recipe promo: &#x27;Dynamite Rice&#x27; seafood dinner.</td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="n6"></td>
+      <td class="num">4</td>
+      <td><div class="subj">Reddit</div></td>
+      <td class="func">Reddit activity/notification digest.</td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="n22"></td>
+      <td class="num">5</td>
+      <td><div class="subj">TLDR</div></td>
+      <td class="func">Tech newsletter: Tesla 6-seat Model Y, Meta AI, understanding bottleneck.</td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="n25"></td>
+      <td class="num">6</td>
+      <td><div class="subj">TLDR Marketing</div></td>
+      <td class="func">Marketing newsletter: AI labels hurt engagement; proof &gt; buzzwords.</td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="n27"></td>
+      <td class="num">7</td>
+      <td><div class="subj">TLDR Dev</div></td>
+      <td class="func">Dev newsletter: Fable 5 safeguards, Safari MCP, code review&#x27;s purpose.</td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="n36"></td>
+      <td class="num">8</td>
+      <td><div class="subj">TLDR AI</div></td>
+      <td class="func">AI newsletter: Meta&#x27;s new model, Anthropic–Samsung chips, autoresearch.</td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="n40"></td>
+      <td class="num">9</td>
+      <td><div class="subj">Product Hunt</div></td>
+      <td class="func">Daily product roundup: Raycast app-builder, bug-prover agent, etc.</td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="n41"></td>
+      <td class="num">10</td>
+      <td><div class="subj">Substack</div></td>
+      <td class="func">Notification: people you follow posted new notes.</td>
+    </tr></tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="dot proc"></span>2 · Processes &amp; Things Built <span class="cnt">28</span></h2>
+  <p class="sec-sub">Each is a run/agent output. I opened the artifact, confirmed the link, and describe what it does. Click through to review.</p>
+  <table class="proc">
+    <thead><tr><th></th><th>#</th><th>What was created</th><th>Functionality</th><th>Open it</th><th>Sev</th></tr></thead>
+    <tbody>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p13"></td>
+      <td class="num">1</td>
+      <td>
+        <div class="subj">task_hub pruner + VACUUM (PR #1257)</div>
+        <div class="meta">task_hub pruner + VACUUM shipped (PR #1257)</div>
+      </td>
+      <td class="func">Simone (via Cody) shipped a task_hub pruner that reaps cancelled tasks/assignments/orphaned runs plus a guarded periodic VACUUM so SQLite returns freed pages to the OS. Run against live prod: DB 3.61 GB to 2.7 GB (~0.9 GB reclaimed), pruned 732 cancelled items + 544 assignments + 2,051 orphaned runs, integrity ok, 10/10 unit tests pass. PR #1257 is confirmed merged on GitHub (+572/-42 lines).</td>
+      <td class="lk"><a class="btn" href="https://github.com/Kjdragan/universal_agent/pull/1257" target="_blank" rel="noopener">View merged PR #1257 ↗</a><span class="lstat" style="color:#15803d">● live</span></td>
+      <td><span class="sev" style="color:#b45309;background:#fef3c7">ACTION</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p21"></td>
+      <td class="num">2</td>
+      <td>
+        <div class="subj">Freelance funnel — Upwork posting qualified (CHASE): Hermes Agent VPS deploy, $300</div>
+        <div class="meta">Freelance funnel CHASE</div>
+      </td>
+      <td class="func">Simone hand-ran the qualify+propose logic on one live Upwork posting (deploy Nous Research&#x27;s Hermes Agent on a VPS for automated X/LinkedIn posting, $300 fixed) to de-risk the proposal logic before Cody builds the scraper. Verdict is CHASE (conditional): 95/100 niche fit, ~$100-150/hr effective, directly in Kevin&#x27;s wheelhouse, with a draft proposal written in his voice ready to edit. The full artifact (posting details, decision rules, draft proposal, and the scraper spec noting Upwork is Cloudflare-walled so scraping needs an authenticated session or a proxy service) is delivered only as HTML/PDF email attachments — no scratchpad or web link was included in the message body.</td>
+      <td class="lk"><span class="muted">—</span></td>
+      <td><span class="sev" style="color:#b45309;background:#fef3c7">ACTION</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p23"></td>
+      <td class="num">3</td>
+      <td>
+        <div class="subj">Paper-to-podcast cron misfire artifact (day-3 final reminder)</div>
+        <div class="meta">[FYI/PROACTIVE] Paper-to-podcast day-3 reminder</div>
+      </td>
+      <td class="func">The cron_paper_to_podcast job (intended: search ArXiv for RAG-advances papers, build a NotebookLM notebook, generate audio + summaries) instead produced only a trace catalog (JSON/Markdown) under work_products/logfire-eval — evidence the run got misrouted into LogFire evaluation tracing rather than the actual paper-to-podcast pipeline. No audio or podcast deliverable was ever produced. This is the third and final automated reminder (ClearSpring artifact-reminder cron); the dashboard todolist entry for this artifact (pa_f5ddb3c970d34dab) confirmed live at 200. Workspace: /opt/universal_agent/AGENT_RUN_WORKSPACES/cron_paper_to_podcast.</td>
+      <td class="lk"><a class="btn" href="https://app.clearspringcg.com/dashboard/todolist?artifact=pa_f5ddb3c970d34dab" target="_blank" rel="noopener">View artifact in dashboard ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://app.clearspringcg.com/api/v1/artifacts/pa_f5ddb3c970d34dab/ack?t=e2f4f6e027aae1cb" target="_blank" rel="noopener">Acknowledge artifact (mutating action link, not auto-clicked) ↗</a></div></td>
+      <td><span class="sev" style="color:#b45309;background:#fef3c7">ACTION</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p4"></td>
+      <td class="num">4</td>
+      <td>
+        <div class="subj">Home A/V Orchestration — Document Library (review hub)</div>
+        <div class="meta">Home A/V Orchestration — Document Library</div>
+      </td>
+      <td class="func">Simone published a centralized, rendered review hub (project-library.html) for the home-automation-business project on the tailnet scratchpad, organized in review order with commentary and amber/blue/green review-status chips per artifact. It links out to four decision documents (landing-page A/B/C demand experiment, pricing strategy, rollout budgets, and a convergence note tying tv_art_gallery to this business), plus a freshly validated home-scan result (8/8 hardware devices auto-discovered in a 6-second passive scan) and other supporting material (demo video, configurator, research). Verified live (HTTP 200) and confirmed the page renders as described.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/home-av-library/project-library.html" target="_blank" rel="noopener">Open review hub ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/ensemble-landing/" target="_blank" rel="noopener">Demand experiment (landing pages A/B/C) ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/home-av-pricing/pricing-strategy.html" target="_blank" rel="noopener">Pricing strategy ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/home-av-budgets/budget-rollouts.html" target="_blank" rel="noopener">Rollout budgets ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/home-av-convergence/CONVERGENCE.md" target="_blank" rel="noopener">Convergence note ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/home-av-first-scan/first-home-scan.html" target="_blank" rel="noopener">First home scan results ↗</a></div></td>
+      <td><span class="sev" style="color:#1d4ed8;background:#dbeafe">REVIEW</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p15"></td>
+      <td class="num">5</td>
+      <td>
+        <div class="subj">PR #1260 - durable migration column-type constants refactor</div>
+        <div class="meta">[VP Status] refactor(durable) migration column-type literals</div>
+      </td>
+      <td class="func">Cody (vp.coder.primary) opened a self-contained refactor of src/universal_agent/durable/migrations.py: the 7 distinct SQL column-type literal strings used across ~45 _add_column_if_missing call sites are now named module-level constants, eliminating a class of silent-typo risk on legacy-database migrations. Verified via GitHub: PR #1260 is OPEN (not merged), 146 additions / 45 deletions, matching the email&#x27;s stated scope. Includes a new focused unit test (test_durable_migration_constants.py) with a demonstrated red-green check, and &quot;Validate PR&quot; CI is green per the email.</td>
+      <td class="lk"><a class="btn" href="https://github.com/Kjdragan/universal_agent/pull/1260" target="_blank" rel="noopener">Review PR #1260 ↗</a><span class="lstat" style="color:#15803d">● live</span></td>
+      <td><span class="sev" style="color:#1d4ed8;background:#dbeafe">REVIEW</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p26"></td>
+      <td class="num">6</td>
+      <td>
+        <div class="subj">ClearSpring CG service widget spec (autonomous social-posting agent)</div>
+        <div class="meta">ClearSpring CG service widget</div>
+      </td>
+      <td class="func">Simone productized the Hermes client validation into a sellable one-page service spec: an autonomous X+LinkedIn posting agent sold as a $300 loss-leader setup plus a $250-1,800/mo retainer across three tiers (80-92% margins). She ran an honesty check and found zero posting infrastructure actually exists in the UA codebase/VPS, so she corrected the draft proposal&#x27;s false &quot;runs in production today&quot; claim and labeled the runbook a BUILD SPEC rather than a proven deploy. Delivered as HTML and PDF attachments only - no link was extracted from the email body/attachments to verify.</td>
+      <td class="lk"><span class="muted">—</span></td>
+      <td><span class="sev" style="color:#1d4ed8;background:#dbeafe">REVIEW</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p28"></td>
+      <td class="num">7</td>
+      <td>
+        <div class="subj">Morning Ideation Report (25 proposals)</div>
+        <div class="meta">[FYI/IDEATION] Morning Ideation Report 25 proposals</div>
+      </td>
+      <td class="func">Simone&#x27;s autonomous ideation cycle generated 25 proposals (disk/DB retention fixes, tutorial_build lane triage, paper-to-podcast silent-failure bug, monetization/service-widget productization ideas) and published a rendered scratchpad report — verified live (HTTP 200) at the tailnet URL, each card showing rationale, tags, effort estimate, and suggested executor. Each of the 25 items also carries individual promote/dismiss action links to app.clearspringcg.com for Kevin&#x27;s per-item decision.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/ideation-20260703-d3b67b/report.html" target="_blank" rel="noopener">View full ideation report (25 proposals) ↗</a><span class="lstat" style="color:#15803d">● live</span></td>
+      <td><span class="sev" style="color:#1d4ed8;background:#dbeafe">REVIEW</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p37"></td>
+      <td class="num">8</td>
+      <td>
+        <div class="subj">Proactive demo attempt: DeepSeek DFlash on Gemma 12B (failed/blocked)</div>
+        <div class="meta">Demo built: DeepSeek DFlash Gemma 12B</div>
+      </td>
+      <td class="func">The proactive demo pipeline (demo_factory) attempted to build a tutorial repo reproducing DeepSeek DFlash speculative-decoding acceleration on Gemma 12B locally. I pulled the workspace from the VPS (/home/ua/lrepos/demo-proactive-deepseek-dflash-on-gemma-12b-locally-up) and read its EXHIBIT.html directly: it is explicitly marked status &quot;UN-DEMOABLE&quot; — &quot;the current run environment was unable to produce a functional demo. No artifacts were generated during this session.&quot; The eval_report.json confirms this: gating requirements (cloning DeepSpec, loading gemma-4-12b-it + the dflash drafter model, running gsm8k/mt-bench speculative-decoding benchmarks) were never actually executed against the real thing. Notably, the notifier email&#x27;s own body contradicts the exhibit — it says &quot;Direct demo — auto-finalized on the endpoint check&quot; and promises an explainer video &quot;rendering in background,&quot; but no video file exists anywhere in the workspace and the exhibit itself says it&#x27;s blocked/un-demoable. I published the actual EXHIBIT.html to the scratchpad and verified it&#x27;s live (HTTP 200).</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/deepseek-dflash-gemma12b-exhibit/deepseek-dflash-exhibit.html" target="_blank" rel="noopener">View run exhibit (UN-DEMOABLE) ↗</a><span class="lstat" style="color:#15803d">● live</span></td>
+      <td><span class="sev" style="color:#1d4ed8;background:#dbeafe">REVIEW</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p7"></td>
+      <td class="num">9</td>
+      <td>
+        <div class="subj">Auto-promoted skill: simulation-graded-loop</div>
+        <div class="meta">[demo-skill simulation-graded-loop] auto-promoted</div>
+      </td>
+      <td class="func">A /demo build (&quot;demo-king-of-las-vegas&quot; — a self-correcting poker-strategy loop graded by a Monte Carlo simulator instead of a test suite) was distilled into a reusable skill and auto-promoted into the private dragan plugin as /dragan:simulation-graded-loop. It builds self-correcting loops graded by a statistical simulator, using a &quot;Goldilocks oracle&quot; where both naive extremes measurably fail. The backing PR (Kjdragan/dragan-plugins#47, &quot;feat(skill): auto-promote simulation-graded-loop&quot;) is merged, and the scratchpad exhibit page is live and confirmed 200. No action needed by default — it&#x27;s already installed; Kevin can reply RETIRE to reverse it, and the librarian flagged overlap with autoresearch-loop / roast-council / self-correcting-loop for possible consolidation.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-skill-simulation-graded-loop/demo-skill-simulation-graded-loop.md" target="_blank" rel="noopener">View skill promotion details ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://github.com/Kjdragan/dragan-plugins/pull/47" target="_blank" rel="noopener">PR #47 (merged) ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p8"></td>
+      <td class="num">10</td>
+      <td>
+        <div class="subj">audit-agentic-workspace skill auto-promotion</div>
+        <div class="meta">[demo-skill audit-agentic-workspace] auto-promoted</div>
+      </td>
+      <td class="func">The /demo factory turned a demo (seeded from a RoboNuggets Claude Fable 5 video) into a new reusable skill, /dragan:audit-agentic-workspace, and auto-promoted it into the private dragan plugin — it&#x27;s already merged and live (PR #48, merged). The skill points Claude Fable 5 at an agent&#x27;s CLAUDE.md, skills library, and memory files and audits them like a context engineer: a scorecard rating six areas out of ten, plus a typed list of stale pointers, duplicate/conflicting instructions, and deprecation-worthy skills. On its bundled deliberately-messy sample workspace it scores 3/10 and catches all the planted rot. The scratchpad page confirms no overlap with existing skills was flagged by the librarian check.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-skill-audit-agentic-workspace/demo-skill-audit-agentic-workspace.md" target="_blank" rel="noopener">View promotion details ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://github.com/Kjdragan/dragan-plugins/pull/48" target="_blank" rel="noopener">PR #48 (merged) ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p9"></td>
+      <td class="num">11</td>
+      <td>
+        <div class="subj">Auto-promoted skill: /dragan:vox-explainer</div>
+        <div class="meta">[demo-skill vox-explainer] auto-promoted</div>
+      </td>
+      <td class="func">A /demo build (vox-remotion-explainer, seeded from a Vox-style motion-graphics YouTube tutorial) was auto-promoted into Kevin&#x27;s private dragan plugin as a new reusable skill, /dragan:vox-explainer, live on next Claude Code restart. It produces narrated Vox-style motion-graphics explainer videos (MP4) entirely from code via Remotion — halftone paper-cutout collages over a locked background, a self-drawing line chart, animated stats, TTS narration driving scene timing, and a music bed. The librarian flagged no overlap with existing skills; the promotion also opened dragan-plugins PR #49. Verified the scratchpad page is live (HTTP 200) and its content matches the email&#x27;s description, including a full CONCEPT writeup of the underlying demo.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-skill-vox-explainer/demo-skill-vox-explainer.md" target="_blank" rel="noopener">View skill promotion details ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://github.com/Kjdragan/dragan-plugins/pull/49" target="_blank" rel="noopener">dragan-plugins PR #49 ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p10"></td>
+      <td class="num">12</td>
+      <td>
+        <div class="subj">vox-remotion-explainer demo (PASS) + promoted /dragan:vox-explainer skill</div>
+        <div class="meta">[demo vox-remotion-explainer] PASS</div>
+      </td>
+      <td class="func">A /demo dark-factory run built a runnable capability from a YouTube seed on Vox-style motion graphics with Remotion. It produced a 39s narrated explainer video (&quot;The Box That Ate the World&quot;) passing 13 deterministic self-checks plus an independent judge eval (8/8 gating behaviors), then extracted and validated a standalone reusable skill (/dragan:vox-explainer) that free-and-keyless renders narrated Vox-style explainers for any topic (Remotion + PIL halftone + edge-tts + numpy music). Verified the EXHIBIT.html page (HTTP 200, live, shows the embedded video, frame stills, and pass status) and the plugin PR #49 in dragan-plugins, which is MERGED (1235 additions, promoting the skill).</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-vox-remotion-explainer-exhibit/EXHIBIT.html" target="_blank" rel="noopener">View exhibit ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/vox-explainer-artifact/explainer.mp4" target="_blank" rel="noopener">Watch the 39s explainer video ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/vox-explainer-walkthrough/vox-remotion-explainer-explainer.mp4" target="_blank" rel="noopener">Watch the 2m20s how-it-works walkthrough ↗</a> <a class="chip" href="https://github.com/Kjdragan/dragan-plugins/pull/49" target="_blank" rel="noopener">Plugin PR #49 (merged) ↗</a> <a class="chip" href="https://github.com/Kjdragan/demo-vox-remotion-explainer" target="_blank" rel="noopener">Demo repo (private) ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p11"></td>
+      <td class="num">13</td>
+      <td>
+        <div class="subj">research-brief-loop skill auto-promotion</div>
+        <div class="meta">[demo-skill research-brief-loop] auto-promoted</div>
+      </td>
+      <td class="func">A /demo build (seeded from an &quot;AI Edge&quot; YouTube video about Claude Fable loops) produced a reusable Agent SDK skill and Simone auto-promoted it into the private dragan plugin as /dragan:research-brief-loop, live on next Claude Code restart. The skill implements a self-checking autonomous intelligence-brief loop: a host-side harness (agent.py) reruns an Agent SDK pass, has the agent research live sources (real HTTP to Hacker News/arXiv, no mocks) and submit one genuinely-new development via an in-process MCP tool, then the host dedupes against existing entries and appends exactly one timestamped entry per pass to intelligence_brief.md. The linked GitHub PR (Kjdragan/dragan-plugins#51, &quot;feat(skill): auto-promote research-brief-loop&quot;) is merged (+487/-2). The scratchpad exhibit page verified live (HTTP 200) with full concept writeup and reply instructions.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-skill-research-brief-loop/demo-skill-research-brief-loop.md" target="_blank" rel="noopener">View skill-promotion exhibit ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://github.com/Kjdragan/dragan-plugins/pull/51" target="_blank" rel="noopener">PR #51 (merged) ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p12"></td>
+      <td class="num">14</td>
+      <td>
+        <div class="subj">plan-then-execute skill auto-promotion</div>
+        <div class="meta">[demo-skill plan-then-execute] auto-promoted</div>
+      </td>
+      <td class="func">A /demo build turned itself into a reusable skill, /dragan:plan-then-execute, and Simone auto-promoted it into the private dragan plugin (PR #52, merged, +539/-2). The skill implements &quot;plan with the frontier model, execute with the cheap one&quot;: glm-5.2 reads a real codebase and writes a plan.json (phases, key decisions, risks, machine-checkable acceptance criteria) rendered as PLAN.html, then glm-4.5-air executes the plan mechanically, verified by running the plan&#x27;s own acceptance checks. The scratchpad page confirms this rendered correctly and is live (HTTP 200); it also notes the librarian found no overlap with existing skills.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-skill-plan-then-execute/demo-skill-plan-then-execute.md" target="_blank" rel="noopener">View promotion details ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://github.com/Kjdragan/dragan-plugins/pull/52" target="_blank" rel="noopener">PR #52 (merged) ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p14"></td>
+      <td class="num">15</td>
+      <td>
+        <div class="subj">Runaway task_hub_evaluations writer fix + DB reclamation (PR #1259)</div>
+        <div class="meta">Runaway evaluation writer fixed</div>
+      </td>
+      <td class="func">Simone root-caused a disk-growth issue: the evaluation scorer was writing ~725k identical defer/dispatch_rebuild rows/day (99.99% of a 4.26M-row, 2.8GB table), not old-row bloat as first suspected. PR #1259 (merged, CI green, +334/-4) adds a dedup guard in task_hub.py::_record_evaluation that skips a defer repeating the prior (decision, reason), with 11 new unit tests, and Simone manually ran the VPS reclamation (deleted 947,851 redundant rows, VACUUM&#x27;d the DB from 2.84GB to 1.04GB, freed disk from 91% to 90%) after the dispatched Cody mission crashed post-merge on that step.</td>
+      <td class="lk"><a class="btn" href="https://github.com/Kjdragan/universal_agent/pull/1259" target="_blank" rel="noopener">View PR #1259 ↗</a><span class="lstat" style="color:#15803d">● live</span></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p16"></td>
+      <td class="num">16</td>
+      <td>
+        <div class="subj">PR #1260 — durable migration column-type constants refactor</div>
+        <div class="meta">[VP Status] refactor(durable) migration column-type literals</div>
+      </td>
+      <td class="func">Cody (vp.coder.primary) opened a self-contained refactor of src/universal_agent/durable/migrations.py: the ~45 inline SQL type-string literals used in _add_column_if_missing calls (e.g. &quot;TEXT&quot;, &quot;INTEGER DEFAULT 100&quot;) were extracted into 7 named module-level constants, eliminating a class of silent-typo risk on legacy-DB migrations since these strings are only exercised when migrating an older database. Confirmed live on GitHub: PR #1260, state OPEN, not merged, 146 insertions/45 deletions across 2 files, matching the email exactly. Includes a new focused test (tests/unit/test_durable_migration_constants.py) with a demonstrated red-green check, ruff clean, and Validate PR CI green; no merge/deploy has happened yet.</td>
+      <td class="lk"><a class="btn" href="https://github.com/Kjdragan/universal_agent/pull/1260" target="_blank" rel="noopener">View PR #1260 ↗</a><span class="lstat" style="color:#15803d">● live</span></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p17"></td>
+      <td class="num">17</td>
+      <td>
+        <div class="subj">promo-video demo skill auto-promotion</div>
+        <div class="meta">[demo-skill promo-video] auto-promoted</div>
+      </td>
+      <td class="func">The demo factory converted a /demo build (remotion-promo-video, seeded from a video on turning screenshots + a spec into a software promo video via Remotion/Claude) into a new reusable skill /dragan:promo-video, and auto-promoted it into Kevin&#x27;s private dragan plugin with no overlap flagged by the librarian. The skill generates a branded MP4 promo from live product screenshots and a config JSON: logo animation, browser-framed UI with Ken Burns/pan motion, staggered taglines, dark palette, CTA end card, music bed, refined via conversational feedback rounds. It&#x27;s already live (active next Claude Code restart); the linked scratchpad page (verified 200, content matches) has the full concept writeup and a PR link (github.com/Kjdragan/dragan-plugins/pull/53).</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-skill-promo-video/demo-skill-promo-video.md" target="_blank" rel="noopener">View promotion details ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://github.com/Kjdragan/dragan-plugins/pull/53" target="_blank" rel="noopener">dragan-plugins PR #53 ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p18"></td>
+      <td class="num">18</td>
+      <td>
+        <div class="subj">remotion-promo-video /demo run (PASS)</div>
+        <div class="meta">[demo remotion-promo-video] PASS</div>
+      </td>
+      <td class="func">Second /demo run of the day, seeded from a YouTube video about a Remotion Claude skill for promo videos. It produced a 13.5s branded product-promo video (logo entrance, screenshots in a browser frame, taglines, CTA) rendered from live Demo Factory screenshots, refined across v1-&gt;v2-&gt;final via natural-language feedback rounds, plus a 2m20s auto-generated walkthrough. All gates (DEMO_VERIFY, DEMO_EVAL 3/3, SKILL_VALIDATE, VIDEO_CONFIRM) passed on first attempt, and the durable skill /dragan:promo-video was promoted (live next restart). The exhibit page at the primary link is confirmed live (HTTP 200) and renders a full report with embedded videos and screenshots.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-remotion-promo-video-exhibit/EXHIBIT.html" target="_blank" rel="noopener">View exhibit ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/promo-video-final/promo.mp4" target="_blank" rel="noopener">Final promo video ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/promo-video-v1-before/promo_v1.mp4" target="_blank" rel="noopener">V1 before video ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/promo-video-walkthrough/remotion-promo-video-explainer.mp4" target="_blank" rel="noopener">Walkthrough video ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/remotion-promo-video-concept/CONCEPT.md" target="_blank" rel="noopener">Concept brief ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/demo-skill-promo-video/demo-skill-promo-video.md" target="_blank" rel="noopener">Skill record ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/demo-catalog/demo-catalog.html" target="_blank" rel="noopener">Demo catalog ↗</a> <a class="chip" href="https://github.com/Kjdragan/demo-remotion-promo-video" target="_blank" rel="noopener">Repo (private) ↗</a> <a class="chip" href="https://github.com/Kjdragan/dragan-plugins/pull/53" target="_blank" rel="noopener">Plugin PR #53 (merged) ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p19"></td>
+      <td class="num">19</td>
+      <td>
+        <div class="subj">workflow-patterns skill auto-promotion (demo-skill)</div>
+        <div class="meta">[demo-skill workflow-patterns] auto-promoted</div>
+      </td>
+      <td class="func">A /demo build turned a YouTube-seeded demo (&quot;Six Workflow Shapes&quot; — classify-and-act, fan-out-and-synthesize, adversarial verification, generate-and-filter, tournament, loop-until-done) into a reusable skill, auto-promoted into Kevin&#x27;s private dragan plugin as /dragan:workflow-patterns (live on next Claude Code restart, no action needed). The scratchpad page confirms it: the demo runs ~35 isolated Claude agent calls exercising all six harness shapes against planted ground truth, gated by a 22-check DEMO_SELFCHECK, and ships each shape as a real Workflow-tool .js script under workflows/. It also links the librarian PR (dragan-plugins#54) that landed the promotion and notes no overlap was flagged with existing skills.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-skill-workflow-patterns/demo-skill-workflow-patterns.md" target="_blank" rel="noopener">View promotion details ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://github.com/Kjdragan/dragan-plugins/pull/54" target="_blank" rel="noopener">PR #54 (dragan-plugins) ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p20"></td>
+      <td class="num">20</td>
+      <td>
+        <div class="subj">Auto-promoted skill: /dragan:notebooklm-video-system</div>
+        <div class="meta">[demo-skill notebooklm-video-system] auto-promoted</div>
+      </td>
+      <td class="func">A /demo build of a NotebookLM-based video system (seeded from a &quot;video system that never resets&quot; tutorial) was auto-promoted into Kevin&#x27;s private dragan plugin as a new reusable skill, callable via /dragan:notebooklm-video-system after next Claude Code restart. The system maintains persistent NotebookLM knowledge bases (built once, reused per video) and a pipeline of Gemini-scripted voiceover + Kokoro TTS + scene/prompt generation timed to real audio duration. The librarian found no overlap with existing skills, so it was auto-installed with no decision required; the backing PR (Kjdragan/dragan-plugins#55) is merged, and the scratchpad detail page is live.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-skill-notebooklm-video-system/demo-skill-notebooklm-video-system.md" target="_blank" rel="noopener">View promotion details ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://github.com/Kjdragan/dragan-plugins/pull/55" target="_blank" rel="noopener">PR #55 (merged) ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p24"></td>
+      <td class="num">21</td>
+      <td>
+        <div class="subj">Daily YouTube Digest — Thursday, 2026-07-03</div>
+        <div class="meta">[FYI/DIGEST] Daily YouTube Summaries</div>
+      </td>
+      <td class="func">The youtube_daily_digest cron produced a rendered scratchpad report summarizing the day&#x27;s watched YouTube videos, with a meta-synthesis of cross-video themes plus full per-video retellings behind a clickable table of contents. Today&#x27;s synthesized theme: pure-LLM agents hit a catastrophic &quot;phase transition&quot; failure (not gradual degradation) once state complexity crosses a threshold, driven by an &quot;attention delusion&quot; effect, with a noted gap around concrete neuro-symbolic/hybrid architecture patterns. Confirmed live (HTTP 200) and rendering as a styled, light-mode HTML digest with a working TOC.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/yt-digest-2026-07-03-0f76c8/youtube-digest-2026-07-03-thursday.html" target="_blank" rel="noopener">View YouTube digest ↗</a><span class="lstat" style="color:#15803d">● live</span></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p29"></td>
+      <td class="num">22</td>
+      <td>
+        <div class="subj">Hourly Intel brief: &quot;Parallel Generation Graduates&quot;</div>
+        <div class="meta">[Intel] Parallel Generation Graduates</div>
+      </td>
+      <td class="func">Simone&#x27;s hourly_intel_digest cron produced a single-signal intel brief on a fast-moving AI-inference trend: three newly open-sourced parallel-generation techniques (DeepSeek D-Flash speculative drafting ~5x speedup, NVIDIA NeMo-Tron 2 Two-Tower masked-diffusion at 2.4x with 98.7% quality retention, and on-weight Multi-Token Prediction powering local coding agents like Qwopus 35B at ~160 tok/s on a single RTX 6000). It frames this as auto-regressive generation being superseded and now viable for local coding-agent workloads. The link resolves to a real, rendered UA Intel brief page (confirmed HTTP 200, styled HTML with title/eyebrow/meta) hosted at app.clearspringcg.com.</td>
+      <td class="lk"><a class="btn" href="https://app.clearspringcg.com/briefs/pa_parallel_gen_local_agents_9c43dcb3" target="_blank" rel="noopener">Read the intel brief ↗</a><span class="lstat" style="color:#15803d">● live</span></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p30"></td>
+      <td class="num">23</td>
+      <td>
+        <div class="subj">Morning Activity Report (proactive fleet digest)</div>
+        <div class="meta">[FYI/DIGEST] Morning Activity Report</div>
+      </td>
+      <td class="func">Simone&#x27;s automated proactive_report cron generated a full-text status digest of the UA autonomous fleet: 40/43 activities healthy, 3 intentionally paused/parked (Claude Code intel sync out of X API credits, two CSI lanes parked by design), 4/4 tasks completed with 0 failures in the last 24h, daily task budget fully used (10/10), and 251 pending signal cards. No link was included — the report is delivered as plain text in the email body itself, not published to an external page.</td>
+      <td class="lk"><span class="muted">—</span></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p34"></td>
+      <td class="num">24</td>
+      <td>
+        <div class="subj">Backlog triage advisory — all skill-gap/deslop findings cleared</div>
+        <div class="meta">[UA backlog triage] Backlog fully cleared 20 PRs</div>
+      </td>
+      <td class="func">Simone&#x27;s backlog-triage advisory reports that every tracked skill-gap and deslop-finding issue is now resolved: 7 new skills shipped from backlog #796 (adversarial-verification, structured-output-compliance, oversized-file-chunked-reading, operations-worktree, verification-before-completion, vps-ssh-remote-diagnostic, technical-deslop), the automated discovery pipeline is live (PR #787, #821), and the remediation loop is end-to-end (CI advisory #786 to track-only findings #792 to auto-remediate #826 to gated dispatch #945), plus 3 standalone deslop cleanups and an infra migration. The email contains no URLs at all — it&#x27;s a plain-text status readout, not a report with an artifact link, so there is nothing to verify or click through.</td>
+      <td class="lk"><span class="muted">—</span></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p35"></td>
+      <td class="num">25</td>
+      <td>
+        <div class="subj">Simone daily digest: 20 proactive review candidates</div>
+        <div class="meta">[UA Digest] Proactive review candidates</div>
+      </td>
+      <td class="func">An automated daily digest from Simone (intelligence_reporter.send_daily_digest) rounding up 20 pieces of proactive work from the last cycle: several Claude Code intel items processed from X/@ClaudeDevs and @bcherny posts (each logged to a clearspringcg audit/task-history page), a partially-successful private tutorial-repo build (Claude Fable use-cases demo, flagged as needing manual runtime verification), several convergence-candidate task records, and a batch of open/merged GitHub PRs (e.g. #1260 open refactor extracting migration column-type constants, #1252 merged invariant-threshold fix). Verified: PR #1260 is OPEN (state confirmed via gh), PR #1252 is MERGED; the clearspringcg dashboard links return HTTP 200 but are an internal authenticated app. This is a low-stakes FYI roundup, not a single artifact.</td>
+      <td class="lk"><a class="btn" href="https://github.com/Kjdragan/universal_agent/pull/1260" target="_blank" rel="noopener">Review open PR #1260 (migration column-type constants) ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://github.com/Kjdragan/universal_agent/pull/1252" target="_blank" rel="noopener">PR #1252 (merged) - convergence freshness threshold fix ↗</a> <a class="chip" href="https://app.clearspringcg.com/dashboard/proactive-task-history?task_id=tutorial-build:f02c5d9d9ce25476" target="_blank" rel="noopener">Tutorial-build task history (needs manual runtime verification) ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p38"></td>
+      <td class="num">26</td>
+      <td>
+        <div class="subj">Demo: &quot;3 FREE AI Employees&quot; (GitHub Claude Skills tutorial)</div>
+        <div class="meta">Demo built: 160,000+ Cloned 3 FREE AI Employees</div>
+      </td>
+      <td class="func">The proactive demo pipeline (demo_factory) built a runnable repo demonstrating three &quot;AI employee&quot; skill definitions (Product Manager/debate, Engineer/dev-team, Sentiment Analyst) inspired by a YouTube tutorial on cloned Claude Skills. Verified via manifest.json: each employee ran a real agent tool-use loop on live inference (glm-4.7 via ZAI, since the intended Anthropic-Max inner session hit the known demo_factory auth-passthrough bug and the build honestly fell back to the outer loop rather than faking it), producing 3/3 real deliverables with DEMO_SELFCHECK PASS. Repo pushed to github.com/Kjdragan/demo-proactive-160-000-cloned-these-3-free-ai-employees; the EXHIBIT.html was not originally linked anywhere clickable, so I copied it to the scratchpad and confirmed it&#x27;s live (HTTP 200).</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/n38-demo/EXHIBIT.html" target="_blank" rel="noopener">View exhibit ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://github.com/Kjdragan/demo-proactive-160-000-cloned-these-3-free-ai-employees" target="_blank" rel="noopener">GitHub repo ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p39"></td>
+      <td class="num">27</td>
+      <td>
+        <div class="subj">Proactive demo: &quot;Fable 5 Just Replaced Entire Software &amp; Game Studios&quot; explainer video</div>
+        <div class="meta">Demo built: Fable 5 Replaced Studios</div>
+      </td>
+      <td class="func">The demo_factory proactive pipeline auto-built a tutorial/demo repo around the topic &quot;Fable 5 Just Replaced Entire Software &amp; Game Studios&quot; and produced a narrated explainer video (proactive-fable-5-just-replaced-entire-software-ga-explainer.mp4) plus an EXHIBIT.html, both saved to a workspace at /home/ua/lrepos/demo-proactive-fable-5-just-replaced-entire-software-ga on the VPS. Verified the video URL directly: it returns HTTP 200 and serves a real MP4 file on the tailnet scratchpad. This was a direct/auto-finalized build (passed the endpoint check with no manual gate), so it&#x27;s a pure FYI notification.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/demo-video-fable-5-just-replaced-entire-software-ga__demo-1/proactive-fable-5-just-replaced-entire-software-ga-explainer.mp4" target="_blank" rel="noopener">Watch the explainer video ↗</a><span class="lstat" style="color:#15803d">● live</span></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr>
+    <tr>
+      <td class="chk"><input type="checkbox" data-k="p42"></td>
+      <td class="num">28</td>
+      <td>
+        <div class="subj">Extraction QC v2 — grounded lab-QC investigation portfolio</div>
+        <div class="meta">Extraction QC v2 - 5 investigations + portfolio</div>
+      </td>
+      <td class="func">A &quot;Claude Science&quot; portfolio hub for a fully synthetic, generic (no vendor names) lab-extraction QC investigation covering two real workflow types: a 24-rod magnetic-bead genomic prep (blood + saliva) and a low-input cfDNA prep. Verified live at the primary URL — it renders a styled hub page linking five investigation reports (saliva elution-loss/bead-carryover flagship, normalization readiness, drift monitoring via Westgard rules, throughput/labor, and a cfDNA healthy-contrast baseline), each with a narrated ~1-min video, page, and an explicit &quot;is this practical to run for real?&quot; verdict. The bottom line: turn on drift monitoring first (near-zero lift), and start capturing manual add-back volume data as the cheapest high-value next step for the saliva flagship finding.</td>
+      <td class="lk"><a class="btn" href="https://uaonvps.taildcc090.ts.net/scratch/extraction-qc-v2/" target="_blank" rel="noopener">View portfolio hub ↗</a><span class="lstat" style="color:#15803d">● live</span><div class="chips"><a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/v2-inv1-saliva/inv1_saliva_flagship.html" target="_blank" rel="noopener">Inv1 - Saliva flagship ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/v2-inv2-normalization/inv2_normalization.html" target="_blank" rel="noopener">Inv2 - Normalization ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/v2-inv3-drift/inv3_drift.html" target="_blank" rel="noopener">Inv3 - Drift monitoring ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/v2-inv4-throughput/inv4_throughput.html" target="_blank" rel="noopener">Inv4 - Throughput &amp; labor ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net/scratch/v2-inv5-cfdna/inv5_cfdna_contrast.html" target="_blank" rel="noopener">Inv5 - cfDNA contrast ↗</a></div></td>
+      <td><span class="sev" style="color:#3f6212;background:#ecfccb">INFO</span></td>
+    </tr></tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="dot att"></span>3 · Need Attention — Work Through Together <span class="cnt">4</span></h2>
+  <p class="sec-sub">Ordered most-urgent first. These need a decision from you; we'll go through them one by one.</p>
+  <table class="proc">
+    <thead><tr><th></th><th>#</th><th>Item</th><th>What &amp; decision needed</th><th>Links</th><th>Sev</th></tr></thead>
+    <tbody>
+    <tr class="att">
+      <td class="chk"><input type="checkbox" data-k="a5"></td>
+      <td class="num">1</td>
+      <td>
+        <div class="subj">Proactive Health critical finding: VPS disk pressure 90.4%</div>
+        <div class="meta">[ACTION/INCIDENT] Proactive Health 1 critical finding</div>
+      </td>
+      <td class="func">Simone&#x27;s proactive_health_timer fired a critical invariant (disk_usage_health) on the production VPS: root/opt/var-lib mounts at 90.4% used with only ~18GB free. Root cause is per-mission workspace buildup (.venv, __pycache__, node_modules under AGENT_RUN_WORKSPACES/vp_coder_primary_external) outpacing the daily regenerable-artifact reaper and weekly workspace pruner. The email includes a runbook (du -sh diagnostics, docker system df, and commands to force-run the reaper/pruner scripts now) plus a link to acknowledge/mute the finding once resolved.<div class="needed"><b>Decision:</b> Force-run the VP-coder regenerable-artifact reaper (and if needed the weekly workspace pruner) on the VPS to reclaim disk before the 18GB free margin is exhausted, then either let the alarm clear on its own or click the ack link once it recovers. Do not click the ack link now -- it mutes the alarm without freeing any disk.</div></td>
+      <td class="lk"><a class="btn" href="https://app.clearspringcg.com/api/v1/proactive_health/ack?f=invariant%3Adisk_usage_health&amp;t=1784256031.7ce113969f61ffdebea552d6624321b0ea9051f8d7d05199ac47c9ad8b28035b" target="_blank" rel="noopener">Acknowledge/mute finding (does not fix disk pressure) ↗</a><span class="lstat" style="color:#64748b">—</span><div class="chips"><a class="chip" href="https://app.clearspringcg.com/api/v1/proactive_health/ack?f=invariant%3Adisk_usage_health&amp;t=1784256031.7ce113969f61ffdebea552d6624321b0ea9051f8d7d05199ac47c9ad8b28035b" target="_blank" rel="noopener">Ack link (plain) ↗</a> <a class="chip" href="https://app.clearspringcg.com/api/v1/proactive_health/ack?f=invariant%3Adisk_usage_health&amp;amp;t=1784256031.7ce113969f61ffdebea552d6624321b0ea9051f8d7d05199ac47c9ad8b28035b" target="_blank" rel="noopener">Ack link (HTML-encoded, as in email) ↗</a></div></td>
+      <td><span class="sev" style="color:#b91c1c;background:#fee2e2">CRITICAL</span></td>
+    </tr>
+    <tr class="att">
+      <td class="chk"><input type="checkbox" data-k="a31"></td>
+      <td class="num">2</td>
+      <td>
+        <div class="subj">GPU Build Approval — Gemma 4 tutorial-build</div>
+        <div class="meta">[ACTION/PROACTIVE] GPU Build Approval Gemma 4</div>
+      </td>
+      <td class="func">Simone&#x27;s tutorial-build pipeline flagged a YouTube tutorial (&quot;Gemma 4 is now 90% FASTER + FREE + Local&quot; by Julian Goldie SEO) as a GPU-bound demo candidate because it matched keyword &#x27;local model&#x27;. Building it requires local model inference (qwen2.5-coder:7b); on the VPS this would take ~15-20 min on CPU and exceed the 600s watchdog, so it&#x27;s parked for Kevin to approve running it on his desktop GPU (GTX 1660 Ti, ~4 min) instead. This is the documented gpu_demo_desktop_approval flow — approving only records intent, it does not trigger the build itself; Kevin then runs `/gpu-demo-build tutorial-build:22b8662deb3dc30d` interactively on the desktop.<div class="needed"><b>Decision:</b> Approve or reject the GPU demo build for the Gemma 4 tutorial (task tutorial-build:22b8662deb3dc30d), then if approved run `/gpu-demo-build tutorial-build:22b8662deb3dc30d` on the desktop.</div></td>
+      <td class="lk"><div class="chips"><a class="chip" href="https://uaonvps.taildcc090.ts.net:8443/api/v1/gpu_demo/tutorial-build:22b8662deb3dc30d/approve?a=approve&amp;t=987da6194822e85b" target="_blank" rel="noopener">Approve (run on desktop GPU) ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net:8443/api/v1/gpu_demo/tutorial-build:22b8662deb3dc30d/approve?a=reject&amp;t=0d06e9c13afce924" target="_blank" rel="noopener">Reject ↗</a></div></td>
+      <td><span class="sev" style="color:#b45309;background:#fef3c7">ACTION</span></td>
+    </tr>
+    <tr class="att">
+      <td class="chk"><input type="checkbox" data-k="a32"></td>
+      <td class="num">3</td>
+      <td>
+        <div class="subj">GPU Build Approval — Hermes tutorial-build</div>
+        <div class="meta">[ACTION/PROACTIVE] GPU Build Approval Hermes</div>
+      </td>
+      <td class="func">Simone&#x27;s tutorial-build pipeline flagged a YouTube tutorial (&quot;How to Run Hermes FREE Forever!&quot;, Julian Goldie SEO) as a GPU-bound demo candidate because it matched keyword &#x27;ollama&#x27;. Per the GPU-demo desktop-approval policy, building it on the VPS via CPU would take ~15-20 min and exceed the 600s watchdog, so it&#x27;s parked pending Kevin&#x27;s approval to instead run it on the desktop GPU (GTX 1660 Ti, qwen2.5-coder:7b, ~4 min). The email carries HMAC-signed approve/reject links; clicking approve records intent on the VPS gateway and surfaces the command (/gpu-demo-build tutorial-build:878cb4893f525061) for Kevin to run interactively on the desktop — nothing builds automatically.<div class="needed"><b>Decision:</b> Approve or reject building the &quot;How to Run Hermes FREE Forever!&quot; tutorial demo on desktop GPU (Ollama qwen2.5-coder:7b); if approved, run /gpu-demo-build tutorial-build:878cb4893f525061 on the desktop</div></td>
+      <td class="lk"><div class="chips"><a class="chip" href="https://uaonvps.taildcc090.ts.net:8443/api/v1/gpu_demo/tutorial-build:878cb4893f525061/approve?a=approve&amp;t=b31fb409f39fa432" target="_blank" rel="noopener">Approve (run on desktop GPU) ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net:8443/api/v1/gpu_demo/tutorial-build:878cb4893f525061/approve?a=reject&amp;t=8769521e19598e1f" target="_blank" rel="noopener">Reject ↗</a></div></td>
+      <td><span class="sev" style="color:#b45309;background:#fef3c7">ACTION</span></td>
+    </tr>
+    <tr class="att">
+      <td class="chk"><input type="checkbox" data-k="a33"></td>
+      <td class="num">4</td>
+      <td>
+        <div class="subj">GPU demo build approval — tutorial-build:af82df2b66da2d10</div>
+        <div class="meta">[ACTION/PROACTIVE] GPU Build Approval Claude Code FREE</div>
+      </td>
+      <td class="func">Simone&#x27;s tutorial-build pipeline picked up a YouTube video (&quot;Claude Code is now FREE: Here&#x27;s how...&quot; by Julian Goldie SEO) whose content matched the &#x27;ollama&#x27; keyword, triggering the GPU-demo-desktop-approval gate (per project memory, `UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED`). Running the demo against local Ollama (qwen2.5-coder:7b) on the VPS would take ~15-20 min CPU-only and blow the 600s watchdog, but only ~4 min on the desktop&#x27;s GTX 1660 Ti GPU. The email asks Kevin to approve or reject via one-time HMAC-signed links, and if approved, to run `/gpu-demo-build tutorial-build:af82df2b66da2d10` himself on the desktop (per policy, nothing runs autonomously on the desktop).<div class="needed"><b>Decision:</b> Approve or reject the tutorial-build GPU demo (tutorial-build:af82df2b66da2d10); if approved, run `/gpu-demo-build tutorial-build:af82df2b66da2d10` on the desktop.</div></td>
+      <td class="lk"><div class="chips"><a class="chip" href="https://uaonvps.taildcc090.ts.net:8443/api/v1/gpu_demo/tutorial-build:af82df2b66da2d10/approve?a=approve&amp;t=a2c5e1facab82bec" target="_blank" rel="noopener">Approve (runs on desktop GPU) ↗</a> <a class="chip" href="https://uaonvps.taildcc090.ts.net:8443/api/v1/gpu_demo/tutorial-build:af82df2b66da2d10/approve?a=reject&amp;t=b375cea291cea2f4" target="_blank" rel="noopener">Reject ↗</a></div></td>
+      <td><span class="sev" style="color:#b45309;background:#fef3c7">ACTION</span></td>
+    </tr></tbody>
+  </table>
+</section>
+
+<footer>Generated 2026-07-03 11:20 CT · Universal Agent inbox triage · private tailnet exhibit</footer>
+</div>
+
+<style>
+:root{color-scheme:light;}
+*{box-sizing:border-box;}
+body{margin:0;background:#f4f6f9;color:#0f172a;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 60px;}
+header h1{margin:0 0 4px;font-size:30px;letter-spacing:-.02em;}
+.sub{margin:0 0 18px;color:#475569;}
+.sub b{color:#0f172a;}
+.stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
+.stat{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px 18px;min-width:96px;box-shadow:0 1px 2px rgba(15,23,42,.04);}
+.stat .v{display:block;font-size:26px;font-weight:700;line-height:1;}
+.stat .l{display:block;font-size:12px;color:#64748b;margin-top:4px;text-transform:uppercase;letter-spacing:.04em;}
+.stat.ok .v{color:#15803d;} .stat.proc .v{color:#1d4ed8;} .stat.att .v{color:#b91c1c;}
+.hint{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;border-radius:10px;padding:10px 14px;font-size:13.5px;margin:6px 0 24px;}
+section{margin:0 0 34px;}
+h2{font-size:19px;display:flex;align-items:center;gap:10px;margin:0 0 4px;}
+.cnt{font-size:13px;background:#e2e8f0;color:#475569;border-radius:20px;padding:2px 10px;font-weight:600;}
+.sec-sub{margin:0 0 12px;color:#64748b;font-size:13.5px;}
+.dot{width:11px;height:11px;border-radius:50%;display:inline-block;}
+.dot.ok{background:#22c55e;} .dot.proc{background:#3b82f6;} .dot.att{background:#ef4444;}
+table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,.05);}
+thead th{background:#f8fafc;text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;padding:10px 12px;border-bottom:1px solid #e2e8f0;}
+tbody td{padding:12px 12px;border-bottom:1px solid #f1f5f9;vertical-align:top;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr:hover{background:#fafcff;}
+.chk{width:34px;text-align:center;}
+.chk input{width:17px;height:17px;cursor:pointer;accent-color:#2563eb;}
+.num{width:26px;color:#94a3b8;font-variant-numeric:tabular-nums;font-size:13px;}
+.subj{font-weight:600;color:#0f172a;}
+.meta{font-size:12px;color:#94a3b8;margin-top:2px;}
+.func{color:#334155;font-size:13.5px;max-width:430px;}
+.needed{margin-top:6px;font-size:13px;background:#fff7ed;border-left:3px solid #f59e0b;padding:5px 9px;border-radius:0 6px 6px 0;color:#7c2d12;}
+.lk{font-size:13px;min-width:150px;}
+.btn{display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:5px 11px;border-radius:7px;font-size:12.5px;font-weight:600;white-space:nowrap;}
+.btn:hover{background:#1d4ed8;}
+.lstat{display:block;font-size:11px;margin-top:4px;font-weight:600;}
+.chips{margin-top:7px;display:flex;flex-wrap:wrap;gap:5px;}
+.chip{font-size:11px;background:#f1f5f9;color:#475569;text-decoration:none;padding:3px 8px;border-radius:6px;border:1px solid #e2e8f0;}
+.chip:hover{background:#e2e8f0;}
+.sev{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap;}
+.att td{background:#fffbfa;}
+.muted,.att .muted{color:#cbd5e1;}
+tr.done{opacity:.5;}
+tr.done .subj{text-decoration:line-through;}
+footer{color:#94a3b8;font-size:12px;text-align:center;margin-top:30px;}
+@media(max-width:720px){.func{max-width:none;}table,thead,tbody,tr,td,th{display:block;}thead{display:none;}tbody td{border:none;padding:4px 14px;}tbody tr{border-bottom:1px solid #e2e8f0;padding:8px 0;}}
+</style>
+<script>
+(function(){
+  var KEY='inbox-triage-2026-07-03';
+  var saved=JSON.parse(localStorage.getItem(KEY)||'{}');
+  document.querySelectorAll('input[type=checkbox]').forEach(function(cb){
+    var k=cb.dataset.k;
+    if(saved[k]){cb.checked=true;cb.closest('tr').classList.add('done');}
+    cb.addEventListener('change',function(){
+      saved[k]=cb.checked; localStorage.setItem(KEY,JSON.stringify(saved));
+      cb.closest('tr').classList.toggle('done',cb.checked);
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

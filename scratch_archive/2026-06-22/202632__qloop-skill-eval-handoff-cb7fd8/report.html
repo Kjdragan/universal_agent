@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>HANDOFF — Skill-Description Optimizer status + QLoop applicability</title>
+<style>
+:root{color-scheme:light;--fg:#1f2328;--muted:#656d76;--bg:#ffffff;--soft:#f6f8fa;--border:#d0d7de;--accent:#0969da;--accent-soft:#ddf4ff}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:#ffffff;color:#1f2328;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6;font-size:16px}
+nav.docset{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--border);padding:.55rem 1rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+nav.docset .brand{font-weight:700;margin-right:.6rem;font-size:.9rem;color:var(--muted)}
+nav.docset a{font-size:.82rem;text-decoration:none;color:var(--accent);padding:.2rem .55rem;border-radius:6px;white-space:nowrap}
+nav.docset a:hover{background:var(--accent-soft)}
+nav.docset a.current{background:var(--fg);color:#fff;font-weight:600}
+nav.docset .sep{width:1px;height:1.1rem;background:var(--border);margin:0 .2rem}
+nav.docset a.file{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem}
+.scratch-back{padding:.5rem 1rem;font-size:.82rem;background:var(--soft);border-bottom:1px solid var(--border)}
+.scratch-back a{color:var(--accent);text-decoration:none}
+.scratch-back a:hover{text-decoration:underline}
+main{max-width:880px;margin:0 auto;padding:2.2rem 1.3rem 5rem}
+h1,h2,h3,h4{line-height:1.25;margin-top:1.8em;margin-bottom:.6em;font-weight:650}
+h1{font-size:1.9rem;border-bottom:1px solid var(--border);padding-bottom:.3em;margin-top:.2em}
+h2{font-size:1.45rem;border-bottom:1px solid var(--border);padding-bottom:.25em}
+h3{font-size:1.18rem}
+a{color:var(--accent)}
+p,li{overflow-wrap:break-word}
+code{background:var(--soft);padding:.15em .4em;border-radius:6px;font-size:.86em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--soft);border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;line-height:1.45}
+pre code{background:none;padding:0;font-size:.82rem}
+blockquote{margin:1em 0;padding:.2em 1em;color:var(--muted);border-left:4px solid var(--border)}
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:.92rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--border);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:650}
+tr:nth-child(even) td{background:#fbfcfd}
+hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+.srcmeta{color:var(--muted);font-size:.85rem;margin:.4rem 0 1rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+footer{max-width:880px;margin:0 auto;padding:1.5rem 1.3rem;color:var(--muted);font-size:.78rem;border-top:1px solid var(--border)}
+
+.sr-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#0969da;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer}
+.sr-fab:hover{background:#0a5fd0}
+.sr-panel{position:fixed;right:16px;bottom:64px;z-index:2147483000;width:340px;max-width:92vw;max-height:70vh;background:#fff;color:#1f2328;border:1px solid #d0d7de;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);display:none;flex-direction:column;overflow:hidden;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.sr-panel.sr-open{display:flex}
+.sr-head{display:flex;justify-content:space-between;align-items:center;padding:.6rem .8rem;border-bottom:1px solid #eaecef}
+.sr-x,.sr-del{background:none;border:none;color:#656d76;cursor:pointer;font-size:13px}
+.sr-headbtns{display:flex;gap:.4rem;align-items:center}
+.sr-clear{background:none;border:1px solid #d0d7de;border-radius:5px;color:#656d76;cursor:pointer;font-size:11px;padding:.1rem .45rem}
+.sr-clear:hover{background:#f6f8fa}
+.sr-hint{font-size:.74rem;line-height:1.45;color:#57606a;padding:.5rem .8rem;border-bottom:1px solid #eaecef;background:#f6f8fa}
+.sr-list{overflow:auto;padding:.5rem .8rem;flex:1}
+.sr-empty{color:#656d76;font-size:.85rem;padding:.5rem 0}
+.sr-item{border:1px solid #eaecef;border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem}
+.sr-loc{display:flex;justify-content:space-between;font-size:.72rem;color:#656d76;font-family:ui-monospace,Menlo,monospace;margin-bottom:.25rem}
+.sr-quote{font-size:.8rem;color:#3b4148;background:#f6f8fa;border-left:3px solid #d0d7de;padding:.2rem .5rem;margin-bottom:.3rem}
+.sr-body{width:100%;border:1px solid #d0d7de;border-radius:6px;padding:.35rem .45rem;font:inherit;resize:vertical}
+.sr-actions{display:flex;gap:.4rem;padding:.6rem .8rem;border-top:1px solid #eaecef}
+.sr-note{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:inherit}
+.sr-submit{flex:1;background:#1f883d;color:#fff;border:none;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:600 13px/1 inherit}
+.sr-submit:hover{background:#1a7332}
+.sr-chip{position:absolute;z-index:2147483001;background:#1f2328;color:#fff;border:none;border-radius:6px;padding:.25rem .5rem;font:600 12px/1 sans-serif;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sr-mark{background:#fff3c4;box-shadow:inset 0 -2px 0 #e3b341;border-radius:2px;cursor:pointer}
+.sr-mark:hover{background:#ffe98a}
+.sr-round{border:1px solid #eaecef;border-radius:8px;margin-bottom:.6rem;overflow:hidden}
+.sr-rhead{display:flex;justify-content:space-between;align-items:center;gap:.4rem;background:#f6f8fa;border-bottom:1px solid #eaecef;padding:.35rem .55rem;font-size:.72rem;color:#57606a;font-family:ui-monospace,Menlo,monospace}
+.sr-recopy{background:#fff;border:1px solid #d0d7de;border-radius:5px;padding:.1rem .4rem;cursor:pointer;font:inherit;color:#0969da;white-space:nowrap}
+.sr-hitem{padding:.35rem .55rem;border-top:1px solid #f0f1f3}
+.sr-hbody{font-size:.85rem;white-space:pre-wrap;color:#1f2328}
+.sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast{display:none!important}}
+</style>
+</head>
+<body><div class="scratch-back"><a href="/scratch/">← Scratchpad index</a></div><main><h1 id="handoff-skill-description-optimizer-status-qloop-applicability">HANDOFF — Skill-Description Optimizer status + QLoop applicability</h1>
+<p><strong>For:</strong> a fresh session picking up the skill-eval / QLoop-evaluation thread. <strong>This is a SETUP brief — it provides context and frames the open work; it does NOT do the work.</strong>
+<strong>Repos:</strong> UA worktree <code>/home/kjdragan/lrepos/ua-gpu-demo</code> (cwd may be <code>/home/kjdragan/lrepos/universal_agent</code> — same monorepo). QLoop = <code>/home/kjdragan/lrepos/kd_evaluator_harness</code> (branch <strong><code>master</code></strong>, HEAD <code>095a109</code>, NOT <code>main</code>).
+<strong>Date:</strong> 2026-06-22. All claims below verified by reading live code; adversarially re-checked.</p>
+<hr />
+<h2 id="1-where-the-optimizer-investigation-stands-done-do-not-re-derive">1. Where the optimizer investigation STANDS (done — do not re-derive)</h2>
+<p>We investigated why Anthropic's bundled <code>skill-creator</code> <em>description optimizer</em> failed and shipped a UA replacement.</p>
+<p><strong>Root cause:</strong> the bundled optimizer is a STALE vendored copy using the raw <code>anthropic</code> SDK (can't ride Max OAuth); upstream already fixed it via <code>claude -p</code>. We also corrected a wrong belief that "GLM is skill-blind" — <strong>glm-5.2 DOES invoke skills via the Agent SDK</strong> (<code>skills="all"</code>).</p>
+<p><strong>Shipped (verified on disk, PRs #1163/#1165):</strong>
+- <code>scripts/skill_desc_optimizer.py</code> — driver. <code>--auth-mode {anthropic,zai,auto}</code> (default <code>anthropic</code>), eval→improve→re-eval, keeps best description by held-out test score.
+- <code>src/universal_agent/services/inference_auth.py::build_inference_env</code> — picks the auth path for ANY out-of-session inference: <code>anthropic</code> (scrub <code>ANTHROPIC_*</code>→Max OAuth real Opus), <code>zai</code> (inject ZAI routing, pop <code>ANTHROPIC_API_KEY</code>, opus-tier glm-5.2), <code>auto</code> (probe credential).
+- <code>src/universal_agent/services/skill_triggering_eval.py::evaluate_triggering</code> — "does skill X trigger for prompt P on model M?" via the canonical <strong>Agent SDK</strong> path (<code>query(skills="all", setting_sources=["project"])</code> against a REAL <code>.claude/skills/</code> skill); <code>_invoked_once</code> = True iff a <code>Skill</code> tool block appears; pass = <code>(trigger_rate&gt;=0.5)==should_trigger</code>; <code>runs_per_query</code> handles variance. Works on Anthropic AND ZAI/GLM.
+- Canonical doc: <strong><code>project_docs/07_tools/05_skill_description_optimizer.md</code></strong> (<code>last_verified: 2026-06-22</code>; full investigation log + reproduction).</p>
+<p><strong>KEY CONCLUSION:</strong> skill-<strong>description</strong>-tuning is a <strong>weak vein</strong>. Head-to-head, glm-5.2 ≈ Opus on skill-triggering (Opus 5/6, glm-5.2 6/6 on the same 6-query set). The one real over-trigger defect (a model-routing near-miss) could NOT be fixed by description rewrites — automated OR a sharp hand-written exclusion clause, which made it <strong>worse</strong> (pink-elephant effect). Payoff is <strong>at scale</strong>, not on already-strong single descriptions.</p>
+<hr />
+<h2 id="2-open-work-for-the-new-session-to-do">2. OPEN WORK (for the new session to DO)</h2>
+<ol>
+<li><strong>Run the optimizer at SCALE across the skill library with real eval sets.</strong> Single-description tuning is a dead end; the open question is whether <em>systematic</em> sweeps surface a class of genuinely mis-described skills, or the "weak vein" generalizes (library uniformly passable → ~zero actionable lift). Build real per-skill eval sets (positive + negative prompts), run <code>skill_desc_optimizer.py</code> across the library, measure aggregate trigger-accuracy lift <strong>with a held-out split</strong> so you measure generalization, not overfit.</li>
+<li><strong>Decide whether/how QLoop applies</strong> (assessment §3). Honest answer: <strong>NOT for the skill-description work — for a different, higher-value gap (subjective artifact judging).</strong></li>
+</ol>
+<hr />
+<h2 id="3-qloop-applicability-assessment-honest-do-not-overclaim">3. QLoop APPLICABILITY ASSESSMENT (honest — do not overclaim)</h2>
+<p><strong>What QLoop is:</strong> an evaluator-controlled refine loop for non-deterministic artifacts (reports, websites, agent workflows). A <strong>pure deterministic controller</strong> (<code>qloop/controller/decision.py::decide</code>) owns the stop/pivot decision via a 7-rule first-match ladder over (<code>EvaluationResult</code>, <code>ControllerPolicy</code>, history, iteration) → accept/refine/pivot/reset/human_review. The LLM judge only <em>recommends</em>; the controller decides (its <code>recommended_action</code> is consulted in EXACTLY ONE rule, #6 reset). Two packages, one-way dep (<code>qloop</code> Core never imports <code>qloop_harness</code>; test-enforced). Text judge = Z.ai/GLM raw SDK; vision judge = Gemini. <code>run_critique()</code> = single-shot scorer of an arbitrary artifact; <code>run_build_loop()</code> = full multi-iteration ladder.</p>
+<p><strong>Where QLoop does NOT fit:</strong>
+- <strong>Skill-triggering eval</strong> is <strong>near-binary detection</strong>, already solved by <code>evaluate_triggering</code>. QLoop adds a stop/pivot ladder over a yes/no signal. <strong>Fit: WEAK.</strong>
+- <strong>Boundary disqualifier:</strong> QLoop's text <em>judge</em> (<code>providers/claude_sdk_zai.py::complete</code>) is the <strong>raw <code>AsyncAnthropic</code> SDK</strong> (<code>messages.create</code>) despite "sdk" in its name — no <code>claude_agent_sdk</code>/<code>claude -p</code>/subprocess, so the <strong>judge cannot invoke skills</strong>. (Nuance: <code>claude_sdk_zai.py::ClaudeSdkZaiProvider.runtime_env()</code> <em>does</em> exist for Agent-SDK/subprocess <strong>builder</strong> calls, so QLoop's generation side is NOT skill-blind — the disqualification is <strong>judge-path-specific</strong>, not whole-system.) Either way, QLoop's judge can't host UA skill-triggering eval.
+- <strong>Skill-description tuning</strong> is a proven weak vein; QLoop would optimize a rubric proxy that doesn't predict the real (triggering) outcome. <strong>Don't build it.</strong></p>
+<p><strong>Where QLoop SHINES (the real opportunity, and UA's genuine gap):</strong>
+- <strong>Subjective quality judging of reports / demos / websites.</strong> UA generates these and judges them once or not at all on quality. <code>run_critique(artifact_type, text=|url=, critique_only=True, mock=...)</code> is a drop-in programmatic scorer; the deterministic controller supplies the standing refine loop UA lacks. <strong>Fit: STRONG.</strong>
+- <strong>Visual quality.</strong> The Gemini vision judge grades rendered UI design (any URL or local PNG) — UA has <strong>NO visual grader</strong>; would catch silent render failures (the mermaid footgun). <strong>Fit: STRONG (standalone, needs only <code>GEMINI_API_KEY</code>).</strong>
+- <strong>ZAI provider boundary.</strong> QLoop's never-mutate-<code>os.environ</code> + never-cross-vendor discipline is cleaner than UA's for the raw-SDK case, but <strong>not interchangeable</strong> — UA must mutate env for the CLI/Agent-SDK path and Max OAuth, which QLoop has no path for. <strong>Fit: PARTIAL — borrow patterns, keep <code>build_inference_env</code>.</strong></p>
+<p><strong>UA already wanted this (key discovery):</strong> <code>urw/</code> (<code>orchestrator.py::URWOrchestrator</code>, <code>evaluator.py::CompositeEvaluator</code>) is a COMPLETE evaluator-controlled loop (binary+constraint+LLM+sub-agent judge, replan, human-review, confidence ladder) — but <strong>DORMANT</strong>, reachable only via the <code>--urw</code> CLI flag (<code>main.py::_run_urw_from_cli</code>), wired into NO heartbeat/cron/Task Hub (only <code>main.py</code> + <code>agent_core.py</code> reference it outside <code>urw/</code>). So the cheapest path may be grafting QLoop's missing pieces (pivot/reset split, calibration, discrimination-gate, vision judge) onto URW rather than greenfield. Caveat: URW's <code>LLMJudgeEvaluator</code> uses raw <code>AsyncAnthropic</code> with the same OAuth fragility we found in the bundled optimizer, and is NOT routed through <code>batched_judge</code> (no FUP/fail-closed protection).</p>
+<hr />
+<h2 id="4-ranked-integration-options">4. RANKED INTEGRATION OPTIONS</h2>
+<ol>
+<li><strong>(Highest value)</strong> Adopt <code>run_critique()</code> as a standing SUBJECTIVE-quality gate around UA artifacts that are currently single-pass or unjudged — start with <code>proactive_convergence</code> cluster briefs and the tutorial/demo pipeline. Wire the controller's accept/refine/human_review into the existing iterate path.</li>
+<li>Adopt the QLoop <strong>Gemini vision judge</strong> as a visual gate for <code>/opt/ua_demos</code> + scratchpad HTML exhibits — UA has no visual grader; catches the silent-mermaid footgun. Cheapest standalone win (only <code>GEMINI_API_KEY</code>).</li>
+<li><strong>Resurrect/extend the dormant URW harness</strong> with QLoop's missing pieces, rather than greenfield. Decide: graft QLoop's controller/calibration onto URW, OR replace URW's loop with QLoop Core.</li>
+<li>Borrow QLoop's <strong>provider discipline</strong> (never-cross-vendor, load-into-dict-never-mutate) at the inference boundary — keep UA's env-mutation + Max-OAuth path (a hard requirement QLoop can't meet).</li>
+<li>If a QLoop integration ships, <strong>reuse UA's <code>batched_judge.py</code></strong> (FUP breaker, fail-closed, chunking, Semaphore) as the text-judge engine via QLoop's <code>get_provider</code> seam, instead of QLoop's parallel raw-Z.ai judge path.</li>
+<li><strong>(Do NOT)</strong> Apply QLoop to the skill-description-optimizer work.</li>
+</ol>
+<hr />
+<h2 id="5-pointers-verified">5. POINTERS (verified)</h2>
+<p><strong>QLoop (<code>/home/kjdragan/lrepos/kd_evaluator_harness</code>, master @095a109):</strong>
+- <code>src/qloop/controller/decision.py::decide</code> — deterministic 7-rule ladder (THE core).
+- <code>src/qloop/schemas/controller.py::ControllerPolicy</code> — the knobs. <strong><code>max_iterations=8</code> in code</strong> (README prose says 3 — trust the policy).
+- <code>src/qloop/critique.py::run_critique</code> + <code>::CritiqueOutcome</code> (exposes <code>recommended_action</code> AND <code>controller_action</code> side by side).
+- <code>src/qloop_harness/loop.py::run_build_loop</code>; <code>src/qloop_harness/router.py::route_contract</code> (cheapest-tier dispatch); <code>src/qloop_harness/judge.py::QLoopJudge</code> (+ Subagent/Mock).
+- <code>src/qloop/providers/__init__.py::get_provider</code> — <strong>RAISES <code>ValueError</code> on an unknown provider (never silently switches vendor); returns <code>MockProvider</code> ONLY on explicit <code>name=="mock"</code>.</strong> (There is <strong>no</strong> <code>factory.py</code>.)
+- <code>src/qloop/providers/claude_sdk_zai.py::ClaudeSdkZaiProvider.complete</code> (raw <code>AsyncAnthropic</code>, explicit <code>base_url</code>/<code>auth_token</code> kwargs — never mutates env); <code>::runtime_env()</code> (Agent-SDK/subprocess builder env); <code>src/qloop/providers/gemini_vision.py::GeminiVisionProvider.judge_call</code>.
+- <code>mock=True</code> / <code>--mock</code> = fully offline deterministic (CI/zero-spend). Calibration + lessons OFF by default and judge-only (never touch the controller; dedicated isolation tests <code>tests/test_harness_isolation.py</code>, <code>tests/test_controller_calibration_isolation.py</code>).</p>
+<p><strong>UA (<code>/home/kjdragan/lrepos/ua-gpu-demo</code>):</strong>
+- Canonical doc: <code>project_docs/07_tools/05_skill_description_optimizer.md</code>.
+- Shipped: <code>scripts/skill_desc_optimizer.py</code>; <code>inference_auth.py::build_inference_env</code>; <code>skill_triggering_eval.py::evaluate_triggering</code> / <code>_invoked_once</code>.
+- Dormant QLoop twin: <code>src/universal_agent/urw/orchestrator.py</code> + <code>urw/evaluator.py::CompositeEvaluator</code> (CLI <code>--urw</code> only; <code>main.py::_run_urw_from_cli</code>).
+- Production judging primitives (no refine loop): <code>services/batched_judge.py::batched_judge</code> (FUP breaker, fail-closed, chunking — the engine to REUSE); <code>services/proactive_convergence.py</code> (main subjective single-pass site); <code>services/cody_evaluation.py::evaluate_demo</code> (MECHANICAL only — subjective verdict lives in Simone via <code>.claude/skills/cody-work-evaluator/SKILL.md</code>); <code>.claude/skills/skill-judge/SKILL.md</code> (120-pt design rubric, ad-hoc); <code>.claude/agents/evaluation-judge.md</code> (only URW invokes it → effectively unexercised).</p>
+<p><strong>Memory:</strong> <code>project_2026-06-22_skill_optimizer_on_zai.md</code> and <code>project_2026-06-22_desktop_gpu_ollama_demos.md</code>; the token-efficiency-north-star + ZAI rate-limit notes frame any standing-judge integration cost.</p>
+<hr />
+<h2 id="6-gotchas-will-bite-you">6. GOTCHAS (will bite you)</h2>
+<ul>
+<li>QLoop default branch is <strong><code>master</code></strong>; <code>.venv/site-packages</code> and <code>.claude/worktrees/</code> are STALE copies — canonical source is <code>src/qloop</code> + <code>src/qloop_harness</code>.</li>
+<li><code>run_critique</code> runs with <code>history=[]</code>, <code>iteration=1</code>, so stagnation / twice-failed-gate / max-iterations rules CANNOT fire single-shot — only <code>run_build_loop</code> exercises the full ladder.</li>
+<li>The evaluator's <code>recommended_action</code> is consulted in EXACTLY ONE rule (#6 reset); the controller can override it. "Evaluator decides, controller rubber-stamps" is the WRONG mental model.</li>
+<li><code>claude_sdk_zai</code>'s <em>judge</em> (<code>complete</code>) is raw <code>AsyncAnthropic</code> → <strong>skill-blind</strong>; but <code>runtime_env()</code> on the same class is for Agent-SDK/subprocess builder calls — so don't read "QLoop is skill-blind" as whole-system.</li>
+<li>Subjective-criterion pass/fail in the router is DERIVED/informational; the controller owns dimension floors. Acceptance flips False only on failed deterministic/interactive criteria.</li>
+<li><strong>Opus model default:</strong> QLoop's LIVE <code>.env</code> sets <code>ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.2</code> — <strong>same as UA</strong>. Only the committed <code>.env.example</code> is stale at <code>glm-5.1</code>. (Do NOT expect a divergence.)</li>
+<li>A standing QLoop refine loop over Z.ai multiplies judge calls per artifact; glm-5.2 thinking is 10–24× tokens and ZAI is rate-limited (concurrency-sensitive) — weigh against the token-efficiency north star before wiring to production.</li>
+</ul></main>
+<footer>Rendered on the tailnet HTML scratchpad · private to your devices.</footer>
+<script>
+(function(){
+  "use strict";
+  var m = location.pathname.match(/\/scratch\/([^\/]+)\//);
+  var parts = location.pathname.split('/').filter(Boolean);
+  var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
+  var KEY = 'scratchReview:' + slug;
+  var comments = [];
+  var lastSel = null;  // most recent text selection inside <main>, kept so "+ Comment" works after the click clears it
+  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
+  var HKEY = 'scratchReviewHistory:' + slug;   // archive of all submitted rounds (never auto-cleared)
+  var history = [];
+  try { history = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch(e){}
+  function persistHistory(){ try{ localStorage.setItem(HKEY, JSON.stringify(history)); }catch(e){} }
+  var viewMode = 'review';  // 'review' (active round) | 'history' (Past comments)
+  function save(){ persist(); render(); applyMarks(); }
+
+  // In-page indicators: highlight the commented text so you can see what you've marked.
+  function clearMarks(){
+    var main=document.querySelector('main'); if(!main) return;
+    main.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+  }
+  function wrapQuote(quote, cid){
+    if(!quote) return; var main=document.querySelector('main'); if(!main) return;
+    var w=document.createTreeWalker(main, NodeFilter.SHOW_TEXT, null), n;
+    while((n=w.nextNode())){
+      if(n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark')) continue;
+      var idx=n.nodeValue.indexOf(quote);
+      if(idx>=0){ var r=document.createRange(); r.setStart(n,idx); r.setEnd(n,idx+quote.length); var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view'; try{ r.surroundContents(mk); }catch(e){} return; }
+    }
+  }
+  function applyMarks(){ clearMarks(); comments.forEach(function(c){ if(c.quote) wrapQuote(c.quote, c.id); }); }
+  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+
+  function headingFor(node){
+    var hs = document.querySelectorAll('main h1[id],main h2[id],main h3[id],main h4[id]');
+    var best=null;
+    for(var i=0;i<hs.length;i++){
+      if(hs[i]===node || (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING)) best=hs[i];
+    }
+    return best;
+  }
+
+  var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
+  var panel=document.createElement('div'); panel.className='sr-panel';
+  panel.innerHTML='<div class="sr-head"><b class="sr-title">Review</b><span class="sr-headbtns"><button type="button" class="sr-clear" data-act="clear">Clear</button><button type="button" class="sr-x" data-act="close">✕</button></span></div>'
+    +'<div class="sr-hint">Highlight text then <b>+ Comment</b>, or <b>+ Note</b> for a general remark. Comments save as you type — add as many as you want. <b>Submit → copy prompt</b> exports your round, archives it under <b>Past</b>, and clears the page for the next round.</div>'
+    +'<div class="sr-list"></div>'
+    +'<div class="sr-actions"></div>';
+  var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
+  var toast=document.createElement('div'); toast.className='sr-toast'; toast.style.display='none';
+  document.body.appendChild(btn); document.body.appendChild(panel); document.body.appendChild(chip); document.body.appendChild(toast);
+
+  function showToast(t){ toast.textContent=t; toast.style.display='block'; setTimeout(function(){toast.style.display='none';},4500); }
+  function openPanel(o){ panel.classList.toggle('sr-open', o!==false); }
+
+  function reviewActionsHTML(){
+    return '<button type="button" class="sr-note" data-act="comment">+ Comment</button>'
+      +'<button type="button" class="sr-note" data-act="note">+ Note</button>'
+      +'<button type="button" class="sr-note" data-act="history">Past'+(history.length?' ('+history.length+')':'')+'</button>'
+      +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button>';
+  }
+  function render(){
+    btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
+    var title=panel.querySelector('.sr-title'), list=panel.querySelector('.sr-list'),
+        actions=panel.querySelector('.sr-actions'), hint=panel.querySelector('.sr-hint');
+    var clr=panel.querySelector('.sr-clear');
+    if(viewMode==='history'){
+      title.textContent='Past comments'; hint.style.display='none'; if(clr) clr.style.display='none';
+      if(!history.length){ list.innerHTML='<div class="sr-empty">No submitted rounds yet.</div>'; }
+      else {
+        var html='';
+        for(var k=history.length-1;k>=0;k--){
+          var h=history[k]; var when=esc((h.submitted_at||'').replace('T',' ').slice(0,16));
+          html+='<div class="sr-round"><div class="sr-rhead"><span>Round '+(k+1)+' · '+when+' · '+h.comments.length+'</span>'
+            +'<button type="button" class="sr-recopy" data-r="'+k+'">copy prompt</button></div>'
+            +h.comments.map(function(c){
+              return '<div class="sr-hitem"><div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span></div>'
+                +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+                +'<div class="sr-hbody">'+esc(c.body||'(no text)')+'</div></div>';
+            }).join('')
+            +'</div>';
+        }
+        list.innerHTML=html;
+      }
+      actions.innerHTML='<button type="button" class="sr-note" data-act="back">← Back to review</button>';
+      return;
+    }
+    title.textContent='Review'; hint.style.display='';
+    if(clr) clr.style.display = comments.length ? '' : 'none';
+    actions.innerHTML=reviewActionsHTML();
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, or <b>+ Note</b>.</div>'; return; }
+    list.innerHTML='';
+    comments.forEach(function(c,i){
+      var row=document.createElement('div'); row.className='sr-item';
+      row.innerHTML='<div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
+        +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+        +'<textarea class="sr-body" data-i="'+i+'" rows="2" placeholder="Your comment…">'+esc(c.body||'')+'</textarea>';
+      list.appendChild(row);
+    });
+  }
+
+  function addComment(quote, heading){
+    comments.push({id:Date.now()+'-'+comments.length, quote:quote||'', heading:heading||'', body:''});
+    save(); openPanel(true);
+    var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus();
+  }
+
+  document.addEventListener('mouseup', function(){
+    setTimeout(function(){
+      var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var main=document.querySelector('main');
+      if(txt && txt.length>1 && sel.rangeCount && main && main.contains(sel.anchorNode)){
+        var r=sel.getRangeAt(0).getBoundingClientRect();
+        chip.style.top=(window.scrollY+r.bottom+6)+'px'; chip.style.left=(window.scrollX+r.left)+'px';
+        var h=headingFor(sel.anchorNode); var hd=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
+        chip.dataset.quote=txt.slice(0,280); chip.dataset.heading=hd;
+        lastSel={quote:txt.slice(0,280), heading:hd};
+        chip.style.display='block';
+      } else { chip.style.display='none'; }
+    },10);
+  });
+  chip.addEventListener('mousedown', function(e){ e.preventDefault(); addComment(chip.dataset.quote, chip.dataset.heading); chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); });
+  btn.addEventListener('click', function(){ openPanel(!panel.classList.contains('sr-open')); render(); });
+  panel.addEventListener('click', function(e){
+    var act=e.target.getAttribute('data-act');
+    if(act==='close') openPanel(false);
+    else if(act==='comment'){ if(lastSel && lastSel.quote){ addComment(lastSel.quote, lastSel.heading); lastSel=null; } else { showToast('Highlight some text on the page first, then “+ Comment”. (Use “+ Note” for a general remark.)'); } }
+    else if(act==='note') addComment('','');
+    else if(act==='submit') submit();
+    else if(act==='history'){ viewMode='history'; render(); }
+    else if(act==='back'){ viewMode='review'; render(); }
+    else if(act==='clear'){ if(comments.length && (typeof confirm!=='function' || confirm('Discard the '+comments.length+' unsubmitted comment(s)? Past history is kept.'))){ comments=[]; persist(); clearMarks(); render(); showToast('Cleared. Past history kept.'); } }
+    else if(e.target.classList.contains('sr-recopy')){ var r=+e.target.getAttribute('data-r'); if(history[r]) copyText(buildPrompt(history[r].comments)).then(function(){ showToast('Round '+(r+1)+' prompt re-copied to the clipboard.'); }).catch(function(){ showToast('Clipboard blocked.'); }); }
+    else if(e.target.classList.contains('sr-del')){ comments.splice(+e.target.getAttribute('data-i'),1); save(); }
+  });
+  panel.addEventListener('input', function(e){
+    if(e.target.classList.contains('sr-body')){ comments[+e.target.getAttribute('data-i')].body=e.target.value; persist(); btn.textContent='💬 Review ('+comments.length+')'; }
+  });
+
+  function buildPrompt(cs){
+    cs = cs || comments;
+    var title=document.title||slug; var L=[];
+    L.push('[scratch-review '+slug+']');
+    L.push('Review of "'+title+'"'); L.push(location.href);
+    L.push('I left '+cs.length+' comment(s); full JSON downloaded to ~/Downloads/scratch-comments-'+slug+'.json'); L.push('');
+    cs.forEach(function(c,i){
+      L.push((i+1)+'. ['+(c.heading?'§ '+c.heading:'note')+'] '+(c.body||'(no text)'));
+      if(c.quote) L.push('   ↳ re: "'+c.quote+'"');
+    });
+    L.push(''); L.push('Re-read the artifact and address each comment, then reply in our chat.');
+    return L.join('\n');
+  }
+  function downloadJSON(){
+    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='scratch-comments-'+slug+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},120);
+  }
+  function copyText(text){
+    if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function(res,rej){ try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res(); }catch(err){ rej(err); } });
+  }
+  function submit(){
+    if(!comments.length){ showToast('No comments yet — highlight text → + Comment, or + Note.'); return; }
+    var text=buildPrompt(comments); downloadJSON();
+    // Archive the round, then clean the slate so the next round starts fresh (no stale
+    // re-highlighting on a revised page). History is kept under "Past".
+    history.push({submitted_at:new Date().toISOString(), comments:comments.slice()}); persistHistory();
+    comments=[]; persist(); clearMarks(); viewMode='review'; render();
+    copyText(text).then(function(){ showToast('Copied — paste into Claude Code. Round archived under “Past”; page cleared for the next round.'); })
+                  .catch(function(){ showToast('JSON downloaded; round archived & cleared. Clipboard blocked — copy from the file.'); });
+  }
+
+  // Click a highlighted span on the page → open the panel and focus that comment.
+  var mainEl=document.querySelector('main');
+  if(mainEl) mainEl.addEventListener('click', function(e){
+    var mk=e.target.closest?e.target.closest('.sr-mark'):null; if(!mk) return;
+    openPanel(true); var idx=-1; comments.forEach(function(c,j){ if(c.id===mk.dataset.cid) idx=j; });
+    if(idx>=0){ var ta=panel.querySelectorAll('.sr-body')[idx]; if(ta){ ta.scrollIntoView({block:'center'}); ta.focus(); } }
+  });
+
+  render(); applyMarks();
+})();
+</script>
+</body></html>

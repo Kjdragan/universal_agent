@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tome invite email — preview</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin:0; background:#f3f4f6; color:#111827;
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; padding:24px; }
+  .wrap { max-width:640px; margin:0 auto; }
+  h1 { font-size:18px; color:#6b7280; font-weight:600; margin:0 0 16px; }
+  .note { background:#fef9c3; border:1px solid #fde047; border-radius:10px; padding:12px 16px; font-size:14px; color:#713f12; margin-bottom:20px; }
+  .email { background:#fff; border:1px solid #e5e7eb; border-radius:14px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .hdr { padding:16px 20px; border-bottom:1px solid #f1f5f9; font-size:14px; }
+  .hdr div { margin:2px 0; }
+  .hdr .lbl { color:#9ca3af; display:inline-block; width:64px; }
+  .subj { font-weight:700; font-size:17px; color:#111827; padding:14px 20px 4px; }
+  .body { padding:8px 20px 24px; white-space:pre-wrap; font-size:15.5px; color:#1f2937; }
+  .step { font-weight:700; }
+  a { color:#2563eb; word-break:break-all; }
+</style></head>
+<body><div class="wrap">
+<h1>Tome onboarding invite — email preview</h1>
+<div class="note"><b>Preview only — not sent.</b> This is the exact text each family member will receive (here shown for Kelsey). Name, sign-in email, and the one-time link are filled in per person at send time.</div>
+<div class="email">
+  <div class="hdr">
+    <div><span class="lbl">From</span> Kevin Dragan &lt;kevinjdragan@gmail.com&gt;</div>
+    <div><span class="lbl">To</span> kelsey.scarlet@icloud.com</div>
+    <div><span class="lbl">Subject</span> Your Tome invite</div>
+  </div>
+  <div class="subj">Your Tome invite</div>
+  <div class="body">Hi Kelsey, you've been invited to Tome (by Dad!) - our private family library, e-reader, and read-aloud narration app.
+
+Tome lives on our own private family network, so there are 3 quick steps to get in on your iPhone. The whole thing takes about 5 minutes.
+
+<span class="step">STEP 1 - Join our private network (Tailscale)</span>
+You'll get a separate email from "Tailscale" inviting you to our network - open it and tap Accept. Then, on your iPhone:
+  - Install the free "Tailscale" app from the App Store.
+  - Open it, tap Log in, and sign in with kelsey.scarlet@icloud.com.
+  - Tap Allow when it asks to add a VPN configuration, and leave the switch turned ON.
+
+<span class="step">STEP 2 - Set up your Tome account</span>
+Open this one-time link on your iPhone in Safari:
+  <a href="#">https://uaonvps.taildcc090.ts.net/?invite=&lt;one-time-token&gt;</a>
+Choose a password (at least 6 characters) and you're in. Next time, you can sign in with just your first name or your email.
+
+<span class="step">STEP 3 - Add the Tome icon to your Home Screen</span>
+With Tome open in Safari, tap the Share button (the square with an up-arrow, at the bottom of the screen), scroll down, tap "Add to Home Screen", then tap "Add". Tome will now open like a normal app, straight from your Home Screen.
+
+That's it - open Tome, pick a book, and tap Narrate to have it read aloud to you. Enjoy!
+- Tome</div>
+</div>
+</div></body></html>

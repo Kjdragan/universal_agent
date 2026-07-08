@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tome onboarding — diagnosis & fix</title>
+<style>
+ :root{color-scheme:light}
+ *{box-sizing:border-box}
+ body{margin:0;background:#f6f7f9;color:#16181d;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:28px}
+ .wrap{max-width:900px;margin:0 auto}
+ h1{font-size:24px;margin:0 0 4px}
+ .sub{color:#6b7280;margin:0 0 24px}
+ h2{font-size:17px;margin:30px 0 12px;padding-bottom:6px;border-bottom:2px solid #e5e7eb}
+ .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px 20px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+ table{border-collapse:collapse;width:100%;font-size:14px}
+ th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #eef0f3;vertical-align:top}
+ th{color:#6b7280;font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.03em}
+ code{background:#f1f3f5;padding:1px 6px;border-radius:5px;font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
+ .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+ .bad{background:#fee2e2;color:#991b1b}.good{background:#dcfce7;color:#166534}.warn{background:#fef9c3;color:#854d0e}
+ .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+ @media(max-width:680px){.two{grid-template-columns:1fr}}
+ .mono{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;overflow:auto;white-space:pre}
+ .lead{font-size:13px;color:#6b7280}
+ .flow{font-size:13.5px;margin:0;padding-left:18px}
+ .flow li{margin:3px 0}
+ .x{color:#b91c1c;font-weight:700}.c{color:#15803d;font-weight:700}
+</style></head>
+<body><div class="wrap">
+<h1>Tome family onboarding — diagnosis &amp; fix</h1>
+<p class="sub">Why the snafus happened, and the unified flow that removes them.</p>
+
+<h2>Root cause: two systems, glued by hand</h2>
+<div class="card">
+Onboarding one person actually crosses <b>two independent systems</b> that have no knowledge of each other.
+The app automates only its own half; the entire Tailscale half is manual admin-API work I did by hand this session.
+<div class="two" style="margin-top:14px">
+  <div>
+    <span class="pill bad">Tailscale — 100% manual</span>
+    <ul class="flow"><li>invite to tailnet</li><li>accept + install + sign in</li><li><b>admin-approve</b> (the "needs-approval" surprise)</li><li>ACL grant scoping them to Tome</li></ul>
+  </div>
+  <div>
+    <span class="pill good">Tome account — automated</span>
+    <ul class="flow"><li><code>mint_invites</code> → one-time token</li><li><code>dispatch_invites</code> → emailed link</li><li>set password in the web app</li></ul>
+  </div>
+</div>
+<p class="lead" style="margin-top:12px">The repo's <b>only</b> link between them is the email text I added today. Nothing checks that someone is even on the network before they're handed a Tome link.</p>
+</div>
+
+<h2>Every snafu → the same gap</h2>
+<div class="card"><table>
+<tr><th>Snafu we hit</th><th>Root cause</th></tr>
+<tr><td>"Open this link" failed — app is tailnet-only</td><td>Email didn't sequence Tailscale first <span class="pill good">fixed</span></td></tr>
+<tr><td>Hand-edited the ACL for each person</td><td>No ACL automation — pure manual admin API</td></tr>
+<tr><td>Kelsey stuck at "needs-approval"</td><td>No approval step or visibility in the flow</td></tr>
+<tr><td>"Which email do they need?"</td><td>Two invites (Tailscale + Tome) sent separately</td></tr>
+<tr><td><b>"Marie can't open it" → manual API spelunking</b></td><td><b>No status view across the 5 stages</b></td></tr>
+<tr><td>Ran mint, then dispatch, then a manual TS invite</td><td>No single command ties it together</td></tr>
+</table></div>
+
+<h2>The fix: one <code>onboard</code> command + a status board</h2>
+<div class="card">
+A thin Tailscale admin client in the repo + one CLI that drives <b>both</b> systems from the existing family roster. No new database — it reads live state from Tailscale + the Tome store.
+<div class="two" style="margin-top:14px">
+<div>
+<p class="lead">BEFORE — ~8 hand-coordinated steps</p>
+<ul class="flow">
+<li><span class="x">manual</span> TS invite (admin console)</li>
+<li><span class="x">manual</span> edit ACL grant</li>
+<li><span class="x">manual</span> approve in console</li>
+<li><span class="x">manual</span> copy their join link</li>
+<li><span class="x">cmd</span> <code>mint_invites</code></li>
+<li><span class="x">cmd</span> <code>dispatch_invites --tailscale-url …</code></li>
+<li><span class="x">manual</span> diagnose if they're stuck</li>
+</ul>
+</div>
+<div>
+<p class="lead">AFTER — one command each</p>
+<ul class="flow">
+<li><span class="c">✦</span> <code>onboard add marie</code><br><span class="lead">invites to tailnet · upserts ACL scope · mints Tome token · sends ONE combined email with both links</span></li>
+<li><span class="c">✦</span> <code>onboard status</code> — the board below</li>
+<li><span class="c">✦</span> <code>onboard approve marie</code> (or <code>--all</code>)</li>
+<li><span class="c">✦</span> <code>onboard resend marie</code></li>
+</ul>
+</div>
+</div>
+</div>
+
+<div class="card">
+<p class="lead" style="margin-top:0">What <code>onboard status</code> would show — the visibility that was missing entirely:</p>
+<div class="mono">FAMILY ONBOARDING STATUS
+person     tailnet              acl-scope   tome account     next step
+───────── ──────────────────── ─────────── ──────────────── ─────────────────────
+Kevin      active (owner)        —           active           ✔ done
+Kelsey     active                ✔ tome-only registered       set password
+Marie      invited · not accepted ✔ tome-only token sent      ⚠ accept TS invite
+Garrett    invited · not accepted ✔ tome-only token sent      ⚠ accept TS invite</div>
+</div>
+
+<h2>One decision for you</h2>
+<div class="card">
+Most of this has obvious defaults (Tailscale token in <code>server/.env</code> like the Gmail one; read live state, no new DB; auto-apply the ACL scope). The one real fork is the <b>approval gate</b> — see the question I'll ask alongside this.
+</div>
+
+</div></body></html>

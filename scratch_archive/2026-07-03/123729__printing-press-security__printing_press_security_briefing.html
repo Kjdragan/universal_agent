@@ -1,0 +1,184 @@
+<title>Printing Press — Security Briefing</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1a1f26; --muted:#5b6472; --line:#e3e7ec;
+    --accent:#2f6df6; --accent-soft:#eaf1ff;
+    --red:#c0392b; --red-soft:#fdecea; --amber:#b8860b; --amber-soft:#fdf5e2;
+    --green:#1e7a46; --green-soft:#e8f5ec;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;padding:0 0 80px}
+  .wrap{max-width:920px;margin:0 auto;padding:0 20px}
+  header{background:linear-gradient(135deg,#20304f,#2f6df6);color:#fff;padding:44px 0 38px;margin-bottom:34px}
+  header .wrap{max-width:920px}
+  .kicker{text-transform:uppercase;letter-spacing:.12em;font-size:12px;font-weight:700;opacity:.85;margin:0 0 8px}
+  h1{margin:0 0 10px;font-size:30px;line-height:1.2}
+  .sub{margin:0;font-size:16px;opacity:.92;max-width:680px}
+  .meta{margin-top:16px;font-size:13px;opacity:.8}
+  h2{font-size:21px;margin:38px 0 12px;padding-bottom:7px;border-bottom:2px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 6px}
+  p{margin:10px 0}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.86em;background:#eef1f5;padding:1.5px 5px;border-radius:4px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0;
+    box-shadow:0 1px 2px rgba(20,30,50,.04)}
+  .verdict{border-left:6px solid var(--amber);background:var(--amber-soft)}
+  .verdict .tag{display:inline-block;background:var(--amber);color:#fff;font-weight:700;font-size:12px;
+    letter-spacing:.06em;padding:3px 10px;border-radius:20px;text-transform:uppercase}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  .pill{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:20px;margin:0 4px 4px 0}
+  .pill.r{background:var(--red-soft);color:var(--red)}
+  .pill.a{background:var(--amber-soft);color:var(--amber)}
+  .pill.g{background:var(--green-soft);color:var(--green)}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f0f3f7;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .scroll{overflow-x:auto}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:14px 0;font-size:13px}
+  .node{background:var(--accent-soft);border:1px solid #cddcff;color:#123;padding:7px 11px;border-radius:8px;font-weight:600}
+  .node.out{background:#eef7f0;border-color:#c6e6d1}
+  .arrow{color:var(--muted);font-weight:700}
+  .callout{border-left:5px solid var(--accent);background:var(--accent-soft);border-radius:0 10px 10px 0;padding:14px 18px;margin:16px 0}
+  .callout.good{border-color:var(--green);background:var(--green-soft)}
+  .callout.bad{border-color:var(--red);background:var(--red-soft)}
+  .callout h3{margin-top:0}
+  ul{margin:8px 0;padding-left:22px}
+  li{margin:5px 0}
+  .small{font-size:13px;color:var(--muted)}
+  .us{border:2px solid var(--accent);border-radius:12px;padding:4px 20px 18px;margin:16px 0;background:#fbfcff}
+  .us h2{border:none;color:var(--accent);margin-bottom:4px}
+  .foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+  .chk{list-style:none;padding-left:0}
+  .chk li{padding-left:26px;position:relative}
+  .chk li:before{content:"✓";position:absolute;left:0;color:var(--green);font-weight:800}
+</style>
+
+<header>
+  <div class="wrap">
+    <p class="kicker">Security Briefing · Supply-Chain &amp; Secrets</p>
+    <h1>The “Printing Press” CLI ecosystem</h1>
+    <p class="sub">What <code>hackernews-pp-cli</code> actually is, who makes it, how safe it is to run inside an agent that holds secrets — and what we already changed.</p>
+    <p class="meta">Prepared for Kevin · 2026-07-03 · Sources: mvanhorn/printing-press-library, cli-printing-press, printingpress.dev, HN, code-verified against the UA repo</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="card verdict">
+    <span class="tag">Verdict: Moderate risk</span>
+    <p style="margin-bottom:6px"><strong>More transparent than it first looked — but how <em>you install it</em> and <em>where it runs</em> decide everything.</strong> The source is genuinely published and the project's default install compiles it from source. The real, unresolved risks are (1) <strong>runtime secret exposure</strong> — the tools read secrets from an ambient environment they inherit <em>whole</em>, with no sandbox or egress control — and (2) <strong>structural supply-chain trust</strong> — a 2-person core plus crowd of contributors, an <code>npx</code>/<code>curl|bash</code> install, and unsigned prebuilt binaries behind some moving tags.</p>
+    <p class="small" style="margin-bottom:0">For an agent host carrying production secrets, the <em>default</em> posture is unsafe. With a few precautions it becomes acceptable for lower-value use. <strong>We’ve already closed the specific hole in our system</strong> (see “What this means for UA”).</p>
+  </div>
+
+  <h2>1 · What it is</h2>
+  <p>Printing Press is two things: a <strong>generator</strong> and a <strong>catalog</strong>.</p>
+  <div class="grid2">
+    <div class="card">
+      <h3>The generator — <code>cli-printing-press</code></h3>
+      <p class="small">Point it at an <strong>OpenAPI spec</strong>, a <strong>HAR capture</strong>, or just a <strong>website URL</strong> (it drives a browser and reverse-engineers the site’s undocumented API), and an LLM-orchestrated pipeline — run <em>inside</em> Claude Code — synthesizes research and fills hand-written Go templates.</p>
+      <p class="small">~3.8k★ · 89 releases · MIT · Go 81% / Go-templates 18%.</p>
+    </div>
+    <div class="card">
+      <h3>The catalog — <code>printing-press-library</code></h3>
+      <p class="small">A registry + installer indexing <strong>316 generated CLIs</strong> across 20 categories, self-described as “Official… Endorsed, tested, and community-contributed.” Each entry ships full Go source, a skill, and a provenance manifest.</p>
+      <p class="small">~1.7k★ · ~2,167 commits · community-submitted by 54+ “printers.”</p>
+    </div>
+  </div>
+
+  <p>Every generation run emits a bundle:</p>
+  <div class="flow">
+    <span class="node">API spec / HAR / URL</span>
+    <span class="arrow">→</span>
+    <span class="node">LLM research + Go templates</span>
+    <span class="arrow">→</span>
+    <span class="node out">&lt;api&gt;-pp-cli</span>
+    <span class="node out">&lt;api&gt;-pp-mcp</span>
+    <span class="node out">pp-&lt;name&gt; skill</span>
+  </div>
+  <p class="small">The differentiators: “agent-native” output (auto-JSON when piped, typed exit codes), a local <strong>SQLite mirror with FTS5 full-text search</strong> kept fresh by incremental sync, and “compound insight” commands (<code>stale</code>, <code>health</code>, <code>trends</code>) that query the whole local dataset.</p>
+
+  <h2>2 · Who’s behind it</h2>
+  <p>Two named individuals — <strong>Matt Van Horn</strong> (<code>mvanhorn</code>) and <strong>Trevin Chow</strong> — with public GitHub histories and community endorsements (steipete, OpenClaw, Nous Hermes skill stores). <strong>No company, legal entity, or funding is disclosed.</strong> The catalog’s “official” CLIs are largely <em>community-submitted</em>, each machine-generated and passed through automated review before earning the “endorsed” label. Endorsements and integrations are <em>not</em> audits.</p>
+
+  <h2>3 · Distribution &amp; auditability <span class="pill g">better than feared</span></h2>
+  <p>The most important — and most reassuring — finding, which corrects an earlier assumption of mine:</p>
+  <ul>
+    <li><strong>The source is published and reviewable.</strong> Each CLI lives as a full Go project in the monorepo (<code>library/&lt;category&gt;/&lt;name&gt;/</code>) — <code>cmd/</code>, <code>internal/</code>, <code>go.mod</code>, <code>go.sum</code>, tests, provenance. Verified directly for both <code>adguard-home</code> and <code>hackernews</code>.</li>
+    <li><strong>The default install compiles from source</strong> via <code>go install</code> (with <code>go.sum</code> pinning transitive deps) — meaningfully more auditable than an opaque blob.</li>
+  </ul>
+  <div class="callout bad">
+    <h3>The weak links</h3>
+    <ul style="margin-bottom:0">
+      <li>A second channel ships <strong>unsigned, un-notarized prebuilt binaries</strong>; macOS install tells you to clear Gatekeeper quarantine.</li>
+      <li>Some release tags are <strong>mutable</strong> (<code>&lt;name&gt;-current</code> “always latest”), so a “pinned” tag’s <em>binary contents can change</em> under you.</li>
+      <li><strong>No end-to-end signing / provenance</strong> (no cosign, no SLSA). The GitHub “verified signature” badge attests only <em>who made the git tag</em> — nothing about the binary.</li>
+      <li>Install entry points are <code>npx -y …</code> (runs with no prompt) and <code>curl … | bash</code>.</li>
+    </ul>
+  </div>
+
+  <h2>4 · How credentials flow — the runtime risk</h2>
+  <p>Authenticated CLIs/MCP servers read their secrets from <strong>environment variables in the ambient process environment</strong> (e.g. Slack’s CLI wants <code>SLACK_BOT_TOKEN</code> set). Some go further and do <strong>browser-cookie capture</strong> (<code>press-auth --chrome</code>) to impersonate your logged-in web session against sniffed APIs.</p>
+  <div class="callout bad">
+    <h3>The crux: a child process inherits your <em>entire</em> environment</h3>
+    <p style="margin-bottom:0">A benign server reads only its one documented token. But nothing in the design <strong>scrubs, allow-lists, or isolates</strong> the rest of the environment — so a malicious or compromised build can read <em>every</em> secret present and exfiltrate it over the network traffic these tools legitimately make (camouflaged as a normal API call, or hidden in the SQLite sync). That responsibility falls <strong>entirely on the caller.</strong></p>
+  </div>
+
+  <h2>5 · Security assessment</h2>
+  <h3>What you’re implicitly trusting</h3>
+  <p>The generator’s LLM codegen · the two maintainers’ GitHub account security · every community “printer” · the (unsigned) release pipeline · the upstream Go dependency graph. <code>go install</code>-from-source shrinks the pipeline risk but leaves the rest intact.</p>
+
+  <h3>Guardrails that exist — and their ceiling</h3>
+  <p>An automated review gate (“Greptile,” P0/P1 block merge), a 100-pt scorecard, dogfood structural checks, and a read-only live smoke test. <strong>All target functional correctness and agent-ergonomics — none is a security review.</strong> In practice an LLM is largely reviewing an LLM’s output. No human security review, threat model, or third-party audit was found. There is <strong>no sandbox, no permission model, and no network-egress transparency.</strong></p>
+
+  <h3>Realistic attack scenarios</h3>
+  <div class="scroll">
+  <table>
+    <tr><th>Scenario</th><th>Vector</th><th>Sev</th></tr>
+    <tr><td>npm orchestrator compromise</td><td><code>npx -y @mvanhorn/printing-press-library</code> runs arbitrary code at install with no prompt</td><td><span class="pill r">High</span></td></tr>
+    <tr><td>Registry poisoning</td><td><code>registry.json</code> redirects a trusted name → attacker source/version</td><td><span class="pill r">High</span></td></tr>
+    <tr><td>Moving-tag binary swap</td><td>Mutable <code>-current</code> tag + unsigned binary → silent replacement (prebuilt path only)</td><td><span class="pill a">Med</span></td></tr>
+    <tr><td>Hostile / careless contributor</td><td>Generated CLI with a subtle exfil path passes LLM-only review, earns “official”</td><td><span class="pill a">Med</span></td></tr>
+    <tr><td>Upstream Go dep compromise</td><td>Malicious dependency reaches every consumer on next bump</td><td><span class="pill a">Med</span></td></tr>
+    <tr><td>Env-var secret leakage</td><td>Any spawned tool inherits the full secret-laden environment</td><td><span class="pill r">High</span></td></tr>
+  </table>
+  </div>
+
+  <div class="callout good">
+    <h3>Fair counterpoints (don’t over-panic)</h3>
+    <p style="margin-bottom:0">The source really is open and the default install compiles it · per-CLI provenance + <code>source_commit</code> pinning · named, reputable authors with reputational stakes · an automated review gate does exist · popularity means more eyes · <strong>nothing found suggests bad intent</strong> — the risks are structural exposure, not evidence of compromise. No CVE or incident surfaced.</p>
+  </div>
+
+  <div class="us">
+    <h2>What this means for UA</h2>
+    <p class="small" style="margin-top:8px">We use <code>hackernews-pp-cli</code> in the HN snapshot service. Two facts, code-verified in our repo:</p>
+    <ul>
+      <li><strong>We use the riskier install channel.</strong> <code>scripts/install_hackernews_cli.sh</code> downloads the <em>prebuilt release binary</em> (the path this briefing warns against) rather than <code>go install</code>-from-source. Mitigant: we <strong>SHA256-pin</strong> a fixed version, so a swap of that asset fails the checksum and aborts — better than the mutable-tag worst case.</li>
+      <li><strong>We were leaking our whole environment to it.</strong> <code>_cli_env()</code> passed <code>os.environ.copy()</code> — and <code>initialize_runtime_secrets()</code> injects the full Infisical project secret set (ZAI keys, tokens, machine-identity creds) into <code>os.environ</code>. So the binary received every runtime secret, for zero benefit (the HN Algolia API needs no auth).</li>
+    </ul>
+    <p class="small"><strong>Already shipped / queued:</strong></p>
+    <ul class="chk small">
+      <li><strong>PR #1265</strong> — replaced the full-env copy with a minimal allow-list; the binary now gets <code>PATH/LANG/LC_*/TZ/SSL_CERT_*</code> and nothing secret. Guard test added. (auto-merging)</li>
+      <li><strong>Issue #1266</strong> — audit <em>every</em> full-<code>os.environ</code> subprocess &amp; stdio-MCP spawn; add a shared minimal-env helper (allow-list, not the fragile deny-list pattern).</li>
+      <li><strong>Root-cause option on the table:</strong> delete the third-party binary entirely and back the HN snapshot with a first-party Algolia client — we already have one in <code>last30days/hackernews.py</code>. “Replace” beats “contain.”</li>
+    </ul>
+  </div>
+
+  <h2>6 · If you adopt any Printing Press tool — precautions</h2>
+  <ul>
+    <li><strong>Scrub the environment before spawning it.</strong> Launch with only its documented vars: <code>env -i SLACK_BOT_TOKEN=… slack-pp-mcp</code>. Never let it inherit your full secret set. <em>This one control neutralizes the biggest runtime risk.</em></li>
+    <li><strong>Sandbox + egress allow-list.</strong> Run in a container/namespace whose network is restricted to the specific API host that CLI needs. Defeats exfiltration even if the binary is malicious.</li>
+    <li><strong>Install from source and read it.</strong> Prefer <code>go install</code>/clone-and-build over prebuilt binaries; the per-CLI Go source is small and present. <strong>Avoid the mutable <code>-current</code> release binaries.</strong></li>
+    <li><strong>Pin everything immutable.</strong> Dated version + <code>source_commit</code> SHA, pinned <code>go.sum</code>, exact npm version (never <code>@latest</code>). Re-review on every bump; don’t auto-update.</li>
+    <li><strong>Don’t pipe the bootstrap to a shell blind</strong> — download, read, then run.</li>
+    <li><strong>Least-privilege, read-only, short-lived tokens</strong> only; keep write-capable creds out; use the built-in read-only/verify modes.</li>
+    <li><strong>Be especially wary of <code>cookie</code>/<code>composed</code>-auth and sniffed-unofficial-API CLIs</strong> — highest credential sensitivity and legal/stability fragility. Prefer official-API, <code>api_key</code>/<code>none</code>-auth entries.</li>
+  </ul>
+
+  <p class="foot">Open items the research could not verify: whether a <code>checksums.txt</code> is actually attached to releases (configured, not confirmed); the depth of human vs. automated review per community CLI; the legal/ToS posture of the reverse-engineered APIs. No independent third-party security audit of Printing Press was found to exist — absence of criticism is not evidence of safety.</p>
+
+</div>

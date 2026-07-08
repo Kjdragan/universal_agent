@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portfolio Video Review — all renders</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#1a1814;--bg-2:#221f1a;--bg-3:#2a2620;--ink:#ece6db;--ink-2:#a39d8e;--ink-3:#6b6557;--rule:#322d25;--rule-2:#3d372d;--accent:#5b9d6f;--accent-2:#7dc190;--serif:'Fraunces',Georgia,serif;--sans:'IBM Plex Sans',system-ui,sans-serif;--mono:'IBM Plex Mono',ui-monospace,monospace}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;padding:48px 32px}
+  .wrap{max-width:1100px;margin:0 auto}
+  header{border-bottom:1px solid var(--rule);padding-bottom:32px;margin-bottom:48px}
+  .k{font-family:var(--mono);font-size:13px;color:var(--accent);letter-spacing:.04em;margin-bottom:14px}
+  h1{font-family:var(--serif);font-weight:400;font-size:42px;letter-spacing:-.018em;line-height:1.1;margin-bottom:16px}
+  h1 em{font-style:italic;color:var(--accent-2)}
+  .lede{font-size:17px;color:var(--ink-2);max-width:62ch}
+  .video{background:var(--bg-2);border:1px solid var(--rule);border-left:3px solid var(--accent);border-radius:8px;padding:24px;margin-bottom:28px}
+  .vhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;flex-wrap:wrap;gap:8px}
+  .vtitle{font-family:var(--mono);font-weight:600;font-size:18px;color:var(--ink)}
+  .vtag{font-family:var(--mono);font-size:11px;color:var(--accent-2);letter-spacing:.04em}
+  .vmeta{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-bottom:16px}
+  .video video{width:100%;border-radius:6px;background:#000;display:block}
+  .vnote{margin-top:14px;font-size:14px;color:var(--ink-2)}
+  .vnote strong{color:var(--ink)}
+  .group-label{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.06em;text-transform:uppercase;margin:40px 0 18px;padding-bottom:8px;border-bottom:1px solid var(--rule)}
+  .group-label::before{content:"// "}
+  .pull{font-family:var(--serif);font-style:italic;font-size:18px;color:var(--ink);border-left:2px solid var(--accent);padding-left:16px;margin:24px 0;max-width:50ch}
+  footer{margin-top:48px;padding-top:24px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="k">// portfolio video review — all renders</div>
+    <h1>Four videos, two production paths, <em>two projects</em>.</h1>
+    <p class="lede">A side-by-side for picking the case-study demo approach. Compare the HyperFrames brand-matched renders against the NotebookLM explainer (branding trimmed). Two projects covered: SonosKD and ClearSpring Deep Research.</p>
+  </header>
+
+  <div class="group-label">SonosKD — two production paths, same project</div>
+
+  <div class="video">
+    <div class="vhead"><span class="vtitle">SonosKD — HyperFrames</span><span class="vtag">brand-matched · recommended</span></div>
+    <div class="vmeta">sonoskd_explainer.mp4 · 1:50 · 4.3 MB · warm-dark + forest-green · Aoede narration</div>
+    <video controls preload="metadata" playsinline><source src="sonoskd_explainer.mp4" type="video/mp4"></video>
+    <div class="vnote"><strong>HyperFrames, authored to the portfolio palette.</strong> Hand-composed HTML/CSS/GSAP, deterministic render, your locked design language. The same pipeline HyperFrames Studio sells — embedding it is a quiet flex. Currently embedded in the SonosKD case study.</div>
+  </div>
+
+  <div class="video">
+    <div class="vhead"><span class="vtitle">SonosKD — NotebookLM (trimmed)</span><span class="vtag">style variety · branding removed</span></div>
+    <div class="vmeta">sonoskd_notebooklm_trimmed.mp4 · 7:33 · 31 MB · classic style · two-host AI dialogue · intro/outro branding cut</div>
+    <video controls preload="metadata" playsinline><source src="sonoskd_notebooklm_trimmed.mp4" type="video/mp4"></video>
+    <div class="vnote"><strong>NotebookLM "classic" style, branding trimmed.</strong> Google generated this from the same source doc; I cut the intro/outro NotebookLM cards. The value is <em>style variety at near-zero effort</em> (watercolor/anime/kawaii available) — but it reads as a generic two-host AI explainer, not visibly yours. Seven-plus minutes is long for a case-study demo; consider it reference, not primary.</div>
+  </div>
+
+  <div class="group-label">ClearSpring Deep Research — two HyperFrames treatments</div>
+
+  <div class="video">
+    <div class="vhead"><span class="vtitle">Deep Research — HyperFrames (brand-matched v2)</span><span class="vtag">v2 · faster, bigger graphics, artifacts+vault arc · recommended</span></div>
+    <div class="vmeta">deep_research_brand.mp4 · 1:27 · 4.9 MB · warm-dark + forest-green · +23% faster narration</div>
+    <video controls preload="metadata" playsinline><source src="deep_research_brand.mp4" type="video/mp4"></video>
+    <div class="vnote"><strong>v2 rebuild — all five fixes applied.</strong> Graphics ~50% larger (legible). Scene transitions tightened to 0.25s overlap (no dead air). Narration +23% faster (1.88→2.31 wps). Added the full universal-artifact arc (report → mind map → podcast → cinematic) as the climax, plus the <em>knowledge vault</em> payoff: the research becomes living, supplementable, queryable by you or your agents. More motion energy in the chaos and vault scenes.</div>
+  </div>
+
+  <div class="video">
+    <div class="vhead"><span class="vtitle">Deep Research — HyperFrames (original, unbranded)</span><span class="vtag">your prior render · for comparison</span></div>
+    <div class="vmeta">clearspring_deep_research.mp4 · 1:16 · 12 MB · unbranded · explains the flow</div>
+    <video controls preload="metadata" playsinline><source src="clearspring_deep_research.mp4" type="video/mp4"></video>
+    <div class="vnote"><strong>The original, for comparison.</strong> A competent explainer — proves the pipeline renders — but generic: it explains the <em>flow</em> without landing the <em>insight</em>, and nothing ties it to a brand. This is the "HyperFrames by default" look the brand-matched version above is meant to beat.</div>
+  </div>
+
+  <div class="pull">The question isn't HyperFrames vs NotebookLM. It's <strong>brand-matched craft</strong> vs <strong>rapid style variety</strong> — and the portfolio's job is to showcase craft.</div>
+
+  <div class="group-label">recommendation</div>
+  <div class="video" style="border-left-color:var(--accent-2)">
+    <div class="vnote">
+      <p><strong>Primary case-study video: HyperFrames, brand-matched.</strong> It's on-palette, reliable (deterministic render, can't flake), and visibly produced by the pipeline the portfolio sells. Use the SonosKD and Deep Research brand-matched renders as the embedded demos.</p>
+      <p style="margin-top:12px"><strong>NotebookLM's role: a "we can also generate these" option.</strong> Its strength is rapid style variety (watercolor, anime, etc.) — genuinely useful for audience-testing or varied client brands, weaker as the primary portfolio asset because it isn't visibly yours. Mention it in the HyperFrames case study; don't embed it as the demo.</p>
+      <p style="margin-top:12px"><strong>Open capability bet:</strong> if the live-video-as-HyperFrames-asset experiment lands, it closes the gap with screen-tracer footage — real recording + authored polish. Don't count on it yet, but the case study framing is flexible enough to slot it in as an evolution.</p>
+    </div>
+  </div>
+
+  <footer>portfolio video review · kevin dragan · 2026 · four renders, two paths</footer>
+</div>
+</body>
+</html>

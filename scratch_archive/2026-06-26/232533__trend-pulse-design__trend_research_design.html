@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recrafting analyze-google-trends → trend-pulse</title>
+<style>
+  :root{--bg:#fbfbfa;--card:#fff;--ink:#1c2024;--mut:#5b6470;--line:#e6e8eb;--accent:#2f6f4f;--accent2:#b8860b;--code:#f3f4f2;--warn:#fff7e6;--warnln:#e8c97a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-text-size-adjust:100%}
+  .wrap{max-width:920px;margin:0 auto;padding:28px 18px 64px}
+  h1{font-size:26px;line-height:1.2;margin:0 0 6px}
+  h2{font-size:19px;margin:34px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+  h3{font-size:15px;margin:18px 0 6px;color:var(--accent)}
+  p{margin:8px 0}
+  .sub{color:var(--mut);font-size:15px;margin-top:0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px}
+  code{background:var(--code);padding:1px 5px;border-radius:4px}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;font-size:13px;line-height:1.5}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.03em}
+  .pill{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:20px;background:#eef4f0;color:var(--accent);margin-right:5px}
+  .pill.paid{background:#fbeee0;color:var(--accent2)}
+  .pill.free{background:#e8f3ec;color:var(--accent)}
+  .warn{background:var(--warn);border:1px solid var(--warnln);border-radius:10px;padding:12px 16px;margin:14px 0}
+  .flow{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+  .step{flex:1;min-width:200px;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 14px}
+  .step b{display:block;font-size:13px;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+  .small{font-size:13.5px;color:var(--mut)}
+  .tree{font-family:ui-monospace,monospace;font-size:13px;line-height:1.7;background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px 16px;white-space:pre}
+  .tag{color:var(--accent2);font-weight:600}
+  hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+  .lead{font-size:16px}
+  ul{margin:6px 0;padding-left:22px}
+  li{margin:4px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Recrafting <code>analyze-google-trends</code> → a prompt-driven <b>trend-pulse</b></h1>
+<p class="sub">Borrowing the proven <code>last30days</code> pattern · keyless-first · entertaining packaging · 2026-06-26</p>
+
+<div class="card lead">
+The skill today does one thing: pull the live Google Trends country board (~10 breakout searches) and write a chat briefing. The recraft keeps that as <i>one signal</i> and wraps it in a broader, <b>prompt-driven trend-research engine</b> — fan out across keyless sources around your topic, score &amp; cluster deterministically, then package the result in a useful/entertaining brief whose <i>shape changes with what you asked for</i>.
+</div>
+
+<h2>1 · What <code>last30days</code> proves (the pattern we steal)</h2>
+<p>It researches "what people actually say about any topic in the last 30 days" across Reddit, X, YouTube, TikTok, HN, Polymarket, GitHub, web. The reusable spine, all of it <span class="pill free">zero paid keys</span> for the parts that matter:</p>
+<ul>
+  <li><b>Intent → template.</b> It classifies the prompt into a QUERY_TYPE (NEWS / RECOMMENDATIONS / COMPARISON / GENERAL…) and emits a different output shape per type. <i>Your "topic + intent" maps straight onto this.</i></li>
+  <li><b>Keyless multi-source fan-out.</b> Reddit (RSS, no key), Hacker News (Algolia API), YouTube (yt-dlp), web (WebSearch), Polymarket (free API) all work with no paid keys. X / TikTok / IG are optional paid add-ons behind graceful "unlock for more coverage" nudges.</li>
+  <li><b>Deterministic score → LLM synthesize.</b> Code fetches, scores by recency + per-source engagement, and clusters items into cross-platform <i>stories</i> with uncertainty tags; the LLM only writes the narrative. A "trend" is <b>corroborated</b>, not a single board's guess.</li>
+  <li><b>Packaging devices that make it fun:</b> a status badge, <b>bold-headline</b> paragraphs each anchored to an inline citation, a numbered <i>KEY PATTERNS</i> list, verbatim high-upvote "<i>best takes</i>" quotes, head-to-head tables for comparisons, and an <span class="tag">emoji-tree</span> per-source stats footer.</li>
+</ul>
+
+<h2>2 · The honest Google Trends constraint</h2>
+<div class="warn">
+<b>You can't get "more focused" data out of Google Trends keylessly.</b> The live feed <code>trends.google.com/trending/rss?geo=XX</code> is <b>geo-only</b> — I just probed it: <code>&amp;category=</code> and <code>&amp;hours=</code> are ignored, it always returns the same ~10 national breakout searches. The richer endpoints (interest-over-time, related queries, by-category) are the ones Google locked down; <code>pytrends</code> is archived/broken, and the only reliable granular path is <b>paid</b> (SerpApi / DataForSEO).
+</div>
+<p class="small">So "focused trend research" doesn't come from a better Trends API — it comes from <b>treating the Trends board as one demand signal and corroborating the topic across other keyless sources</b>, which is exactly what <code>last30days</code> does. That's the design's load-bearing idea.</p>
+
+<h2>3 · The recrafted skill — capability</h2>
+<div class="card">
+<b>Given a topic + an intent in the prompt</b>, fuse the <b>Google Trends demand signal</b> (what people are <i>searching</i>) with a <b>keyless multi-source pulse</b> (what people are <i>saying</i> — Reddit, HN, YouTube, recent web), score &amp; cluster it, and return a brief whose depth and format match the ask — from a 10-second board scan to a deep cited report to a Google Sheet on a timer.
+</div>
+<div class="flow">
+  <div class="step"><b>1 · Fetch</b><span class="small">Google Trends board (geo) + keyless fan-out scoped to the topic: Reddit RSS, HN Algolia, YouTube (yt-dlp), WebSearch recent news.</span></div>
+  <div class="step"><b>2 · Score + cluster</b><span class="small">Deterministic: recency + per-source engagement weighting → cluster corroborated items into trend "stories", tag single-source / thin-evidence honestly.</span></div>
+  <div class="step"><b>3 · Package</b><span class="small">LLM writes the brief in the shape the intent selected; honest when a topic isn't on the board but is hot elsewhere.</span></div>
+</div>
+
+<h2>4 · Prompt-driven modes (the "depends on the prompt" part)</h2>
+<table>
+  <tr><th>What you type</th><th>Mode</th><th>Output</th></tr>
+  <tr><td><span class="mono">what's trending in the US</span></td><td><b>PULSE</b></td><td>Quick ranked board + one-line whys (today's behavior)</td></tr>
+  <tr><td><span class="mono">deep dive on AI agent tools trends</span></td><td><b>DEEP</b></td><td>Multi-source cited report: demand + chatter + best takes + patterns</td></tr>
+  <tr><td><span class="mono">compare Claude vs Gemini momentum</span></td><td><b>COMPARE</b></td><td>Head-to-head table + per-entity strengths + "emerging stack"</td></tr>
+  <tr><td><span class="mono">monitor &lt;topic&gt; trends to a Sheet daily</span></td><td><b>MONITOR</b></td><td>Hand off to the autonomous Agent SDK build → VPS timer → Google Sheet</td></tr>
+  <tr><td><span class="mono">…and "save / show me / make it shareable"</span></td><td><b>+render</b></td><td>Any mode can emit a rendered scratchpad HTML report instead of chat</td></tr>
+</table>
+
+<h2>5 · The entertaining packaging (sample skeleton)</h2>
+<div class="tree">📈 trend-pulse · "AI agent tools" · US · synced 2026-06-26
+
+<b>What's moving</b>
+ 1. <b>Headline trend</b> — one-line why, grounded in its top source  ↗ [cite]
+ 2. <b>Next trend</b> — why it's spiking                              ↗ [cite]
+
+<b>What people are saying</b>  (verbatim, high-engagement)
+ “the actually-fun quote that makes this readable” — r/… 2.1k▲
+ “the contrarian take everyone's arguing about”     — HN 340▲
+
+<b>KEY PATTERNS</b>
+ 1. hype cluster · 2. backlash cluster · 3. launch cluster
+
+✅ Sources reported back
+ ├─ 🔍 Google Trends: 10 terms (geo=US)
+ ├─ 🟠 Reddit: 18 threads · 9.4k▲ · 1.2k comments
+ ├─ 🟣 Hacker News: 6 stories · 1.1k pts
+ └─ ▶️ YouTube: 7 videos · 840k views
+📎 raw saved · ask to render an HTML report or append to a Sheet</div>
+
+<h2>6 · Source tiers</h2>
+<table>
+  <tr><th>Tier</th><th>Sources</th><th>Cost</th></tr>
+  <tr><td><span class="pill free">ship first</span></td><td>Google Trends RSS · Reddit (keyless RSS) · Hacker News (Algolia) · YouTube (yt-dlp) · WebSearch</td><td>$0, no keys, runs anywhere python3 does</td></tr>
+  <tr><td><span class="pill paid">later, optional</span></td><td>X (AUTH_TOKEN/xAI) · TikTok/IG (ScrapeCreators) · granular Google Trends (SerpApi/DataForSEO) · Polymarket odds (free but niche)</td><td>paid keys / behind degrade-nudges</td></tr>
+</table>
+
+<h2>7 · Why this fits UA</h2>
+<ul>
+  <li><b>A new CSI / intel modality.</b> UA's intel watches AI-developer channels; this adds <i>aggregate public search demand + cross-platform chatter</i> on demand — a different lens, keyless, geo-aware.</li>
+  <li><b>The scheduled form already exists.</b> The MONITOR mode hands off to <code>demo-trends-to-sheets-agent</code> (the Agent SDK build) → a <code>deployment/systemd/</code> timer on the VPS → fetch · analyze · append to a Sheet, hands-off.</li>
+  <li><b>Composes with what we just built.</b> The DEEP mode's multi-source fan-out is a natural fit for <code>/dragan:subagent-fanout</code> — one worker subagent per source, a synthesizer to merge.</li>
+</ul>
+
+<hr>
+<p class="small">Build options: (A) recraft <code>analyze-google-trends</code> in place into <code>trend-pulse</code>, keyless tier only; (B) same, but run it through the demo factory so it lands as a proven demo + auto-promoted skill; (C) design-only for now. Cheapest high-leverage win = the keyless fan-out + the deterministic-score-then-synthesize split + the packaging skeleton above.</p>
+
+</div>
+</body>
+</html>

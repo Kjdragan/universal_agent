@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Infisical Agent — Adoption Assessment for Universal Agent</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    background: #ffffff; color: #1f2328;
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0; padding: 0;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 32px 22px 80px; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 22px; margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #d8dee4; scroll-margin-top: 16px; }
+  h3 { font-size: 17px; margin: 26px 0 8px; }
+  p { margin: 10px 0; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: #f6f8fa; border-radius: 5px; padding: 2px 6px; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 8px; padding: 14px 16px; overflow-x: auto; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre code { background: none; padding: 0; }
+  .sub { color: #57606a; font-size: 14px; margin: 0 0 8px; }
+  .verdict { border-radius: 10px; padding: 18px 20px; margin: 22px 0 6px; border: 1px solid; }
+  .verdict.no { background: #fff5f5; border-color: #f0b6b6; }
+  .verdict .tag { display: inline-block; font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; padding: 3px 10px; border-radius: 999px; }
+  .verdict.no .tag { background: #cf222e; color: #fff; }
+  .verdict h2 { border: none; margin: 8px 0 6px; font-size: 19px; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }
+  th, td { border: 1px solid #d8dee4; padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  td .y { color: #1a7f37; font-weight: 600; }
+  td .n { color: #cf222e; font-weight: 600; }
+  td .m { color: #9a6700; font-weight: 600; }
+  .toc { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 8px; padding: 14px 18px; margin: 20px 0; font-size: 14.5px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 3px 0; }
+  .callout { border-left: 4px solid #0969da; background: #f0f6ff; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 14.5px; }
+  .callout.warn { border-color: #9a6700; background: #fff8e8; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .card { border: 1px solid #d8dee4; border-radius: 10px; padding: 14px 16px; }
+  .card h3 { margin-top: 0; }
+  .card.have { background: #f3fbf5; border-color: #b6e3c2; }
+  .card.offers { background: #f6f8fa; }
+  .muted { color: #57606a; font-size: 13px; }
+  footer { margin-top: 50px; padding-top: 16px; border-top: 1px solid #d8dee4; color: #57606a; font-size: 13px; }
+  ul.tight li { margin: 4px 0; }
+  @media (max-width: 680px) { .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Infisical Agent — Adoption Assessment</h1>
+  <p class="sub">For the <code>universal_agent</code> runtime · 2026-06-23 · code-verified against current usage</p>
+
+  <div class="verdict no">
+    <span class="tag">Recommendation: Do not adopt</span>
+    <h2>The Infisical Agent solves problems we don't have.</h2>
+    <p>We already run a mature, Python-native secret bootstrap that does the one job the Agent exists to do — get vault secrets into a process — with less moving machinery. The Agent's headline features (SDK-less injection, long-lived access-token renewal, dynamic-secret leases) map to needs UA doesn't currently have. Adopting it would add a daemon to babysit on every host and a <em>second</em> way secrets reach a process, for marginal gain. <strong>Keep the current loader.</strong> Revisit only if we adopt Infisical <em>dynamic secrets</em> (DB/SSH lease credentials).</p>
+  </div>
+
+  <div class="toc">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#what">What the Infisical Agent actually is</a></li>
+      <li><a href="#have">What UA already has</a></li>
+      <li><a href="#fit">Capability-by-capability fit</a></li>
+      <li><a href="#useful">The one genuinely useful capability — and why it's still marginal</a></li>
+      <li><a href="#cost">What adoption would cost</a></li>
+      <li><a href="#trigger">When to revisit</a></li>
+      <li><a href="#bottom">Bottom line</a></li>
+    </ol>
+  </div>
+
+  <h2 id="what">1. What the Infisical Agent actually is</h2>
+  <p>The Agent is a <strong>long-running daemon</strong> (a subcommand of the Infisical CLI: <code>infisical agent --config agent.yaml</code>) that sits beside an application and feeds it secrets <em>without the app needing any Infisical code</em>. Its design center is "the app can't or shouldn't be modified to talk to Infisical." It does four things:</p>
+  <ul class="tight">
+    <li><strong>Authenticates</strong> a machine identity (universal-auth, AWS/GCP/Azure/K8s native IAM, …) and keeps the <em>Infisical access token</em> renewed before it expires.</li>
+    <li><strong>Sinks</strong> — writes that renewed access token to a file so the app can read it (file sink is the only type today).</li>
+    <li><strong>Templates</strong> — renders secrets through a Go <code>text/template</code> to an output file (e.g. a <code>.env</code>), re-rendering on a <code>polling-interval</code>, and optionally running an <code>execute.command</code> after a change (e.g. restart the app).</li>
+    <li><strong>Dynamic secrets</strong> — provisions and auto-renews leased credentials (DB/SSH) so rendered creds stay live.</li>
+  </ul>
+  <p>A representative config:</p>
+<pre><code>infisical:
+  address: "https://app.infisical.com"
+auth:
+  type: "universal-auth"
+  config: { client-id: "./client-id", client-secret: "./client-secret" }
+sinks:
+  - type: "file"
+    config: { path: "/run/infisical/access-token" }
+templates:
+  - source-path: dot-env.tmpl
+    destination-path: /opt/app/.env
+    config:
+      polling-interval: 60s
+      execute: { command: ./reload-app.sh, timeout: 30 }</code></pre>
+
+  <h2 id="have">2. What UA already has</h2>
+  <p>UA's secret path is <code>infisical_loader.py::initialize_runtime_secrets()</code> — verified in the current tree:</p>
+  <ul class="tight">
+    <li>On startup, every UA service calls it once. It logs the machine identity in via REST (<code>POST /api/v1/auth/universal-auth/login</code>), fetches all secrets (<code>GET /api/v3/secrets/raw</code>, recursive), and injects them into <code>os.environ</code> with <code>overwrite=True</code> (vault is authoritative; only bootstrap-identity keys are pinned).</li>
+    <li><strong>Idempotent singleton</strong> — first call wins, cached under a lock; later calls are no-ops. No SDK, no CLI, no long-lived session.</li>
+    <li><strong>Write-back exists too</strong> — <code>infisical_loader.upsert_infisical_secret(key, value)</code> PATCHes a secret <em>and</em> mutates <code>os.environ</code> in-process, so a rotated value is picked up immediately without a restart. Already used by the Threads token-refresh cron.</li>
+    <li><strong>Non-Python consumers</strong> (e.g. the Next.js web-ui) are served by <code>scripts/render_service_env_from_infisical.py</code>, which materializes an env file from the vault at deploy time.</li>
+    <li>Only <strong>three</strong> bootstrap creds live on disk (<code>INFISICAL_CLIENT_ID/SECRET/PROJECT_ID</code>); the VPS <code>.env</code> is rewritten from a fixed bootstrap dict on every deploy, then services restart and re-fetch.</li>
+  </ul>
+  <div class="callout">In other words, UA is <strong>not</strong> "an app that can't talk to Infisical." It is a first-class Infisical client already, with both read and write primitives and an in-process hot-update path. That removes the Agent's core reason to exist.</div>
+
+  <h2 id="fit">3. Capability-by-capability fit</h2>
+  <table>
+    <thead><tr><th>Agent capability</th><th>Do we need it?</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>SDK-less secret injection into an unmodifiable app</td><td><span class="n">No</span></td><td>UA <em>is</em> the client. <code>initialize_runtime_secrets()</code> already injects into <code>os.environ</code>.</td></tr>
+      <tr><td>Renew the <em>Infisical access token</em> before expiry</td><td><span class="n">No</span></td><td>UA's access token is ephemeral: login → fetch → discard at startup. We never hold a long-lived Infisical session to renew.</td></tr>
+      <tr><td>Token <strong>sink</strong> (write access token to a file)</td><td><span class="n">No</span></td><td>Nothing in UA consumes a shared on-disk Infisical access token. Each process auths itself.</td></tr>
+      <tr><td>Template render to <code>.env</code> for non-Python consumers</td><td><span class="m">Already solved</span></td><td><code>render_service_env_from_infisical.py</code> covers this at deploy time without a daemon.</td></tr>
+      <tr><td><strong>Re-render + <code>execute</code> on secret change</strong> (hot reload)</td><td><span class="m">Marginal</span></td><td>The only real overlap. See §4 — deploys already restart+refetch, and <code>upsert_infisical_secret</code> gives in-process pickup.</td></tr>
+      <tr><td>Dynamic-secret lease provisioning &amp; renewal</td><td><span class="n">No (today)</span></td><td>UA doesn't use Infisical dynamic secrets. This is the one feature that would actually justify the Agent — if we ever adopt it. See §6.</td></tr>
+      <tr><td>Renew third-party OAuth (Google/Threads/ZAI keys)</td><td><span class="n">Not offered</span></td><td>Common misconception: the Agent renews <em>Infisical</em> tokens, not vendor OAuth. Our real rotation pain (gws 7-day tokens, ZAI key swaps) is untouched by it.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="useful">4. The one genuinely useful capability — and why it's still marginal</h2>
+  <p>The Agent's <code>polling-interval</code> + <code>execute.command</code> gives <strong>automatic hot reload</strong>: change a secret in the vault → the Agent re-renders the <code>.env</code> → runs <code>systemctl restart</code>. UA's documented limitation is the mirror image: <em>secrets are read at startup only; a vault change needs a restart to take effect.</em> So on paper the Agent closes that gap.</p>
+  <p>In practice the gap is small for us:</p>
+  <ul class="tight">
+    <li><strong>Deploys already do this.</strong> Every deploy restarts the stack, and each service re-fetches from Infisical. Config changes ride a deploy and propagate cleanly.</li>
+    <li><strong>Out-of-band changes already have a path.</strong> <code>upsert_infisical_secret()</code> updates <code>os.environ</code> in the live process, no restart. For multi-process propagation we restart the affected units — a known, rare, deliberate operation (e.g. ZAI key rotation).</li>
+    <li><strong>How often does a secret change <em>without</em> a deploy and need <em>instant</em> fleet-wide pickup?</strong> Rarely. Paying for a permanent daemon on every host to optimize a rare manual event is a bad trade.</li>
+  </ul>
+  <div class="callout warn">If we ever <em>did</em> want zero-touch fleet reload, the cheaper move is a tiny "restart-on-rotation" hook in our existing <code>upsert_infisical_secret</code> path (it already knows the key changed) — not a new daemon with its own auth, config, and failure modes on every VPS service.</div>
+
+  <h2 id="cost">5. What adoption would cost</h2>
+  <ul class="tight">
+    <li><strong>A new daemon per host to babysit.</strong> Another <code>systemd</code> unit, another liveness concern, another thing that can wedge — on a box that already runs the gateway, autonomous worker, two VP workers, CSI ingester, and discord-intel.</li>
+    <li><strong>A second, divergent auth path.</strong> Today there is exactly one way secrets reach a UA process: the Python loader. The Agent introduces a parallel mechanism (file sinks, Go templates) that must be kept consistent with the loader's normalization quirks — e.g. the <code>CURL_CA_BUNDLE</code> trailing-newline fix lives in <code>_normalize_secret_value()</code>; the Agent's raw template render would re-introduce that class of bug.</li>
+    <li><strong>Two sources of truth for "what's in my env."</strong> Debugging "why does this process see secret X" gets harder when the answer could be <em>either</em> the loader <em>or</em> a template render.</li>
+    <li><strong>CLI dependency on the VPS.</strong> The Agent requires the Infisical CLI installed and version-managed on the host — a dependency our headless REST path deliberately avoids.</li>
+  </ul>
+
+  <h2 id="trigger">6. When to revisit</h2>
+  <p>One concrete trigger flips this recommendation: <strong>adopting Infisical <em>dynamic secrets</em></strong> — short-lived, auto-leased DB or SSH credentials. The Agent's lease provisioning and auto-renewal are purpose-built for that and would be genuinely hard to reproduce in our loader. We don't use dynamic secrets today (UA holds static API keys and OAuth tokens). If a future component needs leased database creds, re-open this assessment — that's the Agent's home turf.</p>
+
+  <h2 id="bottom">7. Bottom line</h2>
+  <p><strong>Don't adopt the Infisical Agent.</strong> It's the right tool for SDK-less apps, long-lived token sessions, and dynamic-secret leases — none of which describe UA today. Our Python loader already delivers secrets, supports write-back, and has an in-process hot-update path; the Agent would add operational surface for a benefit we can already get more cheaply. Keep the loader; keep one source of truth.</p>
+  <p>The adjacent idea you raised — having Infisical feed <strong>GitHub</strong> — is a different and <em>better</em> bet. That's covered in the companion exhibit (GitHub integration assessment + plan).</p>
+
+  <footer>
+    Code-verified against <code>infisical_loader.py</code>, <code>scripts/deploy/remote_deploy.sh</code>, <code>scripts/render_service_env_from_infisical.py</code>, and <code>project_docs/06_platform/01_secrets_and_infisical.md</code>. Source: <a href="https://infisical.com/docs/integrations/platforms/infisical-agent">Infisical Agent docs</a>.
+  </footer>
+</div>
+</body>
+</html>

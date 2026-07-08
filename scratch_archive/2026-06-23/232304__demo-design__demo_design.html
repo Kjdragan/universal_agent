@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>/demo — Design Synthesis</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1d2430; --muted:#5b6675; --line:#e3e7ee;
+    --accent:#4f46e5; --accent2:#0d9488; --warn:#b45309; --ok:#15803d;
+    --code:#0f172a; --codebg:#f1f3f8; --chip:#eef1f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-text-size-adjust:100%}
+  .wrap{max-width:980px;margin:0 auto;padding:28px 20px 80px}
+  header.h{margin-bottom:8px}
+  h1{font-size:30px;line-height:1.2;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:16px;margin:0 0 22px}
+  h2{font-size:20px;margin:34px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+  h3{font-size:16px;margin:18px 0 8px}
+  p{margin:8px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;
+    background:var(--codebg);color:var(--code);padding:1px 6px;border-radius:5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:12px 0;
+    box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .lead{background:linear-gradient(180deg,#fff, #fbfcff);border-left:4px solid var(--accent)}
+  .chip{display:inline-block;background:var(--chip);border:1px solid var(--line);border-radius:999px;
+    padding:2px 10px;font-size:12.5px;color:var(--muted);margin:2px 4px 2px 0}
+  /* flow */
+  .flow{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
+  .step{flex:1 1 150px;min-width:150px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .step .n{font-size:12px;color:var(--accent);font-weight:700;letter-spacing:.04em}
+  .step .t{font-weight:650;margin:3px 0}
+  .step .d{font-size:13px;color:var(--muted)}
+  .arrow{align-self:center;color:#b9c0cc;font-size:20px}
+  /* archetypes */
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.cols{grid-template-columns:1fr}}
+  .a1{border-top:4px solid var(--accent)}
+  .a2{border-top:4px solid var(--accent2)}
+  .pill{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+  .a1 .pill{color:var(--accent)} .a2 .pill{color:var(--accent2)}
+  .recipe{counter-reset:r;list-style:none;padding:0;margin:8px 0}
+  .recipe li{position:relative;padding:6px 0 6px 30px;border-bottom:1px dashed var(--line);font-size:14px}
+  .recipe li:last-child{border-bottom:0}
+  .recipe li:before{counter-increment:r;content:counter(r);position:absolute;left:0;top:6px;
+    width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;
+    display:flex;align-items:center;justify-content:center;font-weight:700}
+  .a2 .recipe li:before{background:var(--accent2)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f0f2f7;font-size:12.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
+  td .k{font-weight:650}
+  .tag-ok{color:var(--ok);font-weight:700}
+  .tag-new{color:var(--accent);font-weight:700}
+  .open{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 14px;margin:10px 0}
+  .open .q{font-weight:650}
+  .open .rec{font-size:14px;margin-top:4px}
+  .open .rec b{color:var(--warn)}
+  .reuse{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  @media(max-width:720px){.reuse{grid-template-columns:1fr}}
+  .reuse .r{font-size:13.5px;background:#fafbfd;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .reuse .r code{font-size:12.5px}
+  .footnote{color:var(--muted);font-size:13px;margin-top:24px}
+  .legend{font-size:13px;color:var(--muted);margin:6px 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="h">
+    <h1>/demo — point it at anything, get a briefing + a working demo</h1>
+    <p class="sub">Design synthesis from our grilling session · 2026-06-23 · <b>every decision below is resolved</b> — ready to turn into an implementation plan</p>
+  </header>
+
+  <div class="card lead">
+    <p style="margin-top:0"><b>What it is.</b> An interactive desktop slash command. You point it at any source — a GitHub repo, an X/Threads post, a blog/news announcement, a YouTube video, a dropped-in image, or even a one-line topic — and it <b>researches the thing until it understands it well enough to build with it</b>, writes an operator briefing, then builds a <b>real, runnable demo</b> that exercises the capability end-to-end. The lasting payoff is a <b>skill</b> — a modular capability our agents can adopt.</p>
+    <p style="margin-bottom:0">It is mostly <span class="tag-ok">wiring existing parts together</span> behind a generalized front door, plus genuinely <span class="tag-new">new</span> pieces: a per-source repo, a self-improving <code>demo_factory</code>, and a recall vault.</p>
+  </div>
+
+  <div class="card" style="border-left:4px solid var(--accent2)">
+    <p style="margin-top:0"><b>What this is — and isn't.</b> <code>/demo</code> is a <b>portable Claude Code slash command</b>, installable into <code>~/.claude/</code> and runnable in <i>any</i> session on any repo — <b>not</b> a feature inside Universal Agent. We author it from the UA session and lean on UA's code as <b>proven patterns to replicate, never as a dependency to import.</b></p>
+    <p style="margin-bottom:0"><b>Packaging split:</b> <b><code>dragan-plugins</code></b> holds the portable surface — the <code>/demo</code> entrypoint (next to <code>/new-repo</code>) + <b>graduated skills</b>; the <b><code>demo_factory</code> repo</b> holds the engine + data — base SDK template, growing local skill library, vault, lessons, regression suite, verifier/hook scripts. The command is a thin launcher that drives the factory. <b>Promotion pipeline:</b> a skill is born in a demo → accrues to the factory's local library → (proven + reused) → <b>graduates into <code>dragan-plugins</code></b>, becoming a global capability.</p>
+  </div>
+
+  <h2>The flow</h2>
+  <div class="flow">
+    <div class="step"><div class="n">SEED</div><div class="t">Point at a source</div><div class="d">URL · repo · post · image · topic + optional one-line steer</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">RESEARCH</div><div class="t">Investigate outward</div><div class="d">The seed is a starting point. Route to domain specialists — the <code>claude-code-guide</code> agent (official Anthropic docs) for any Claude Code / SDK / API source — until the API surface is understood with <i>current</i> ids/signatures.</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">BRIEF</div><div class="t">Briefing + plan</div><div class="d">Publish to scratchpad &amp; hand you the link <b>immediately</b>, then keep going. Interruptible, never blocks.</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">BUILD</div><div class="t">Build the demo</div><div class="d">Archetype-routed (below). Real endpoint, no mocks, small suite of 2–3 examples.</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">VERIFY</div><div class="t">Run &amp; iterate</div><div class="d">Execute, evaluate, FEEDBACK.md, re-run. Several retries, no wall-clock timeout.</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">LAND</div><div class="t">Repo + register + skill</div><div class="d">/new-repo → GitHub + VPS, register on the dashboard, stage the skill as a promotion candidate, accrue it into the factory, and write/extend the capability's vault entry.</div></div>
+  </div>
+  <p class="legend">Only hard-stops on a genuine blocker (no API access, source simply isn't buildable) — and even then it ships the briefing + an honest "couldn't verify because X" markup.</p>
+
+  <div class="card" style="border-left:4px solid var(--accent)">
+    <p style="margin:0"><b>Research helpers — required, routed by domain.</b> The research phase delegates to specialists rather than relying on training-data recall (critical for features announced today). The <b><code>claude-code-guide</code> agent</b> — doc-grounded against official Anthropic docs + web search — is the <b>required</b> helper for any Claude Code, Agent SDK, or Claude API source, i.e. the common archetype-1 case. Others by domain: <code>gemini-api-dev</code> / <code>Context7</code> / <code>deepwiki</code> for third-party frameworks; the YouTube transcript skill when the best explainer is a video.</p>
+    <p style="margin:8px 0 0"><b>Plus (additive, not a replacement):</b> for source-heavy topics, dump the gathered sources into a <b>NotebookLM notebook</b> and query it grounded — a richer aggregator layered <i>on top of</i> the routed-specialist research above, never instead of it.</p>
+  </div>
+
+  <h2>What the demo builds — two archetypes</h2>
+  <div class="cols">
+    <div class="card a1">
+      <div class="pill">Archetype 1 · agent capability</div>
+      <h3 style="margin-top:6px">A dialogue-driven agent + a custom skill</h3>
+      <p style="font-size:14px;color:var(--muted);margin-top:0">New Claude Code feature, an MCP, an agent tool, a new API param — anything that makes an <i>agent</i> more capable.</p>
+      <ol class="recipe">
+        <li><b>Proof script</b> — grounded by the <code>claude-code-guide</code> agent's doc research, make the capability actually work against the real thing (fastest path to "it runs").</li>
+        <li><b>Extract a skill</b> via <code>skill-creator</code> — refactor the proven functionality into an optimized, modular skill.</li>
+        <li><b>Base agent + demonstration dialogue</b> — scripted text sets a premise/task → triggers the skill → it runs its process (multi-turn if needed) → the feature is demonstrated.</li>
+      </ol>
+      <p style="font-size:13.5px;margin-bottom:0">The agent <i>pursues an outcome by reaching for the skill</i> — not running a hardcoded script. The base agent is <b>one reusable scaffold</b> (override allowed for unusual topologies).</p>
+    </div>
+    <div class="card a2">
+      <div class="pill">Archetype 2 · general framework</div>
+      <h3 style="margin-top:6px">A straight script that drives the framework</h3>
+      <p style="font-size:14px;color:var(--muted);margin-top:0">A new library / model / API — your "Google OCR parser" example. Build in <i>that</i> stack, first-class.</p>
+      <ol class="recipe">
+        <li><b>Proof script</b> — use the framework to accomplish one real task, end-to-end, against the real thing.</li>
+        <li><b>Small suite</b> — a couple of examples covering the feature's main uses.</li>
+        <li><b>Graduate (optional)</b> — if it's worth lifting into the agent toolbox, run the same <code>skill-creator</code> step and it <i>becomes</i> an agent capability.</li>
+      </ol>
+      <p style="font-size:13.5px;margin-bottom:0">Local-GPU / local-model demos run on the desktop <b>Ollama</b> (qwen2.5-coder:7b) — the only place they <i>can</i> run.</p>
+    </div>
+  </div>
+  <div class="card" style="border-left:4px solid var(--accent2)">
+    <p style="margin:0"><b>The synthesis:</b> the <b>skill is the universal durable artifact</b> regardless of source type. The script→skill bridge means even a general-framework demo can graduate into a modular agent capability. Every <code>/demo</code> grows the toolbox.</p>
+  </div>
+
+  <h2>Resolved decisions</h2>
+  <table>
+    <tr><th>#</th><th>Decision</th><th>Resolution</th></tr>
+    <tr><td>1</td><td class="k">Deliverable target</td><td>Per-source private GitHub repo via <code>/new-repo</code>, indexed in the portable <b><code>demo_factory</code> vault index</b> (the canonical "dashboard"). Registering into UA's <code>/opt/ua_demos</code> dashboard is an <b>optional bonus</b> only when run on a UA machine. <span class="tag-new">repo = new capability</span></td></tr>
+    <tr><td>2</td><td class="k">Execution locus</td><td>Interactive desktop skill, <b>Anthropic Max</b>, runs inline. GPU demos run locally (desktop-only).</td></tr>
+    <tr><td>3</td><td class="k">Demo definition</td><td>Runnable, exercises the real capability end-to-end, <b>never mocked</b>. Functional completeness &gt; polish. Small suite (2–3 examples).</td></tr>
+    <tr><td>4</td><td class="k">Ingestion model</td><td>Seeded <b>research</b>, not scraping. The seed only decides where research starts; research continues until buildable understanding, delegating to domain specialists — the <code>claude-code-guide</code> agent (<b>required</b>) for Claude-ecosystem sources. Feeds briefing + demo.</td></tr>
+    <tr><td>5</td><td class="k">Agent-demo recipe</td><td>proof script → extract skill (<code>skill-creator</code>) → base agent + demonstration dialogue.</td></tr>
+    <tr><td>6</td><td class="k">Base agent</td><td>One reusable dialogue-driven scaffold; override allowed when a feature needs a different topology.</td></tr>
+    <tr><td>7</td><td class="k">Skill promotion</td><td>Accrues to the factory's local library; staged as a <b>candidate</b> (flagged, never auto-installed). Proven + reused skills <b>graduate into <code>dragan-plugins</code></b> — a global capability in every session. Reuse-count + librarian judgment drive it; promotion stays deliberate.</td></tr>
+    <tr><td>8</td><td class="k">Demo inference</td><td>Claude Code binary (updated → has new features) over the ZAI backend by default; Infisical <b>production</b> per-provider keys (Google/OpenAI/…); Ollama for local-GPU; best-effort + honest markup when an endpoint is missing.</td></tr>
+    <tr><td>9</td><td class="k">Checkpoint</td><td>Briefing + plan link delivered <b>immediately</b>, then proceed unblocked. Interruptible; hard-stop only on a real blocker.</td></tr>
+    <tr><td>10</td><td class="k">Resilience &amp; verify</td><td>Build-and-verify runs as <b>native /goal</b> — the same primitive UA already shells autonomously (<code>claude -p "/goal …"</code>), NOT a hand-rolled loop and NOT <code>cody-work-evaluator</code>. /goal is the loop <b>driver</b>; the <b>gate</b> is a deterministic verifier that EXECUTES the demo and prints a forge-proof <code>DEMO_VERIFY: PASS</code> token the condition greps for. <code>self-brief-and-attest</code> authors ACCEPTANCE.md + goal_condition.txt up front. <b>No hard wall-clock cap</b> (LivenessWatchdog idle-kill + high backstop + the condition's "stop after N turns"; N scales with verification depth — ≈6 headless, ≈20 for the visual render → screenshot → critique → fix sub-loop + auto-screencast). Mechanical checks re-run as a hard gate after the loop. (See the /goal section below.)</td></tr>
+  </table>
+
+  <h2>What it reuses (the lazy part)</h2>
+  <div class="reuse">
+    <div class="r"><code>/new-repo · scaffold_repo.sh</code> → repo + uv venv + Infisical bootstrap + GitHub + VPS deploy</div>
+    <div class="r"><code>youtube-transcript-metadata</code> → YouTube seeds &amp; tutorial research</div>
+    <div class="r"><code>web-reader · defuddle · deepwiki</code> → post / article / repo ingestion</div>
+    <div class="r"><code>web-search-prime · WebSearch</code> → research outward to the real docs</div>
+    <div class="r"><code>claude-code-guide</code> agent → <b>required</b> doc-grounded research for Claude Code / SDK / API sources</div>
+    <div class="r"><code>skill-creator</code> → extract the proven functionality into a skill</div>
+    <div class="r">Cody <code>DEMO_BUILD_CONTRACT</code> → framework selection, no-mock, manifest, run command</div>
+    <div class="r"><code>cody-work-evaluator</code> pass/iterate/defer → the retry loop</div>
+    <div class="r"><code>LivenessWatchdog</code> → no-progress monitoring instead of a wall-clock cap</div>
+    <div class="r"><code>scratch_publish · publish_scratch.sh</code> → briefing to your phone + auto-archive</div>
+    <div class="r"><code>/opt/ua_demos</code> register (symlink + manifest.json) → dashboard visibility</div>
+  </div>
+
+  <h2>Adopted from the fast convergence lane</h2>
+  <p><code>/demo</code> is the <b>intensive marquee</b> build; the existing autonomous <code>tutorial_build</code> lane is the <b>quick, automatic</b> one. Worth lifting from the quick lane into this one:</p>
+  <div class="reuse">
+    <div class="r"><b>DemoManifest + endpoint_hit / marker_verified</b> → proof the demo hit the <i>real</i> endpoint (not a mock); dashboard compatibility for free</div>
+    <div class="r"><b>Acceptance attestation</b> (<code>self-brief-and-attest</code>: ACCEPTANCE.md + goal_condition.txt + COMPLETION.md) → declare success up front, attest at the end</div>
+    <div class="r"><b>Mechanical completion checks</b> (venv / uv.lock / pyproject present + README run section) → cheap objective gate before "done"</div>
+    <div class="r"><b>SOURCES/ grounding</b> → research artifacts become cited reference docs the build + briefing draw from</div>
+    <div class="r"><b>Buildability judgment</b> (repurposed) → becomes the <i>un-demoable</i> decision: graceful degradation, not a gate</div>
+    <div class="r" style="opacity:.6"><b>Skipped:</b> daily ceiling / approval gate — autonomous quota control, irrelevant to an interactive build</div>
+  </div>
+
+  <h2>/goal as the build-loop driver — verified, with guardrails</h2>
+  <p>Critical multi-lens analysis (code-grounded, ultracode). <b>Verdict: adopt with hardening.</b> The reframe: UA's "internal goal loop" <b>IS</b> native /goal — <code>claude_cli_client.py::_run_goal_loop_mission</code> literally shells <code>claude -p "/goal &lt;condition&gt;"</code>. Using it in /demo is <b>consolidation onto a production primitive, not a new mechanism</b> (and when goal-eligible, UA already disables its own retry loop). The <code>cody-work-evaluator</code> pass/iterate/defer loop is a different, autonomous, cross-subprocess beast — <i>not</i> imported into /demo.</p>
+  <div class="card lead">
+    <p style="margin:0"><b>Decisive rule: /goal is the loop DRIVER (foreman), never the completion GATE (judge).</b> Its evaluator is transcript-only (no tools, no file reads). The gate stays a <b>deterministic verifier that actually executes the demo</b> and prints one forge-proof line — <code>DEMO_VERIFY: PASS demo_id=… ran=1 exit=0 endpoint=anthropic_native …</code>; the /goal condition only greps for that token. On the desktop the evaluator is <i>real</i> Haiku (Anthropic Max), not the autonomous ZAI <code>glm-4.5-air</code> rubber-stamp — so it's a <b>better</b> fit here than autonomously.</p>
+  </div>
+  <h3>Hooks are first-class here — not banned</h3>
+  <p>The "vanilla settings" rule was always about <b>not inheriting the production daemon's ZAI-routing env/hooks</b> (so a demo proves a clean real-Anthropic endpoint) — never a ban on hooks as a capability. Confirmed in code: <code>POLLUTION_INDICATORS</code> strips the inherited <code>hooks</code> <i>key</i>, not the <code>disableAllHooks</code> toggle — hooks stay enabled (<b>/goal itself IS a Stop hook</b>). For /demo we keep endpoint integrity the right way — the <b>Anthropic-Max launch profile</b> + per-build <code>endpoint_hit</code> verification — <i>not</i> by stripping hooks.</p>
+  <p>So: the <b>improving base SDK template owns a curated, version-controlled hook set</b>; new hooks are added &amp; tested in the template's own test environment (conflicts contained to one evolving source), recorded in a <b><code>HOOKS.md</code> ledger</b>, with a template-<code>CLAUDE.md</code> guideline to <b>minimize hooks unless they earn their place — record every one, never overuse, never prohibit.</b> Hooks actively <i>serve</i> this design: the verifier-gate is a deterministic <b>script Stop hook</b> that prints <code>DEMO_VERIFY</code>; per-skill lesson capture (Loop 1) is a <b>PostToolUse hook</b>.</p>
+  <table>
+    <tr><th>Hardening (must-have)</th><th>Why</th></tr>
+    <tr><td class="k">Verifier executes the demo</td><td>Make <code>evaluate_demo</code>'s rerun REQUIRED for /demo (optional for supervised Cody); capture exit code, detect mocks, print the token. Cleanly a script Stop hook.</td></tr>
+    <tr><td class="k">Out-of-band endpoint proof</td><td><code>detect_endpoint_from_text</code> is a substring grep a printed hostname can spoof — require a real-request signal (proxy/SDK count or server token).</td></tr>
+    <tr><td class="k">Pre-trust the workspace</td><td>/goal is unavailable in an <i>untrusted</i> dir; <code>provision_demo_workspace</code> doesn't trust the new repo → /goal silently no-ops. Pre-trust before backgrounding; else fall back to single-pass+retry. <b>This — not hooks — was the real blocker.</b></td></tr>
+    <tr><td class="k">Anthropic-Max launch profile</td><td>Scrub ANTHROPIC_* + forward OAuth (<code>_build_cli_env(cody_mode='anthropic')</code>), <code>--model claude-opus-4-8</code> on argv — a stray ZAI var makes the "Haiku" judge run on glm-4.5-air. Verify endpoint each build.</td></tr>
+    <tr><td class="k">Cap-clear ≠ pass</td><td>"or stop after N turns" clears the goal even on failure → treat cap-clear as DEFER; only the token marks success. N scales with verification depth (≈6 headless, ≈20 visual).</td></tr>
+    <tr><td class="k">Echo + hard re-gate</td><td>Force the agent to print verifier output each turn (the judge is blind to disk), and re-run mechanical checks as a hard code gate after /goal returns.</td></tr>
+  </table>
+
+  <h2>Recursive improvement — the compounding engine</h2>
+  <p>The proven pattern is your own <code>/new-repo</code> lessons loop (<i>blocker → root cause → fix → file</i>, folded back, buffer reset). We apply it at three levels, all hosted in the dedicated <code>demo_factory</code> repo (base scaffold + shared skill library + meta-lessons + regression suite).</p>
+  <div class="cols" style="grid-template-columns:1fr 1fr 1fr">
+    <div class="card"><div class="pill" style="color:var(--accent)">Loop 1 · per-skill</div>
+      <p style="font-size:13.5px;margin-bottom:0">Every authored skill ships <code>LESSONS.md</code> — written at creation &amp; at runtime, <b>read at the start of every run</b>, folded into the skill body on consolidation. "Next time it runs, it's already solved."</p></div>
+    <div class="card"><div class="pill" style="color:var(--accent)">Loop 2 · capability accrual</div>
+      <p style="font-size:13.5px;margin-bottom:0">Every demo skill auto-registers into the factory's <b>shared skill library</b> (local to the demo-builder, <i>not</i> broad UA). The builder gets monotonically more capable; repeat capabilities are reused, not rebuilt.</p></div>
+    <div class="card"><div class="pill" style="color:var(--accent)">Loop 3 · process memory</div>
+      <p style="font-size:13.5px;margin-bottom:0">The <code>/demo</code> skill + base scaffold accrue <i>meta</i>-lessons about building demos (provider key names, "X-type sources are briefing-only," model-currency notes), read at the start of every build.</p></div>
+  </div>
+  <table>
+    <tr><th>Guard / signal</th><th>Why it's there</th></tr>
+    <tr><td class="k">Reuse → promotion signal</td><td>A skill reused across N demos auto-ranks higher as a broad-UA promotion candidate (decision #7). Reuse count is a better adoption signal than judging a skill in isolation.</td></tr>
+    <tr><td class="k">Demos = regression suite</td><td>Every demo is runnable + verified, so when a shared skill folds in a lesson, re-run the demos that use it. The safety rail that stops self-modifying skills from silently rotting.</td></tr>
+    <tr><td class="k">Structured + bounded</td><td>Reuse the new-repo lesson schema (actionable checklist, not prose); dedupe → fold durable lessons into the body → reset the buffer so logs never bloat.</td></tr>
+  </table>
+
+  <div class="card" style="border-left:4px solid var(--accent)">
+    <p style="margin:0"><b>Skill librarian — keeps the library from sprawling.</b> The vault pre-flight doesn't just answer have-it / don't: when it finds <i>related</i> skills, an LLM judgment picks <b>reuse · expand an existing skill · or create-new-then-flag-for-consolidation</b>. A periodic librarian pass then consolidates a crowded cluster into a <b>master skill</b> (HyperFrames <code>video-ad-producer</code> shape — one skill, internal modes) or a <b>skill group</b> (stitch shape — directory + README + sub-skills), and re-runs the regression suite. Lean: a skill-group template + LLM judgment, not deep infra. Raises the promotion bar (decision #7).</p>
+  </div>
+
+  <h2>Knowledge vault — the recall layer</h2>
+  <p><b>State of the existing vault:</b> the <code>claude-code-intelligence</code> machinery exists but is <b>empty &amp; parked</b> (no pages since Apr 28; population loop flag-off; NotebookLM output never ingested back). The one store that actually works is <code>scratch_archive</code>. So we build <b>fresh-and-lean in <code>demo_factory</code></b> on that proven pattern rather than revive drifted machinery.</p>
+  <div class="card">
+    <p style="margin-top:0"><b>One entry per capability</b> (not per demo run — re-visiting a capability <i>extends</i> its entry). Each unifies what <code>/demo</code> already emits: the concept brief, the visual briefing, the proven skill(s), the demo repo link, the lessons, and the failure notes. Index = the scratch_archive pattern (jsonl ledger + browsable HTML) <b>+ SQLite FTS</b> so an agent can actually ask <i>"have we covered X?"</i> — stdlib, deterministic, no embeddings infra.</p>
+    <p style="margin-bottom:0"><b>Failures are first-class.</b> When a concept relates to a real skill but <b>won't demo</b> (needs hardware we lack, a paid tier, an unreleased API, or it's simply not demoable), the process writes <i>"what it is + why it didn't demo + what it'd take"</i> into <code>CONCEPT.md</code> <b>and</b> the visual briefing, and the vault marks that entry <span style="color:var(--warn);font-weight:700">un-demoable</span> — not dropped. The durable form of "best-effort, mark honestly."</p>
+  </div>
+  <div class="cols">
+    <div class="card a1"><div class="pill">Payoff · future demos</div><p style="font-size:13.5px;margin-bottom:0">A pre-flight query — "do we already have a concept / skill / known-failure for this?" — kills re-research and surfaces a reusable skill. The <i>recall</i> half of the loops above; without it they accumulate but can't be retrieved.</p></div>
+    <div class="card a2"><div class="pill">Payoff · real project builds</div><p style="font-size:13.5px;margin-bottom:0">A searchable library of "how to actually use capability X," each entry backed by a verified runnable demo + a liftable skill + known gotchas. A genuine engineering asset, not demo exhaust.</p></div>
+  </div>
+
+  <div class="card">
+    <p style="margin-top:0"><b>Consumption &amp; connection layer</b> — all core, these are what turn a pile of demos into a living asset:</p>
+    <div class="reuse">
+      <div class="r"><b>"Where could we use this?"</b> → each briefing ends with an LLM section mapping the capability to our existing projects/repos. The biggest connector from factory to real work.</div>
+      <div class="r"><b>NotebookLM audio overview</b> per capability → listen to a new-capability briefing on the go (<code>paper-to-podcast</code> / <code>gemini-tts-narrator</code>).</div>
+      <div class="r"><b>Wiki, repurposed</b> → NotebookLM generates a per-capability-cluster overview <i>on demand</i> into the vault entry, instead of the dead autonomous card→wiki loop.</div>
+      <div class="r"><b>Weekly "what's new in the toolbox"</b> → LLM synthesis over new vault entries; emergent themes + newly-possible skill combinations.</div>
+      <div class="r"><b>Cross-capability composition demos</b> → once the library has several skills, build demos that <i>combine</i> them; showcases emergent value + tests interop.</div>
+    </div>
+    <p style="margin-bottom:0;font-size:13px;color:var(--muted)">(NotebookLM-as-research-aggregator lives in the research layer above — additive to it, not here.)</p>
+  </div>
+
+  <h2>Settled details (A–E — all approved)</h2>
+
+  <div class="open">
+    <div class="q">A · Input surface — what can you point it at?</div>
+    <div class="rec"><b style="color:var(--ok)">Approved ✓</b> any URL (repo / X·Threads / blog·news / YouTube / docs) <b>+</b> a local file/image you drop in <b>+</b> a short freeform topic ("the new Claude Code tag feature") <b>+</b> an optional one-line steer ("focus on the streaming part"). The seed can be thin; research fills the rest.</div>
+  </div>
+  <div class="open">
+    <div class="q">B · Briefing form</div>
+    <div class="rec"><b style="color:var(--ok)">Approved ✓</b> durable markdown in the repo (<code>CONCEPT.md</code> + <code>README.md</code>, reusing the teaching-doc pattern) <b>and</b> a rendered scratchpad page. Default to auto-rendered markdown; upgrade to a hand-authored visual-explainer page when diagrams genuinely help. Always light mode.</div>
+  </div>
+  <div class="open">
+    <div class="q">C · Research stopping rule</div>
+    <div class="rec"><b style="color:var(--ok)">Approved ✓</b> stop when you can write correct code against the <i>current</i> API (verified ids/signatures) or when marginal info drops off; soft cap of distinct sources to avoid runaway. If still not buildable, ship the briefing + a clear blocker note.</div>
+  </div>
+  <div class="open">
+    <div class="q">D · Retry budget</div>
+    <div class="rec"><b style="color:var(--ok)">Approved ✓</b> up to ~3–5 iterate cycles before deferring with an honest blocker report — mirrors the existing evaluator loop. No wall-clock timeout; liveness-based progress only.</div>
+  </div>
+  <div class="open">
+    <div class="q">E · Repo naming</div>
+    <div class="rec"><b style="color:var(--ok)">Approved ✓</b> snake_case derived from the feature (e.g. <code>claude_code_tag_feature_demo</code>), private, lands at <code>~/lrepos/&lt;name&gt;</code> on desktop + VPS via <code>vps_bootstrap.sh</code>.</div>
+  </div>
+
+  <p class="footnote">Mark this page up where you disagree, or reply in chat. Nothing here is built yet — this is the shared-understanding checkpoint before we write a plan.</p>
+</div>
+</body>
+</html>

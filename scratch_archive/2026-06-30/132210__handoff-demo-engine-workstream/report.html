@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Handoff — Proactive demos on the /demo engine (+ model strategy)</title>
+<style>
+:root{color-scheme:light;--fg:#1f2328;--muted:#656d76;--bg:#ffffff;--soft:#f6f8fa;--border:#d0d7de;--accent:#0969da;--accent-soft:#ddf4ff}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:#ffffff;color:#1f2328;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6;font-size:16px}
+nav.docset{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--border);padding:.55rem 1rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+nav.docset .brand{font-weight:700;margin-right:.6rem;font-size:.9rem;color:var(--muted)}
+nav.docset a{font-size:.82rem;text-decoration:none;color:var(--accent);padding:.2rem .55rem;border-radius:6px;white-space:nowrap}
+nav.docset a:hover{background:var(--accent-soft)}
+nav.docset a.current{background:var(--fg);color:#fff;font-weight:600}
+nav.docset .sep{width:1px;height:1.1rem;background:var(--border);margin:0 .2rem}
+nav.docset a.file{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem}
+.scratch-back{padding:.5rem 1rem;font-size:.82rem;background:var(--soft);border-bottom:1px solid var(--border)}
+.scratch-back a{color:var(--accent);text-decoration:none}
+.scratch-back a:hover{text-decoration:underline}
+main{max-width:880px;margin:0 auto;padding:2.2rem 1.3rem 5rem}
+h1,h2,h3,h4{line-height:1.25;margin-top:1.8em;margin-bottom:.6em;font-weight:650}
+h1{font-size:1.9rem;border-bottom:1px solid var(--border);padding-bottom:.3em;margin-top:.2em}
+h2{font-size:1.45rem;border-bottom:1px solid var(--border);padding-bottom:.25em}
+h3{font-size:1.18rem}
+a{color:var(--accent)}
+p,li{overflow-wrap:break-word}
+code{background:var(--soft);padding:.15em .4em;border-radius:6px;font-size:.86em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--soft);border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;line-height:1.45}
+pre code{background:none;padding:0;font-size:.82rem}
+blockquote{margin:1em 0;padding:.2em 1em;color:var(--muted);border-left:4px solid var(--border)}
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:.92rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--border);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:650}
+tr:nth-child(even) td{background:#fbfcfd}
+hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+.srcmeta{color:var(--muted);font-size:.85rem;margin:.4rem 0 1rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+footer{max-width:880px;margin:0 auto;padding:1.5rem 1.3rem;color:var(--muted);font-size:.78rem;border-top:1px solid var(--border)}
+
+.sr-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#0969da;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer}
+.sr-fab:hover{background:#0a5fd0}
+.sr-panel{position:fixed;right:16px;bottom:64px;z-index:2147483000;width:340px;max-width:92vw;max-height:70vh;background:#fff;color:#1f2328;border:1px solid #d0d7de;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);display:none;flex-direction:column;overflow:hidden;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.sr-panel.sr-open{display:flex}
+.sr-head{display:flex;justify-content:space-between;align-items:center;padding:.6rem .8rem;border-bottom:1px solid #eaecef}
+.sr-x,.sr-del{background:none;border:none;color:#656d76;cursor:pointer;font-size:13px}
+.sr-headbtns{display:flex;gap:.4rem;align-items:center}
+.sr-clear{background:none;border:1px solid #d0d7de;border-radius:5px;color:#656d76;cursor:pointer;font-size:11px;padding:.1rem .45rem}
+.sr-clear:hover{background:#f6f8fa}
+.sr-hint{font-size:.74rem;line-height:1.45;color:#57606a;padding:.5rem .8rem;border-bottom:1px solid #eaecef;background:#f6f8fa}
+.sr-list{overflow:auto;padding:.5rem .8rem;flex:1}
+.sr-empty{color:#656d76;font-size:.85rem;padding:.5rem 0}
+.sr-item{border:1px solid #eaecef;border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem}
+.sr-loc{display:flex;justify-content:space-between;font-size:.72rem;color:#656d76;font-family:ui-monospace,Menlo,monospace;margin-bottom:.25rem}
+.sr-quote{font-size:.8rem;color:#3b4148;background:#f6f8fa;border-left:3px solid #d0d7de;padding:.2rem .5rem;margin-bottom:.3rem}
+.sr-body{width:100%;border:1px solid #d0d7de;border-radius:6px;padding:.35rem .45rem;font:inherit;resize:vertical}
+.sr-actions{display:flex;gap:.4rem;padding:.6rem .8rem;border-top:1px solid #eaecef}
+.sr-note{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:inherit}
+.sr-submit{flex:1;background:#1f883d;color:#fff;border:none;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:600 13px/1 inherit}
+.sr-submit:hover{background:#1a7332}
+.sr-chip{position:absolute;z-index:2147483001;background:#1f2328;color:#fff;border:none;border-radius:6px;padding:.25rem .5rem;font:600 12px/1 sans-serif;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sr-mark{background:#fff3c4;box-shadow:inset 0 -2px 0 #e3b341;border-radius:2px;cursor:pointer}
+.sr-mark:hover{background:#ffe98a}
+.sr-round{border:1px solid #eaecef;border-radius:8px;margin-bottom:.6rem;overflow:hidden}
+.sr-rhead{display:flex;justify-content:space-between;align-items:center;gap:.4rem;background:#f6f8fa;border-bottom:1px solid #eaecef;padding:.35rem .55rem;font-size:.72rem;color:#57606a;font-family:ui-monospace,Menlo,monospace}
+.sr-recopy{background:#fff;border:1px solid #d0d7de;border-radius:5px;padding:.1rem .4rem;cursor:pointer;font:inherit;color:#0969da;white-space:nowrap}
+.sr-hitem{padding:.35rem .55rem;border-top:1px solid #f0f1f3}
+.sr-hbody{font-size:.85rem;white-space:pre-wrap;color:#1f2328}
+.sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast{display:none!important}}
+</style>
+</head>
+<body><div class="scratch-back"><a href="/scratch/">← Scratchpad index</a></div><main><h1 id="handoff-proactive-demos-on-the-demo-engine-model-strategy">HANDOFF — Proactive demos on the /demo engine (+ model strategy)</h1>
+<p>Continuation handoff for a fresh session. The prior session's context got huge; everything
+below is the state to resume from. <strong>Repos:</strong> <code>universal_agent</code> (the autonomous system; deployed
+on the VPS <code>uaonvps</code> as user <code>ua</code> at <code>/opt/universal_agent</code>) and <code>demo_factory</code> (the <code>/demo</code>
+engine; desktop <code>~/lrepos/demo_factory</code>, also cloned on the VPS at <code>/home/ua/lrepos/demo_factory</code>).</p>
+<h2 id="done-live-all-merged-deployed">DONE &amp; LIVE (all merged + deployed)</h2>
+<ul>
+<li><strong>Watchdog fix</strong> — universal_agent #1220: the <code>claude --print</code> CLI lane now exempts in-flight
+  tools from the no-progress kill (was killing live eval missions at 600s). Deployed.</li>
+<li><strong>Email canonical = gmail</strong> — #1221 + Infisical <code>UA_PRIMARY_EMAIL=kevinjdragan@gmail.com</code>
+  (outlook was bounce-prone). <code>UA_NOTIFICATION_EMAIL</code> also gmail.</li>
+<li><strong>Consolidation (proactive demos → demo_factory engine):</strong></li>
+<li>demo_factory <strong>#77</strong> — <code>scripts/build_demo.py</code> headless driver + <code>goal_build.py --model</code>.</li>
+<li>demo_factory <strong>#78</strong> — skill tiering: <code>library</code> (frontmatter <code>disable-model-invocation: true</code>
+    → zero context, on-demand <code>/dragan:&lt;name&gt;</code>) vs <code>deployed</code> (loaded). <code>scripts/skill_tier.py</code>
+    (deploy/undeploy/list/index→<code>LIBRARY.md</code>); <code>promote_skill --tier</code> (default <strong>deployed</strong> so
+    <code>/demo</code> is unchanged); proactive passes <code>--skill-tier library</code>.</li>
+<li>universal_agent <strong>#1223</strong> — flag <code>UA_PROACTIVE_DEMO_ENGINE</code> wiring: when on, the
+    <code>cody_demo_task</code> objective (in <code>services/cody_dispatch.py</code>) redirects the build to
+    <code>build_demo.py</code>. Default OFF; <code>metadata.build_engine</code> records which engine ran.</li>
+<li>universal_agent <strong>#1225</strong> — deterministic "demo built" email at the worker_loop
+    <code>cody_demo_task</code> completion seam (<code>services/demo_built_notifier.py</code>) with a playable
+    explainer-video link <strong>when one exists</strong>, else exhibit/workspace; proactive objective now
+    passes <code>--promote --skill-tier library</code>.</li>
+<li><strong>THE FLIP IS LIVE:</strong> Infisical <code>UA_PROACTIVE_DEMO_ENGINE=1</code> +
+    <code>UA_PROACTIVE_DEMO_FACTORY_SCRIPT=/home/ua/lrepos/demo_factory/scripts/build_demo.py</code>,
+    verified through the gateway's <code>initialize_runtime_secrets()</code> path
+    (<code>proactive_use_demo_factory()=True</code>). gateway + autonomous-runtime restarted. demo_factory
+    cloned + <code>uv sync</code>'d on the VPS; a live Opus <code>--build-only</code> build validated PASS there.
+    <strong>Bespoke <code>cody_implementation</code> builder LEFT INTACT</strong> as the rollback path.</li>
+<li><strong>Auto-promote daily cap</strong> — Infisical <code>UA_INTEL_AUTO_PROMOTE_DAILY_CAP=3</code> (was 2).</li>
+<li><strong>Model right-sizing</strong> — demo_factory <strong>#80</strong>: <code>scripts/model_tiers.py</code> (demo class → build
+  alias + Gemini eval; <strong>build models are Claude ALIASES <code>opus</code>/<code>sonnet</code>/<code>haiku</code> → no stale ids,
+  auto-resolve to current</strong>), <code>build_demo.py --model-tier {fixed(default)|auto}</code> (opt-in; default
+  unchanged), <code>scripts/model_rightsize_eval.py</code> (measurement harness), <code>MODEL_RIGHTSIZING.md</code>.
+  <strong>Evidence (Mandelbrot, generic class, live verify gate): opus/sonnet/haiku ALL PASS; haiku
+  ~45% faster (98s vs 179s).</strong> Decision: <code>generic→sonnet</code>, <code>agent_sdk</code>/<code>visual</code>→<code>opus</code>
+  (unmeasured), haiku = next step for a <code>simple</code> sub-class. <code>DEMO_FACTORY_ALL_OPUS=1</code> = one-flag
+  fallback.</li>
+<li><strong>Sonnet 5 (released 2026-06-30)</strong> — VPS Claude Code updated <strong>2.1.143 → 2.1.197</strong> (matches
+  desktop). The <code>sonnet</code> alias now auto-resolves to Sonnet 5 (near-Opus-4.8 quality, ~$2/$10
+  intro) → the alias-based config <strong>adopts Sonnet 5 for free</strong> (<code>generic→sonnet</code> = Sonnet 5).</li>
+</ul>
+<h2 id="in-flight-verify-first">IN FLIGHT — verify first</h2>
+<ul>
+<li><strong>Sonnet 5 build validation</strong> was launched on the VPS but not yet confirmed. Re-verify:
+  <code>bash
+  ssh ua@uaonvps 'cd /home/ua/lrepos/demo_factory &amp;&amp; /usr/local/bin/uv run python scripts/build_demo.py \
+    "render a Mandelbrot set PNG with numpy and pillow" --demo-id s5v --build-only \
+    --build-model claude-sonnet-5 --workspace-root /tmp/df-s5v 2&gt;&amp;1 | tail -3'
+  # expect: GOAL_BUILD: PASS … then BUILD_DEMO: PASS</code></li>
+</ul>
+<h2 id="open-threads-resume-here">OPEN THREADS (resume here)</h2>
+<ol>
+<li><strong>GATED: flip the proactive default to <code>--model-tier auto</code></strong> (needs operator OK). One-line edit:
+   add <code>--model-tier auto</code> to the <code>build_demo.py</code> invocation in the proactive objective in
+   <code>universal_agent/services/cody_dispatch.py</code>. Makes autonomous demos right-size by class
+   (<code>generic→sonnet</code>=Sonnet 5). Low risk (a too-cheap build just fails the verify gate → rescue);
+   <code>DEMO_FACTORY_ALL_OPUS=1</code> reverts.</li>
+<li><strong>Per-process / intra-build model assignment (the operator's bigger idea):</strong> use a different
+   real-Anthropic model for different STEPS within one build (Haiku for the grind, stronger for
+   judgment), not one model per whole build. A single <code>claude --print</code> session = one model, so
+   the mechanisms are: (a) <strong><code>opusplan</code></strong> alias (Opus-plan→Sonnet-execute — VERIFY it engages in
+   a headless <code>--print</code> <code>/goal</code> build), (b) <strong>sub-agent delegation</strong> (cheap main session delegates
+   hard steps to an Opus sub-agent — the real per-process mechanism; needs the build authored to
+   delegate), (c) multi-session decomposition (heavy). <strong>Next step:</strong> verify <code>opusplan</code> headless
+   + prototype "cheap main + Opus sub-agent for hard steps" on one demo and measure vs the
+   whole-build tiers.</li>
+<li><strong>Right-sizing extension:</strong> more generic seeds to confirm <code>haiku</code> for a <code>simple</code> sub-class;
+   measure <code>agent_sdk</code>/<code>visual</code> classes (currently conservative <code>opus</code>); run the harness with
+   <code>--eval</code> (Gemini fidelity), not just the verify gate.</li>
+<li><strong>ClearSpring on the VPS</strong> — needed for the demo-built email's <strong>video link</strong> (today it falls
+   back to the exhibit/workspace; video render needs ClearSpring + node/fnm/hyperframes/uv/ffmpeg/
+   Gemini on the VPS, currently desktop-only).</li>
+<li><strong>Retire the bespoke builder</strong> after the new engine logs a few clean prod runs.</li>
+</ol>
+<h2 id="key-facts-constraints">KEY FACTS / CONSTRAINTS</h2>
+<ul>
+<li>The <code>/goal</code> build MUST stay on <strong>real Anthropic Max</strong> (never ZAI; <code>_launch.py</code> scrubs
+  <code>ANTHROPIC_*</code>, forwards OAuth). Its internal evaluator is real Haiku. The verifier
+  (<code>verify_demo.py</code>) is model-free — don't touch it.</li>
+<li>Model aliases auto-resolve (no stale ids). <code>sonnet</code> now = Sonnet 5; <code>opus</code> = Opus 4.8.</li>
+<li><strong>Engine rollback:</strong> <code>infisical secrets set UA_DISABLE_PROACTIVE_DEMO_ENGINE=1 --env production</code>
+  then <code>sudo systemctl restart universal-agent-gateway universal-agent-autonomous-runtime</code>.</li>
+<li>VPS: <code>ssh ua@uaonvps</code> (passwordless sudo); Infisical machine identity in <code>/opt/universal_agent/.env</code>
+  (<code>infisical login --method=universal-auth --client-id $INFISICAL_CLIENT_ID --client-secret
+  $INFISICAL_CLIENT_SECRET --silent --plain</code> → token; projectId <code>9970e5b7-d48a-4ed8-a8af-43e923e67572</code>,
+  <code>--env production</code>). Services: <code>universal-agent-gateway</code>, <code>universal-agent-autonomous-runtime</code>.</li>
+<li>CI: demo_factory = <code>auto-merge.yml</code> (byte-compile + squash-merge every non-draft PR).
+  universal_agent = <code>pr-validate.yml</code> (py_compile, ruff, <code>pytest tests/unit</code>); <code>claude/*</code> branches
+  auto-merge; merge→<code>deploy.yml</code>→VPS. Work in a worktree off fresh <code>origin/main</code>; ship via PR.</li>
+</ul>
+<h2 id="reports-tailnet-scratchpad">Reports (tailnet scratchpad)</h2>
+<ul>
+<li>Increment-3 build report: <code>scratch/proactive-demo-engine-report/</code></li>
+<li>Model right-sizing report: <code>scratch/model-rightsizing-report/</code></li>
+<li>Model right-sizing handoff: <code>scratch/handoff-demo-model-rightsizing/</code></li>
+</ul></main>
+<footer>Rendered on the tailnet HTML scratchpad · private to your devices.</footer>
+<script>
+(function(){
+  "use strict";
+  var m = location.pathname.match(/\/scratch\/([^\/]+)\//);
+  var parts = location.pathname.split('/').filter(Boolean);
+  var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
+  var KEY = 'scratchReview:' + slug;
+  var comments = [];
+  var lastSel = null;  // most recent text selection inside <main>, kept so "+ Comment" works after the click clears it
+  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
+  var HKEY = 'scratchReviewHistory:' + slug;   // archive of all submitted rounds (never auto-cleared)
+  var history = [];
+  try { history = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch(e){}
+  function persistHistory(){ try{ localStorage.setItem(HKEY, JSON.stringify(history)); }catch(e){} }
+  var viewMode = 'review';  // 'review' (active round) | 'history' (Past comments)
+  function save(){ persist(); render(); applyMarks(); }
+
+  // In-page indicators: highlight the commented text so you can see what you've marked.
+  function clearMarks(){
+    var main=document.querySelector('main'); if(!main) return;
+    main.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+  }
+  function wrapQuote(quote, cid){
+    if(!quote) return; var main=document.querySelector('main'); if(!main) return;
+    var w=document.createTreeWalker(main, NodeFilter.SHOW_TEXT, null), n;
+    while((n=w.nextNode())){
+      if(n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark')) continue;
+      var idx=n.nodeValue.indexOf(quote);
+      if(idx>=0){ var r=document.createRange(); r.setStart(n,idx); r.setEnd(n,idx+quote.length); var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view'; try{ r.surroundContents(mk); }catch(e){} return; }
+    }
+  }
+  function applyMarks(){ clearMarks(); comments.forEach(function(c){ if(c.quote) wrapQuote(c.quote, c.id); }); }
+  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+
+  function headingFor(node){
+    var hs = document.querySelectorAll('main h1[id],main h2[id],main h3[id],main h4[id]');
+    var best=null;
+    for(var i=0;i<hs.length;i++){
+      if(hs[i]===node || (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING)) best=hs[i];
+    }
+    return best;
+  }
+
+  var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
+  var panel=document.createElement('div'); panel.className='sr-panel';
+  panel.innerHTML='<div class="sr-head"><b class="sr-title">Review</b><span class="sr-headbtns"><button type="button" class="sr-clear" data-act="clear">Clear</button><button type="button" class="sr-x" data-act="close">✕</button></span></div>'
+    +'<div class="sr-hint">Highlight text then <b>+ Comment</b>, or <b>+ Note</b> for a general remark. Comments save as you type — add as many as you want. <b>Submit → copy prompt</b> exports your round, archives it under <b>Past</b>, and clears the page for the next round.</div>'
+    +'<div class="sr-list"></div>'
+    +'<div class="sr-actions"></div>';
+  var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
+  var toast=document.createElement('div'); toast.className='sr-toast'; toast.style.display='none';
+  document.body.appendChild(btn); document.body.appendChild(panel); document.body.appendChild(chip); document.body.appendChild(toast);
+
+  function showToast(t){ toast.textContent=t; toast.style.display='block'; setTimeout(function(){toast.style.display='none';},4500); }
+  function openPanel(o){ panel.classList.toggle('sr-open', o!==false); }
+
+  function reviewActionsHTML(){
+    return '<button type="button" class="sr-note" data-act="comment">+ Comment</button>'
+      +'<button type="button" class="sr-note" data-act="note">+ Note</button>'
+      +'<button type="button" class="sr-note" data-act="history">Past'+(history.length?' ('+history.length+')':'')+'</button>'
+      +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button>';
+  }
+  function render(){
+    btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
+    var title=panel.querySelector('.sr-title'), list=panel.querySelector('.sr-list'),
+        actions=panel.querySelector('.sr-actions'), hint=panel.querySelector('.sr-hint');
+    var clr=panel.querySelector('.sr-clear');
+    if(viewMode==='history'){
+      title.textContent='Past comments'; hint.style.display='none'; if(clr) clr.style.display='none';
+      if(!history.length){ list.innerHTML='<div class="sr-empty">No submitted rounds yet.</div>'; }
+      else {
+        var html='';
+        for(var k=history.length-1;k>=0;k--){
+          var h=history[k]; var when=esc((h.submitted_at||'').replace('T',' ').slice(0,16));
+          html+='<div class="sr-round"><div class="sr-rhead"><span>Round '+(k+1)+' · '+when+' · '+h.comments.length+'</span>'
+            +'<button type="button" class="sr-recopy" data-r="'+k+'">copy prompt</button></div>'
+            +h.comments.map(function(c){
+              return '<div class="sr-hitem"><div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span></div>'
+                +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+                +'<div class="sr-hbody">'+esc(c.body||'(no text)')+'</div></div>';
+            }).join('')
+            +'</div>';
+        }
+        list.innerHTML=html;
+      }
+      actions.innerHTML='<button type="button" class="sr-note" data-act="back">← Back to review</button>';
+      return;
+    }
+    title.textContent='Review'; hint.style.display='';
+    if(clr) clr.style.display = comments.length ? '' : 'none';
+    actions.innerHTML=reviewActionsHTML();
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, or <b>+ Note</b>.</div>'; return; }
+    list.innerHTML='';
+    comments.forEach(function(c,i){
+      var row=document.createElement('div'); row.className='sr-item';
+      row.innerHTML='<div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
+        +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+        +'<textarea class="sr-body" data-i="'+i+'" rows="2" placeholder="Your comment…">'+esc(c.body||'')+'</textarea>';
+      list.appendChild(row);
+    });
+  }
+
+  function addComment(quote, heading){
+    comments.push({id:Date.now()+'-'+comments.length, quote:quote||'', heading:heading||'', body:''});
+    save(); openPanel(true);
+    var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus();
+  }
+
+  document.addEventListener('mouseup', function(){
+    setTimeout(function(){
+      var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var main=document.querySelector('main');
+      if(txt && txt.length>1 && sel.rangeCount && main && main.contains(sel.anchorNode)){
+        var r=sel.getRangeAt(0).getBoundingClientRect();
+        chip.style.top=(window.scrollY+r.bottom+6)+'px'; chip.style.left=(window.scrollX+r.left)+'px';
+        var h=headingFor(sel.anchorNode); var hd=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
+        chip.dataset.quote=txt.slice(0,280); chip.dataset.heading=hd;
+        lastSel={quote:txt.slice(0,280), heading:hd};
+        chip.style.display='block';
+      } else { chip.style.display='none'; }
+    },10);
+  });
+  chip.addEventListener('mousedown', function(e){ e.preventDefault(); addComment(chip.dataset.quote, chip.dataset.heading); chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); });
+  btn.addEventListener('click', function(){ openPanel(!panel.classList.contains('sr-open')); render(); });
+  panel.addEventListener('click', function(e){
+    var act=e.target.getAttribute('data-act');
+    if(act==='close') openPanel(false);
+    else if(act==='comment'){ if(lastSel && lastSel.quote){ addComment(lastSel.quote, lastSel.heading); lastSel=null; } else { showToast('Highlight some text on the page first, then “+ Comment”. (Use “+ Note” for a general remark.)'); } }
+    else if(act==='note') addComment('','');
+    else if(act==='submit') submit();
+    else if(act==='history'){ viewMode='history'; render(); }
+    else if(act==='back'){ viewMode='review'; render(); }
+    else if(act==='clear'){ if(comments.length && (typeof confirm!=='function' || confirm('Discard the '+comments.length+' unsubmitted comment(s)? Past history is kept.'))){ comments=[]; persist(); clearMarks(); render(); showToast('Cleared. Past history kept.'); } }
+    else if(e.target.classList.contains('sr-recopy')){ var r=+e.target.getAttribute('data-r'); if(history[r]) copyText(buildPrompt(history[r].comments)).then(function(){ showToast('Round '+(r+1)+' prompt re-copied to the clipboard.'); }).catch(function(){ showToast('Clipboard blocked.'); }); }
+    else if(e.target.classList.contains('sr-del')){ comments.splice(+e.target.getAttribute('data-i'),1); save(); }
+  });
+  panel.addEventListener('input', function(e){
+    if(e.target.classList.contains('sr-body')){ comments[+e.target.getAttribute('data-i')].body=e.target.value; persist(); btn.textContent='💬 Review ('+comments.length+')'; }
+  });
+
+  function buildPrompt(cs){
+    cs = cs || comments;
+    var title=document.title||slug; var L=[];
+    L.push('[scratch-review '+slug+']');
+    L.push('Review of "'+title+'"'); L.push(location.href);
+    L.push('I left '+cs.length+' comment(s); full JSON downloaded to ~/Downloads/scratch-comments-'+slug+'.json'); L.push('');
+    cs.forEach(function(c,i){
+      L.push((i+1)+'. ['+(c.heading?'§ '+c.heading:'note')+'] '+(c.body||'(no text)'));
+      if(c.quote) L.push('   ↳ re: "'+c.quote+'"');
+    });
+    L.push(''); L.push('Re-read the artifact and address each comment, then reply in our chat.');
+    return L.join('\n');
+  }
+  function downloadJSON(){
+    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='scratch-comments-'+slug+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},120);
+  }
+  function copyText(text){
+    if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function(res,rej){ try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res(); }catch(err){ rej(err); } });
+  }
+  function submit(){
+    if(!comments.length){ showToast('No comments yet — highlight text → + Comment, or + Note.'); return; }
+    var text=buildPrompt(comments); downloadJSON();
+    // Archive the round, then clean the slate so the next round starts fresh (no stale
+    // re-highlighting on a revised page). History is kept under "Past".
+    history.push({submitted_at:new Date().toISOString(), comments:comments.slice()}); persistHistory();
+    comments=[]; persist(); clearMarks(); viewMode='review'; render();
+    copyText(text).then(function(){ showToast('Copied — paste into Claude Code. Round archived under “Past”; page cleared for the next round.'); })
+                  .catch(function(){ showToast('JSON downloaded; round archived & cleared. Clipboard blocked — copy from the file.'); });
+  }
+
+  // Click a highlighted span on the page → open the panel and focus that comment.
+  var mainEl=document.querySelector('main');
+  if(mainEl) mainEl.addEventListener('click', function(e){
+    var mk=e.target.closest?e.target.closest('.sr-mark'):null; if(!mk) return;
+    openPanel(true); var idx=-1; comments.forEach(function(c,j){ if(c.id===mk.dataset.cid) idx=j; });
+    if(idx>=0){ var ta=panel.querySelectorAll('.sr-body')[idx]; if(ta){ ta.scrollIntoView({block:'center'}); ta.focus(); } }
+  });
+
+  render(); applyMarks();
+})();
+</script>
+</body></html>
