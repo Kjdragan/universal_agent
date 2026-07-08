@@ -2343,6 +2343,22 @@ _vp_stale_reconcile_interval_seconds = max(
 )
 _vp_stale_reconcile_task: Optional[asyncio.Task] = None
 _vp_stale_reconcile_stop: Optional[asyncio.Event] = None
+# How often to run task_hub.reconcile_task_lifecycle as a periodic janitor.
+# Before this loop, the reconciler only ran at gateway startup and when a
+# dashboard happened to poll the agent-queue endpoint — so a todo run whose
+# session crashed mid-flight left its task seized+in_progress (invisible to
+# the dispatch scorer, which skips in_progress) until the next deploy or
+# dashboard visit. The 2026-07-07 VP-bookkeeping task rotted ~8h exactly this
+# way. 10 min default: the reconciler's own liveness guards (gateway session
+# ids, cron grace, VP lease, todo runs-row freshness) make it safe to run
+# often; the interval just bounds zombie dwell time.
+_task_lifecycle_reconcile_enabled = should_run_loop("task_lifecycle_reconcile", prod_default=True)
+_task_lifecycle_reconcile_interval_seconds = max(
+    60,
+    int(os.getenv("UA_TASK_LIFECYCLE_RECONCILE_INTERVAL_SECONDS", "").strip() or 10 * 60),
+)
+_task_lifecycle_reconcile_task: Optional[asyncio.Task] = None
+_task_lifecycle_reconcile_stop: Optional[asyncio.Event] = None
 _channel_probe_results: dict[str, dict] = {}
 _notifications: list[dict] = []
 _notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
@@ -9368,6 +9384,65 @@ async def _vp_stale_reconcile_loop(stop_event: asyncio.Event) -> None:
             logger.warning("Periodic VP stale-mission reconciliation failed: %s", exc)
 
 
+async def _task_lifecycle_reconcile_loop(stop_event: asyncio.Event) -> None:
+    """Periodically repair orphaned Task Hub lifecycle rows (seized/in_progress).
+
+    Mirrors `_vp_stale_reconcile_loop` for the todo/heartbeat lane:
+    `task_hub.reconcile_task_lifecycle` already exists with the full liveness
+    guard stack (gateway session ids, cron grace window, VP-mission lease,
+    cross-process todo runs-row freshness) and a per-task retry cap — but its
+    only callers were the one-shot startup recovery sweep and the on-demand
+    dashboard agent-queue read. A todo session that crashed mid-run therefore
+    left its assignment `seized` and its task `in_progress` (which the dispatch
+    scorer skips) until the next deploy or dashboard poll — the 2026-07-07
+    8-hour zombie. This loop bounds that dwell time to the sweep interval.
+
+    Parameterization matches the on-demand dashboard caller (daemon alive):
+    nonzero cron grace so young in-process cron runs are never false-orphaned.
+    The sync SQLite work runs in a thread so it cannot block the event loop
+    (see the 2026-05-16 startup-recovery incident).
+    """
+    interval = max(60.0, float(_task_lifecycle_reconcile_interval_seconds))
+
+    def _sweep_once(running_sessions: set[str]) -> dict[str, int]:
+        conn = connect_runtime_db(get_activity_db_path())
+        try:
+            conn.row_factory = sqlite3.Row
+            task_hub.ensure_schema(conn)
+            return task_hub.reconcile_task_lifecycle(
+                conn,
+                running_session_ids=running_sessions,
+                rebuild_queue=True,
+                cron_live_grace_seconds=_cron_reconcile_grace_seconds(),
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        try:
+            # Snapshot live sessions on the event-loop side before the thread hop.
+            running_sessions = _running_execution_session_ids()
+            result = await asyncio.to_thread(_sweep_once, running_sessions)
+            repaired = sum(int(result.get(key) or 0) for key in ("reopened", "reviewed"))
+            if repaired > 0:
+                logger.warning(
+                    "🧹 Periodic lifecycle reconcile repaired %d orphaned task(s): %s",
+                    repaired,
+                    result,
+                )
+        except Exception as exc:  # noqa: BLE001 — janitor must never die
+            logger.warning("Periodic task-lifecycle reconcile failed: %s", exc)
+
+
 async def _hq_self_heartbeat_loop(stop_event: asyncio.Event) -> None:
     """Periodically refresh HQ's own factory registration so it stays 'online'."""
     _hq_heartbeat_interval = 60.0
@@ -14846,6 +14921,7 @@ async def lifespan(app: FastAPI):
     global _factory_registry, _factory_staleness_task, _factory_staleness_stop
     global _hq_self_heartbeat_task, _hq_self_heartbeat_stop
     global _vp_stale_reconcile_task, _vp_stale_reconcile_stop
+    global _task_lifecycle_reconcile_task, _task_lifecycle_reconcile_stop
     try:
         _registry_conn = connect_registry_db()
         _factory_registry = FactoryRegistry(_registry_conn)
@@ -15660,6 +15736,18 @@ async def lifespan(app: FastAPI):
             _vp_stale_reconcile_seconds,
         )
 
+    # --- Periodic Task Hub lifecycle reconcile (seized/in_progress janitor;
+    # startup + on-demand dashboard reconcile alone leave multi-hour gaps). ---
+    if _task_lifecycle_reconcile_enabled and _run_autonomous_loops_here:
+        _task_lifecycle_reconcile_stop = asyncio.Event()
+        _task_lifecycle_reconcile_task = asyncio.create_task(
+            _task_lifecycle_reconcile_loop(_task_lifecycle_reconcile_stop)
+        )
+        logger.info(
+            "🧹 Task-lifecycle periodic reconcile enabled (interval=%ds)",
+            _task_lifecycle_reconcile_interval_seconds,
+        )
+
     if _vp_event_bridge_enabled and _run_autonomous_loops_here:
         _vp_event_bridge_stop_event = asyncio.Event()
         _vp_event_bridge_task = asyncio.create_task(_vp_event_bridge_loop())
@@ -15773,6 +15861,13 @@ async def lifespan(app: FastAPI):
     if _vp_stale_reconcile_task is not None:
         try:
             await _vp_stale_reconcile_task
+        except Exception:
+            pass
+    if _task_lifecycle_reconcile_stop is not None:
+        _task_lifecycle_reconcile_stop.set()
+    if _task_lifecycle_reconcile_task is not None:
+        try:
+            await _task_lifecycle_reconcile_task
         except Exception:
             pass
     if _gws_event_listener:
