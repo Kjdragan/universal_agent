@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""claude-sessions — list recent Claude Code sessions across both accounts
+with their name, repo, and a ready-to-paste resume command.
+
+Usage:
+  claude-sessions            # last 25 real sessions, newest first
+  claude-sessions -n 40      # last 40
+  claude-sessions demo       # only sessions whose repo/name matches "demo"
+
+ponytail: stdlib only, mtime = last activity, skips /tmp ephemeral workers.
+"""
+import os, sys, json, glob, time, shutil
+
+HOMES = [  # (account label, launcher, projects dir)
+    ("a1", "claudereal", os.path.expanduser("~/.claude/projects")),
+    ("a2", "claude2",    os.path.expanduser("~/.claude-acct2/projects")),
+]
+
+def scan(path):
+    """Return (cwd, name) reading only the cheap bits of a transcript."""
+    cwd = name = None
+    try:
+        with open(path, errors="replace") as fh:
+            for ln in fh:
+                if cwd is None and '"cwd"' in ln:
+                    try: cwd = json.loads(ln).get("cwd")
+                    except Exception: pass
+                if "named this session" in ln:
+                    try:
+                        c = json.loads(ln).get("message", {}).get("content")
+                        s = c if isinstance(c, str) else " ".join(
+                            b.get("text", "") for b in c if isinstance(b, dict))
+                        i = s.find("named this session")
+                        name = s[i+18:].split(".")[0].strip().strip('"')
+                    except Exception: pass
+    except Exception: pass
+    return cwd, name
+
+def main():
+    args = [a for a in sys.argv[1:]]
+    limit = 25
+    if "-n" in args:
+        i = args.index("-n"); limit = int(args[i+1]); del args[i:i+2]
+    filt = args[0].lower() if args else None
+
+    rows = []
+    for label, launcher, root in HOMES:
+        for f in glob.glob(os.path.join(root, "*", "*.jsonl")):
+            if "/-tmp" in f or ".orphaned-" in f:   # skip ephemeral workers + rotated
+                continue
+            rows.append((os.path.getmtime(f), label, launcher, f))
+    rows.sort(reverse=True)
+
+    out = []
+    for mtime, label, launcher, f in rows:
+        sid = os.path.basename(f)[:-6]
+        cwd, name = scan(f)
+        repo = os.path.basename(cwd) if cwd else "?"
+        desc = name or "(unnamed)"
+        if filt and filt not in (repo + " " + desc).lower():
+            continue
+        out.append((mtime, label, launcher, cwd, repo, desc, sid))
+        if len(out) >= limit:
+            break
+
+    if not out:
+        print("no sessions matched.")
+        return
+
+    tty = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+    def c(code, s): return f"\033[{code}m{s}\033[0m" if tty else s
+    width = shutil.get_terminal_size((100, 20)).columns
+    acct = {"a1": "35", "a2": "36"}                     # magenta / cyan
+    name_w = max(24, width - 46)                        # leave room for the fixed columns
+
+    print()
+    print(c("1", f"  Claude Code sessions  ·  {len(out)} shown  ·  newest first"))
+    print(c("2", "  " + "─" * min(width - 2, 78)))
+    for i, (mtime, label, launcher, cwd, repo, desc, sid) in enumerate(out, 1):
+        when = time.strftime("%m-%d %H:%M", time.localtime(mtime))
+        named = desc != "(unnamed)"
+        name = desc if len(desc) <= name_w else desc[:name_w - 1] + "…"
+        name = c("1;36", name) if named else c("2;3", name)
+        row = (f"  {c('2', f'{i:>2}')}  {c('2', when)}  "
+               f"{c(acct.get(label, '37'), label)}  "
+               f"{c('37', f'{repo[:22]:<22}')}  {name}")
+        print(row)
+        cd = f"cd {cwd} && " if cwd else ""
+        print("      " + c("2", f"{cd}{launcher} --resume {sid}"))
+    print()
+
+if __name__ == "__main__":
+    main()
