@@ -565,3 +565,100 @@ class TestOpusBurstPacing:
             assert elapsed < 0.2  # no pacing when ZAI_OPUS_MIN_INTERVAL=0
         finally:
             ZAIRateLimiter.reset_instance()
+
+# ── backoff_floor downward decay (proactive_health false-WARN fix) ─────────
+# The floor used to be structurally pinned at exactly _initial_backoff: the
+# 429-raise clamp min(max(_initial_backoff, 8.0), _initial_backoff * 1.5**n)
+# AND the success-decay clamp max(_initial_backoff, floor * 0.9) both collapse
+# to _initial_backoff when it is >= 8.0, so the "adaptive" floor was a
+# constant. The ZAI-inference watchdog's saturation threshold (8.0s) sits
+# BELOW that permanent resting value, so the floor read "saturated" forever
+# and the proactive_health WARN false-fired chronically. These tests pin the
+# fix: sustained clean success must walk the floor back below the threshold
+# toward a true _floor_min, and the persisted snapshot must self-correct so a
+# fresh subprocess can't re-pin it at the spawn value.
+
+
+@pytest.fixture
+def prod_backoff(tmp_path, monkeypatch):
+    """Prod-shaped backoff knobs (_initial_backoff=10s > watchdog threshold 8s)
+    so the structural pin is observable. Mirrors the `limiter` fixture's
+    isolation hygiene."""
+    monkeypatch.setenv("UA_ZAI_INFERENCE_STATE_PATH", str(tmp_path / "zai_state.json"))
+    monkeypatch.setenv("ZAI_MIN_INTERVAL", "0.0")
+    monkeypatch.setenv("ZAI_OPUS_MIN_INTERVAL", "0")
+    monkeypatch.setenv("ZAI_INITIAL_BACKOFF", "10.0")
+    monkeypatch.setenv("ZAI_MAX_BACKOFF", "30.0")
+    monkeypatch.setenv("ZAI_BACKOFF_FLOOR_MIN", "1.0")
+    monkeypatch.setenv("ZAI_BACKOFF_DECAY_STREAK", "5")
+    monkeypatch.setenv("ZAI_TIER_INCREASE_STREAK", "3")
+    monkeypatch.setenv("ZAI_TIER_INCREASE_QUIET_SECONDS", "0")
+    monkeypatch.setenv("ZAI_TIER_INCREASE_COOLDOWN_SECONDS", "0")
+    ZAIRateLimiter.reset_instance()
+    yield ZAIRateLimiter.get_instance()
+    ZAIRateLimiter.reset_instance()
+
+
+def test_backoff_floor_decays_below_threshold_on_clean_streak(prod_backoff):
+    """RED on the pinned-decay bug: raising the floor to the cap and feeding a
+    clean-success streak must walk it below the watchdog saturation threshold
+    (8.0s) toward _floor_min. Pre-fix the floor stopped at _initial_backoff
+    (10s) and could not decay further."""
+    limiter = prod_backoff
+
+    async def run() -> None:
+        # Raise both floors to the cap, simulating a storm that has cleared.
+        limiter._backoff_floor = limiter._max_backoff
+        limiter._tier_backoff_floor["sonnet"] = limiter._max_backoff
+        # Feed a sustained clean-success streak.
+        for _ in range(40):
+            await limiter.record_success(model_tier="sonnet")
+        # Decayed below the watchdog threshold and never below _floor_min.
+        assert limiter._backoff_floor < 8.0, limiter._backoff_floor
+        assert limiter._backoff_floor >= limiter._floor_min
+        assert limiter._tier_backoff_floor["sonnet"] < 8.0
+        assert limiter._tier_backoff_floor["sonnet"] >= limiter._floor_min
+        # Counters actually increment on success (the smoking-gun check).
+        assert limiter._total_requests == 40
+        assert limiter._tier_total_requests["sonnet"] == 40
+        assert limiter._tier_clean_streak["sonnet"] >= 1
+        assert limiter._clean_streak >= 1
+
+    asyncio.run(run())
+
+
+def test_snapshot_floor_self_corrects_when_healthy(tmp_path, monkeypatch):
+    """The snapshot is last-writer-wins across processes that each spawn at
+    _initial_backoff (10s). A fresh subprocess with no recent 429 system-wide
+    must NOT overwrite the snapshot at the spawn value — otherwise the
+    watchdog reads 'saturated' forever. Healthy => snapshot floor rests at
+    _floor_min (< 8.0s threshold)."""
+    import json as _json
+    import time as _time
+
+    state = tmp_path / "seeded_state.json"
+    monkeypatch.setenv("UA_ZAI_INFERENCE_STATE_PATH", str(state))
+    monkeypatch.setenv("ZAI_MIN_INTERVAL", "0.0")
+    monkeypatch.setenv("ZAI_OPUS_MIN_INTERVAL", "0")
+    monkeypatch.setenv("ZAI_INITIAL_BACKOFF", "10.0")
+    monkeypatch.setenv("ZAI_MAX_BACKOFF", "30.0")
+    monkeypatch.setenv("ZAI_BACKOFF_FLOOR_MIN", "1.0")
+    # Seed a stale raised floor + stale last_429_at from a long-gone storm.
+    state.write_text(
+        _json.dumps({"backoff_floor": 25.0, "last_429_at": _time.time() - 9999.0})
+    )
+    ZAIRateLimiter.reset_instance()
+    limiter = ZAIRateLimiter.get_instance()
+    try:
+
+        async def run() -> None:
+            await limiter.record_success(model_tier="sonnet")
+
+        asyncio.run(run())
+        snap = _json.loads(state.read_text())
+        # Self-corrected to the healthy floor — not the stale 25.0 and not the
+        # fresh-spawn _initial_backoff (10.0).
+        assert snap["backoff_floor"] <= limiter._floor_min, snap["backoff_floor"]
+        assert snap["backoff_floor"] < 8.0
+    finally:
+        ZAIRateLimiter.reset_instance()

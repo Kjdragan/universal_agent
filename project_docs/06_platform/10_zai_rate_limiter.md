@@ -21,7 +21,7 @@ code_paths:
   - src/universal_agent/infisical_loader.py
   - src/universal_agent/services/batched_judge.py
   - web-ui/app/dashboard/zai-control/page.tsx
-last_verified: 2026-06-22
+last_verified: 2026-07-08
 ---
 
 # ZAI Rate Limiter & Inference Governance
@@ -183,8 +183,16 @@ All three take `_state_lock` and call `_persist_snapshot()`:
   is a glitchy-retry pattern, not a rate-limiting posture, and the floor only ever
   applies *after* a 429 so a larger value is free on healthy traffic. (For the old
   1.0 default the ceiling is `max(1.0, 8.0)=8.0` — unchanged.) Otherwise the streak resets.
-- **`record_success()`** — decays the floor back toward `initial_backoff` (`* 0.9`)
-  and walks `_consecutive_429s` down. The system self-heals once ZAI recovers.
+- **`record_success()`** — walks the floor back toward `_floor_min` (`* 0.9`) but
+  ONLY after a sustained clean streak (`ZAI_BACKOFF_DECAY_STREAK`, default 5) — never
+  mid-storm, since `record_429` resets the streak and the first 429 re-anchors the
+  floor at `initial_backoff`. `_consecutive_429s` walks down too. The system
+  self-heals once ZAI recovers. (Pre-2026-07-08 the decay clamp
+  `max(initial_backoff, floor * 0.9)` collapsed to `initial_backoff`, so the
+  "adaptive" floor was a *constant* `_initial_backoff` — 10s in prod, permanently
+  above the watchdog's 8s saturation threshold, which false-fired the
+  `proactive_health` WARN for weeks. `_floor_min` is itself floored at
+  `_initial_backoff` so a conservative operator config still wins.)
 - **`record_fup_signal(context, snippet)`** — increments `_total_fup_events`, stores
   the snippet/context, logs at ERROR. **This is categorically different from a 429:**
   a 429 is "slow down and retry"; a FUP/`[1313]` is "stop now — retrying raises the
@@ -204,6 +212,16 @@ with their own fresh singleton. The snapshot is the cross-process source of trut
 watchdog reads. The write is best-effort — a snapshot failure logs a warning and never
 crashes the limiter.
 
+**Self-correcting floor.** The snapshot is single-file last-writer-wins across UA
+processes, each spawning at the conservative `_initial_backoff`. To keep a fresh
+short-lived subprocess from re-pinning the snapshot at "saturated" (its spawn
+value) versus the watchdog's 8s threshold, `rate_limiter.py::ZAIRateLimiter._persist_snapshot`
+reports the floor as `_floor_min` whenever no 429 has been seen system-wide for
+longer than `ZAI_BACKOFF_DECAY_WINDOW_SECONDS`. The cross-process `last_429_at` is
+merge-`max`'d on every write, so it is the reliable system-wide signal; a real
+storm (recent 429 system-wide) still reports the actual raised floor. This makes
+the persisted state self-correcting so a stale high floor cannot recur.
+
 ### 4.5 Configuration (environment variables)
 
 Defaults below are the **actual code defaults** in `ZAIRateLimiter.__init__`.
@@ -211,7 +229,10 @@ Defaults below are the **actual code defaults** in `ZAIRateLimiter.__init__`.
 | Env var | Code default | Meaning |
 |---|---|---|
 | `ZAI_MAX_CONCURRENT` | **`2`** | Max parallel ZAI requests through the legacy (tierless) gate |
-| `ZAI_INITIAL_BACKOFF` | **`10.0`** | Starting backoff floor (seconds) — conservative-by-default; only fires after a 429 |
+| `ZAI_INITIAL_BACKOFF` | **`10.0`** | Starting backoff floor (seconds) — conservative-by-default; only fires after a 429. Also the floor a fresh process spawns at and the value the first 429 re-anchors to |
+| `ZAI_BACKOFF_FLOOR_MIN` | **`1.0`** | Floor the adaptive backoff DECAYS to after sustained clean success (floored at `ZAI_INITIAL_BACKOFF`). Below the watchdog's 8s saturation threshold so a healthy limiter reads non-saturated |
+| `ZAI_BACKOFF_DECAY_STREAK` | **`5`** | Consecutive clean successes required before the floor decays toward `_floor_min` (mid-storm safety — `record_429` resets the streak) |
+| `ZAI_BACKOFF_DECAY_WINDOW_SECONDS` | **`600`** | No system-wide 429 for this long ⇒ the snapshot floor rests at `_floor_min` (persisted-state self-correction; see §4.4) |
 | `ZAI_MAX_BACKOFF` | **`30.0`** | Hard cap on any single backoff |
 | `ZAI_MIN_INTERVAL` | **`0.5`** | Minimum seconds between request *starts* (global, all tiers) |
 | `ZAI_MAX_RETRIES` | **`5`** | Default retry attempts per logical call (non-opus tiers) |

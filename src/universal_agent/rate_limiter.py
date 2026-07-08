@@ -285,6 +285,12 @@ class ZAIRateLimiter:
         self._consecutive_429s = 0
         self._total_429s = 0
         self._total_requests = 0
+        # Global clean-success streak mirrors the per-tier one so the GLOBAL
+        # backoff_floor (the value the ZAI-inference watchdog reads) can decay
+        # below the conservative spawn floor after sustained health. Reset to
+        # 0 by record_429. Pre-fix the floor could not decay below
+        # _initial_backoff, so this counter had no global counterpart.
+        self._clean_streak = 0
         # FUP tracking (P4 2026-05-20): critical-immediate tier for
         # fair-use-policy / concurrency-violation signals from ZAI.
         self._total_fup_events = 0
@@ -368,6 +374,27 @@ class ZAIRateLimiter:
         self._saturation_exhaustion_window_s = float(
             os.getenv("ZAI_TIER_SATURATION_EXHAUSTION_WINDOW_SECONDS", "120")
         )
+
+        # Backoff-floor DOWNWARD decay (proactive_health false-WARN fix).
+        # The floor spawns at the conservative _initial_backoff (a safe retry
+        # base for a process that has observed nothing), but sustained clean
+        # success must walk it back toward _floor_min. Pre-fix the decay clamp
+        # max(_initial_backoff, floor * 0.9) collapsed to _initial_backoff,
+        # pinning the "adaptive" floor at a constant _initial_backoff (10s in
+        # prod) — permanently above the watchdog saturation threshold (8s),
+        # so the floor read "saturated" forever. _floor_min is floored at
+        # _initial_backoff so a conservative operator config still wins.
+        self._floor_min = min(
+            self._initial_backoff, float(os.getenv("ZAI_BACKOFF_FLOOR_MIN", "1.0"))
+        )
+        # Decay only after this many consecutive clean successes, never
+        # mid-storm (record_429 resets the streak AND re-anchors the floor
+        # at _initial_backoff on the first 429).
+        self._decay_streak = _tier_env_int("ZAI_BACKOFF_DECAY_STREAK", "5")
+        # Persisted-state self-correction window: when no 429 has been seen
+        # system-wide for longer than this, the snapshot floor rests at
+        # _floor_min regardless of any single writer's in-memory value.
+        self._decay_window_s = float(os.getenv("ZAI_BACKOFF_DECAY_WINDOW_SECONDS", "600"))
 
         # Account-level cliff state: freeze gates additive INCREASES;
         # pause fail-fasts new acquires (the actual brake). Consecutive
@@ -538,6 +565,9 @@ class ZAIRateLimiter:
                 self._backoff_floor = self._initial_backoff
 
             self._last_429_time = now
+            # A 429 ends the clean streak on the global floor too (mirrors
+            # the per-tier reset below), so decay cannot run mid-storm.
+            self._clean_streak = 0
 
             if tier is not None:
                 self._tier_total_429s[tier] += 1
@@ -605,20 +635,29 @@ class ZAIRateLimiter:
             now = time.time()
             self._total_requests += 1
             self._last_success_time = now
-            # Slowly decay the floor back to initial
-            self._backoff_floor = max(self._initial_backoff, self._backoff_floor * 0.9)
+            self._clean_streak += 1
+            # Walk the global floor back toward _floor_min ONLY after a
+            # sustained clean streak — never mid-storm (record_429 resets
+            # _clean_streak, and the first 429 re-anchors the floor at
+            # _initial_backoff). Pre-fix max(_initial_backoff, floor*0.9)
+            # clamped the decay at the spawn value so the floor never moved.
+            if self._clean_streak >= self._decay_streak:
+                self._backoff_floor = max(self._floor_min, self._backoff_floor * 0.9)
             self._consecutive_429s = max(0, self._consecutive_429s - 1)
 
             if tier is not None:
                 self._tier_total_requests[tier] += 1
-                self._tier_backoff_floor[tier] = max(
-                    self._initial_backoff, self._tier_backoff_floor[tier] * 0.9
-                )
+                self._tier_clean_streak[tier] += 1
+                # Same gated decay on the tier floor (mirrors the global
+                # path; clean_streak was just incremented above).
+                if self._tier_clean_streak[tier] >= self._decay_streak:
+                    self._tier_backoff_floor[tier] = max(
+                        self._floor_min, self._tier_backoff_floor[tier] * 0.9
+                    )
                 self._tier_consecutive_429s[tier] = max(
                     0, self._tier_consecutive_429s[tier] - 1
                 )
                 self._tier_success_since_decrease[tier] = True
-                self._tier_clean_streak[tier] += 1
                 # Additive increase: sustained clean streak, quiet since the
                 # last 429, not too soon after the last increase, no FUP
                 # freeze, below the max bound.
@@ -737,9 +776,30 @@ class ZAIRateLimiter:
                 merged = max(prior, float(own or 0.0))
                 return merged or None
 
+            # Self-correcting floor — the persisted-state half of the fix.
+            # The snapshot is single-file, last-writer-wins across UA
+            # processes, each spawning at the conservative _initial_backoff.
+            # Without this, short-lived subprocesses (cron, the watchdog host)
+            # forever overwrite a healthy low floor with their spawn-time
+            # _initial_backoff, re-pinning the snapshot at "saturated" vs the
+            # watchdog threshold. When the cross-process last_429_at shows no
+            # recent 429 system-wide, the floor IS at its healthy rest
+            # (_floor_min) regardless of what this writer holds in memory.
+            now = time.time()
+            merged_last_429 = max(
+                float(existing.get("last_429_at") or 0.0),
+                float(self._last_429_time or 0.0),
+            )
+            system_healthy = merged_last_429 == 0.0 or (
+                now - merged_last_429
+            ) > self._decay_window_s
+            eff_floor = self._floor_min if system_healthy else self._backoff_floor
+
             payload = {
                 "max_concurrent": self._max_concurrent,
-                "backoff_floor": self._backoff_floor,
+                "backoff_floor": eff_floor,
+                "floor_min": self._floor_min,
+                "floor_resting_when_healthy": system_healthy,
                 "consecutive_429s": self._consecutive_429s,
                 "total_429s": self._total_429s,
                 "total_requests": self._total_requests,
@@ -773,7 +833,10 @@ class ZAIRateLimiter:
                         "cap": self._tier_cap[t],
                         "min": self._tier_min[t],
                         "max": self._tier_max[t],
-                        "floor": round(self._tier_backoff_floor[t], 3),
+                        "floor": round(
+                            eff_floor if system_healthy else self._tier_backoff_floor[t],
+                            3,
+                        ),
                         "consecutive_429s": self._tier_consecutive_429s[t],
                         "clean_streak": self._tier_clean_streak[t],
                         "total_429s": self._tier_total_429s[t],
