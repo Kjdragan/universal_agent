@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import itertools
 import logging
+import threading
 import time
 from typing import Callable
 
@@ -176,7 +177,7 @@ def run_monitor(
     on_stock: Callable[[dict, Target | None], None],
     on_dead_item: Callable[[str, str], None] | None = None,
     on_sold_out: Callable[[str, str], None] | None = None,
-    stop_event=None,
+    stop_event: threading.Event | None = None,
 ) -> None:
     """
     Main polling loop.
