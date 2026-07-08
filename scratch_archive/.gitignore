@@ -1,2 +1,4 @@
 # Runtime lock for concurrent index writes — never commit it.
 .index.lock
+# Video artifacts stay served on the VPS scratch dir, not tracked in git (228MB+ mp4s, dupes)
+**/*.mp4
