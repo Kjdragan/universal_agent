@@ -1,0 +1,339 @@
+<title>Kevin's Network — Assessment & Skill Plan</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1c2430; --muted:#5b6674; --line:#e2e6ec;
+    --accent:#2563eb; --accent2:#0891b2; --good:#0f9d58; --warn:#d98a00; --bad:#d1453b;
+    --vps:#2563eb; --desk:#7c3aed; --net:#0891b2; --code:#0b1220;
+    --chip:#eef2f7;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0}
+  .wrap{max-width:1040px;margin:0 auto;padding:32px 22px 90px}
+  h1{font-size:29px;line-height:1.2;margin:0 0 6px;letter-spacing:-.4px}
+  h2{font-size:21px;margin:38px 0 14px;letter-spacing:-.3px;padding-bottom:7px;border-bottom:2px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 8px}
+  .sub{color:var(--muted);font-size:14.5px;margin:0 0 4px}
+  .lede{font-size:16px;color:#33404f;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:16px 18px;margin:20px 0 8px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0;box-shadow:0 1px 2px rgba(20,30,50,.04)}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.grid3,.grid2{grid-template-columns:1fr}}
+  .tier{border-radius:12px;padding:16px 17px;border:1px solid var(--line);background:var(--card)}
+  .tier h3{margin:0 0 4px;display:flex;align-items:center;gap:8px;font-size:16px}
+  .dot{width:11px;height:11px;border-radius:50%;display:inline-block;flex:none}
+  .tier ul{margin:8px 0 0;padding-left:18px}
+  .tier li{margin:3px 0;font-size:13.7px}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;background:#eef2f7;color:#42506a;margin:0 0 6px}
+  code,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.8px;background:#eef1f6;border:1px solid #e0e5ec;border-radius:5px;padding:1px 5px;color:#243}
+  pre{background:var(--code);color:#dfe7f3;border-radius:10px;padding:13px 15px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.6px;line-height:1.5}
+  pre .c{color:#7d8aa5}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.4px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f0f3f8;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:#4a5768}
+  tr:last-child td{border-bottom:none}
+  .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;white-space:nowrap}
+  .p-vps{background:#e7efff;color:#1d4ed8}
+  .p-desk{background:#f0e9ff;color:#6d28d9}
+  .p-net{background:#e0f4f8;color:#0e7490}
+  .sev{font-weight:700;font-size:11px;padding:2px 9px;border-radius:6px;letter-spacing:.3px}
+  .s-hi{background:#fbe4e2;color:#b4261c}
+  .s-med{background:#fdf0da;color:#a56800}
+  .s-low{background:#e8f1ea;color:#0c7b41}
+  .s-good{background:#e2f4ea;color:#0a7a3d}
+  .finding{border:1px solid var(--line);border-radius:11px;padding:14px 16px;margin:11px 0;background:var(--card)}
+  .finding.hi{border-left:4px solid var(--bad)}
+  .finding.med{border-left:4px solid var(--warn)}
+  .finding.low{border-left:4px solid var(--good)}
+  .finding h4{margin:0 0 5px;font-size:15px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+  .finding p{margin:6px 0}
+  .fix{font-size:13.2px;color:#2a3a2f;background:#f1f7f2;border:1px solid #d9e9df;border-radius:8px;padding:8px 11px;margin-top:8px}
+  .fix b{color:#0a7a3d}
+  .flow{display:flex;flex-direction:column;gap:9px}
+  .q{background:#f0f3f8;border:1px solid var(--line);border-radius:9px;padding:11px 14px}
+  .q b{color:var(--accent)}
+  .a{margin-left:16px;padding:8px 14px;border-left:3px solid var(--accent2);font-size:14px}
+  .strong-list li{margin:5px 0}
+  .muted{color:var(--muted)}
+  .foot{margin-top:40px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;margin:6px 0 2px;color:var(--muted)}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .topo text{font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+  .kicker{font-size:12.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--accent);margin:0 0 3px}
+</style>
+
+<div class="wrap">
+
+<p class="kicker">Network Assessment</p>
+<h1>Kevin's Network: how the desktop, the VPS, and the tailnet fit together</h1>
+<p class="sub">Assessment across <b>universal_agent</b>, <b>ebook_reader (Tome)</b>, <b>SonosKD</b>, <b>ensemble</b> (ex-<b>tv_art_gallery</b>) &amp; <b>home_tray</b> — plus a live read-only probe of both machines. Basis for a proposed <code>network-description-for-kevin</code> skill. <span class="muted">Read-only; nothing was changed.</span></p>
+
+<div class="lede">
+<b>Bottom line.</b> You've converged on a genuinely good, consistent architecture — a clear <b>three-tier placement model</b> (VPS = always-on prod, desktop = home-LAN anchor + cockpit, tailnet = the wiring &amp; the auth boundary) with disciplined secrets and a "tailnet-membership-is-the-auth" stance. The pattern is sound enough to write down as one skill. Two things need attention regardless of the skill: <b>Docker is publishing several services straight to the public internet</b> past your firewall (Ollama &amp; Jaeger are answering strangers right now), and the <b>tv_art_gallery→ensemble rename left two live services running off deleted files</b> — one reboot from silent failure.
+</div>
+
+<h2>The picture, as it actually runs</h2>
+
+<div class="card" style="padding:10px 14px 4px">
+<div class="legend">
+  <span><span class="dot" style="background:var(--vps)"></span> VPS <code>uaonvps</code> — always-on</span>
+  <span><span class="dot" style="background:var(--desk)"></span> Desktop <code>mint-desktop</code> — home LAN</span>
+  <span><span class="dot" style="background:var(--net)"></span> Tailscale tailnet <code>taildcc090.ts.net</code></span>
+</div>
+<svg class="topo" viewBox="0 0 1000 430" width="100%" role="img" aria-label="Network topology diagram">
+  <!-- tailnet band -->
+  <rect x="20" y="150" width="960" height="130" rx="16" fill="#e6f5f9" stroke="#bfe4ec"/>
+  <text x="40" y="172" font-size="13" font-weight="700" fill="#0e7490">TAILSCALE TAILNET · MagicDNS · membership = auth · SSHFS path bridge</text>
+
+  <!-- desktop -->
+  <rect x="40" y="60" width="330" height="86" rx="12" fill="#f3eefe" stroke="#d6c6fb"/>
+  <text x="58" y="86" font-size="15" font-weight="700" fill="#6d28d9">Desktop · mint-desktop</text>
+  <text x="58" y="106" font-size="11.5" fill="#59506b">LAN 192.168.4.28 · tailnet 100.95.187.38</text>
+  <text x="58" y="124" font-size="11.5" fill="#59506b">GTX 1660 Ti GPU · residential IP</text>
+  <text x="58" y="140" font-size="11.5" fill="#59506b">SonosKD:8557 · ensemble:8558 · fauxmo · home_tray</text>
+
+  <!-- VPS -->
+  <rect x="630" y="60" width="330" height="86" rx="12" fill="#e9f0ff" stroke="#c3d6fb"/>
+  <text x="648" y="86" font-size="15" font-weight="700" fill="#1d4ed8">VPS · uaonvps (Hostinger)</text>
+  <text x="648" y="106" font-size="11.5" fill="#42506a">public 187.77.16.29 · tailnet 100.106.113.93</text>
+  <text x="648" y="124" font-size="11.5" fill="#42506a">no GPU · always-on · 59 timers</text>
+  <text x="648" y="140" font-size="11.5" fill="#42506a">universal_agent · Tome · nginx sites</text>
+
+  <!-- home LAN cluster -->
+  <rect x="40" y="300" width="330" height="104" rx="12" fill="#faf6ff" stroke="#e6d9fb"/>
+  <text x="58" y="324" font-size="13" font-weight="700" fill="#6d28d9">Home LAN devices (192.168.4.x)</text>
+  <text x="58" y="345" font-size="11.5" fill="#59506b">Sonos S1 (UPnP :1400) · Echo (SSDP)</text>
+  <text x="58" y="362" font-size="11.5" fill="#59506b">LG TV · Denon AVR · Apple TVs · Matter</text>
+  <text x="58" y="386" font-size="11.5" fill="#59506b" font-style="italic">VPS cannot reach these — desktop-only</text>
+
+  <!-- public internet -->
+  <rect x="630" y="300" width="330" height="104" rx="12" fill="#fdf3f2" stroke="#f6d5d1"/>
+  <text x="648" y="324" font-size="13" font-weight="700" fill="#b4261c">Public internet (nginx :443)</text>
+  <text x="648" y="345" font-size="11.5" fill="#7a4a45">clearspringcg.com + subdomains</text>
+  <text x="648" y="362" font-size="11.5" fill="#7a4a45">app.clearspringcg.com /briefs /ws</text>
+  <text x="648" y="386" font-size="11.5" fill="#b4261c" font-style="italic">+ leaking: Ollama, Jaeger, dev-UI ⚠</text>
+
+  <!-- connectors -->
+  <line x1="205" y1="146" x2="205" y2="150" stroke="#a9c9d2" stroke-width="2"/>
+  <line x1="795" y1="146" x2="795" y2="150" stroke="#a9c9d2" stroke-width="2"/>
+  <line x1="205" y1="280" x2="205" y2="300" stroke="#c9b6ef" stroke-width="2"/>
+  <line x1="795" y1="280" x2="795" y2="300" stroke="#e6b3ad" stroke-width="2"/>
+  <!-- desktop <-> vps over tailnet -->
+  <line x1="370" y1="215" x2="630" y2="215" stroke="#0e7490" stroke-width="2.5" stroke-dasharray="7 5"/>
+  <text x="500" y="208" font-size="11.5" font-weight="600" fill="#0e7490" text-anchor="middle">SSHFS · serve · SSH · deploy</text>
+</svg>
+</div>
+
+<h2>The mental model an agent needs (three tiers)</h2>
+<div class="grid3">
+  <div class="tier" style="border-top:3px solid var(--vps)">
+    <span class="tag">Always-on runtime</span>
+    <h3><span class="dot" style="background:var(--vps)"></span>VPS · uaonvps</h3>
+    <p class="muted" style="font-size:13px;margin:2px 0 0">The production host. If it must survive the desktop sleeping, run on a schedule, or be reachable 24/7, it lives here.</p>
+    <ul>
+      <li>Deployed apps: universal_agent, Tome</li>
+      <li>Public web: nginx → clearspringcg.com</li>
+      <li>Private artifacts: <code>/scratch</code> via tailscale serve</li>
+      <li>Scheduling: systemd timers (not cron/routines)</li>
+      <li><b>No GPU. No home-LAN access.</b></li>
+    </ul>
+  </div>
+  <div class="tier" style="border-top:3px solid var(--desk)">
+    <span class="tag">Cockpit + LAN anchor</span>
+    <h3><span class="dot" style="background:var(--desk)"></span>Desktop · mint-desktop</h3>
+    <p class="muted" style="font-size:13px;margin:2px 0 0">Interactive dev, plus the <i>only</i> place that can touch the house or use a residential IP.</p>
+    <ul>
+      <li>Interactive Claude Code (Max plan)</li>
+      <li>Home devices: Sonos, LG/Denon/AppleTV, Matter</li>
+      <li>SSDP/multicast bridges (fauxmo → Echo)</li>
+      <li>Residential-IP egress (yt-dlp / YT Music)</li>
+      <li>GPU work (GTX 1660 Ti, Ollama)</li>
+    </ul>
+  </div>
+  <div class="tier" style="border-top:3px solid var(--net)">
+    <span class="tag">Wiring + auth boundary</span>
+    <h3><span class="dot" style="background:var(--net)"></span>Tailnet · taildcc090</h3>
+    <p class="muted" style="font-size:13px;margin:2px 0 0">Connects the two machines and <i>is</i> the access control. Membership = the auth.</p>
+    <ul>
+      <li>MagicDNS: <code>uaonvps…</code>, <code>mint-desktop…</code></li>
+      <li><code>tailscale serve</code> → private HTTPS</li>
+      <li><code>tailscale funnel</code> → the rare public case</li>
+      <li>SSHFS path bridge (same path both ways)</li>
+      <li>ACLs by device tag (in-repo policy in UA)</li>
+    </ul>
+  </div>
+</div>
+
+<h2>The two decisions that drive everything</h2>
+<div class="grid2">
+  <div class="card">
+    <h3>1 · Where should this run?</h3>
+    <div class="flow">
+      <div class="q"><b>Does it touch home devices, SSDP/multicast, or need a residential IP?</b></div>
+      <div class="a">→ <b>Desktop, mandatory.</b> The VPS physically can't reach the LAN or broadcast. (Sonos, ensemble, fauxmo, yt-dlp.)</div>
+      <div class="q"><b>Does it need a GPU?</b></div>
+      <div class="a">→ <b>Desktop.</b> VPS has none, ever.</div>
+      <div class="q"><b>Must it be always-on / scheduled / public?</b></div>
+      <div class="a">→ <b>VPS.</b> Desktop sleeps; VPS doesn't. Schedule = systemd timer.</div>
+      <div class="q"><b>Everything else (a web app, an API, an agent)?</b></div>
+      <div class="a">→ <b>VPS by default;</b> desktop only for interactive dev.</div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>2 · How do I make it reachable?</h3>
+    <div class="flow">
+      <div class="q"><b>Private (just you, your devices)?</b> — the good pattern</div>
+      <div class="a">Bind <code>127.0.0.1:PORT</code>, expose with <code>tailscale serve</code>. Gives TLS + a clean MagicDNS URL, off every public NIC. <span class="muted">(UA scratchpad, Tome do this.)</span></div>
+      <div class="q"><b>Public web (customers)?</b></div>
+      <div class="a">nginx on the VPS's <i>public</i> IP, with each <code>listen 443</code> pinned to that IP so it never collides with tailscale serve. Never hand-edit — use the install script.</div>
+      <div class="q"><b>Genuinely public one-off?</b></div>
+      <div class="a"><code>tailscale funnel</code>. Real internet exposure — audit it; don't leave it pointing at dead ports.</div>
+      <div class="q" style="background:#fdf0da;border-color:#f0d9a8"><b>Anti-pattern:</b> bind <code>0.0.0.0:PORT</code> + raw <code>http://host:PORT</code></div>
+      <div class="a">Works over the tailnet but ships no TLS and sits on <i>every</i> interface. <span class="muted">(SonosKD/ensemble do this today.)</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>Per-repo cheat sheet</h2>
+<div class="card" style="padding:6px 8px">
+<table>
+<thead><tr><th>Repo</th><th>Runs on</th><th>Why there</th><th>Reached via</th><th>Deploy</th></tr></thead>
+<tbody>
+<tr>
+  <td><b>universal_agent</b></td>
+  <td><span class="pill p-vps">VPS</span></td>
+  <td>Always-on prod runtime; the flagship</td>
+  <td>tailscale serve (private) + nginx (public briefs)</td>
+  <td><b>CI/CD</b> — PR→GHA→remote_deploy→health-gate</td>
+</tr>
+<tr>
+  <td><b>ebook_reader</b> (Tome)</td>
+  <td><span class="pill p-vps">VPS</span></td>
+  <td>Always-on reader; no LAN/GPU need</td>
+  <td>loopback :8000 + <code>tailscale serve</code> (TLS) ✓</td>
+  <td>Manual — <code>deploy.sh update</code> (git pull + restart)</td>
+</tr>
+<tr>
+  <td><b>SonosKD</b></td>
+  <td><span class="pill p-desk">Desktop</span></td>
+  <td>Sonos UPnP :1400 is LAN-only; yt-dlp needs residential IP</td>
+  <td>raw :8557 <i>and</i> a serve on :8443 (TLS)</td>
+  <td>Manual — PR merge + <code>systemctl --user restart</code></td>
+</tr>
+<tr>
+  <td><b>ensemble</b> (ex tv_art_gallery)</td>
+  <td><span class="pill p-desk">Desktop</span></td>
+  <td>Drives house AV over LAN; fauxmo needs SSDP</td>
+  <td>raw <code>0.0.0.0:8558</code> — no serve, no TLS</td>
+  <td>Manual user units; VPS bootstrap script unused</td>
+</tr>
+<tr>
+  <td><b>home_tray</b></td>
+  <td><span class="pill p-desk">Desktop</span></td>
+  <td>Cinnamon tray watchdog for the local services</td>
+  <td>Local only — <code>systemctl --user</code> + xdg-open</td>
+  <td>Autostart <code>.desktop</code>; no network surface</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h2>What you're doing right (keep these — they belong in the skill as rules)</h2>
+<div class="grid2">
+  <div class="card"><ul class="strong-list" style="margin:0;padding-left:18px">
+    <li><b>Consistent secrets story.</b> Every repo bootstraps from Infisical with 3 machine-id creds in a gitignored <code>.env</code>; values never printed; device creds verified untracked.</li>
+    <li><b>Tailnet-as-auth, on purpose.</b> "Membership is the auth" is stated and applied uniformly, not stumbled into.</li>
+    <li><b>Loopback + <code>tailscale serve</code></b> as the private-exposure gold standard (UA, Tome) — TLS, MagicDNS, off the public NIC.</li>
+  </ul></div>
+  <div class="card"><ul class="strong-list" style="margin:0;padding-left:18px">
+    <li><b>The "never host SonosKD on the VPS" rule</b> — correct reasoning about LAN + residential IP, written down so it isn't relitigated.</li>
+    <li><b>nginx IP-pinned</b> to avoid the 443/tailscale collision; installed by script, not hand-edited.</li>
+    <li><b>Sound SSH posture:</b> key-only, no password auth, ufw default-deny; SSHFS path guarantee for seamless cross-machine files.</li>
+  </ul></div>
+</div>
+
+<h2>Where it drifts from best practice</h2>
+<p class="sub">Prioritised. The top two are worth acting on soon; the rest are the raw material for the skill's "gotchas" section.</p>
+
+<div class="finding hi">
+  <h4><span class="sev s-hi">HIGH</span> Docker publishes ports to <code>0.0.0.0</code>, bypassing ufw — services are on the public internet right now</h4>
+  <p>ufw shows default-deny and correctly blocks 22/8001/8002. But Docker writes its own iptables rules <i>ahead</i> of ufw's INPUT chain, so any <code>ports: ["11434:11434"]</code>-style mapping binds the public NIC regardless. Probing the public IP <code>187.77.16.29</code> from off-box confirmed live:</p>
+  <table style="margin:8px 0">
+    <thead><tr><th>Port</th><th>Service</th><th>State from the internet</th></tr></thead>
+    <tbody>
+      <tr><td><code>11434</code></td><td>Ollama</td><td><span class="sev s-hi">OPEN, no auth</span> — returned <code>{"version":"0.30.10"}</code> to a stranger</td></tr>
+      <tr><td><code>16686</code></td><td>Jaeger UI</td><td><span class="sev s-hi">OPEN</span> — HTTP 200 (trace data browsable)</td></tr>
+      <tr><td><code>9000</code></td><td>agent dev-UI (uvicorn)</td><td><span class="sev s-med">OPEN</span> — 307 → <code>/dev-ui/</code></td></tr>
+      <tr><td><code>3030</code>, <code>4318</code></td><td>dashboard, OTLP collector</td><td><span class="sev s-med">OPEN</span> — 200 / responding</td></tr>
+      <tr><td><code>6379</code></td><td>Redis</td><td><span class="sev s-low">exposed but authed</span> — <code>-NOAUTH</code> (password set ✓)</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">Ollama on a GPU-less VPS is also just questionable — worth asking why it's there at all.</p>
+  <div class="fix"><b>Fix:</b> in each compose file bind these to loopback or the tailnet IP — <code>127.0.0.1:11434:11434</code> (or <code>100.106.113.93:…</code>) — so they leave the public NIC. Or add explicit <code>DOCKER-USER</code> deny rules. Don't rely on ufw alone with Docker.</div>
+</div>
+
+<div class="finding hi">
+  <h4><span class="sev s-hi">HIGH</span> The tv_art_gallery→ensemble rename left two live services running off deleted files</h4>
+  <p><code>ensemble-fauxmo.service</code> and <code>tvag-art-screensaver.service</code> are running <i>right now</i> from <code>/home/kjdragan/lrepos/tv_art_gallery/…</code> — a directory that no longer exists (merged into <code>ensemble</code>). They survive only because Linux keeps a deleted binary's inode alive for a running process. Worse, the fix isn't just the installed units: <code>ensemble/deployment/fauxmo/fauxmo_config.json</code> and the repo's own copy of the unit <i>still hardcode the dead path</i>, so even a clean restart breaks.</p>
+  <div class="fix"><b>Fix:</b> repoint the two systemd units + <code>fauxmo_config.json</code>'s plugin path to <code>/home/kjdragan/lrepos/ensemble/…</code>, then restart once to prove it. You're one reboot from a silently-dead Alexa bridge and screensaver.</div>
+</div>
+
+<div class="finding med">
+  <h4><span class="sev s-med">MEDIUM</span> The private-exposure pattern isn't standardized across the home repos</h4>
+  <p>UA and Tome do it right (loopback + <code>tailscale serve</code>, TLS). SonosKD and ensemble bind <code>0.0.0.0:PORT</code> and are reached as raw <code>http://…:8557/:8558</code> — no TLS, on every interface. ensemble's own HANDOFF flags "Tailscale Serve HTTPS (PWA SW)" as a still-open TODO, because service workers need HTTPS. SonosKD already half-fixed this (a serve on :8443) but still also binds raw.</p>
+  <div class="fix"><b>Fix:</b> standardize home services on loopback + <code>tailscale serve</code>. One pattern, TLS everywhere, clean MagicDNS URLs, and nothing accidentally on a public NIC.</div>
+</div>
+
+<div class="finding med">
+  <h4><span class="sev s-med">MEDIUM</span> The SSHFS path bridge is unowned, undocumented OS substrate with three competing definitions</h4>
+  <p>The bridge is live and working (verified <code>BRIDGE-OK</code> from the VPS). But the desktop side has <i>three</i> different mount mechanisms on disk — <code>mnt-vps.service</code>, <code>mount-vps.service</code>+<code>/usr/local/bin/mount-vps-tailscale</code>, and different target paths (<code>/</code> vs <code>/root</code>) — <b>none enabled</b>, yet something mounts it at boot. UA's own networking doc already flags that no <code>sshfs</code> command lives in any repo; it's assumed substrate that can silently drift.</p>
+  <div class="fix"><b>Fix:</b> pick one mechanism, <code>systemctl enable</code> it, delete the other two, and check the chosen unit into a repo (or document it in the UA networking doc). Right now nobody owns the thing the "path guarantee" depends on.</div>
+</div>
+
+<div class="finding med">
+  <h4><span class="sev s-med">MEDIUM</span> Deploy discipline is bimodal — and an agent can't tell which repo is which</h4>
+  <p>universal_agent has full CI/CD (PR→GHA→remote_deploy→health-gate→<code>/api/v1/version</code> check). Tome, SonosKD, ensemble are all manual <code>git pull</code>+restart with no CI gate, and a couple still carry raw <code>scp</code> steps (unifetch RUNBOOK Phase 0) or an unused <code>gh</code>-clone bootstrap (ensemble). For personal scale that's fine — but the <i>inconsistency</i> is the risk: a fresh agent doesn't know the rules per repo.</p>
+  <div class="fix"><b>Fix:</b> the skill should carry a one-line "how this repo deploys" per repo (below), so an agent never guesses. Optionally graduate Tome to the same CI pattern.</div>
+</div>
+
+<div class="finding low">
+  <h4><span class="sev s-low">LOW</span> Stale public Funnel on the desktop pointing at dead ports</h4>
+  <p>The desktop has <code>tailscale funnel</code> ON exposing <code>/</code>→:8000, <code>/support</code>→:8002, <code>/contracts</code>→:8003 to the <i>public</i> internet — but only :8002 has anything listening; <code>/</code> and <code>/contracts</code> are dead. Funnel is real internet exposure (unlike serve), so it deserves a periodic audit.</p>
+  <div class="fix"><b>Fix:</b> drop the funnel paths you aren't using; keep only what genuinely needs to be public.</div>
+</div>
+
+<div class="finding low">
+  <h4><span class="sev s-low">LOW</span> Root-keyed SSHFS + root SSH still enabled; LAN IPs hardcoded as fallbacks</h4>
+  <p>The VPS→desktop mount authenticates as <code>root</code> with <code>allow_other</code>; root SSH is key-only but still enabled now that <code>ua</code> has sudo. And <code>192.168.4.28/.103</code> are sprinkled as fallback defaults across ensemble's drivers and SonosKD's seed IP.</p>
+  <div class="fix"><b>Fix:</b> move the bridge to a non-root user; consider disabling root SSH; centralize the LAN IPs into one config value per repo. All minor.</div>
+</div>
+
+<h2>The proposed skill: <code>network-description-for-kevin</code></h2>
+<div class="card">
+<p>One skill that hands any agent — dropped into <i>any</i> of your repos — the mental model above, so it places work correctly and reaches it correctly without re-deriving your topology. It's a <b>reference/description skill</b>, not an action skill: it teaches, it doesn't run commands.</p>
+
+<h3>What it should contain</h3>
+<table>
+<thead><tr><th>Section</th><th>Content</th></tr></thead>
+<tbody>
+<tr><td><b>The three tiers</b></td><td>The VPS / desktop / tailnet model above — what each is <i>for</i>, in 3 short blocks.</td></tr>
+<tr><td><b>Decision rule 1: where to run</b></td><td>The placement flowchart (LAN/residential-IP/GPU → desktop; always-on/public → VPS; else VPS by default).</td></tr>
+<tr><td><b>Decision rule 2: how to expose</b></td><td>loopback+serve (private) · nginx-on-public-IP (public) · funnel (rare) · the 0.0.0.0 anti-pattern.</td></tr>
+<tr><td><b>Canonical facts table</b></td><td>Hostnames, MagicDNS names, both IPs per machine, SSH aliases (<code>uaonvps</code>), the port map, the SSHFS path guarantee, the Infisical bootstrap pattern.</td></tr>
+<tr><td><b>Per-repo cheat sheet</b></td><td>The 5-row table above — where each runs, why, reached-via, deploy mechanism.</td></tr>
+<tr><td><b>Gotchas / do-nots</b></td><td>Don't host LAN services on the VPS · Docker ports bypass ufw · don't hand-edit nginx · the deleted-path drift class · watch stale funnels · which repos are CI vs manual.</td></tr>
+</tbody>
+</table>
+
+<h3>Where it should live &amp; how to trigger it</h3>
+<ul>
+  <li><b>Home:</b> <code>~/lrepos/dragan-plugins</code> — your canonical skill repo. Author in <code>skills/network-description-for-kevin/SKILL.md</code>; keep any scratch/design notes in <code>dev/</code>. Publishable later by design.</li>
+  <li><b>Trigger:</b> a description that fires whenever an agent needs to know <i>where to put</i> or <i>how to reach</i> something — "where should this run", "how do I expose this", "deploy this", "reach it from my phone", "does this need the VPS or the desktop", or any repo that spans the two machines.</li>
+  <li><b>Keep it a description, not a duplicate.</b> universal_agent's <code>06_networking…md</code> stays the deep canonical doc; the skill is the <i>portable, cross-repo</i> summary + decision rules. Link, don't fork.</li>
+</ul>
+</div>
+
+<div class="foot">
+Read-only assessment. Sources: repo docs (CLAUDE.md/README/HANDOFF/DESIGN across the 5 repos) via parallel research agents, universal_agent's <code>project_docs/06_platform/</code> canonical docs, and a live probe of both machines (tailscale serve/funnel, <code>ss</code>, ufw, sshd, external port checks against the VPS's own public IP). All "OPEN"/"authed" claims were confirmed by direct request, not inferred. Nothing was changed on either machine.
+</div>
+
+</div>
