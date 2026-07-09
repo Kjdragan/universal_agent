@@ -9,6 +9,7 @@ code_paths:
   - src/universal_agent/systemd_migrated_jobs.py
   - src/universal_agent/task_hub.py
   - src/universal_agent/services/paper_to_podcast_guard.py
+  - src/universal_agent/services/paper_to_podcast_workspace.py
   - src/universal_agent/arxiv_runtime.py
   - deployment/systemd/
   - scripts/install_vps_phase_a_batch1_timers.sh
@@ -330,6 +331,33 @@ The rate-limit carve-out exists because the 3-attempt retry tripled the call
 rate into Composio's edge during a 429 window on 2026-05-23 — exactly the wrong
 behavior. Matching is on the error **body text**, because the upstream SDK
 discards the HTTP 429 status code.
+
+### Pre-run workspace hygiene (paper_to_podcast_daily) — the root-cause fix
+
+`paper_to_podcast_daily` reuses ONE fixed workspace
+(``AGENT_RUN_WORKSPACES/cron_paper_to_podcast``) across every daily run, and
+historically nothing cleaned it — so each run's deliverables piled up beside
+prior runs'. That reused-and-never-cleaned directory was the root cause of a
+recurring class of false success/failure calls: every downstream component (the
+post-run guard, the artifact notifier) had to re-derive "is this file from THIS
+run?" via mtime-vs-run-start heuristics, and those heuristics mis-fired in both
+directions (2026-06-10 a stale manifest emailed as tonight's podcast; 2026-07-09
+a real podcast produced but stale sidecars → false "zero usable papers" no-op).
+
+The fix eliminates the ambiguity at its source:
+``services/paper_to_podcast_workspace.py::prepare_run_workspace`` clears
+``work_products/paper_to_podcast/`` **before** the run's LLM session is created.
+It is called once per run from ``cron_service.py`` in the main LLM-execution path
+(gated on ``metadata.system_job == "paper_to_podcast_daily"``, right before the
+DB-lock retry loop that wraps ``create_session``). With a clean output dir, "does
+``podcast_audio.m4a`` exist?" is a true binary check rather than a freshness
+puzzle. It clears only the output subdir — the workspace ROOT (and its
+``.nlm_resume.json`` deploy-restart checkpoint) is left intact so an interrupted
+run can still adopt its in-flight notebook and re-download into the cleared dir.
+The wipe is best-effort and never raises, so a cleanup failure cannot block a
+run. Because of this, the mtime-freshness checks in the guard and notifier are
+now a **backstop** (they catch a wipe that ever fails) rather than the primary
+line of defence.
 
 ### Per-job post-run fail-loud guard (paper_to_podcast_daily)
 
