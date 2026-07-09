@@ -2136,6 +2136,37 @@ class CronService:
                             configured_retries = 2
                     max_db_lock_retries = max(0, min(_CRON_DB_LOCK_RETRY_MAX, configured_retries))
 
+                    # Deterministic pre-run hygiene for paper_to_podcast_daily.
+                    # The cron reuses ONE fixed workspace, so clear the prior
+                    # run's OUTPUT dir before this run starts — that makes the
+                    # post-run "did we produce a podcast?" check a true binary
+                    # existence check instead of an mtime-freshness puzzle, and
+                    # removes the stale-artifact false success/failure class at
+                    # its source (the guard/notifier freshness checks stay only
+                    # as a backstop). Runs once per run (before the DB-lock
+                    # retry loop). The workspace ROOT is preserved so the
+                    # deploy-restart .nlm_resume.json checkpoint survives.
+                    # Best-effort — never blocks the run.
+                    try:
+                        if str((job.metadata or {}).get("system_job") or "").strip() == "paper_to_podcast_daily":
+                            from universal_agent.services.paper_to_podcast_workspace import (
+                                prepare_run_workspace as _prep_p2p_ws,
+                            )
+                            _p2p_removed = _prep_p2p_ws(job.workspace_dir)
+                            if _p2p_removed:
+                                logger.info(
+                                    "paper_to_podcast_daily: cleared %d stale artifact(s) "
+                                    "from the reused workspace before run for job %s",
+                                    _p2p_removed,
+                                    job.job_id,
+                                )
+                    except Exception as _p2p_prep_exc:  # noqa: BLE001
+                        logger.debug(
+                            "paper_to_podcast pre-run cleanup skipped for job %s: %s",
+                            job.job_id,
+                            _p2p_prep_exc,
+                        )
+
                     attempt = 0
                     while True:
                         try:
