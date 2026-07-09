@@ -13,7 +13,7 @@ code_paths:
   - deployment/systemd/
   - scripts/install_vps_phase_a_batch1_timers.sh
   - scripts/install_vps_phase_a_batch2_timers.sh
-last_verified: 2026-06-22
+last_verified: 2026-07-09
 ---
 
 # Cron & Scheduling
@@ -345,16 +345,37 @@ The mechanical fix lives in ``cron_service.py`` in the Phase F.1 close block
 (right after ``_f_rc_equiv_llm`` is computed): for a job whose
 ``metadata.system_job == "paper_to_podcast_daily"`` and whose rc_equiv is 0,
 ``services/paper_to_podcast_guard.py::evaluate_paper_to_podcast_run`` inspects
-the run's ``work_products/paper_to_podcast/`` artifacts for evidence of >=1
-usable paper (``manifest.json`` with a non-empty ``papers`` list, or
-``papers_metadata.json`` with >=1 entry). If zero usable papers are evidenced
-(or the skill's explicit ``FAILURE.txt`` sentinel is present), the guard flips
-``_f_rc_equiv_llm`` from 0 to 1 and stamps a descriptive error on the run
-record — so the ``cron_consecutive_failures`` invariant, the dashboard, and
-journalctl all surface a real failure instead of a silent no-op. The guard is
-gated on the ``paper_to_podcast_daily`` system_job id and is best-effort (any
-guard exception is swallowed so it cannot mask the original outcome); a
+the run's ``work_products/paper_to_podcast/`` artifacts for evidence that the
+run really produced its deliverable. Success evidence, in priority order:
+
+1. **The headline deliverable itself** — a fresh, real ``podcast_audio.m4a``
+   (mtime at/after ``run_started_at``, size >= ``_MIN_PODCAST_AUDIO_BYTES`` =
+   100 KB). This is ground truth: you cannot make a NotebookLM audio overview
+   from zero sources, so a produced podcast proves the run succeeded regardless
+   of whether the agent also wrote the JSON sidecars.
+2. ``manifest.json`` with a non-empty ``papers`` list (fresh).
+3. ``papers_metadata.json`` with >=1 entry (fresh).
+
+If none of these is evidenced (or the skill's explicit ``FAILURE.txt`` sentinel
+is present and fresh), the guard flips ``_f_rc_equiv_llm`` from 0 to 1 and
+stamps a descriptive error on the run record — so the
+``cron_consecutive_failures`` invariant, the dashboard, and journalctl all
+surface a real failure instead of a silent no-op. The guard is gated on the
+``paper_to_podcast_daily`` system_job id and is best-effort (any guard
+exception is swallowed so it cannot mask the original outcome); a
 timeout/cancel/exception keeps its real classification.
+
+Why the podcast is checked first (2026-07-09): the guard previously keyed
+success *only* on the two JSON sidecars. A run downloaded a real 38 MB
+``podcast_audio.m4a`` + quiz + flashcards, published a report to the
+scratchpad, and self-reported success — but never re-wrote ``manifest.json`` /
+``papers_metadata.json`` (both left stale from the prior day). The freshness
+gate correctly treated the stale sidecars as absent, so the guard misread a
+real success as "zero usable papers (run no-op'd)" and, because the notifier
+only runs on the rc=0 path (``cron_artifact_notifier``), suppressed the podcast
+email and sent an ``[ERROR]`` instead. Accepting the fresh ``.m4a`` as
+first-class evidence fixes both the false failure and delivery, without
+reopening the 2026-06-22 no-op class (a genuine no-op leaves no fresh podcast).
 
 The cache-path half of the same RCA was fixed in
 ``arxiv_runtime.py::canonical_arxiv_storage_path`` /

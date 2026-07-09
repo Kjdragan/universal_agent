@@ -280,6 +280,89 @@ class TestEvaluatePaperToPodcastRun:
         assert result.is_failure is True
         assert result.usable_paper_count == 0
 
+    # ------------------------------------------------------------------
+    # Ground-truth deliverable: a fresh, real podcast_audio.m4a is success
+    # even when the agent forgot to (re)write the JSON sidecars.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _write_podcast(wp: Path, size: int = 200 * 1024) -> Path:
+        audio = wp / "podcast_audio.m4a"
+        audio.write_bytes(b"\x00" * size)
+        return audio
+
+    def test_fresh_podcast_audio_is_success_without_sidecars(self, tmp_path):
+        """Regression for 2026-07-09: the run downloaded a real podcast (m4a)
+        but never re-wrote manifest.json / papers_metadata.json. The guard MUST
+        treat the produced podcast as success, not a "zero usable papers" no-op.
+        """
+        wp = tmp_path / "work_products" / "paper_to_podcast"
+        wp.mkdir(parents=True)
+        run_start = time.time() - 60
+        audio = self._write_podcast(wp)
+        os.utime(audio, (run_start + 10, run_start + 10))  # written during the run
+        # No manifest.json, no papers_metadata.json at all.
+        result = evaluate_paper_to_podcast_run(tmp_path, run_started_at=run_start)
+        assert result.is_failure is False
+        assert "podcast_audio.m4a" in result.reason
+
+    def test_fresh_podcast_audio_reports_paper_count_when_manifest_present(self, tmp_path):
+        """When both a fresh podcast and a fresh manifest exist, the podcast
+        still wins and the paper count is surfaced for observability."""
+        wp = tmp_path / "work_products" / "paper_to_podcast"
+        wp.mkdir(parents=True)
+        run_start = time.time() - 60
+        audio = self._write_podcast(wp)
+        os.utime(audio, (run_start + 10, run_start + 10))
+        manifest = wp / "manifest.json"
+        manifest.write_text(
+            json.dumps({"papers": [{"id": "a"}, {"id": "b"}, {"id": "c"}]}),
+            encoding="utf-8",
+        )
+        os.utime(manifest, (run_start + 20, run_start + 20))
+        result = evaluate_paper_to_podcast_run(tmp_path, run_started_at=run_start)
+        assert result.is_failure is False
+        assert "podcast_audio.m4a" in result.reason
+        assert result.usable_paper_count == 3
+
+    def test_stale_podcast_audio_does_not_vouch_for_a_no_op(self, tmp_path):
+        """A podcast .m4a left by a PRIOR run must not pass a run that produced
+        nothing this time — the 2026-06-22 silent-no-op class must stay caught.
+        """
+        wp = tmp_path / "work_products" / "paper_to_podcast"
+        wp.mkdir(parents=True)
+        run_start = time.time()
+        audio = self._write_podcast(wp)
+        os.utime(audio, (run_start - 3600, run_start - 3600))  # yesterday's podcast
+        result = evaluate_paper_to_podcast_run(tmp_path, run_started_at=run_start)
+        assert result.is_failure is True
+
+    def test_tiny_podcast_audio_is_not_accepted(self, tmp_path):
+        """A truncated / failed-download stub (< 100 KB) is not a real podcast
+        and must not satisfy the guard."""
+        wp = tmp_path / "work_products" / "paper_to_podcast"
+        wp.mkdir(parents=True)
+        run_start = time.time() - 60
+        audio = self._write_podcast(wp, size=1024)  # 1 KB stub
+        os.utime(audio, (run_start + 10, run_start + 10))
+        result = evaluate_paper_to_podcast_run(tmp_path, run_started_at=run_start)
+        assert result.is_failure is True
+
+    def test_fresh_failure_sentinel_wins_over_podcast(self, tmp_path):
+        """An explicit fresh FAILURE.txt is still honoured even if a podcast
+        file is present — the agent is declaring the run failed."""
+        wp = tmp_path / "work_products" / "paper_to_podcast"
+        wp.mkdir(parents=True)
+        run_start = time.time() - 60
+        audio = self._write_podcast(wp)
+        os.utime(audio, (run_start + 10, run_start + 10))
+        fail = wp / "FAILURE.txt"
+        fail.write_text("zero papers downloaded", encoding="utf-8")
+        os.utime(fail, (run_start + 20, run_start + 20))
+        result = evaluate_paper_to_podcast_run(tmp_path, run_started_at=run_start)
+        assert result.is_failure is True
+        assert "FAILURE.txt sentinel" in result.reason
+
     def test_run_result_is_frozen(self):
         """PaperToPodcastRunResult is a frozen dataclass (immutable)."""
         r = PaperToPodcastRunResult(is_failure=True, reason="x", usable_paper_count=0)
