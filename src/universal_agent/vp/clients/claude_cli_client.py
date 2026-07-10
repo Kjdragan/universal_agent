@@ -250,6 +250,7 @@ class ClaudeCodeCLIClient(VpClient):
                         original_prompt=prompt,
                         previous_error=last_outcome.message,
                         attempt=attempt,
+                        workspace_dir=workspace_dir,
                     )
 
                 outcome = await _execute_cli_session(
@@ -1365,6 +1366,28 @@ def _build_cli_prompt(
 
     parts.append(f"## Workspace\n\nAll output files go under: {workspace_dir}\n")
 
+    # Crash-recovery apply discipline. Only relevant when the mission mutates
+    # the UA repo (the Edit tool is workspace-confined, so repo edits go through
+    # an agent-authored ``apply_*.py`` script run via Bash). Direct the session
+    # to run that script through the blessed runner so a crash at finalize is
+    # recoverable: apply -> ruff -> pytest -> ``apply_checkpoint.json``, and the
+    # runner is idempotent on retry (see universal_agent.scripts.vp_apply_and_checkpoint).
+    if repo_mutation_requested(payload):
+        parts.append(
+            "## Apply-script discipline (crash-recovery)\n\n"
+            "If you edit the UA repo via an ``apply_*.py`` script, run it through "
+            "the blessed runner so the apply is recoverable after a crash:\n"
+            "```\n"
+            "python -m universal_agent.scripts.vp_apply_and_checkpoint "
+            "<your_apply_script.py> --workspace $PWD "
+            "--repo-root /opt/universal_agent --ruff-scope <changed paths> "
+            "--pytest-args tests/unit/<relevant>\n"
+            "```\n"
+            "The runner applies your script, runs ``ruff`` + ``pytest``, and only on "
+            "all-green writes ``apply_checkpoint.json``. It is idempotent: a retry "
+            "after a crash skips re-applying and resumes from push/PR.\n"
+        )
+
     # Self-briefing directive: when UA_VP_GOAL_ENABLED is on, prepend an
     # instruction telling the VP to invoke the self-brief-and-attest skill
     # FIRST. The skill drives the VP to write BRIEF.md (and ACCEPTANCE.md +
@@ -1432,15 +1455,55 @@ def _build_cli_prompt(
     return "\n".join(parts)
 
 
-def _build_retry_prompt(original_prompt: str, previous_error: str, attempt: int) -> str:
-    """Build a retry prompt incorporating the previous failure."""
-    return (
+def _build_retry_prompt(
+    original_prompt: str,
+    previous_error: str,
+    attempt: int,
+    *,
+    workspace_dir: Optional[Path] = None,
+) -> str:
+    """Build a retry prompt incorporating the previous failure.
+
+    Crash-recovery (apply checkpoint): if a prior attempt already applied its
+    apply-script AND validated (ruff + pytest green), recorded in
+    ``apply_checkpoint.json``, direct the retried session to SKIP re-applying
+    and resume from the post-apply steps. Re-running an anchor-validated
+    apply-script is destructive (edit anchors are consumed on first run), so
+    this checkpoint read happens BEFORE any apply attempt. See
+    ``vp/apply_checkpoint.py`` and ``universal_agent.scripts.vp_apply_and_checkpoint``.
+    """
+    parts: list[str] = [
         f"## Retry Attempt {attempt}\n\n"
         f"The previous attempt failed with this error:\n"
         f"```\n{previous_error[:500]}\n```\n\n"
-        f"Please address the issue and try again.\n\n"
-        f"---\n\n{original_prompt}"
-    )
+        f"Please address the issue and try again.\n"
+    ]
+    if workspace_dir is not None:
+        try:
+            from universal_agent.vp.apply_checkpoint import (
+                has_validated_apply,
+                read_checkpoint,
+            )
+
+            if has_validated_apply(workspace_dir):
+                _cp = read_checkpoint(workspace_dir)
+                _when = (_cp.applied_at if _cp else "") or "(timestamp unavailable)"
+                parts.append(
+                    "\n## CRASH-RECOVERY: apply already complete. DO NOT re-run apply scripts\n\n"
+                    f"A prior attempt already applied the edits and validated them "
+                    f"(ruff + pytest green) at `{_when}`, recorded in "
+                    f"`{workspace_dir / 'apply_checkpoint.json'}`. Re-running an "
+                    f"``apply_*.py`` script is FORBIDDEN here: anchor-validated apply "
+                    f"scripts consume their edit anchors on first run and a re-run is "
+                    f"destructive. Instead: verify the edits are present (``git diff``), "
+                    f"commit them if uncommitted, and RESUME from the post-apply steps "
+                    f"(push branch, open PR, finalize). Only re-apply if you can prove "
+                    f"the edits are absent AND no validated checkpoint exists.\n"
+                )
+        except Exception:  # noqa: BLE001 -- checkpoint read must never break the retry
+            pass
+    parts.append(f"\n---\n\n{original_prompt}")
+    return "".join(parts)
 
 
 def _resolve_workspace(

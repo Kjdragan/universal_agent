@@ -13,7 +13,8 @@ code_paths:
   - src/universal_agent/services/vp_failure_rescue.py
   - src/universal_agent/services/wiki_rescue_policy.py
   - src/universal_agent/services/wiki_rescue_driver.py
-last_verified: 2026-06-30
+  - src/universal_agent/scripts/vp_apply_and_checkpoint.py
+last_verified: 2026-07-10
 ---
 
 # VP Workers & Delegation
@@ -285,6 +286,24 @@ doesn't expose them. Key behaviors (`clients/claude_cli_client.py`):
   with a retry prompt that injects the prior error — except **auth failures
   short-circuit immediately** (`_is_auth_failure`), since the same env will
   re-401.
+- **Crash-recovery at finalize (apply checkpoint):** the retry loop reuses the
+  workspace per `mission_id`, so a mission that crashes *after* applying +
+  validating its repo edits but *before* success (the opaque "Unknown error" /
+  empty-`final_text` / `trace_id=null` CLI-session-death signature) must not
+  re-run its `apply_*.py` on retry - re-running an anchor-validated apply-script
+  is destructive (anchors are consumed on first run).
+  `claude_cli_client.py::_build_retry_prompt` reads
+  `apply_checkpoint.py::has_validated_apply` and, if a prior attempt already
+  wrote `apply_checkpoint.json` (atomic `apply_checkpoint.py::write_checkpoint`),
+  directs the retried session to RESUME from push/PR and skip the apply. The
+  checkpoint is produced by the one blessed idempotent runner
+  `scripts/vp_apply_and_checkpoint.py::run_apply_pipeline`
+  (apply -> `ruff` -> `pytest` -> checkpoint; no-ops and exits 0 if already
+  validated), advertised to the session via `_build_cli_prompt`'s
+  apply-discipline section. The checkpoint read happens BEFORE any apply
+  attempt; re-running is prevented both structurally (idempotent runner) and by
+  prompt. (Salvage of orphaned pre-checkpoint apply-scripts is a separate lane;
+  `apply_checkpoint.json` is the durable marker it keys off.)
 - **Stream buffer:** `limit=10 MiB` (`CLI_STREAM_BUFFER_LIMIT`) because
   stream-json lines (large tool_result blocks) legitimately exceed asyncio's
   64 KiB default and would otherwise crash the monitor.
