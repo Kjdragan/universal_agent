@@ -73,11 +73,33 @@ ACTION_REHYDRATE = "rehydrate"
 ACTION_RE_EVALUATE = "re_evaluate"
 ACTION_REDIRECT_TO = "redirect_to"
 ACTION_REQUEST_REVISION = "request_revision"
+ACTION_BULK_CLOSE_AMBIENT = "bulk_close_ambient"
+
+# ── Ambient close for stale batch-event failure items ────────────────────────
+# ``vp_mission_failure`` items are informational — routed to Simone for
+# adjudication, never dispatched/scored — so the generic stale reaper
+# (``_apply_stale_policy``, which is eval-gated on ``eval_count > 0``) never
+# fires on them. After a resolved systemic event they accumulate indefinitely
+# (119 from the 2026-06-11 event survived 4+ heartbeats). The ambient-close
+# path auto-closes old, single (non-recurring) failures as
+# "ambient — stale, no action", distinguishable from a rescue-complete in the
+# audit trail via the ``metadata.ambient_close`` marker + an evaluation row
+# tagged ``judge_payload.source = AMBIENT_CLOSE_EVAL_SOURCE``. Shared by the
+# ``bulk_close_ambient`` Task Hub verb (clears backlog) and the TTL sweep cron
+# (self-heals going forward); see ``close_ambient_vp_failures``.
+VP_FAILURE_AMBIENT_SOURCE_KIND = "vp_mission_failure"
+AMBIENT_CLOSE_REASON = "ambient_stale_no_action"
+AMBIENT_CLOSE_LAST_DISPOSITION = "ambient_closed"
+AMBIENT_CLOSE_EVAL_SOURCE = "vp_mission_failure_ambient_close"
+DEFAULT_AMBIENT_TTL_DAYS = 7
+DEFAULT_AMBIENT_GUARD_HOURS = 48
+DEFAULT_AMBIENT_MAX_FAILURE_COUNT = 1
 
 VALID_ACTIONS = {
     ACTION_SEIZE, ACTION_REJECT, ACTION_BLOCK, ACTION_UNBLOCK, ACTION_REVIEW,
     ACTION_COMPLETE, ACTION_PARK, ACTION_SNOOZE, ACTION_DELEGATE, ACTION_APPROVE,
     ACTION_PROMOTE,
+    ACTION_BULK_CLOSE_AMBIENT,
     # Hermes-adaptation Phase B.1 — operator-driven "unstick" verbs.
     # Defined for tasks wedged in needs_review / blocked because the
     # heartbeat or todo retry budget tripped. Operator-only initially;
@@ -5617,20 +5639,43 @@ DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS = frozenset(
 def perform_task_action(
     conn: sqlite3.Connection,
     *,
-    task_id: str,
+    task_id: str = "",
     action: str,
     reason: str = "",
     note: str = "",
     agent_id: str = "dashboard_operator",
+    filt: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Execute a lifecycle action (seize, complete, park, block, etc.) on a task.
 
     *action* must be one of ``VALID_ACTIONS``; unknown verbs are rejected.
+
+    The ``bulk_close_ambient`` action is the exception: it does not target a
+    single ``task_id`` (ignored) but closes a batch of stale
+    ``vp_mission_failure`` items described by *filt* (older_than_days,
+    max_failure_count, within_hours_guard, source_kind). See
+    ``close_ambient_vp_failures`` for the guard + audit trail.
     """
     ensure_schema(conn)
     action_norm = str(action or "").strip().lower()
     if action_norm not in VALID_ACTIONS:
         raise ValueError(f"unsupported action: {action_norm}")
+
+    # bulk_close_ambient is a batch verb — no single task_id. Route to the
+    # shared ambient-close core (guard + per-item sanctioned audit path) and
+    # return its summary instead of a single item dict.
+    if action_norm == ACTION_BULK_CLOSE_AMBIENT:
+        _filt = dict(filt or {})
+        return close_ambient_vp_failures(
+            conn,
+            older_than_days=int(_filt.get("older_than_days", DEFAULT_AMBIENT_TTL_DAYS)),
+            max_failure_count=int(_filt.get("max_failure_count", DEFAULT_AMBIENT_MAX_FAILURE_COUNT)),
+            within_hours_guard=int(_filt.get("within_hours_guard", DEFAULT_AMBIENT_GUARD_HOURS)),
+            source_kind=str(_filt.get("source_kind", VP_FAILURE_AMBIENT_SOURCE_KIND)),
+            agent_id=agent_id,
+            via="bulk_verb",
+            reason_text=str(reason or note or "").strip(),
+        )
 
     item = get_item(conn, task_id)
     if not item:
@@ -6195,6 +6240,210 @@ def perform_task_action(
     if not fresh:
         raise ValueError("task not found after action")
     return fresh
+
+
+def _read_failure_count(item: dict[str, Any]) -> int:
+    """Read ``metadata.failure_count`` for a vp_mission_failure item.
+
+    Defaults to 1 — the canonical default stamped by
+    ``vp_failure_rescue.surface_failure_to_simone``. A row missing the field is
+    treated as a single failure (closeable when stale), which is the intent.
+    """
+    meta = dict(item.get("metadata") or {})
+    try:
+        n = int(meta.get("failure_count"))
+    except (TypeError, ValueError):
+        return 1
+    return n if n >= 1 else 1
+
+
+def _ambient_close_failure_item(
+    conn: sqlite3.Connection,
+    item: dict[str, Any],
+    *,
+    agent_id: str,
+    via: str,
+    now_iso: str,
+    age_days: float,
+    failure_count: int,
+    reason_text: str,
+) -> None:
+    """Close ONE vp_mission_failure item as ambient-stale through the sanctioned
+    per-item audit path (NOT a set-level bulk UPDATE).
+
+    Mirrors the ``complete`` action's audit shape — metadata disposition
+    markers, a run-ledger close via ``_complete_active_assignments_for_task``,
+    an evaluation row, and a per-row status UPDATE with a fresh
+    ``completion_token`` — plus the honest ``metadata.ambient_close`` marker
+    that distinguishes this from a rescue-complete.
+    """
+    task_id = str(item.get("task_id") or "")
+    metadata = _resolve_dispatch_metadata(
+        dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso
+    )
+    dispatch_meta = dict(metadata.get("dispatch") or {})
+    dispatch_meta["last_disposition"] = AMBIENT_CLOSE_LAST_DISPOSITION
+    dispatch_meta["last_disposition_reason"] = (
+        reason_text or f"{AMBIENT_CLOSE_REASON} (unattended, no rescue action)"
+    )
+    dispatch_meta["completion_unverified"] = False
+    metadata["dispatch"] = dispatch_meta
+    metadata["ambient_close"] = {
+        "reason": AMBIENT_CLOSE_REASON,
+        "via": via,
+        "closed_at": now_iso,
+        "age_days": round(float(age_days), 2),
+        "failure_count": int(failure_count),
+    }
+    completion_token = f"ambient_{uuid.uuid4().hex[:12]}_{now_iso}"
+    _complete_active_assignments_for_task(
+        conn,
+        task_id=task_id,
+        result_summary=reason_text or AMBIENT_CLOSE_REASON,
+        ended_at=now_iso,
+        outcome="completed",
+    )
+    conn.execute(
+        "UPDATE task_hub_items SET status=?, seizure_state=?, completion_token=?, metadata_json=?, updated_at=? WHERE task_id=?",
+        (TASK_STATUS_COMPLETED, "completed", completion_token, _json_dumps(metadata), now_iso, task_id),
+    )
+    _record_evaluation(
+        conn,
+        task_id=task_id,
+        agent_id=agent_id,
+        decision="complete",
+        reason=AMBIENT_CLOSE_REASON,
+        score=_safe_float(item.get("score"), 0.0),
+        score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+        judge_payload={
+            "source": AMBIENT_CLOSE_EVAL_SOURCE,
+            "via": via,
+            "age_days": round(float(age_days), 2),
+            "failure_count": int(failure_count),
+        },
+    )
+
+
+def close_ambient_vp_failures(
+    conn: sqlite3.Connection,
+    *,
+    older_than_days: int = DEFAULT_AMBIENT_TTL_DAYS,
+    max_failure_count: int = DEFAULT_AMBIENT_MAX_FAILURE_COUNT,
+    within_hours_guard: int = DEFAULT_AMBIENT_GUARD_HOURS,
+    agent_id: str = "ambient_sweep",
+    via: str = "ttl",
+    source_kind: str = VP_FAILURE_AMBIENT_SOURCE_KIND,
+    reason_text: str = "",
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Ambient-close stale, single (non-recurring) batch-event failure items.
+
+    Selects non-terminal ``source_kind`` items, enforces the GUARD on each, and
+    closes each QUALIFYING item through ``_ambient_close_failure_item`` (the
+    sanctioned per-item audit path — never a set-level bulk UPDATE). This is
+    the shared core used by BOTH the ``bulk_close_ambient`` Task Hub verb
+    (clears the existing backlog in one call) and the TTL sweep cron
+    (self-heals future batch-event piles).
+
+    GUARD — an item is closed only if ALL hold:
+
+    * ``created_at`` parses cleanly (malformed timestamps are skipped, never
+      closed — never auto-close something we cannot age),
+    * age (by ``created_at``) >= ``within_hours_guard`` (default 48h: preserve
+      the rescue-evaluator lane for recent failures),
+    * ``failure_count`` <= ``max_failure_count`` (default 1: preserve genuinely
+      recurring failures, ``failure_count >= 2``, for the rescue-evaluator),
+    * age >= ``older_than_days`` (the TTL window, default 7d),
+    * not already ambient-closed and not ``must_complete``.
+
+    Returns a summary dict: ``{via, source_kind, closed, skipped,
+    skipped_reasons, closed_ids, guard, dry_run}``. ``dry_run=True`` reports
+    the summary without writing.
+    """
+    ensure_schema(conn)
+    now_dt = datetime.now(timezone.utc)
+    now_iso = _now_iso()
+    guard_hours = max(0, _safe_int(within_hours_guard, DEFAULT_AMBIENT_GUARD_HOURS))
+    ttl_days = max(0, _safe_int(older_than_days, DEFAULT_AMBIENT_TTL_DAYS))
+    max_fc = max(0, _safe_int(max_failure_count, DEFAULT_AMBIENT_MAX_FAILURE_COUNT))
+    ttl_threshold_hours = float(ttl_days) * 24.0
+
+    rows = conn.execute(
+        "SELECT * FROM task_hub_items WHERE source_kind=? AND status NOT IN (?, ?, ?)",
+        (source_kind, TASK_STATUS_COMPLETED, TASK_STATUS_PARKED, TASK_STATUS_CANCELLED),
+    ).fetchall()
+
+    closed_ids: list[str] = []
+    skipped_reasons: dict[str, int] = {
+        "recent": 0,
+        "recurring": 0,
+        "below_ttl_window": 0,
+        "malformed_timestamp": 0,
+        "must_complete": 0,
+        "already_ambient_closed": 0,
+    }
+
+    for row in rows:
+        item = hydrate_item(dict(row))
+        task_id = str(item.get("task_id") or "")
+        meta = dict(item.get("metadata") or {})
+        if meta.get("ambient_close"):
+            skipped_reasons["already_ambient_closed"] += 1
+            continue
+        if bool(item.get("must_complete")):
+            skipped_reasons["must_complete"] += 1
+            continue
+        created_dt = _parse_iso(item.get("created_at"))
+        if created_dt is None:
+            skipped_reasons["malformed_timestamp"] += 1
+            continue
+        age_hours = max(0.0, (now_dt - created_dt).total_seconds() / 3600.0)
+        fc = _read_failure_count(item)
+        # GUARD order: protective skips first (recent, recurring), then the
+        # TTL-window gate. A too-aggressive guard buries real signals; a
+        # too-conservative one fails to self-heal.
+        if age_hours < float(guard_hours):
+            skipped_reasons["recent"] += 1
+            continue
+        if fc > max_fc:
+            skipped_reasons["recurring"] += 1
+            continue
+        if age_hours < ttl_threshold_hours:
+            skipped_reasons["below_ttl_window"] += 1
+            continue
+        if dry_run:
+            closed_ids.append(task_id)
+            continue
+        _ambient_close_failure_item(
+            conn,
+            item,
+            agent_id=agent_id,
+            via=via,
+            now_iso=now_iso,
+            age_days=age_hours / 24.0,
+            failure_count=fc,
+            reason_text=reason_text,
+        )
+        closed_ids.append(task_id)
+
+    if closed_ids and not dry_run:
+        conn.commit()
+        rebuild_dispatch_queue(conn)
+
+    return {
+        "via": via,
+        "source_kind": source_kind,
+        "closed": len(closed_ids),
+        "skipped": sum(skipped_reasons.values()),
+        "skipped_reasons": skipped_reasons,
+        "closed_ids": closed_ids,
+        "guard": {
+            "within_hours": guard_hours,
+            "older_than_days": ttl_days,
+            "max_failure_count": max_fc,
+        },
+        "dry_run": bool(dry_run),
+    }
 
 
 # ── VP Lifecycle Helpers ─────────────────────────────────────────────────────

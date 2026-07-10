@@ -13,7 +13,7 @@ from universal_agent.feature_flags import task_hub_missions_enabled
 _ACTION_ALIASES = {
     "claim": "seize",
 }
-_LIFECYCLE_ACTIONS = {"review", "complete", "block", "park", "unblock", "delegate", "approve", "seize", "claim"}
+_LIFECYCLE_ACTIONS = {"review", "complete", "block", "park", "unblock", "delegate", "approve", "seize", "claim", "bulk_close_ambient"}
 
 
 def _ok(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -30,7 +30,10 @@ def _err(message: str) -> Dict[str, Any]:
         "Perform Task Hub lifecycle actions for an existing task. "
         "Allowed actions: claim, seize, review, complete, block, park, unblock, delegate, approve. "
         "For delegate: set reason=<vp_id> (e.g. 'vp.general.primary') and note='mission_id=<id>'. "
-        "For approve: marks a VP-completed pending_review task as completed with sign-off."
+        "For approve: marks a VP-completed pending_review task as completed with sign-off. "
+        "For bulk_close_ambient: NO task_id; pass filter={older_than_days, max_failure_count, "
+        "within_hours_guard, source_kind} to ambient-close a batch of stale vp_mission_failure "
+        "items (default: >7d old, failure_count<=1, >48h guard). Returns a summary."
     ),
     input_schema={
         "task_id": str,
@@ -38,6 +41,7 @@ def _err(message: str) -> Dict[str, Any]:
         "reason": str,
         "note": str,
         "agent_id": str,
+        "filter": dict,
     },
 )
 async def task_hub_task_action_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -45,16 +49,54 @@ async def task_hub_task_action_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _task_hub_task_action_impl(args: Dict[str, Any]) -> Dict[str, Any]:
-    task_id = str(args.get("task_id", "") or "").strip()
-    if not task_id:
-        return _err("task_id is required")
-
     action = str(args.get("action", "") or "").strip().lower()
     if action not in _LIFECYCLE_ACTIONS:
         return _err(
             f"unsupported action: {action}. allowed actions: {', '.join(sorted(_LIFECYCLE_ACTIONS))}"
         )
     action_norm = _ACTION_ALIASES.get(action, action)
+
+    # bulk_close_ambient is a batch verb: NO task_id. It takes a `filter`
+    # ({older_than_days, max_failure_count, within_hours_guard, source_kind})
+    # and closes each qualifying stale vp_mission_failure item through the
+    # sanctioned per-item lifecycle path (task_hub.close_ambient_vp_failures).
+    # Returns a summary dict, not a single item.
+    if action_norm == "bulk_close_ambient":
+        filt = args.get("filter") or {}
+        if isinstance(filt, str):
+            try:
+                filt = json.loads(filt)
+            except json.JSONDecodeError as exc:
+                return _err(f"filter must be a JSON object: {exc}")
+        if not isinstance(filt, dict):
+            return _err("filter must be a JSON object")
+        conn = connect_runtime_db(get_activity_db_path())
+        conn.row_factory = sqlite3.Row
+        try:
+            summary = task_hub.perform_task_action(
+                conn,
+                task_id="",
+                action="bulk_close_ambient",
+                filt=filt,
+                reason=str(args.get("reason", "") or "").strip(),
+                agent_id=str(args.get("agent_id", "heartbeat_agent") or "heartbeat_agent").strip()
+                or "heartbeat_agent",
+            )
+        except ValueError as exc:
+            return _err(str(exc))
+        finally:
+            conn.close()
+        return _ok(
+            {
+                "success": True,
+                "action": "bulk_close_ambient",
+                "summary": summary,
+            }
+        )
+
+    task_id = str(args.get("task_id", "") or "").strip()
+    if not task_id:
+        return _err("task_id is required")
 
     conn = connect_runtime_db(get_activity_db_path())
     conn.row_factory = sqlite3.Row
