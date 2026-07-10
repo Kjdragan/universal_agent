@@ -24,6 +24,9 @@ from universal_agent.vp.clients.base import (
     VpClient,
     consume_adapter_events_with_idle_timeout,
 )
+from universal_agent.vp.finalize_failure_context import (
+    maybe_work_done_finalize_failed_payload,
+)
 
 
 class ClaudeCodeClient(VpClient):
@@ -57,6 +60,10 @@ class ClaudeCodeClient(VpClient):
         trace_id: Optional[str] = None
         final_text = ""
         error_text: Optional[str] = None
+        # Populated by the adapter consumer when an ERROR event arrives, so
+        # the failure outcome can carry the engine detail/log_tail/trace_id
+        # that the bare-error path used to drop.
+        error_context: dict[str, Any] = {}
 
         try:
             await adapter.initialize()
@@ -72,6 +79,7 @@ class ClaudeCodeClient(VpClient):
                 await consume_adapter_events_with_idle_timeout(
                     adapter, objective,
                     idle_timeout_seconds=vp_no_progress_kill_seconds(),
+                    error_context=error_context,
                 )
             )
         finally:
@@ -110,6 +118,22 @@ class ClaudeCodeClient(VpClient):
                 # Best-effort — never let bookkeeping mask the original failure.
                 pass
 
+            # Diagnosability: if the real work (apply-edits) ran before the
+            # finalize-step crash, replace the bare failure payload with the
+            # recoverable work_done_finalize_failed record so the dispatch
+            # sweep/rescue see done-but-unfinalized work, not a destructive
+            # re-run candidate. Preserves the sdk-timeout bookkeeping above.
+            _work_done_payload = maybe_work_done_finalize_failed_payload(
+                workspace_dir=workspace_dir,
+                final_text=final_text,
+                trace_id=trace_id,
+                error_message=error_text,
+                error_detail=error_context.get("detail"),
+                log_tail=error_context.get("log_tail"),
+                prior_payload=outcome_payload,
+            )
+            if _work_done_payload is not None:
+                outcome_payload = _work_done_payload
             return MissionOutcome(
                 status="failed",
                 result_ref=f"workspace://{workspace_dir}",
@@ -129,6 +153,24 @@ class ClaudeCodeClient(VpClient):
 
         # Detect zero-output missions (startup crash / silent failure)
         if not final_text.strip():
+            # Even with no final text, the apply may have run before a
+            # finalize crash — recognize recoverable done-work first.
+            _work_done_payload = maybe_work_done_finalize_failed_payload(
+                workspace_dir=workspace_dir,
+                final_text=final_text,
+                trace_id=trace_id,
+                error_message="zero output (possible startup crash or adapter failure)",
+            )
+            if _work_done_payload is not None:
+                return MissionOutcome(
+                    status="failed",
+                    result_ref=f"workspace://{workspace_dir}",
+                    message=(
+                        "Mission produced no final output but prior work "
+                        "was applied (finalize-step crash suspected)"
+                    ),
+                    payload=_work_done_payload,
+                )
             import logging
             logging.getLogger(__name__).warning(
                 "VP mission %s produced no output — marking as failed (possible startup crash)",
