@@ -1,0 +1,247 @@
+<title>Universal Agent — Fable Ultra Code Review</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#14161a; --muted:#5b636e; --line:#e4e7ec;
+    --hi:#b42318; --med:#b25f00; --low:#5b636e; --sec:#6941c6; --ok:#067647;
+    --chip:#eef1f5; --code:#f2f4f7; --accent:#1d4ed8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-text-size-adjust:100%}
+  .wrap{max-width:1040px;margin:0 auto;padding:28px 20px 80px}
+  header h1{font-size:26px;margin:0 0 6px;letter-spacing:-.01em}
+  header .sub{color:var(--muted);font-size:14px;margin-bottom:2px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 6px}
+  .pill{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:18px 0 26px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .stat b{display:block;font-size:22px;line-height:1.1}
+  .stat span{color:var(--muted);font-size:12px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:30px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .f{background:var(--card);border:1px solid var(--line);border-left-width:4px;border-radius:12px;padding:14px 16px;margin:11px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .f.hi{border-left-color:var(--hi)} .f.med{border-left-color:var(--med)} .f.sec{border-left-color:var(--sec)} .f.low{border-left-color:var(--low)}
+  .f .top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .rank{font-weight:700;font-size:15px;color:var(--muted);min-width:20px}
+  .f h3{font-size:16px;margin:0;flex:1;min-width:240px;letter-spacing:-.01em}
+  .tags{display:flex;gap:6px;flex-wrap:wrap}
+  .tag{font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;border:1px solid transparent}
+  .t-hi{background:#fef3f2;color:var(--hi);border-color:#fecdca}
+  .t-med{background:#fef6e7;color:var(--med);border-color:#fddca6}
+  .t-sec{background:#f4f3ff;color:var(--sec);border-color:#d9d6fe}
+  .t-live{background:#fff1f0;color:#a8071a;border-color:#ffa39e}
+  .t-latent{background:#f0f4ff;color:#1d39c4;border-color:#adc6ff}
+  .t-ok{background:#ecfdf3;color:var(--ok);border-color:#abefc6}
+  .loc{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;color:var(--accent);background:var(--code);padding:1px 6px;border-radius:5px;display:inline-block;margin:8px 0 4px;word-break:break-all}
+  .f p{margin:6px 0 0;color:#2b2f36;font-size:14px}
+  .f p.sc{color:var(--muted);font-size:13.5px}
+  .f .why{margin-top:7px;font-size:13px;color:#3a3f47;background:#fafbfc;border:1px dashed var(--line);border-radius:8px;padding:8px 10px}
+  details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px 16px;margin:11px 0}
+  details summary{cursor:pointer;font-weight:600;padding:8px 0}
+  details li{margin:5px 0;font-size:13.5px;color:#3a3f47}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--code);padding:1px 5px;border-radius:4px}
+  .note{font-size:12.5px;color:var(--muted);margin-top:4px}
+  footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>Universal Agent — Ultra Code Review</h1>
+  <div class="sub">Whole-repo review by Claude Fable · target <code>origin/main</code> @ <code>7a53ad97</code> · 2026-07-10</div>
+  <div class="meta">
+    <span class="pill">12 finder angles → 55 candidates</span>
+    <span class="pill">8 verifier clusters (1-vote, 3-state)</span>
+    <span class="pill">3 findings independently re-confirmed by Fable</span>
+    <span class="pill">4 live probes on the production gateway (read-only)</span>
+  </div>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--hi)"></i>correctness / reliability</span>
+    <span><i class="dot" style="background:var(--sec)"></i>security</span>
+    <span><i class="dot" style="background:var(--med)"></i>medium</span>
+    <span><b>LIVE</b> = proven on the running VPS · <b>latent</b> = real but not currently firing</span>
+  </div>
+</header>
+
+<div class="grid">
+  <div class="stat"><b>15</b><span>ranked findings (of 55 candidates)</span></div>
+  <div class="stat"><b>2</b><span>LIVE unauthenticated destructive endpoints</span></div>
+  <div class="stat"><b>2</b><span>idempotency bugs → duplicate side effects</span></div>
+  <div class="stat"><b>1</b><span>candidate REFUTED &amp; dropped</span></div>
+</div>
+
+<h2>Top tier — fix first</h2>
+
+<div class="f sec hi">
+  <div class="top"><span class="rank">1</span><h3>Unauthenticated destructive CSI purge — internet-reachable</h3>
+    <div class="tags"><span class="tag t-sec">security</span><span class="tag t-live">LIVE</span></div></div>
+  <div class="loc">gateway_server.py:16424 — POST /api/v1/dashboard/csi/purge</div>
+  <p>The endpoint takes no <code>Request</code> and makes no auth call; it wipes CSI digests, activity-event notifications, the <code>csi_specialist_loops</code> table, and CSI <code>task_hub_items</code>. Sibling destructive routes (<code>dashboard_discord_delete_*</code>) all call <code>_require_ops_auth</code>; this one doesn't, and the only auth middleware matches <code>/api/v1/ops/*</code> only.</p>
+  <p class="sc"><b>Proven live:</b> <code>GET /api/v1/dashboard/csi/digests</code> on the running gateway returned <b>HTTP 200</b> with 457 KB of data and no token, while the auth-gated control <code>GET /api/v1/sessions</code> returned <b>401</b>. The destructive POST shares that same (absent) auth. Reachable publicly via nginx (<code>app.clearspringcg.com</code>) → Next.js → :8002, and with <code>CORS allow_origins=["*"] + allow_credentials=True</code> it is a cross-origin drive-by from any browser that can route to the host.</p>
+  <div class="why">Fix: gate on <code>_require_ops_auth(request)</code> like the Discord siblings, or add a middleware covering <code>/api/v1/dashboard/*</code> and <code>/api/v1/csi/*</code>. Also tighten CORS off wildcard-with-credentials.</div>
+</div>
+
+<div class="f sec hi">
+  <div class="top"><span class="rank">2</span><h3>Unauthenticated CSI watchlist add/delete</h3>
+    <div class="tags"><span class="tag t-sec">security</span><span class="tag t-live">LIVE</span></div></div>
+  <div class="loc">api/routers/csi_watchlist.py:195 — DELETE /{channel_id} · POST /add</div>
+  <p>The router imports no auth dependency at all and is mounted with <code>app.include_router(csi_watchlist_router)</code> (no <code>dependencies=[...]</code>). <code>delete_channel</code> rewrites the on-disk watchlist JSON and purges DB rows; <code>add_channel</code> injects arbitrary channels.</p>
+  <p class="sc"><b>Proven live:</b> <code>GET /api/v1/csi/watchlist</code> returned <b>HTTP 200</b> with the full channel list and no token. The DELETE/POST on the same router are equally open.</p>
+  <div class="why">Fix: add the same auth dependency the gated routers use, at the router level (<code>APIRouter(dependencies=[Depends(require_ops_auth)])</code>).</div>
+</div>
+
+<div class="f hi">
+  <div class="top"><span class="rank">3</span><h3>Idempotency ledger reads the wrong columns → duplicate external side effects</h3>
+    <div class="tags"><span class="tag t-hi">correctness</span><span class="tag t-ok">Fable-confirmed</span></div></div>
+  <div class="loc">durable/ledger.py:253 — prepare_tool_call, UNIQUE-constraint race branch</div>
+  <p>On the concurrent-duplicate race the branch is meant to dedupe, it fetches the existing row with <code>SELECT *</code> (positional) and builds the receipt from the wrong indices: <code>status=existing[14]</code> is actually <code>idempotency_key</code>, <code>idempotency_key=existing[13]</code> is actually <code>normalized_args_hash</code>, and <code>response_ref</code> is hardcoded <code>None</code> — discarding the real cached response at index 18 (schema verified in <code>migrations.py</code>).</p>
+  <p class="sc"><b>Failure:</b> back in <code>main.py</code>, <code>cached_response = receipt.response_ref or ""</code> is always empty → <code>is_valid_cache</code> false → it logs <i>"Cached result was empty/error — allowing retry"</i> and re-executes. For a side-effecting tool (<code>GMAIL_SEND_EMAIL</code>, Slack send) the second caller <b>sends again</b> — exactly the email-storm class this ledger exists to prevent.</p>
+  <div class="why">Fix: index by column name (<code>sqlite3.Row</code>) instead of magic offsets; return the real <code>response_ref</code>/<code>status</code>. Add a self-check test on the race branch.</div>
+</div>
+
+<div class="f sec hi">
+  <div class="top"><span class="rank">4</span><h3>Unauthenticated session file upload → prompt injection + disk fill</h3>
+    <div class="tags"><span class="tag t-sec">security</span><span class="tag t-ok">Fable-confirmed</span></div></div>
+  <div class="loc">gateway_server.py:18406 — POST /api/v1/sessions/{session_id}/upload</div>
+  <p>This is the only <code>/api/v1/sessions/…</code> route with no <code>Request</code> parameter and no <code>_require_session_api_auth</code> call (create/list/get/policy/resume/delete all gate). It <code>mkdir</code>s the workspace unconditionally and, per its docstring, returns text-file content "so the frontend can inject it into the user prompt".</p>
+  <p class="sc"><b>Failure:</b> an unauthenticated caller can (a) fill disk with 10 MB/request across unlimited fabricated session dirs, or (b) for a known/guessed session id, plant a file whose content is injected into that session's prompt. Internet-routed like #1/#2. (Verified in code + the auth-gated control returning 401; the write itself was not exercised.)</p>
+  <div class="why">Fix: add <code>request: Request</code> and call <code>_require_session_api_auth(request)</code>; bind uploads to an existing, owned session instead of auto-mkdir.</div>
+</div>
+
+<div class="f hi">
+  <div class="top"><span class="rank">5</span><h3>File-descriptor leak: journal handle never closed</h3>
+    <div class="tags"><span class="tag t-hi">reliability</span></div></div>
+  <div class="loc">agent_core.py:1990 — UniversalAgent.run_query</div>
+  <p><code>journal_file = open(journal_path, "a")</code> is opened at the start of every turn, but the <code>finally</code> closes only <code>run_log_file</code> — there is no <code>journal_file.close()</code> anywhere in the file. The same <code>UniversalAgent</code> instance is reused across turns in a session.</p>
+  <p class="sc"><b>Failure:</b> on a long-lived process (gateway, Telegram bot) this leaks one fd per turn; eventually the process hits its fd ulimit and every subsequent file/socket open fails with <i>"Too many open files"</i> — a whole-process outage.</p>
+  <div class="why">Fix: close <code>journal_file</code> in the same <code>finally</code>, or use a <code>with</code>/<code>contextlib.ExitStack</code>.</div>
+</div>
+
+<div class="f hi">
+  <div class="top"><span class="rank">6</span><h3>Blocking 180 s git-fetch outlives the 120 s mission lease → duplicate execution</h3>
+    <div class="tags"><span class="tag t-hi">correctness</span></div></div>
+  <div class="loc">vp/worker_loop.py:1536 — _provision_workspace</div>
+  <p><code>subprocess.run(["git","fetch",…], timeout=180)</code> runs synchronously on the VP worker's single event loop. The lease is renewed once <i>before</i> <code>_provision_workspace</code>, but the recurring renewal task is created only <i>after</i> it returns; the lease TTL default is 120 s (<code>vp_lease_ttl_seconds</code>).</p>
+  <p class="sc"><b>Failure:</b> a slow-but-successful fetch (120–180 s) expires the lease with no renewal in flight; <code>claim_next_vp_mission</code> reclaims expired leases (<code>status='running' AND claim_expires_at &lt; now</code>), so a worker restart (<code>Restart=always</code>) or a second instance duplicate-executes the coder mission — two worktrees, potentially two PRs.</p>
+  <div class="why">Fix: offload the fetch with <code>asyncio.to_thread</code>, and/or start the renewal task before provisioning. Ensure fetch timeout &lt; lease TTL.</div>
+</div>
+
+<div class="f sec med">
+  <div class="top"><span class="rank">7</span><h3>Cross-session file read via string-prefix path check</h3>
+    <div class="tags"><span class="tag t-sec">security</span><span class="tag t-med">medium</span></div></div>
+  <div class="loc">api/server.py:338 (and :300)</div>
+  <p><code>str(target).startswith(str(workspace_resolved))</code> after <code>.resolve()</code>. <code>resolve()</code> collapses plain <code>../</code>, but a sibling that shares the name as a prefix passes: for workspace <code>…/session_123</code>, <code>file_path=../session_123_other/secret.txt</code> resolves to a different directory yet <code>startswith</code> is true. Reachable via <code>/api/files/{session_id}/{file_path:path}</code> and <code>/api/v1/runs/{run_id}/files/{file_path:path}</code>.</p>
+  <p class="sc"><b>Note:</b> the same file already has the correct pattern in <code>_resolve_path_under_root</code> (<code>root_resolved in target.parents</code>). In prod, <code>_enforce_session_owner</code> requires owning one session, so impact scales with multi-user exposure.</p>
+  <div class="why">Fix: reuse <code>_resolve_path_under_root</code>'s <code>parents</code>-based containment check in both helpers.</div>
+</div>
+
+<div class="f med">
+  <div class="top"><span class="rank">8</span><h3><code>execute_simple</code> always reports success</h3>
+    <div class="tags"><span class="tag t-med">correctness</span></div></div>
+  <div class="loc">execution_engine.py:1243</div>
+  <p>It reads <code>event.data.get("error")</code>, but both ERROR emitters put the text under <code>data["message"]</code>. So <code>error</code> is always <code>None</code> and <code>"success": error is None</code> is always <code>True</code>.</p>
+  <p class="sc"><b>Failure:</b> any caller of <code>execute_simple</code> (testing / simple integrations, per its docstring) sees a failed or watchdog-killed run reported as a clean success with empty error.</p>
+  <div class="why">Fix: read <code>data.get("message")</code> (or standardize the ERROR event key across emitters).</div>
+</div>
+
+<div class="f med">
+  <div class="top"><span class="rank">9</span><h3>Ledger returns a bool where an idempotency-key string is declared</h3>
+    <div class="tags"><span class="tag t-med">correctness</span><span class="tag t-ok">Fable-confirmed</span></div></div>
+  <div class="loc">durable/ledger.py:261 — return type tuple[Optional[LedgerReceipt], str]</div>
+  <p>The race branch returns <code>(receipt, False)</code> and the FK branch <code>(receipt, True)</code>; callers unpack the 2nd element as <code>idempotency_key</code> into <code>ToolDecision</code>.</p>
+  <p class="sc"><b>Failure:</b> on the FK/phantom path (the comment says it "commonly occurs"), <code>_inject_provider_idempotency</code> writes <code>client_request_id = True</code> (JSON <code>true</code>, non-unique) into provider calls, defeating provider-side dedup; on the race path the real key is lost so no provider idempotency token is injected at all.</p>
+  <div class="why">Fix: return the actual <code>idempotency_key</code> string in both branches.</div>
+</div>
+
+<div class="f med">
+  <div class="top"><span class="rank">10</span><h3>Non-atomic Task-Hub claim / queue-rebuild / finalize</h3>
+    <div class="tags"><span class="tag t-med">correctness</span><span class="tag t-latent">latent</span></div></div>
+  <div class="loc">task_hub.py:2512 (claim) · :1894 (rebuild) · :4266 (finalize)</div>
+  <p>The runtime connection is autocommit (<code>isolation_level=None</code>) with no <code>BEGIN IMMEDIATE</code> and no <code>UNIQUE(task_id)</code> on assignments. Claim is check-then-act (status read, then <code>UPDATE … WHERE task_id=?</code> with no status guard); rebuild does an unconditional <code>DELETE FROM task_hub_dispatch_queue</code> then per-row autocommit inserts; finalize pops <code>active_assignment_id</code> without checking it owns the current in-progress state.</p>
+  <p class="sc"><b>Failure (latent):</b> two concurrent claimers double-dispatch a task; a concurrent rebuild wipes another's just-inserted rows and starves it; a late finalize clobbers a newer assignment's metadata. Currently masked by single-process, serialized, no-await dispatch — but fragile: one added <code>await</code> between check and update, or a second claiming process, reintroduces duplicate workers.</p>
+  <div class="why">Fix: make the claim atomic (<code>UPDATE … WHERE task_id=? AND status IN(...)</code> and check <code>rowcount</code>, or <code>BEGIN IMMEDIATE</code>); add <code>UNIQUE(task_id)</code> for active assignments; scope rebuild/finalize to the owning id.</div>
+</div>
+
+<div class="f sec med">
+  <div class="top"><span class="rank">11</span><h3>Action-link tokens never expire and are replayable</h3>
+    <div class="tags"><span class="tag t-sec">security</span><span class="tag t-med">medium</span></div></div>
+  <div class="loc">services/cron_artifact_notifier.py:1051 — sign_ack_token / sign_gpu_demo_token</div>
+  <p>Tokens are an HMAC over a static id/action string with no timestamp or nonce, so they never expire — yet the gpu_demo approve endpoint shows "Link expired or invalid" and overwrites decision state with no already-decided guard.</p>
+  <p class="sc"><b>Failure:</b> a leaked or forwarded approve/ack/promote email link stays valid forever and can be replayed to flip an approve↔reject decision the operator already changed. The codebase's own <code>proactive_health_notifier.sign_finding_ack_token</code> embeds and checks an expiry — that pattern just wasn't applied here.</p>
+  <div class="why">Fix: embed an <code>exp</code> claim + verify it; mark tokens single-use (consume like the Link card-token flow).</div>
+</div>
+
+<div class="f med">
+  <div class="top"><span class="rank">12</span><h3>Blocking calls on the gateway event loop</h3>
+    <div class="tags"><span class="tag t-med">perf / correctness</span></div></div>
+  <div class="loc">services/agentmail_service.py:4313 (time.sleep ≤3 s) · :2490 (subprocess.run gws, timeout=15 s)</div>
+  <p>Both run synchronously inside async inbound-email paths on the gateway's single event loop: a sqlite lock-retry sleeps up to ~3 s, and calendar scheduling shells out to <code>gws</code> for up to 15 s.</p>
+  <p class="sc"><b>Failure:</b> during those windows no other coroutine runs — HTTP, health checks, other loops all stall. This is the exact incident class fixed elsewhere via <code>asyncio.to_thread</code> (the 2026-05-26 "Gateway unreachable" regression).</p>
+  <div class="why">Fix: wrap both in <code>asyncio.to_thread</code>/<code>run_in_executor</code>.</div>
+</div>
+
+<div class="f sec med">
+  <div class="top"><span class="rank">13</span><h3>Non-constant-time secret comparison (CWE-208)</h3>
+    <div class="tags"><span class="tag t-sec">security</span><span class="tag t-med">medium</span></div></div>
+  <div class="loc">gateway_server.py:14503 (+session/ws/youtube auth) · hooks_service.py:4365</div>
+  <p>Ops-token issuance, the session API/WS auth, and the default webhook-token strategy all compare secrets with plain <code>==</code>/<code>!=</code>. The constant-time <code>hmac.compare_digest</code> is used elsewhere in the very same modules (<code>auth/ops_auth.py</code>, the <code>composio_hmac</code> branch).</p>
+  <p class="sc"><b>Note:</b> a remote HTTP timing side-channel is hard to exploit in practice (network jitter dominates), so this is a real code-level defect with a high practical bar rather than an easy exploit.</p>
+  <div class="why">Fix: swap to <code>hmac.compare_digest</code> for all secret comparisons.</div>
+</div>
+
+<div class="f med">
+  <div class="top"><span class="rank">14</span><h3>Digest-pause link signed and verified with different secret chains</h3>
+    <div class="tags"><span class="tag t-med">correctness</span><span class="tag t-latent">latent</span></div></div>
+  <div class="loc">services/hourly_intel_digest.py:620 (sign) vs cron_artifact_notifier.py _ack_secret (verify)</div>
+  <p>The emailed pause link is signed via <code>_digest_pause_secret()</code>, which checks <code>UA_FEEDBACK_HMAC_SECRET</code> first; the live <code>/api/v1/digest/pause</code> verifies via <code>cron_artifact_notifier._ack_secret()</code>, which omits that var entirely.</p>
+  <p class="sc"><b>Failure (latent):</b> the moment <code>UA_FEEDBACK_HMAC_SECRET</code> is set and differs from <code>UA_ARTIFACT_ACK_SECRET</code> — and that var exists <i>only</i> for this feature — every emailed pause link 401s and the operator can never pause the digest. CI misses it because the tests round-trip only the same-module pair. (Runtime secret values weren't read, so live-vs-latent isn't determined.)</p>
+  <div class="why">Fix: have <code>hourly_intel_digest</code> import the canonical <code>sign_digest_pause_token</code> from <code>cron_artifact_notifier</code> so one secret chain is used on both sides.</div>
+</div>
+
+<div class="f sec med">
+  <div class="top"><span class="rank">15</span><h3><code>_require_ops_auth</code> fails open when tokens are unset</h3>
+    <div class="tags"><span class="tag t-sec">security</span><span class="tag t-latent">latent</span></div></div>
+  <div class="loc">gateway_server.py:14475</div>
+  <p>It returns (allows the request) when both <code>UA_OPS_TOKEN</code> and <code>UA_OPS_JWT_SECRET</code> are unset, regardless of deployment profile — whereas <code>_require_session_api_auth</code> fails <i>closed</i> (503) on the vps profile.</p>
+  <p class="sc"><b>Live check:</b> the ops endpoints currently return 401 (the token <i>is</i> populated at runtime), so this is not firing today. But if Infisical ever fails to populate the ops token at boot/redeploy, the entire <code>/api/v1/ops/*</code> admin surface (ZAI/factory/Telegram/timer controls) silently opens with no request-time warning.</p>
+  <div class="why">Fix: fail closed on the vps profile, mirroring <code>_require_session_api_auth</code>.</div>
+</div>
+
+<h2>Confirmed runner-ups (didn't make the top-15 cut)</h2>
+<details open><summary>Nine more verified defects worth a ticket</summary>
+<ul>
+  <li><b>Full parent env handed to the spawned <code>claude</code> CLI</b> — <code>vp/clients/claude_cli_client.py:1307</code> &amp; <code>services/cody_implementation.py:485</code> pass <code>dict(os.environ)</code> (every Infisical secret) to an autonomous agent with Bash access. Violates the user-global least-privilege-subprocess rule; the correct allow-list pattern exists at <code>hackernews_snapshot_service.py::_cli_env</code>.</li>
+  <li><b>Orphaned <code>engine_task</code> on lease-break</b> — <code>gateway.py:1277</code> <code>break</code>s out of the adapter generator without <code>aclose()</code>/cancel; the cached CODER-VP <code>ClaudeSDKClient</code> is reused later while the orphan turn may still be driving it → interleaved conversation state.</li>
+  <li><b>Non-atomic Redis result publish</b> — <code>delegation/redis_vp_result_bridge.py:99</code> publishes then marks-published as two steps; a crash between them re-publishes a duplicate SUCCESS/FAILED for the same job on the next tick.</li>
+  <li><b>Stale-reap of live work</b> — <code>services/todo_dispatch_service.py:714</code> calls <code>dispatch_sweep</code> without <code>additional_running_sessions</code> though it tracks <code>self.executing_sessions</code>; a long-running peer's assignment can be released as "abandoned". Latent under today's serialized loop.</li>
+  <li><b>Global <code>os.environ</code> mutated across an <code>await</code></b> — <code>execution_engine.py:637</code> sanitizes the process env inside a context manager held across <code>transport.connect()</code>, no lock; concurrent same-loop adapters can observe a stripped env or clobber it on out-of-order restore.</li>
+  <li><b>Heartbeat dead code masks the live path</b> — <code>heartbeat_service.py:2490</code> hardcodes <code>task_hub_claimed=[]</code>, so its finalize + <code>release_stale_assignments(agent_id_prefix="heartbeat:")</code> safety net matches zero rows (live claimers use <code>todo:</code>).</li>
+  <li><b><code>priority = envelope.priority or 100</code></b> — <code>delegation/redis_vp_bridge.py:252</code> turns an intentional <code>priority=0</code> (most-urgent under ASC ordering) into 100 (least-urgent). Latent on the external wire protocol.</li>
+  <li><b>Connection/fd not released</b> — bare <code>with connect_runtime_db(...) as conn:</code> commits but doesn't close (<code>todo_dispatch_service.py</code> ×6, <code>urw/plan_persistence.py</code>). The fix (<code>contextlib.closing</code>) already exists at <code>priority_dispatcher.py:199</code>.</li>
+  <li><b>Safety-status parse fragility</b> — <code>email_task_bridge.py:133</code> falls back to a whole-text <code>"quarantine" in text</code> substring scan when the field regex misses (it misses even the prompt's own <code>- safety_status:</code> bullet form). Fails safe (over-quarantine).</li>
+</ul>
+</details>
+
+<h2>Quality themes (not bugs, but real drift risk)</h2>
+<details><summary>Duplication &amp; altitude patterns worth a cleanup pass</summary>
+<ul>
+  <li><b>6+ hand-rolled LLM-JSON parsers</b> while <code>utils/json_utils.py::extract_json_payload</code> (robust, 5-layer) exists — two are byte-identical copies (<code>mission_control_tier1.py:437</code>, <code>mission_control_chief_of_staff.py:753</code>); others drift in fence-stripping/error behavior.</li>
+  <li><b>Anthropic-client + api-key fallback + tool_use retry</b> copy-pasted across <code>csi_url_judge</code>, <code>csi_intelligence_pass</code>, <code>claude_code_intel</code> (a docstring literally says "Mirrors…").</li>
+  <li><b><code>_slugify</code> reimplemented ≥6×</b> with drifted truncation lengths (40 / 48 / none) — slug-mismatch bug class between call sites.</li>
+  <li><b><code>calendar_task_bridge.py</code></b> — 807 lines, 57 tests, zero production call sites, yet docs mark it "IMPLEMENTED". Also latent: no producer ever sets <code>TASK_STATUS_SCHEDULED</code>, and <code>trigger_type='scheduled'</code> tasks are never gated on <code>due_at</code> (only used as a sort tiebreaker), so the "hold until due" contract isn't established for any producer.</li>
+  <li><b>Efficiency:</b> <code>dispatch_scheduled_due</code> rebuilds the entire dispatch queue once per due task (should claim once with <code>limit=N</code>); <code>cron_service._scheduler_loop</code> writes the full job registry once per fired job instead of once per tick.</li>
+  <li><b>Altitude:</b> shared Task-Hub paths carry incident-driven special cases (a hardcoded <code>DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS</code> frozenset, three overlapping eligibility branches, per-<code>source_kind</code> string checks duplicated between claim and dashboard-read) that should be data-driven task-kind policy.</li>
+</ul>
+</details>
+
+<h2>Dropped after verification</h2>
+<div class="f low">
+  <div class="top"><h3>Shared empty-write failure counter</h3><div class="tags"><span class="tag t-ok">REFUTED</span></div></div>
+  <div class="loc">agent_core.py:731 — _EMPTY_WRITE_FAILURE_COUNT</div>
+  <p class="sc">The module-global counter is real, but its only wiring (<code>_default_hooks</code>) is reached solely from <code>server.py</code>, which is dead/unreferenced. Both live call sites (CLI <code>main.py</code>, WebSocket <code>api/agent_bridge.py</code>) pass explicit <code>AgentHookSet</code> hooks that bypass it — so concurrent sessions do not actually share the counter. Not a live bug.</p>
+</div>
+
+<footer>
+  Method: 10 parallel finder angles + a task-spine and gateway specialist (12 total) surfaced 55 candidates; 8 verifier agents adjudicated each as CONFIRMED / PLAUSIBLE / REFUTED with quoted evidence; Fable independently re-derived the two ledger bugs against the DB schema and ran four read-only probes against the live production gateway to separate LIVE from latent. Line numbers are against <code>origin/main</code> @ <code>7a53ad97</code> and may shift. No files were modified; only read-only GETs were issued to the running service.
+</footer>
+</div>
