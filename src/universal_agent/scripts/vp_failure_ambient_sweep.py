@@ -80,7 +80,7 @@ def main() -> int:
     finally:
         try:
             conn.close()
-        except Exception:  # noqa: BLE001
+        except sqlite3.Error:
             pass
 
     logger.info(
