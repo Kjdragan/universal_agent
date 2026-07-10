@@ -968,6 +968,25 @@ the triage verdict + dispatch path (candidate→task), not this artifact→task 
 > (run_kind `"cron"`) and `hooks.py::on_post_email_send_artifact` (run_kind `"cron"`),
 > so every cron delivery is tracked regardless of which path sent it.
 
+> **Manual-recovery delivery tracking (2026-07-10).** The self-send layer above
+> only fires for `run_kind == "cron"` deliveries — a *manually-recovered*
+> scheduled artifact (e.g. `paper_to_podcast_daily` missed, then re-delivered to
+> Kevin by a principal/agent from a non-cron run context via an AgentMail send)
+> still bypassed both gates, so the false 'no email in 30h' critical persisted
+> for hours after Kevin actually received it (verified 2026-07-09: podcast
+> delivered at 21:04 UTC, watchdog still critical 3h later). The delivery core is
+> now shared: `record_cron_run_delivery_email` (cron self-send) and the new
+> `cron_artifact_notifier.py::log_manual_artifact_delivery` (manual recovery) both
+> delegate to `cron_artifact_notifier.py::_record_job_delivery`, which is
+> idempotent on `message_id`, tags the subject `[<job_id>]`, and coalesces onto
+> the existing artifact row. The manual helper is **selective** — it is NOT
+> auto-fired on every AgentMail send (Kevin receives many non-artifact
+> messages); the recovery caller asserts the `job_id` linkage by invoking the
+> companion CLI `universal_agent.scripts.log_manual_artifact_delivery` after the
+> re-delivery send succeeds. Both write into the same `proactive_artifact_emails`
+> table with the same `[<job_id>]` tag the watchdog matches, so the critical
+> clears with **no watchdog-query change** — the probe is delivery-kind-agnostic.
+
 ---
 
 ## Gotchas

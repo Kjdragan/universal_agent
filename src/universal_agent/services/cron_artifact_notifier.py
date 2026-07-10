@@ -467,48 +467,46 @@ def notify_cron_artifact_fire_and_forget(
             )
 
 
-def record_cron_run_delivery_email(
+def _record_job_delivery(
     conn: sqlite3.Connection,
     *,
     job_id: str,
-    message_id: str = "",
-    subject: str = "",
-    recipient: str = "",
-    source: str = "",
+    message_id: str,
+    subject: str,
+    recipient: str,
+    source: str,
+    kind: str,
+    extra_metadata: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
-    """Record a cron run's *self-sent* email as a delivered proactive artifact.
+    """Shared core that records a job-keyed artifact delivery row.
 
-    This is the delivery-tracking layer that catches sends the notifier
-    itself never sees. ``notify_cron_artifact`` only records the
-    *notifier*-composed disclosure email; when the agent inside the cron run
-    delivers the real artifact directly via an AgentMail tool (canonical case:
-    ``paper_to_podcast_daily`` resume-runs emailing the podcast mp3 through
-    ``mcp__internal__agentmail_send_with_local_attachments`` or
-    ``mcp__AgentMail__send_message``), that send bypasses the notifier. Without
-    this layer no row lands in ``proactive_artifact_emails`` and the subject
-    lacks the ``[<job_id>]`` tag the ``paper_to_podcast_email_delivery``
-    proactive-health watchdog keys on — producing a recurring false 'no email
-    in 30h' *critical* even though Kevin actually received the podcast
-    (verified Amazon SES ``message_id``).
+    Writes one ``proactive_artifact_emails`` row whose subject is tagged with
+    ``[<job_id>]`` — the exact marker the ``proactive_pipeline_invariants``
+    delivery watchdogs (e.g. ``paper_to_podcast_email_delivery``) match — so any
+    delivery recorded here (cron-run self-send OR manual recovery) clears the
+    watchdog's per-job freshness critical. ``record_cron_run_delivery_email``
+    (cron self-send path) and ``log_manual_artifact_delivery`` (manual-recovery
+    path) both delegate here, sharing one dedup/tag/coalesce implementation.
 
     Best-effort and idempotent:
 
       1. **Dedup on ``message_id``** — skip if a row already exists for this
          ``message_id`` (the notifier already recorded the same send, or a
          retry re-fired).
-      2. **Tag the subject** — prepend ``[<job_id>]`` unless the agent's own
+      2. **Tag the subject** — prepend ``[<job_id>]`` unless the caller's own
          subject already carries it, so the watchdog's
          ``subject LIKE '[<job_id>]%'`` match succeeds. The original subject
          is preserved in ``metadata_json``.
-      3. **Coalesce the artifact** — attach the email to an existing same-cron
+      3. **Coalesce the artifact** — attach the email to an existing same-job
          open ``proactive_artifacts`` row when one exists (matched on
          ``job_id``, within the dedup window); only mint a minimal
-         surfaced/emailed artifact when none exists, so a pure self-send run
-         still records against something (``record_email_delivery`` requires a
+         surfaced/emailed artifact when none exists, so a delivery still
+         records against something (``record_email_delivery`` requires a
          pre-existing artifact row).
 
-    Never raises — a failure here must never propagate into the send path or
-    the post-tool hook.
+    Never raises — a failure here must never propagate into the send path,
+    the post-tool hook, or a recovery caller. ``kind`` + ``source`` +
+    ``extra_metadata`` land in the row's ``metadata_json`` for provenance.
     """
     clean_job_id = str(job_id or "").strip()
     clean_message_id = str(message_id or "").strip()
@@ -533,7 +531,7 @@ def record_cron_run_delivery_email(
             else f"{prefix} {clean_subject}".strip()[:200]
         )
 
-        # 3. Coalesce onto an existing same-cron artifact; else mint a minimal
+        # 3. Coalesce onto an existing same-job artifact; else mint a minimal
         #    one so record_email_delivery (which requires a pre-existing
         #    artifact) can attach the row.
         linked_task_id = f"cron:{clean_job_id}"
@@ -543,6 +541,22 @@ def record_cron_run_delivery_email(
             linked_task_id=linked_task_id,
             job_id=clean_job_id,
             window_hours=_dedup_window_hours(),
+        )
+        clean_source = source or kind
+        artifact_meta: dict[str, Any] = {
+            "job_id": clean_job_id,
+            "task_id": linked_task_id,
+            "source": clean_source,
+        }
+        if kind == "cron_self_send":
+            artifact_meta["self_send"] = True
+        elif isinstance(extra_metadata, dict):
+            # Manual-recovery provenance — who delivered it and from where.
+            artifact_meta.update(extra_metadata)
+        summary = (
+            "Cron-run self-send delivery recorded by the delivery-tracking layer."
+            if kind == "cron_self_send"
+            else "Manual-recovery delivery recorded by the delivery-tracking layer."
         )
         if artifact is None:
             source_ref = f"{clean_job_id}:{int(time.time())}"
@@ -559,15 +573,10 @@ def record_cron_run_delivery_email(
                 source_kind=DEFAULT_SOURCE_KIND,
                 source_ref=source_ref,
                 title=clean_subject or clean_job_id,
-                summary="Cron-run self-send delivery recorded by the delivery-tracking layer.",
+                summary=summary,
                 status=proactive_artifacts.ARTIFACT_STATUS_SURFACED,
                 delivery_state=proactive_artifacts.DELIVERY_EMAILED,
-                metadata={
-                    "job_id": clean_job_id,
-                    "task_id": linked_task_id,
-                    "self_send": True,
-                    "source": source or "cron_self_send",
-                },
+                metadata=artifact_meta,
             )
             artifact = proactive_artifacts.get_artifact(conn, artifact_id)
 
@@ -575,33 +584,142 @@ def record_cron_run_delivery_email(
         if not artifact_id:
             return None
 
+        row_meta: dict[str, Any] = {
+            "kind": kind,
+            "source": clean_source,
+            "original_subject": clean_subject,
+        }
+        if kind != "cron_self_send" and isinstance(extra_metadata, dict):
+            row_meta.update(extra_metadata)
+
         result = proactive_artifacts.record_email_delivery(
             conn,
             artifact_id=artifact_id,
             message_id=clean_message_id,
             subject=tagged_subject,
             recipient=str(recipient or "").strip(),
-            metadata={
-                "kind": "cron_self_send",
-                "source": source or "cron_self_send",
-                "original_subject": clean_subject,
-            },
+            metadata=row_meta,
         )
         logger.info(
-            "cron_artifact_notifier: recorded cron self-send delivery for job %s "
+            "cron_artifact_notifier: recorded %s delivery for job %s "
             "(message_id=%s, recipient=%s)",
+            kind,
             clean_job_id,
             clean_message_id,
             recipient,
         )
         return result
-    except Exception as exc:  # noqa: BLE001 — best-effort; never disrupt the send path
+    except Exception as exc:  # noqa: BLE001 — best-effort; never disrupt the caller
         logger.debug(
-            "cron_artifact_notifier: record_cron_run_delivery_email failed for job %s: %s",
+            "cron_artifact_notifier: _record_job_delivery failed for job %s: %s",
             clean_job_id,
             exc,
         )
         return None
+
+
+def record_cron_run_delivery_email(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    message_id: str = "",
+    subject: str = "",
+    recipient: str = "",
+    source: str = "",
+) -> Optional[dict[str, Any]]:
+    """Record a cron run's *self-sent* email as a delivered proactive artifact.
+
+    This is the delivery-tracking layer that catches sends the notifier
+    itself never sees. ``notify_cron_artifact`` only records the
+    *notifier*-composed disclosure email; when the agent inside the cron run
+    delivers the real artifact directly via an AgentMail tool (canonical case:
+    ``paper_to_podcast_daily`` resume-runs emailing the podcast mp3 through
+    ``mcp__internal__agentmail_send_with_local_attachments`` or
+    ``mcp__AgentMail__send_message``), that send bypasses the notifier. Without
+    this layer no row lands in ``proactive_artifact_emails`` and the subject
+    lacks the ``[<job_id>]`` tag the ``paper_to_podcast_email_delivery``
+    proactive-health watchdog keys on — producing a recurring false 'no email
+    in 30h' *critical* even though Kevin actually received the podcast
+    (verified Amazon SES ``message_id``).
+
+    Best-effort and idempotent (see ``_record_job_delivery``). Never raises —
+    a failure here must never propagate into the send path or the post-tool
+    hook.
+    """
+    return _record_job_delivery(
+        conn,
+        job_id=job_id,
+        message_id=message_id,
+        subject=subject,
+        recipient=recipient,
+        source=source or "cron_self_send",
+        kind="cron_self_send",
+    )
+
+
+def log_manual_artifact_delivery(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    message_id: str,
+    subject: str = "",
+    recipient: str = "",
+    artifact_path: str = "",
+    delivered_by: str = "",
+) -> Optional[dict[str, Any]]:
+    """Record a *manually-recovered* scheduled-artifact delivery so the
+    proactive-health delivery watchdog clears.
+
+    When a principal/agent (Simone, a VP, a heartbeat recovery) notices a
+    MISSED scheduled artifact (e.g. ``paper_to_podcast_daily`` never delivered)
+    and re-delivers it to Kevin via an AgentMail send from a NON-cron run
+    context, that send bypasses ``cron_artifact_notifier`` AND the cron
+    self-send delivery hooks (``local_toolkit_bridge`` and the PostToolUse
+    ``hooks`` path both gate on ``run_kind == "cron"``). Without this call no
+    row lands in ``proactive_artifact_emails``, so the
+    ``paper_to_podcast_email_delivery`` watchdog keeps firing a false 'no email
+    in 30h' *critical* for hours after Kevin actually received the artifact
+    (verified Jul 9, 2026: podcast delivered at 21:04 UTC via
+    ``agentmail_send_with_local_attachments``; watchdog still critical 3h later
+    because it only saw the prior Jul 8 notifier row).
+
+    The CALLER asserts the linkage: "this AgentMail send is a scheduled-artifact
+    delivery for ``job_id``", and passes the cron job id (e.g. ``"2afe05ab96"``
+    for paper_to_podcast) plus the AgentMail ``message_id`` returned by the
+    send. This helper is therefore **selective** — it must NOT be auto-fired on
+    every AgentMail send (Kevin receives many non-artifact messages: VP
+    completion notifications, digest entries, routine replies); invoke it only
+    on the manual-recovery code path, after the re-delivery send succeeds. The
+    AgentMail send primitive stays generic; the logging is the recovery path's
+    responsibility. The companion CLI
+    ``universal_agent.scripts.log_manual_artifact_delivery`` is the canonical
+    invocation point.
+
+    Writes into the SAME ``proactive_artifact_emails`` table with the SAME
+    ``[<job_id>]`` subject tag the watchdog matches, so the critical clears
+    with NO watchdog-query change. Idempotent on ``message_id`` (a retried
+    manual delivery does not double-count). ``artifact_path`` and
+    ``delivered_by`` are stored in the row's ``metadata_json`` for provenance.
+    Best-effort / never raises.
+    """
+    clean_delivered_by = str(delivered_by or "").strip()
+    return _record_job_delivery(
+        conn,
+        job_id=job_id,
+        message_id=message_id,
+        subject=subject,
+        recipient=recipient,
+        source=(
+            f"manual_recovery:{clean_delivered_by}"
+            if clean_delivered_by
+            else "manual_recovery"
+        ),
+        kind="manual_recovery",
+        extra_metadata={
+            "artifact_path": str(artifact_path or "").strip(),
+            "delivered_by": clean_delivered_by,
+        },
+    )
 
 
 # ── Artifact discovery ─────────────────────────────────────────────────
