@@ -444,6 +444,63 @@ def check_stuck_vp_missions() -> list[HeartbeatFinding]:
     try:
         if not _table_exists(conn, "vp_missions"):
             return findings
+
+        # Self-heal: queued + cancel_requested=1 missions never reach terminal
+        # 'cancelled' on their own — the dispatcher never re-leases a
+        # cancel_requested mission, so no worker ever picks them up. Both
+        # _list_queued (filters cancel_requested=0) and the dispatched/running
+        # count query below miss them. Finalize past a TTL race-guard so the
+        # very loop that would count them reconciles them. See
+        # services.vp_mission_reaper.reap_stale_cancel_requested_queued_vp_missions.
+        reaped_orphans: list[Any] = []
+        try:
+            from universal_agent.services.vp_mission_reaper import (
+                DEFAULT_STALE_CANCEL_REQUESTED_TTL_MINUTES as _CR_TTL,
+                reap_stale_cancel_requested_queued_vp_missions as _reap_cr,
+            )
+
+            reaped_orphans = _reap_cr(conn)
+        except Exception as exc:
+            logger.debug(
+                "cancel-requested-queued reaper failed (non-fatal): %s", exc
+            )
+        if reaped_orphans:
+            _cr_summary = ", ".join(o.mission_id for o in reaped_orphans[:5])
+            if len(reaped_orphans) > 5:
+                _cr_summary += f" ... and {len(reaped_orphans) - 5} more"
+            findings.append(HeartbeatFinding(
+                finding_id="stale_cancel_requested_queued_finalized",
+                category="gateway",
+                severity="warn",
+                metric_key="vp.stale_cancel_requested_queued_finalized",
+                observed_value=len(reaped_orphans),
+                threshold_text=(
+                    f"queued+cancel_requested=1 finalized to cancelled past "
+                    f"{_CR_TTL}m TTL"
+                ),
+                known_rule_match=True,
+                confidence="high",
+                title=(
+                    f"\U0001fa93 Reaped {len(reaped_orphans)} queued+cancel_requested=1 "
+                    f"VP mission(s) stuck past {_CR_TTL}m TTL: {_cr_summary}"
+                ),
+                recommendation=(
+                    "These missions had cancellation requested but never "
+                    "reached terminal 'cancelled' (the dispatcher never "
+                    "re-leases a cancel_requested mission). Finalized to "
+                    "cancelled with a vp_events audit row. The operator "
+                    "one-shot backfill is `uv run python -m "
+                    "universal_agent.scripts.flush_vp_mission_backlog "
+                    "--reap-cancel-requested 1`."
+                ),
+                runbook_command=(
+                    'sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/'
+                    "vp_state.db \"SELECT mission_id, event_type, created_at "
+                    "FROM vp_events WHERE event_type='vp.mission.cancelled' "
+                    "ORDER BY created_at DESC LIMIT 10;\""
+                ),
+            ))
+
         cutoff = (_utc_now() - timedelta(hours=STALE_DELEGATION_HOURS)).isoformat()
         rows = conn.execute(
             """

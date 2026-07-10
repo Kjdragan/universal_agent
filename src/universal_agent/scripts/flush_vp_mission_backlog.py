@@ -34,6 +34,10 @@ import sqlite3
 import sys
 
 from universal_agent.infisical_loader import initialize_runtime_secrets
+from universal_agent.services.vp_mission_reaper import (
+    DEFAULT_STALE_CANCEL_REQUESTED_TTL_MINUTES,
+    reap_stale_cancel_requested_queued_vp_missions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +149,20 @@ def main() -> int:
         "--reason", default="manual flush of queued backlog",
         help="Cancellation reason recorded in vp_events + audit JSON.",
     )
+    parser.add_argument(
+        "--reap-cancel-requested",
+        nargs="?",
+        type=int,
+        default=None,
+        const=DEFAULT_STALE_CANCEL_REQUESTED_TTL_MINUTES,
+        metavar="MIN_AGE_MIN",
+        help=(
+            "Instead of flushing the fresh queued backlog, finalize the orphan "
+            "class _list_queued skips: queued + cancel_requested=1 missions "
+            "older than MIN_AGE_MIN minutes (default %(const)dm). Pass a small "
+            "value (e.g. 1) for a one-shot backfill that clears existing buildup."
+        ),
+    )
     args = parser.parse_args()
 
     # Load Infisical secrets so the durable.db helper can resolve the
@@ -156,6 +174,38 @@ def main() -> int:
 
     conn = _open_vp_conn()
     try:
+        if args.reap_cancel_requested is not None:
+            # Operator one-shot backfill: finalize the orphan class _list_queued
+            # skips (queued + cancel_requested=1 — cancellation was requested on
+            # a not-yet-leased queued mission, so it can never self-finalize).
+            # ttl_minutes here is an explicit min-age; pass a small value (e.g.
+            # 1) to clear existing buildup, or omit the value for the default.
+            reaped = reap_stale_cancel_requested_queued_vp_missions(
+                conn,
+                ttl_minutes=args.reap_cancel_requested,
+                vp_id=args.vp,
+                dry_run=args.dry_run,
+                reason=args.reason,
+            )
+            if not reaped:
+                logger.info(
+                    "No queued+cancel_requested=1 orphans older than %dm%s.",
+                    args.reap_cancel_requested,
+                    f" for {args.vp}" if args.vp else "",
+                )
+            else:
+                verb = "Would reap" if args.dry_run else "Reaped"
+                logger.info(
+                    "%s %d queued+cancel_requested=1 orphan(s) "
+                    "(min-age=%dm%s): %s",
+                    verb,
+                    len(reaped),
+                    args.reap_cancel_requested,
+                    f", vp={args.vp}" if args.vp else "",
+                    ", ".join(r.mission_id for r in reaped),
+                )
+            return 0
+
         rows = _list_queued(conn, args.vp)
         if not rows:
             logger.info("No queued missions to flush%s.", f" for {args.vp}" if args.vp else "")

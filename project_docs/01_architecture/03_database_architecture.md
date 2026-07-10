@@ -17,9 +17,11 @@ code_paths:
   - src/universal_agent/memory/memory_vector_index.py
   - src/universal_agent/utils/db_health_monitor.py
   - src/universal_agent/services/stuck_run_reaper.py
+  - src/universal_agent/services/vp_mission_reaper.py
+  - src/universal_agent/scripts/flush_vp_mission_backlog.py
   - CSI_Ingester/development/csi_ingester/store/sqlite.py
   - src/universal_agent/services/proactive_convergence.py
-last_verified: 2026-06-27
+last_verified: 2026-07-10
 ---
 
 # Database Architecture
@@ -185,7 +187,8 @@ A separate, self-contained SQLite store implements a Semantic-RAG conversation g
 The heartbeat health monitor inspects DBs and emits `HeartbeatFinding`s. It resolves paths via its own `_db_path(name)` (env-var-first, then `AGENT_RUN_WORKSPACES/<name>`):
 
 - `check_stale_runs` — `runtime_state.db`: first **self-heals**, then counts, runs whose latest attempt is `running`/`queued`/`blocked` past `STALE_RUN_HOURS`. It calls `stuck_run_reaper.py::finalize_orphaned_run_attempts` BEFORE its count query, so an attempt left non-terminal when its run already reached a terminal status (a failure-finalization path can stamp `runs.status` terminal — e.g. `failed` with `terminal_reason='hook_dispatch_failed'` — without finalizing the linked `run_attempts` row) is reconciled by the very loop that detects it and can no longer trip the "stuck in running/queued" alert permanently. The orphan is mirrored to the run's outcome with no re-surfaced failure card (the run already recorded its terminal outcome). It then counts the residual and auto-reaps genuinely-stuck `running` runs via `stuck_run_reaper.py::reap_stale_runs` (progress-based TTL), which exists to prevent the dispatch-cascade resource-exhaustion incident. `reap_stale_runs` alone cannot reach the orphan class — it scopes to `runs.status='running'` AND `run_attempts.status='running'` — which is why the dedicated orphan pass runs first.
-- `check_stale_delegations`, `check_stuck_vp_missions` — runtime/VP DBs.
+- `check_stale_delegations` — runtime/VP DBs.
+- `check_stuck_vp_missions` — `vp_state.db`: first **self-heals** the queued-orphan class, then counts dispatched/running missions stuck past `STALE_DELEGATION_HOURS`. A VP mission at `status='queued'`, `cancel_requested=1` can never reach terminal `cancelled` on its own — the dispatcher never re-leases a `cancel_requested` mission, so no worker ever picks it up — and the class is invisible to `flush_vp_mission_backlog.py::_list_queued` (filters `cancel_requested=0`) and to this check's dispatched/running count query. `check_stuck_vp_missions` calls `vp_mission_reaper.py::reap_stale_cancel_requested_queued_vp_missions` BEFORE its count query, finalizing orphans older than `DEFAULT_STALE_CANCEL_REQUESTED_TTL_MINUTES` (60m, matching `stuck_run_reaper.py::DEFAULT_FALLBACK_TTL_MINUTES`) to `cancelled` with a `vp_events` audit row (`vp.mission.cancelled`) and no re-surfaced failure card (the mission never ran). Idempotent via the `WHERE status='queued' AND cancel_requested=1` guard. The operator one-shot backfill — clearing existing buildup the 60m TTL would leave behind — is `uv run python -m universal_agent.scripts.flush_vp_mission_backlog --reap-cancel-requested <MIN_AGE_MIN>` (e.g. `1`).
 - `check_pending_signal_cards` — `activity_state.db`.
 - CSI checks — the `/var/lib/universal-agent/csi/csi.db` store.
 
