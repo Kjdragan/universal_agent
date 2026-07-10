@@ -1193,7 +1193,20 @@ class ProcessTurnAdapter:
                 )
         else:
             # Emit error
-            error_message = result_holder.get("error", "Unknown error")
+            # When the run ended without an `error` key it means a
+            # non-Exception BaseException (CancelledError / generator-close
+            # during finalize) bypassed the except block above — the bare
+            # "Unknown error" default erased all context. Surface the class
+            # explicitly so downstream diagnosability
+            # (vp.finalize_failure_context) can recognize a finalize-step
+            # crash vs a real captured exception.
+            if "error" in result_holder:
+                error_message = str(result_holder.get("error") or "Unknown error")
+            else:
+                error_message = (
+                    "VP run ended without a result (possible cancellation "
+                    "or finalize-step crash; no exception detail captured)"
+                )
             error_detail = result_holder.get("error_detail")
             log_tail = None
             log_path = Path(self.config.workspace_dir) / "run.log"
@@ -1208,12 +1221,17 @@ class ProcessTurnAdapter:
                 except Exception as e:
                     logger.warning("Failed to read run.log tail: %s", e)
             logger.error("Execution engine error: %s", error_message)
+            # Propagate the gateway span trace_id on the error path too —
+            # ITERATION_END (the other trace_id carrier) is emitted only on
+            # success, so without this a failed run records trace_id=null
+            # and the failure record cannot link back to trace.json.
             yield AgentEvent(
                 type=EventType.ERROR,
                 data={
                     "message": error_message,
                     "detail": error_detail,
                     "log_tail": log_tail,
+                    "trace_id": _gateway_trace_id_hex,
                     "duration_seconds": round(time.time() - start_ts, 2),
                 },
             )
