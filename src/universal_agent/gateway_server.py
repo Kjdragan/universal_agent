@@ -15289,6 +15289,7 @@ async def lifespan(app: FastAPI):
                 _ensure_vp_coder_regenerable_reap_cron_job()
                 _ensure_scratch_pruning_cron_job()
                 _ensure_vp_mission_pr_reconciler_cron_job()
+                _ensure_vp_failure_ambient_sweep_cron_job()
                 _ensure_architecture_canvas_drift_cron_job()
                 _ensure_hackernews_snapshot_cron_job()
                 _ensure_atlas_direct_dispatch_cron_job()
@@ -20104,6 +20105,43 @@ def _ensure_vp_mission_pr_reconciler_cron_job() -> Optional[dict[str, Any]]:
         # in-flight cached value started returning 401. Skipping the
         # bootstrap makes this cron resilient to Composio outages it doesn't
         # depend on.
+        lightweight=True,
+    )
+
+
+def _ensure_vp_failure_ambient_sweep_cron_job() -> Optional[dict[str, Any]]:
+    """Ambient-close stale, single (non-recurring) ``vp_mission_failure`` items.
+
+    Self-healing counterpart to the ``bulk_close_ambient`` Task Hub verb. Without
+    it, a resolved systemic event (e.g. the 2026-06-11 blip that left 119
+    failure items open for 4+ heartbeats) re-accumulates indefinitely, because
+    ``vp_mission_failure`` items are informational and never enter the eval-gated
+    generic stale reaper (``_apply_stale_policy``). Runs 3x/day during active
+    hours; the TTL window + 48h guard + ``failure_count<=1`` gate live in
+    ``task_hub.close_ambient_vp_failures``. Operator knobs:
+    ``UA_VP_FAILURE_AMBIENT_SWEEP_ENABLED`` (on/off),
+    ``UA_VP_FAILURE_AMBIENT_SWEEP_CRON`` / ``_TIMEZONE`` (schedule),
+    ``UA_VP_FAILURE_AMBIENT_TTL_DAYS`` / ``_GUARD_HOURS`` /
+    ``_MAX_FAILURE_COUNT`` (thresholds, read by the sweep script).
+
+    ``skip_task_hub_link=True`` + ``lightweight=True`` — pure sqlite
+    housekeeping, no agent session, no work product.
+    """
+    return _register_system_cron_job(
+        system_job="vp_failure_ambient_sweep",
+        default_cron="23 7,13,19 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.vp_failure_ambient_sweep",
+        description=(
+            "Ambient-close stale single vp_mission_failure Task Hub items "
+            "(default: >7 days old, failure_count<=1, >48h guard). "
+            "Self-heals resolved batch-event failure piles."
+        ),
+        timeout_seconds=120,
+        enabled=_proactive_cron_enabled("UA_VP_FAILURE_AMBIENT_SWEEP_ENABLED"),
+        cron_env_var="UA_VP_FAILURE_AMBIENT_SWEEP_CRON",
+        timezone_env_var="UA_VP_FAILURE_AMBIENT_SWEEP_TIMEZONE",
+        skip_task_hub_link=True,
         lightweight=True,
     )
 
