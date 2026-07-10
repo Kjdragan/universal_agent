@@ -194,9 +194,11 @@ def main() -> int:
                     f" for {args.vp}" if args.vp else "",
                 )
             else:
+                verb = "Would reap" if args.dry_run else "Reaped"
                 logger.info(
-                    "Reaped %d queued+cancel_requested=1 orphan(s) "
+                    "%s %d queued+cancel_requested=1 orphan(s) "
                     "(min-age=%dm%s): %s",
+                    verb,
                     len(reaped),
                     args.reap_cancel_requested,
                     f", vp={args.vp}" if args.vp else "",
