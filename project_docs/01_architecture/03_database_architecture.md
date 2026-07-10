@@ -19,7 +19,9 @@ code_paths:
   - src/universal_agent/services/stuck_run_reaper.py
   - CSI_Ingester/development/csi_ingester/store/sqlite.py
   - src/universal_agent/services/proactive_convergence.py
-last_verified: 2026-06-27
+  - src/universal_agent/gateway_server.py
+  - scripts/prune_task_hub_evaluations.py
+last_verified: 2026-07-01
 ---
 
 # Database Architecture
@@ -136,12 +138,19 @@ Like `migrations.py`, `task_hub.ensure_schema` runs a base `executescript` then 
 - `UA_ACTIVITY_EVENTS_RETENTION_DAYS` — hard-retention window, floor 7, **default 90**.
 - `UA_ACTIVITY_NOTIFICATION_AUTO_READ_HOURS` — non-actionable `info`/`success` notification rows older than this are auto-marked `read` (so health checks measure real unconsumed operator work, not telemetry noise), floor 1, **default 24**.
 - `UA_ACTIVITY_DEFAULT_WINDOW_DAYS` — default query window, floor 1, **default 7**.
+- `UA_ACTIVITY_EVALUATIONS_RETENTION_DAYS` — age TTL for `task_hub_evaluations` rows, floor 3, **default 7**. Enforced by `gateway_server.py::_activity_prune_old`.
+- `UA_ACTIVITY_EVALUATIONS_MAX_PER_TASK` — per-task cap: only the newest N evals per `task_id` survive inside the TTL window, floor 10, **default 500**. Prevents a hot cron / vp-mission task from piling up thousands of near-identical evals (observed ~10K rows/task over 7d). Enforced by `task_hub.py::prune_task_hub_evaluations_to_cap`.
+- `UA_ACTIVITY_EVAL_CAP_PRUNE_INTERVAL_SECONDS` — the per-task cap does a whole-table `ROW_NUMBER()` scan, so it is time-gated rather than run on every activity-event write, floor 60, **default 600**. The first call after process start always runs, so the cap self-heals on deploy.
 
 ## 4. Pruning & retention
 
 Task Hub is the only operational DB with explicit row-level pruning:
 
 `task_hub.py::prune_settled_tasks(conn, *, retention_days=21)` deletes, in order, `task_hub_evaluations` → `task_hub_assignments` → `task_hub_items` for tasks whose `status IN ('completed', 'parked')` and whose `updated_at < datetime('now', '-{retention_days} days')`. Default retention is **21 days**. The only production caller is the Simone heartbeat (`heartbeat_service.py`), which calls it with `retention_days=21`.
+
+In addition to `prune_settled_tasks` (which only touches settled tasks), `gateway_server.py::_activity_prune_old` runs two retention passes on `task_hub_evaluations` on every activity-event write: (1) an age TTL deleting rows older than `UA_ACTIVITY_EVALUATIONS_RETENTION_DAYS`, and (2) `task_hub.py::prune_task_hub_evaluations_to_cap`, a per-task cap keeping only the newest `UA_ACTIVITY_EVALUATIONS_MAX_PER_TASK` rows per `task_id` (time-gated via `UA_ACTIVITY_EVAL_CAP_PRUNE_INTERVAL_SECONDS`; self-heals on the first call after deploy). This cap is what bounds `task_hub_evaluations` against runaway hot cron / vp-mission writers — every per-task reader uses `LIMIT ≤ 10`, and the global readers compute decision ratios that are robust to a decision-agnostic cap, so no consumer needs more than latest-N per task. After a prune, `_activity_prune_old` runs `PRAGMA incremental_vacuum` (budget bumped to 50000 pages when the cap just freed >1000 rows) to return freed pages to the OS lock-free.
+
+> **One-time bulk reclaim — `scripts/prune_task_hub_evaluations.py`.** The deployed cap self-heals on the first prune after deploy, but it reclaims incrementally. To reclaim an existing multi-GB backlog immediately (independent of a deploy), run this script on the VPS as `ua`. It is a **dry run by default**; pass `--apply` for lock-free `incremental_vacuum` reclaim (gateway keeps serving), or `--apply --full-vacuum` for a one-shot full `VACUUM` that also adopts `auto_vacuum=INCREMENTAL` going forward (takes an EXCLUSIVE lock for minutes on a 3GB DB — maintenance window only). It reuses `task_hub.py::prune_task_hub_evaluations_to_cap` as the single source of truth for the delete.
 
 > Note: `prune_settled_tasks` does **not** prune `task_hub_runs`, `cody_token_usage`, `token_usage_events`, or `task_hub_delivery_evidence`. Those grow unbounded by row count; storage management for them relies on the file-level `auto_vacuum=INCREMENTAL` pragma only. `[VERIFY: whether task_hub_runs growth is intentional or a missed prune target.]`
 
