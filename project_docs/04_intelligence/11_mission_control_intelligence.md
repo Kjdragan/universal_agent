@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/services/mission_control_event_titles.py
   - src/universal_agent/services/mission_control_prompts.py
   - src/universal_agent/gateway_server.py
-last_verified: 2026-06-22
+last_verified: 2026-07-10
 ---
 
 # Mission Control Intelligence
