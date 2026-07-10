@@ -2364,6 +2364,265 @@ def list_runs_for_task(
     return out
 
 
+# ---------------------------------------------------------------------------
+# Dispatch pre-flight dedup (2026-07-10 reliability fix)
+# ---------------------------------------------------------------------------
+# Suppresses re-dispatch of a source task that already has a landed demo, a
+# pending vp_failure rescue, or a non-cancelled in-flight VP mission. Root
+# cause: the dispatcher re-presented source tasks as dispatchable based only on
+# task status (open/review) — it did not inspect landed demos or pending
+# rescues, so a task whose demo had already landed (but had not yet been
+# closed) was re-claimed and re-dispatched, wasting the single cap=1
+# vp.coder.primary slot and leaving a cancel-requested zombie. Three same-day
+# occurrences on 2026-07-07 (Nemotron ASR, TripoSplat, Riley Brown Jarvis).
+#
+# Deterministic code gate (per the project's design philosophy: dedup /
+# concurrency / safety boundaries belong in code, not LLM judgment). Runs
+# inside the per-item claim window of claim_next_dispatch_tasks — the same
+# atomic seizure that serializes across heartbeats — so it is race-safe, not a
+# non-atomic read-then-act. The existing status-based in-flight protection (a
+# delegated/in_progress task is never claimed) is preserved; these conditions
+# catch the revert race plus the landed-demo and pending-rescue cases the
+# status filter misses.
+
+# VP mission statuses that count as "in-flight" for dedup. A queued mission
+# will run; a running mission is actively executing. Both consume the slot.
+_VP_INFLIGHT_STATUSES = ("queued", "running")
+
+# Prefix vp_failure rescue rows stamp on their task_id (``vp_failure:{mid}``).
+_VP_FAILURE_TASK_PREFIX = "vp_failure:"
+
+
+def _dispatch_dedup_has_landed_demo(item: dict[str, Any]) -> tuple[bool, str]:
+    """Condition (c): a completed mission already landed a demo for this task.
+
+    Reads the source task's own metadata — stamped by the VP worker terminal
+    sync (``metadata.vp_terminal_status``) and ``tutorial_demo_finalize``
+    (``metadata.demo_finalize.ok``); the same signals the completion-evidence
+    gate in :func:`perform_task_action` keys on. OR of the two: either signal
+    means a mission reached terminal-completion for this task, so re-dispatch
+    would duplicate already-landed work.
+    """
+    metadata = item.get("metadata") if isinstance(item, dict) else None
+    if not isinstance(metadata, dict):
+        return False, ""
+    demo_finalize = metadata.get("demo_finalize")
+    if isinstance(demo_finalize, dict) and bool(demo_finalize.get("ok")):
+        return True, "demo_finalize.ok=true"
+    # vp_terminal_status may be top-level (worker terminal sync) or nested
+    # under delegation (backfill_vp_cancel_bookkeeping stamps both shapes).
+    vp_terminal = str(metadata.get("vp_terminal_status") or "").strip().lower()
+    if vp_terminal != "completed":
+        delegation = metadata.get("delegation")
+        if isinstance(delegation, dict):
+            vp_terminal = str(delegation.get("vp_terminal_status") or "").strip().lower()
+    if vp_terminal == "completed":
+        return True, "vp_terminal_status=completed"
+    return False, ""
+
+
+def _vp_mission_links_to_task_clause() -> str:
+    """SQL fragment matching vp_missions rows whose payload links to a task."""
+    return (
+        "json_extract(payload_json, '$.task_id') = ? "
+        "OR json_extract(payload_json, '$.metadata.task_id') = ? "
+        "OR json_extract(payload_json, '$.metadata.linked_task_id') = ?"
+    )
+
+
+def _dispatch_dedup_has_pending_rescue(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    vp_conn: Optional[sqlite3.Connection] = None,
+) -> tuple[bool, str]:
+    """Condition (b): a non-terminal ``vp_mission_failure`` rescue exists for
+    this task.
+
+    Rescue rows (created by ``vp_failure_rescue``) carry
+    ``source_kind='vp_mission_failure'`` and a ``task_id`` of the form
+    ``vp_failure:{mission_id}``. They do NOT reliably carry
+    ``metadata.original_task_id`` (empirically NULL on 2026-07-07), so we link
+    two ways:
+
+      1. direct — ``metadata.original_task_id == task_id`` (kept for any rescue
+         whose producer did stamp it), and
+      2. mission-linkage — the rescue's mission_id (parsed from its task_id)
+         corresponds to a ``vp_missions`` row whose payload links to ``task_id``.
+
+    A pending (non-terminal) rescue means a human/Simone is already working the
+    failure — re-dispatching would race that resolution. The mission-linkage
+    path needs the separate ``vp_state.db`` (``vp_conn``); when it is not
+    available only the direct path runs (best-effort, never blocks the claim).
+    """
+    if not task_id:
+        return False, ""
+    terminal_ph = ",".join("?" for _ in TERMINAL_STATUSES)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT task_id, metadata_json
+            FROM task_hub_items
+            WHERE source_kind = 'vp_mission_failure'
+              AND status NOT IN ({terminal_ph})
+            """,
+            tuple(TERMINAL_STATUSES),
+        ).fetchall()
+    except Exception:
+        return False, ""
+    if not rows:
+        return False, ""
+
+    # Direct path: original_task_id on the rescue row.
+    for row in rows:
+        try:
+            meta = json.loads(row["metadata_json"] or "{}") if "metadata_json" in row.keys() else {}
+        except Exception:
+            meta = {}
+        if str(meta.get("original_task_id") or "").strip() == task_id:
+            return True, "pending vp_failure rescue (original_task_id)"
+
+    # Mission-linkage path: rescue mission_id -> vp_missions payload -> task.
+    if vp_conn is None:
+        return False, ""
+    rescue_mids: list[str] = []
+    for row in rows:
+        rid = str(row["task_id"] or "").strip()
+        if rid.startswith(_VP_FAILURE_TASK_PREFIX):
+            mid = rid[len(_VP_FAILURE_TASK_PREFIX):].strip()
+            if mid:
+                rescue_mids.append(mid)
+    if not rescue_mids:
+        return False, ""
+    mid_ph = ",".join("?" for _ in rescue_mids)
+    link_clause = _vp_mission_links_to_task_clause()
+    try:
+        hit = vp_conn.execute(
+            f"""
+            SELECT 1
+            FROM vp_missions
+            WHERE mission_id IN ({mid_ph})
+              AND ({link_clause})
+            LIMIT 1
+            """,
+            tuple(rescue_mids) + (task_id, task_id, task_id),
+        ).fetchone()
+    except Exception:
+        return False, ""
+    if hit:
+        return True, "pending vp_failure rescue (mission-linkage)"
+    return False, ""
+
+
+def _dispatch_dedup_has_inflight_mission(
+    vp_conn: sqlite3.Connection, task_id: str
+) -> tuple[bool, str]:
+    """Condition (a): a NON-CANCELLED in-flight/queued VP mission exists for
+    this task.
+
+    Queries ``vp_missions`` (vp_state.db, a separate file from the task_hub
+    activity db) by the linked-task fields the dispatcher stamps into
+    ``payload_json``. A mission blocks only when genuinely active:
+    ``status IN ('queued','running') AND cancel_requested = 0``. This precisely
+    handles the cancel nuance — a fully-cancelled mission
+    (``status='cancelled'``) and a cancel-requested-pending mission
+    (``cancel_requested=1``) both fall through so the slot frees, while a
+    mission still legitimately running blocks a duplicate dispatch.
+    """
+    if not task_id:
+        return False, ""
+    placeholders = ",".join("?" for _ in _VP_INFLIGHT_STATUSES)
+    link_clause = _vp_mission_links_to_task_clause()
+    try:
+        row = vp_conn.execute(
+            f"""
+            SELECT 1
+            FROM vp_missions
+            WHERE status IN ({placeholders})
+              AND cancel_requested = 0
+              AND ({link_clause})
+            LIMIT 1
+            """,
+            tuple(_VP_INFLIGHT_STATUSES) + (task_id, task_id, task_id),
+        ).fetchone()
+    except Exception:
+        return False, ""
+    if row:
+        return True, "non-cancelled in-flight/queued VP mission"
+    return False, ""
+
+
+def dispatch_preflight_dedup_skip(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    item: Optional[dict[str, Any]] = None,
+    vp_conn: Optional[sqlite3.Connection] = None,
+) -> tuple[bool, str]:
+    """Pre-flight dedup gate for the dispatch claim path.
+
+    Returns ``(True, reason)`` when re-dispatch of ``task_id`` should be
+    SUPPRESSED because any of these hold (OR-gate):
+
+      (a) a NON-CANCELLED in-flight/queued VP mission exists for the task,
+      (b) a ``vp_mission_failure`` rescue is pending for the task, or
+      (c) a completed mission already landed a demo (``demo_finalize.ok`` or
+          ``vp_terminal_status=completed`` on the source task).
+
+    Returns ``(False, "")`` when dispatch may proceed.
+
+    Condition (c) is a pure source-task metadata read. Conditions (a) and (b)
+    consult ``vp_state.db`` (a separate file); the vp db is opened once
+    best-effort and shared between them. Any failure (db unreachable / table
+    missing) silently skips the vp-dependent conditions — dedup is a
+    best-effort reliability backstop and must never block the claim path, so
+    condition (c) still applies even if vp_state.db is unavailable. Tests
+    inject ``vp_conn`` directly.
+    """
+    if not task_id:
+        return False, ""
+
+    # (c) landed demo — pure metadata read, no db query.
+    if item is not None:
+        skip, reason = _dispatch_dedup_has_landed_demo(item)
+        if skip:
+            return True, reason
+
+    # Open vp_state.db once (best-effort), shared by (a) and (b).
+    owns_vp_conn = vp_conn is None
+    if owns_vp_conn:
+        try:
+            from universal_agent.durable.db import (
+                connect_runtime_db,
+                get_vp_db_path,
+            )
+
+            vp_conn = connect_runtime_db(get_vp_db_path())
+        except Exception:
+            vp_conn = None
+    try:
+        # (b) pending vp_failure rescue — task_hub query + optional vp linkage.
+        skip, reason = _dispatch_dedup_has_pending_rescue(
+            conn, task_id, vp_conn=vp_conn
+        )
+        if skip:
+            return True, reason
+
+        # (a) non-cancelled in-flight VP mission — vp_state.db query.
+        if vp_conn is not None:
+            skip, reason = _dispatch_dedup_has_inflight_mission(vp_conn, task_id)
+            if skip:
+                return True, reason
+    finally:
+        if owns_vp_conn and vp_conn is not None:
+            try:
+                vp_conn.close()
+            except Exception:
+                pass
+
+    return False, ""
+
+
 def claim_next_dispatch_tasks(
     conn: sqlite3.Connection,
     *,
@@ -2469,6 +2728,22 @@ def claim_next_dispatch_tasks(
             logger.warning(
                 "⛔ Skipping claim of completion-locked task %s (token=%s)",
                 task_id, str(current["completion_token"])[:16],
+            )
+            continue
+
+        # ── dispatch dedup pre-flight: suppress re-dispatch when a demo
+        # already landed, a vp_failure rescue is pending, or a non-cancelled
+        # in-flight VP mission exists for this source task (2026-07-10
+        # reliability fix). Same per-item claim window as the
+        # completion_token guard above — the seizure serializes across
+        # heartbeats, so this is race-safe and not a non-atomic pre-read. ──
+        _dedup_skip, _dedup_reason = dispatch_preflight_dedup_skip(
+            conn, task_id, item=current
+        )
+        if _dedup_skip:
+            logger.info(
+                "⏭️ Skipping claim of %s — dispatch dedup: %s",
+                task_id, _dedup_reason,
             )
             continue
 
