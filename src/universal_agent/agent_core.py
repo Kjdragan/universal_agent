@@ -2109,6 +2109,7 @@ class UniversalAgent:
                 os.close(original_stdout_fd)
                 os.close(original_stderr_fd)
                 run_log_file.close()
+                journal_file.close()
             except Exception:
                 pass
 

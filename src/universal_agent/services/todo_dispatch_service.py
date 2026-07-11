@@ -1,6 +1,7 @@
 """Todo dispatch service: continuation references and queueing helpers."""
 
 import asyncio
+import contextlib
 from datetime import datetime, timezone
 import json
 import logging
@@ -699,7 +700,7 @@ class ToDoDispatchService:
             )
             all_claimed: list[dict] = []
             max_per_sweep = TODO_DISPATCH_MAX_PER_SWEEP
-            with connect_runtime_db(activity_db_path) as conn:
+            with contextlib.closing(connect_runtime_db(activity_db_path)) as conn:
                 for _ in range(max_per_sweep):
                     # Claim one task at a time with deferred workspace.
                     #
@@ -790,7 +791,7 @@ class ToDoDispatchService:
             _priority_dispatch_on = priority_dispatcher_enabled()
             dispatched_task_ids: set[str] = set()
             decisions: list = []
-            with connect_runtime_db(activity_db_path) as conn:
+            with contextlib.closing(connect_runtime_db(activity_db_path)) as conn:
                 activity = task_hub.get_agent_activity(conn)
                 active_assignments = (
                     activity.get("active_assignments") if isinstance(activity, dict) else []
@@ -1038,7 +1039,7 @@ class ToDoDispatchService:
                         run_id = str(task_hub_claimed[0].get("workflow_run_id") or "")
                         wdir = str(task_hub_claimed[0].get("workspace_dir") or "")
                         if wdir:
-                            with connect_runtime_db(activity_db_path) as conn:
+                            with contextlib.closing(connect_runtime_db(activity_db_path)) as conn:
                                 for t_id in task_ids:
                                     item = task_hub.get_item(conn, t_id)
                                     if item and str(item.get("status") or "") == task_hub.TASK_STATUS_COMPLETED:
@@ -1078,7 +1079,7 @@ class ToDoDispatchService:
                 stuck_task_ids: list[str] = []
                 if task_ids and claimed_assignment_ids:
                     try:
-                        with connect_runtime_db(activity_db_path) as conn:
+                        with contextlib.closing(connect_runtime_db(activity_db_path)) as conn:
                             for t_id, a_id in zip(task_ids, claimed_assignment_ids):
                                 item = task_hub.get_item(conn, t_id)
                                 if not item:
@@ -1103,7 +1104,7 @@ class ToDoDispatchService:
                         stuck_task_ids,
                     )
                     try:
-                        with connect_runtime_db(activity_db_path) as conn:
+                        with contextlib.closing(connect_runtime_db(activity_db_path)) as conn:
                             task_hub.finalize_assignments(
                                 conn,
                                 assignment_ids=stuck_assignments,
@@ -1147,7 +1148,7 @@ class ToDoDispatchService:
                 })
             if claimed_assignment_ids:
                 try:
-                    with connect_runtime_db(activity_db_path) as conn:
+                    with contextlib.closing(connect_runtime_db(activity_db_path)) as conn:
                         task_hub.finalize_assignments(
                             conn,
                             assignment_ids=claimed_assignment_ids,

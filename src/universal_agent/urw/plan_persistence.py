@@ -7,6 +7,7 @@ Based on interview.md design.
 
 from __future__ import annotations
 
+import contextlib
 from datetime import datetime
 import json
 from pathlib import Path
@@ -55,7 +56,7 @@ class SQLitePlanStore:
     
     def _init_schema(self) -> None:
         """Initialize database schema."""
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS plans (
                     id TEXT PRIMARY KEY,
@@ -98,7 +99,7 @@ class SQLitePlanStore:
     
     def save_plan(self, plan: Plan) -> None:
         """Save plan and all its phases/tasks to database."""
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             # Save plan
             conn.execute("""
                 INSERT OR REPLACE INTO plans 
@@ -149,7 +150,7 @@ class SQLitePlanStore:
     
     def load_plan(self, plan_id: str) -> Optional[Plan]:
         """Load plan by ID."""
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT data FROM plans WHERE id = ?", 
@@ -162,7 +163,7 @@ class SQLitePlanStore:
     
     def load_by_harness_id(self, harness_id: str) -> Optional[Plan]:
         """Load plan by harness ID."""
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT data FROM plans WHERE harness_id = ?", 
@@ -175,7 +176,7 @@ class SQLitePlanStore:
     
     def update_phase_status(self, phase_id: str, status: TaskStatus, session_path: Optional[str] = None) -> None:
         """Update phase status and optionally session path."""
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             if session_path:
                 conn.execute(
                     "UPDATE phases SET status = ?, session_path = ? WHERE id = ?",
@@ -189,7 +190,7 @@ class SQLitePlanStore:
     
     def update_task_status(self, task_id: str, status: TaskStatus) -> None:
         """Update task status."""
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "UPDATE tasks SET status = ? WHERE id = ?",
                 (status.value, task_id)
@@ -197,7 +198,7 @@ class SQLitePlanStore:
     
     def get_pending_tasks(self, plan_id: str) -> List[dict]:
         """Get tasks ready for execution (all dependencies completed)."""
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
                 SELECT t.* FROM tasks t
@@ -213,7 +214,7 @@ class SQLitePlanStore:
     
     def get_plan_summary(self, plan_id: str) -> dict:
         """Get summary stats for a plan."""
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             phases_total = conn.execute(
                 "SELECT COUNT(*) FROM phases WHERE plan_id = ?", (plan_id,)
             ).fetchone()[0]

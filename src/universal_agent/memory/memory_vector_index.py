@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 import json
 import math
@@ -23,7 +24,7 @@ class VectorEntry:
 
 def _ensure_db(path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with contextlib.closing(sqlite3.connect(path)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS embeddings (
@@ -73,7 +74,7 @@ def upsert_vector(
     _ensure_db(db_path)
     vector = _hash_embed(_tokenize(content))
     payload = json.dumps(vector)
-    with sqlite3.connect(db_path) as conn:
+    with contextlib.closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             """
             INSERT INTO embeddings(entry_id, content_hash, timestamp, summary, preview, vector_json)
@@ -95,7 +96,7 @@ def search_vectors(db_path: str, query: str, limit: int = 5) -> list[dict]:
     _ensure_db(db_path)
     query_vec = _hash_embed(_tokenize(query))
     results: list[tuple[float, dict]] = []
-    with sqlite3.connect(db_path) as conn:
+    with contextlib.closing(sqlite3.connect(db_path)) as conn, conn:
         cursor = conn.execute(
             "SELECT entry_id, timestamp, summary, preview, vector_json FROM embeddings"
         )
