@@ -4,9 +4,14 @@ Code sessions (both accounts): per-project groups, session names, topic
 snippets, and ready-to-paste resume commands, published as ONE living
 scratchpad page (stable URL) the operator can open whenever he's lost.
 
-Companion to `claude-sessions` (the terminal lister). Deterministic — no LLM:
-topic signal = session name + first real user message + newest compaction
-summary the harness wrote into the transcript.
+Companion to `claude-sessions` (the terminal lister). Mostly deterministic;
+the top few sessions per repo additionally carry a GLM-written "where we left
+off" gist derived from the TAIL of the transcript (bounded read — an 800k-token
+session costs the same as a short one), cached per (session, mtime) in
+~/.cache/claude-session-atlas/summaries.json so regenerations only pay for
+sessions that actually changed. Runs on the ZAI flat plan (glm-5-turbo via
+ZAI_API_KEY/ANTHROPIC_AUTH_TOKEN from the login shell); with no key in the
+environment the LLM step is skipped and the page degrades to the old behavior.
 
   claude-session-atlas                  # write HTML to stdout-path + print URL hint
   claude-session-atlas --publish        # also publish to scratch/session-atlas (same-slug update)
@@ -24,6 +29,16 @@ HOMES = [("a1", "claudereal", os.path.expanduser("~/.claude/projects")),
          ("a2", "claude2",    os.path.expanduser("~/.claude-acct2/projects"))]
 PUBLISH = os.path.expanduser("~/lrepos/universal_agent/scripts/publish_scratch.sh")
 OUT = "/tmp/claude-session-atlas.html"
+CACHE = os.path.expanduser("~/.cache/claude-session-atlas/summaries.json")
+LIVE_DIR = os.path.expanduser("~/.claude/sessions")  # per-pid live registry
+BOILER = "This session is being continued from a previous conversation"
+GIST_PER_REPO = 3  # only the newest N sessions per repo get an LLM gist
+GIST_PROMPT = (
+    "Below is the tail end of a Claude Code working session transcript. In 1-2 "
+    "sentences (max 45 words), state where the work currently stands and what is "
+    "immediately pending — the gist the operator needs to remember where he left "
+    "off. Present tense, specific names/artifacts/decisions, no preamble, no markdown."
+)
 
 
 def _text(content):
@@ -50,10 +65,17 @@ def scan(path, max_lines=4000):
                     cwd = rec["cwd"]
                 if rec.get("type") == "summary" and rec.get("summary"):
                     last_summary = rec["summary"]
+                # the harness writes structured rename records — canonical,
+                # last-write-wins (late renames are also caught by tail_records)
+                if rec.get("type") == "custom-title" and rec.get("customTitle"):
+                    name = rec["customTitle"]
+                elif rec.get("type") == "agent-name" and rec.get("agentName"):
+                    name = rec["agentName"]
                 m = rec.get("message") or {}
                 if rec.get("type") == "user" and first_user is None:
                     t = _text(m.get("content")).strip()
-                    if t and not t.startswith("<") and "Caveat:" not in t[:40]:
+                    if (t and not t.startswith("<") and "Caveat:" not in t[:40]
+                            and not t.startswith(BOILER)):
                         first_user = t
                 if name is None and "named this session" in ln:
                     s = _text(m.get("content"))
@@ -63,6 +85,115 @@ def scan(path, max_lines=4000):
     except Exception:
         pass
     return cwd, name, first_user, last_summary
+
+
+def tail_records(path, tail_bytes=262144, keep=24):
+    """Bounded read of a transcript's TAIL: the last meaningful user/assistant
+    texts (oldest→newest) + any late rename. Never reads the whole file."""
+    texts, late_name = [], None
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > tail_bytes:
+                fh.seek(size - tail_bytes)
+                fh.readline()  # drop the partial line at the seek point
+            data = fh.read().decode(errors="replace")
+        for ln in data.splitlines():
+            try:
+                rec = json.loads(ln)
+            except Exception:
+                continue
+            if rec.get("type") == "custom-title" and rec.get("customTitle"):
+                late_name = rec["customTitle"]
+            m = rec.get("message") or {}
+            t = None
+            if rec.get("type") == "user" and not rec.get("isMeta"):
+                u = _text(m.get("content")).strip()
+                if u and not u.startswith("<") and "Caveat:" not in u[:40] and not u.startswith(BOILER):
+                    t = "OPERATOR: " + u
+            elif rec.get("type") == "assistant":
+                a = _text(m.get("content")).strip()
+                if a:
+                    t = "AGENT: " + a
+            if t:
+                texts.append(t[:1500])
+    except Exception:
+        pass
+    return texts[-keep:], late_name
+
+
+def _glm_gist(tail_texts, timeout=45):
+    """One bounded glm-5-turbo call (ZAI flat plan, stdlib urllib — no deps).
+    Returns None on any failure or when no key is in the environment."""
+    import urllib.request
+    key = os.environ.get("ZAI_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    if not key or not tail_texts:
+        return None
+    prompt = GIST_PROMPT + "\n\n---\n" + "\n\n".join(tail_texts)[-9000:]
+    req = urllib.request.Request(
+        "https://api.z.ai/api/anthropic/v1/messages",
+        data=json.dumps({"model": "glm-5-turbo", "max_tokens": 160,
+                         "messages": [{"role": "user", "content": prompt}]}).encode(),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+                 "anthropic-version": "2023-06-01"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.load(r)
+        out = " ".join(b.get("text", "") for b in d.get("content", [])
+                       if isinstance(b, dict)).strip()
+        return out or None
+    except Exception:
+        return None
+
+
+def add_gists(rows):
+    """Give the newest GIST_PER_REPO sessions of each repo a 'where we left
+    off' gist from the transcript tail. Cached per (sid, mtime): regenerations
+    only pay LLM cost for sessions that changed since the last run."""
+    try:
+        cache = json.load(open(CACHE))
+    except Exception:
+        cache = {}
+    seen_per_repo = {}
+    dirty = False
+    for r in rows:  # rows arrive newest-first
+        k = seen_per_repo.get(r["repo"], 0)
+        if k >= GIST_PER_REPO:
+            continue
+        seen_per_repo[r["repo"]] = k + 1
+        c = cache.get(r["sid"])
+        if c and c.get("mtime") == int(r["mtime"]):
+            r["gist"] = c.get("gist") or ""
+            if not r["name"] and c.get("name"):
+                r["name"] = c["name"]
+            continue
+        texts, late_name = tail_records(r["path"])
+        if late_name:
+            r["name"] = late_name
+        g = _glm_gist(texts)
+        r["gist"] = g or ""
+        cache[r["sid"]] = {"mtime": int(r["mtime"]), "gist": r["gist"],
+                           "name": r["name"] or ""}
+        dirty = True
+    if dirty:
+        os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+        json.dump(cache, open(CACHE, "w"))
+
+
+def live_status():
+    """sessionId -> status for currently-running sessions (best-effort)."""
+    out = {}
+    try:
+        for f in glob.glob(os.path.join(LIVE_DIR, "*.json")):
+            try:
+                d = json.load(open(f))
+                if d.get("sessionId") and d.get("status") == "running":
+                    out[d["sessionId"]] = "running"
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
 
 
 def collect(days, cap):
@@ -81,11 +212,41 @@ def collect(days, cap):
         cwd, name, first, summ = scan(f)
         if not cwd:
             continue
+        # worktree cwds (<repo>/.claude/worktrees/<x>) consolidate silently into
+        # their parent repo — worktrees are plumbing the operator never sees
+        repo = os.path.basename(cwd)
+        if "/.claude/worktrees/" in cwd:
+            repo = os.path.basename(cwd.partition("/.claude/worktrees/")[0])
         out.append(dict(mtime=mt, acct=label, launcher=launcher,
-                        sid=os.path.basename(f)[:-6],
-                        repo=os.path.basename(cwd), cwd=cwd, name=name,
+                        sid=os.path.basename(f)[:-6], path=f,
+                        repo=repo, cwd=cwd, name=name, gist="",
                         first=(first or "")[:200], summary=(summ or "")[:280]))
     return out
+
+
+def _ago(secs):
+    if secs < 3600: return f"{max(1, int(secs // 60))}m ago"
+    if secs < 172800: return f"{int(secs // 3600)}h ago"
+    return f"{int(secs // 86400)}d ago"
+
+
+def _heat(rs, days=14):
+    """Pure-CSS per-repo activity strip: one cell per day (oldest→newest),
+    intensity = sessions last-touched that day."""
+    now = time.time()
+    counts = [0] * days
+    for r in rs:
+        d = int((now - r["mtime"]) // 86400)
+        if 0 <= d < days:
+            counts[d] += 1
+    cells = []
+    for d in reversed(range(days)):
+        c = counts[d]
+        if c:
+            cells.append(f'<i style="opacity:{min(1.0, 0.3 + 0.28 * c):.2f}"></i>')
+        else:
+            cells.append('<i class="z"></i>')
+    return f'<span class="heat" title="last {days} days">{"".join(cells)}</span>'
 
 
 def render(rows, days):
@@ -102,6 +263,11 @@ body{{margin:0;background:#faf9f7;color:#1a1a1f;font:15px/1.55 Inter,-apple-syst
 header{{border-bottom:3px solid #e04e00;background:#fff;padding:26px 0 18px;margin-bottom:26px}}
 h1{{font-size:24px;margin:0 0 4px}} .sub{{color:#5c5a55;font-size:13px}}
 h2{{font-size:17px;margin:26px 0 8px}} h2 .n{{color:#e04e00;font-family:monospace;font-size:13px}}
+h2 .ago{{color:#a09d96;font-size:12px;font-weight:400;margin-left:8px}}
+.heat{{margin-left:10px;vertical-align:middle}}
+.heat i{{display:inline-block;width:7px;height:11px;margin-right:2px;background:#e04e00;border-radius:2px}}
+.heat i.z{{background:#e6e3dd}}
+.live{{display:inline-block;font-size:10.5px;font-weight:600;padding:0 6px;border-radius:9px;margin-left:6px;background:#e8f7ec;color:#0a7d33}}
 .s{{background:#fff;border:1px solid #e6e3dd;border-radius:9px;padding:12px 15px;margin:8px 0}}
 .when{{font-family:monospace;font-size:11.5px;color:#a05a00}}
 .nm{{font-weight:650}} .unnamed{{color:#5c5a55;font-weight:400;font-style:italic}}
@@ -110,19 +276,30 @@ code{{font-family:monospace;font-size:12px;background:#f2f0ec;border-radius:4px;
 .acct{{display:inline-block;font-family:monospace;font-size:10.5px;padding:0 6px;border-radius:9px;margin-left:6px;background:#eaf2f9;color:#20507a}}
 </style></head><body><header><div class="wrap">
 <h1>Claude session atlas</h1><div class="sub">What every conversation has been building — last {days} days,
-both accounts, grouped by project, newest first. Regenerated daily 07:30 CT (and on demand:
-<code>claude-session-atlas --publish</code>). Resume any session by pasting its command in a terminal.
-Updated {time.strftime('%Y-%m-%d %H:%M %Z')}.</div></div></header><div class="wrap">"""]
+both accounts, grouped by project, <b>most recently active repo first</b>. The newest sessions in each
+repo carry a GLM-written "where we left off" gist from the transcript tail. Regenerated daily 07:30 CT
+(and on demand: <code>claude-session-atlas --publish</code>). Resume any session by pasting its command
+in a terminal. Updated {time.strftime('%Y-%m-%d %H:%M %Z')}.</div></div></header><div class="wrap">"""]
+    live = live_status()
     for repo, rs in ordered:
-        parts.append(f'<h2><span class="n">{len(rs)}·</span> {e(repo)}</h2>')
+        ago = _ago(time.time() - rs[0]["mtime"])
+        parts.append(f'<h2><span class="n">{len(rs)}·</span> {e(repo)}'
+                     f'<span class="ago">last active {ago}</span>{_heat(rs)}</h2>')
         for r in rs:
             when = time.strftime("%a %m-%d %H:%M", time.localtime(r["mtime"]))
-            nm = f'<span class="nm">{e(r["name"])}</span>' if r["name"] else \
-                 f'<span class="unnamed">(unnamed)</span>'
-            topic = r["summary"] or r["first"]
+            # unnamed sessions wear their first prompt as the title — an
+            # empty "(unnamed)" marker tells the operator nothing
+            if r["name"]:
+                nm = f'<span class="nm">{e(r["name"])}</span>'
+                topic = r.get("gist") or r["summary"] or r["first"]
+            else:
+                nm = ('<span class="nm" style="font-weight:500">'
+                      f'{e((r["first"] or r["summary"] or "(empty session)")[:110])}</span>')
+                topic = r.get("gist") or r["summary"] or ""
+            badge = '<span class="live">● running</span>' if r["sid"] in live else ""
             parts.append(
                 f'<div class="s"><span class="when">{when}</span> {nm}'
-                f'<span class="acct">{r["acct"]}</span>'
+                f'<span class="acct">{r["acct"]}</span>{badge}'
                 f'<div class="topic">{e(topic)}</div>'
                 f'<code>{e(r["launcher"])} --resume {r["sid"]}</code>'
                 f' <code style="opacity:.6">cd {e(r["cwd"])}</code></div>')
@@ -130,11 +307,37 @@ Updated {time.strftime('%Y-%m-%d %H:%M %Z')}.</div></div></header><div class="wr
     return "".join(parts)
 
 
+def find(rows, query, limit=8):
+    """Token-cheap lookup for in-session use: compact matches, resume-ready.
+    A skill should call THIS, never Read the atlas HTML into context."""
+    terms = [w for w in query.lower().split() if w]
+    scored = []
+    for r in rows:
+        hay = " ".join([r["repo"], r["name"] or "", r["first"], r["summary"],
+                        r.get("gist") or ""]).lower()
+        score = sum(hay.count(w) for w in terms)
+        if score:
+            scored.append((score, r))
+    scored.sort(key=lambda s: (-s[0], -s[1]["mtime"]))
+    if not scored:
+        print(f"no sessions match: {query}")
+        return
+    for score, r in scored[:limit]:
+        when = time.strftime("%m-%d %H:%M", time.localtime(r["mtime"]))
+        topic = (r["name"] or r["summary"] or r["first"])[:110]
+        print(f"{when}  [{r['repo']}]  {topic}")
+        print(f"        cd {r['cwd']} && {r['launcher']} --resume {r['sid']}")
+
+
 def main():
     a = sys.argv[1:]
     days = int(a[a.index("--days") + 1]) if "--days" in a else 45
     cap = int(a[a.index("--max") + 1]) if "--max" in a else 140
+    if "--find" in a:
+        rows = collect(max(days, 90), 400)
+        return find(rows, a[a.index("--find") + 1]) or 0
     rows = collect(days, cap)
+    add_gists(rows)
     open(OUT, "w").write(render(rows, days))
     print(f"atlas: {len(rows)} sessions → {OUT}")
     if "--publish" in a:

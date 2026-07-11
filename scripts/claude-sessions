@@ -25,7 +25,13 @@ def scan(path):
                 if cwd is None and '"cwd"' in ln:
                     try: cwd = json.loads(ln).get("cwd")
                     except Exception: pass
-                if "named this session" in ln:
+                if '"custom-title"' in ln:
+                    # structured rename record — canonical, last-write-wins
+                    try:
+                        t = json.loads(ln).get("customTitle")
+                        if t: name = t
+                    except Exception: pass
+                elif name is None and "named this session" in ln:
                     try:
                         c = json.loads(ln).get("message", {}).get("content")
                         s = c if isinstance(c, str) else " ".join(
