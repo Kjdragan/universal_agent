@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Matt Pocock's Skills v1.1 — Field Guide</title>
+<style>
+  :root {
+    --ink: #1a2233; --muted: #5b6577; --faint: #8b93a5;
+    --bg: #f7f8fa; --card: #ffffff; --line: #e3e7ee;
+    --accent: #0b63c4; --accent-soft: #e8f1fb;
+    --green: #157f3d; --green-soft: #e7f5ec;
+    --amber: #92600a; --amber-soft: #fdf3df;
+    --red: #b3261e; --red-soft: #fbeae9;
+    --purple: #6b3fa0; --purple-soft: #f1eaf9;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { color-scheme: light; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Inter, sans-serif; background: var(--bg); color: var(--ink); line-height: 1.55; padding: 32px 16px 80px; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header.hero { background: linear-gradient(135deg, #0d2b52 0%, #0b63c4 70%, #2b8fe8 100%); color: #fff; border-radius: 16px; padding: 36px 40px; margin-bottom: 28px; }
+  .hero h1 { font-size: 28px; letter-spacing: -0.02em; margin-bottom: 8px; }
+  .hero p.sub { color: #cfe2f7; max-width: 70ch; font-size: 15px; }
+  .hero .pills { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill { background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.25); color: #fff; padding: 4px 12px; border-radius: 999px; font-size: 12.5px; text-decoration: none; }
+  .pill b { font-weight: 600; }
+  a { color: var(--accent); }
+  h2 { font-size: 21px; letter-spacing: -0.01em; margin: 40px 0 6px; }
+  h2 .kicker { display: block; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; color: var(--accent); margin-bottom: 2px; }
+  p.lede { color: var(--muted); max-width: 82ch; margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; }
+  code, .cmd { font-family: var(--mono); font-size: .92em; background: #eef1f6; border-radius: 5px; padding: 1px 6px; }
+  pre.cmd-block { font-family: var(--mono); font-size: 13px; background: #101828; color: #d7e3f4; padding: 14px 18px; border-radius: 10px; overflow-x: auto; margin: 10px 0; }
+  pre.cmd-block .c { color: #7d8aa5; }
+  pre.out { font-family: var(--mono); font-size: 12.5px; background: #fbfcfe; border: 1px solid var(--line); color: #2a3550; padding: 14px 16px; border-radius: 10px; overflow-x: auto; white-space: pre-wrap; margin: 10px 0; }
+
+  /* flow diagram */
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; margin: 18px 0 6px; }
+  .fstep { flex: 1 1 120px; min-width: 118px; background: var(--card); border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 12px; position: relative; margin-right: 26px; }
+  .fstep:last-child { margin-right: 0; }
+  .fstep::after { content: "➜"; position: absolute; right: -22px; top: 50%; transform: translateY(-50%); color: var(--faint); font-size: 15px; }
+  .fstep:last-child::after { content: none; }
+  .fstep .nm { font-family: var(--mono); font-weight: 700; font-size: 13.5px; color: var(--accent); }
+  .fstep .ds { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .fstep.alt .nm { color: var(--purple); }
+  .flowlabel { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); margin: 22px 0 6px; }
+
+  /* skill cards */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; margin-top: 14px; }
+  .skill { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .skill h3 { font-family: var(--mono); font-size: 15px; color: var(--ink); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .tag { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 2px 8px; border-radius: 999px; }
+  .tag.user { background: var(--amber-soft); color: var(--amber); }
+  .tag.model { background: var(--green-soft); color: var(--green); }
+  .tag.hitl { background: var(--purple-soft); color: var(--purple); }
+  .tag.afk { background: var(--accent-soft); color: var(--accent); }
+  .skill p { font-size: 13.5px; color: var(--muted); margin-top: 7px; }
+  .skill ul { margin: 8px 0 0 18px; font-size: 13px; color: var(--muted); }
+  .skill li { margin-bottom: 3px; }
+  .skill li b { color: var(--ink); font-weight: 600; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 12px; background: var(--card); border-radius: 10px; overflow: hidden; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; margin-top: 12px; }
+  .tablewrap table { margin-top: 0; border: none; }
+  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); background: #f2f4f8; padding: 9px 14px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.mono, span.mono { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+  .ok { color: var(--green); font-weight: 700; }
+  .miss { color: var(--red); font-weight: 700; }
+  .part { color: var(--amber); font-weight: 700; }
+
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft); border-radius: 0 10px 10px 0; padding: 12px 16px; font-size: 13.5px; color: #1e3a5c; margin: 14px 0; }
+  .callout.warn { border-color: var(--amber); background: var(--amber-soft); color: #5c430e; }
+  .callout.good { border-color: var(--green); background: var(--green-soft); color: #124d28; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+  footer { margin-top: 48px; color: var(--faint); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .testhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-top: 26px; }
+  .testhead h3 { font-size: 16.5px; }
+  .testhead .mono { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Matt Pocock&rsquo;s Skills v1.1 — Field Guide</h1>
+  <p class="sub">A software-development lifecycle as agent skills: grill&nbsp;&rarr;&nbsp;spec&nbsp;&rarr;&nbsp;tickets&nbsp;&rarr;&nbsp;implement&nbsp;&rarr;&nbsp;review, plus the new <b>Wayfinder</b> for plans too big for one session. Installed and live-tested on this machine on 2026-07-11.</p>
+  <div class="pills">
+    <a class="pill" href="https://youtu.be/A8mokin_YOs"><b>Source video:</b> “New Skills! v1.1” (Matt Pocock)</a>
+    <a class="pill" href="https://github.com/mattpocock/skills"><b>Repo:</b> mattpocock/skills</a>
+    <a class="pill" href="https://github.com/mattpocock/skills/releases/tag/v1.1.0"><b>Release:</b> v1.1.0 · 2026-07-08</a>
+    <span class="pill"><b>Status:</b> installed globally, stale names pruned, 4 live tests run</span>
+  </div>
+</header>
+
+<h2><span class="kicker">Setup</span>Install, update, prune</h2>
+<p class="lede">One installer command pulls the whole set. The CLI (<code>skills</code> on npm, by Vercel — the engine behind skills.sh) drops each skill into <code>~/.agents/skills</code> or your agent's skills dir and wires it into Claude Code as a slash command. Skills load at session start — restart a session after installing. Note: the CLI phones home anonymous install telemetry by default (<code>DISABLE_TELEMETRY=1</code> to opt out).</p>
+<div class="card">
+<pre class="cmd-block"><span class="c"># install / re-sync everything (also how you pick up renames)</span>
+npx skills add mattpocock/skills -g -y -s '*' -a claude-code
+
+<span class="c"># update previously-installed skills in place</span>
+npx skills update -g
+
+<span class="c"># v1.1 renamed skills — the installer does NOT migrate old names; prune them yourself</span>
+npx skills remove to-prd to-issues decision-mapping -g -y</pre>
+<div class="callout warn"><b>Rename trap.</b> v1.1 renamed <code>to-prd</code>&rarr;<code>to-spec</code>, merged <code>to-plan</code>+<code>to-issues</code>&rarr;<code>to-tickets</code>, and renamed <code>decision-mapping</code>&rarr;<code>wayfinder</code>. The installer adds the new names but leaves the old ones behind — both answer until you prune. On this machine I removed <code>to-prd</code>, <code>to-issues</code>, <code>decision-mapping</code>, plus two older orphans (<code>diagnose</code>&rarr;now <code>diagnosing-bugs</code>, and <code>zoom-out</code>, deleted upstream).</div>
+<div class="callout"><b>Once per repo:</b> run <code>/setup-matt-pocock-skills</code> in each repo before using the flow. It writes <code>docs/agents/issue-tracker.md</code> — which tracker to use (GitHub / GitLab / local markdown), the triage label vocabulary, and the “Wayfinding operations” section that <code>code-review</code>, <code>to-tickets</code>, <code>triage</code> and <code>wayfinder</code> all read.</div>
+</div>
+
+<h2><span class="kicker">The big picture</span>The main flow</h2>
+<p class="lede">This is the answer to “what's the flow?” — the complete lifecycle v1.1 closes. Plan mode is replaced by an interview: the agent grills <em>you</em>, the answers become a spec, the spec becomes tickets, and each ticket is one fresh-context implementation session that reviews and commits itself.</p>
+<div class="card">
+  <div class="flowlabel">Normal-sized work</div>
+  <div class="flow">
+    <div class="fstep"><span class="nm">/grill-me</span><div class="ds">agent interviews you, one question at a time (<span class="mono">/grill-with-docs</span> also writes ADRs + glossary)</div></div>
+    <div class="fstep"><span class="nm">/to-spec</span><div class="ds">synthesize the conversation into a spec on the tracker — no interview</div></div>
+    <div class="fstep"><span class="nm">/to-tickets</span><div class="ds">tracer-bullet vertical slices with blocking edges</div></div>
+    <div class="fstep"><span class="nm">/implement</span><div class="ds">one ticket per fresh session; drives <span class="mono">/tdd</span> at pre-agreed seams</div></div>
+    <div class="fstep"><span class="nm">/code-review</span><div class="ds">two parallel sub-agents: Standards + Spec; then commit</div></div>
+  </div>
+  <div class="flowlabel">Too big for one session? Chart it first</div>
+  <div class="flow">
+    <div class="fstep alt"><span class="nm">/wayfinder</span><div class="ds">chart a shared map of investigation tickets on the issue tracker</div></div>
+    <div class="fstep alt"><span class="nm">work the map</span><div class="ds">one ticket per session: research · prototype · grilling · task</div></div>
+    <div class="fstep alt"><span class="nm">map done</span><div class="ds">nothing left to decide — hand the decisions to <span class="mono">/to-spec</span> and rejoin the main flow</div></div>
+  </div>
+  <div class="flowlabel">Support, anytime</div>
+  <div class="flow">
+    <div class="fstep"><span class="nm">/research</span><div class="ds">background agent reads primary sources, leaves a cited .md</div></div>
+    <div class="fstep"><span class="nm">/prototype</span><div class="ds">throwaway code that answers a design question (logic or UI)</div></div>
+    <div class="fstep"><span class="nm">/diagnosing-bugs</span><div class="ds">the “something's broken” on-ramp</div></div>
+    <div class="fstep"><span class="nm">/ask-matt</span><div class="ds">router — tells you which skill fits your situation</div></div>
+  </div>
+</div>
+
+<h2><span class="kicker">Reference</span>The eleven skills that matter</h2>
+<p class="lede"><span class="tag user">user-invoked</span> means you type it; <span class="tag model">model-invoked</span> means the agent may reach for it on its own. <span class="tag hitl">HITL</span> needs you in the loop; <span class="tag afk">AFK</span> runs alone.</p>
+<div class="grid">
+  <div class="skill"><h3>/grilling <span class="tag model">model</span> <span class="tag hitl">hitl</span></h3>
+    <p>The shared interview primitive. Relentless questions about your plan until shared understanding.</p>
+    <ul><li><b>One question at a time</b> — “asking multiple questions at once is bewildering.”</li>
+    <li><b>Facts vs decisions</b> — facts get looked up in the codebase; decisions are always put to you.</li>
+    <li><b>Confirmation gate</b> — won't enact the plan until you confirm shared understanding.</li></ul></div>
+  <div class="skill"><h3>/grill-me · /grill-with-docs <span class="tag user">user</span> <span class="tag hitl">hitl</span></h3>
+    <p>The two front doors to grilling. <code>/grill-me</code> is the bare interview; <code>/grill-with-docs</code> also captures ADRs and a domain glossary via <code>/domain-modeling</code> as you answer.</p>
+    <ul><li><b>Replaces plan mode</b> as the way work starts.</li><li>Both signpost up to <code>/wayfinder</code> when the effort won't fit one session.</li></ul></div>
+  <div class="skill"><h3>/to-spec <span class="tag user">user</span></h3>
+    <p>Turns the current conversation into a spec (née PRD) and publishes it to the repo's tracker. No interview — pure synthesis of what was already discussed.</p>
+    <ul><li>Proposes the <b>test seams</b> (fewest, highest possible) and confirms them with you.</li>
+    <li>Template: problem &rarr; solution &rarr; extensive user stories &rarr; implementation + testing decisions &rarr; out of scope.</li>
+    <li>No file paths or code in the spec — they go stale. Exception: decision-rich prototype snippets.</li></ul></div>
+  <div class="skill"><h3>/to-tickets <span class="tag user">user</span></h3>
+    <p>Breaks a spec into <b>tracer-bullet tickets</b> — narrow vertical slices through every layer, each demoable, each sized for one fresh context window, each declaring what blocks it.</p>
+    <ul><li>Quizzes you on granularity and blocking edges before publishing.</li>
+    <li><b>Wide refactors</b> escape vertical slicing: expand&ndash;contract, migrating call sites in batches.</li>
+    <li>Work the <b>frontier</b> (unblocked tickets) one at a time with <code>/implement</code>.</li></ul></div>
+  <div class="skill"><h3>/implement <span class="tag user">user</span></h3>
+    <p>Deliberately tiny (15 lines): implement the spec/ticket, use <code>/tdd</code> at pre-agreed seams, typecheck often, full suite once at the end, then <code>/code-review</code>, then commit.</p>
+    <ul><li>Exists so every ticket session starts the same way.</li></ul></div>
+  <div class="skill"><h3>/tdd <span class="tag model">model</span></h3>
+    <p>Now <b>reference material, not a step list</b> — hand it to an AFK agent and it just works. Red before green, one slice at a time.</p>
+    <ul><li><b>Seams</b>: tests live only at pre-agreed public boundaries.</li>
+    <li>Anti-patterns named: implementation-coupled, tautological, horizontal slicing.</li>
+    <li><b>Refactoring is no longer in the loop</b> — it moved to code review.</li></ul></div>
+  <div class="skill"><h3>/code-review <span class="tag model">model</span></h3>
+    <p>Reviews the diff since a fixed point on <b>two axes in parallel sub-agents</b>: Standards (repo's documented rules + the Fowler smell baseline) and Spec (does the code do what was asked?). Never merges the two reports — one axis must not mask the other.</p>
+    <ul><li>Fails fast on a bad ref or empty diff before spawning agents.</li>
+    <li>Repo standards override the baseline; smells are judgement calls, never hard violations.</li></ul></div>
+  <div class="skill"><h3>/wayfinder <span class="tag user">user</span> <span class="tag hitl">hitl</span></h3>
+    <p>For a loose idea “too big for one session and wrapped in fog.” Charts the route as a <b>shared map</b> on the issue tracker: one <code>wayfinder:map</code> issue whose child tickets are the open decisions.</p>
+    <ul><li><b>Plan, don't do</b> — the map produces decisions, not deliverables.</li>
+    <li>Ticket types: research (AFK) · prototype (HITL) · grilling (HITL) · task.</li>
+    <li><b>Fog of war</b>: only ticket what you can phrase sharply; the rest waits in “Not yet specified.”</li>
+    <li>One ticket per session; claim by assignment; blocking edges render the frontier in the tracker UI.</li></ul></div>
+  <div class="skill"><h3>/research <span class="tag model">model</span> <span class="tag afk">afk</span></h3>
+    <p>Spins up a <b>background agent</b> to investigate a question against primary sources — official docs, source code, specs — and leave one cited Markdown file where the repo keeps notes. You keep working while it reads.</p></div>
+  <div class="skill"><h3>/prototype <span class="tag model">model</span> <span class="tag hitl">hitl</span></h3>
+    <p>Throwaway code that answers a design question. Two branches: <b>logic</b> (tiny interactive terminal app to push a state model through hard cases) or <b>UI</b> (several radically different variations on one route).</p>
+    <ul><li>One command to run, no persistence, no polish, state always surfaced.</li>
+    <li>When done: fold the decision into real code, park the prototype on a throwaway branch.</li></ul></div>
+  <div class="skill"><h3>/setup-matt-pocock-skills <span class="tag user">user</span> <span class="tag hitl">hitl</span></h3>
+    <p>Run once per repo. Configures the three things every flow skill reads: which issue tracker (GitHub / GitLab / <b>local markdown</b> under <code>.scratch/</code>), the five triage labels, and where domain docs (CONTEXT.md, ADRs) live.</p></div>
+  <div class="skill"><h3>Also in the box <span class="tag model">assorted</span></h3>
+    <p>The full set is ~39 skills: <code>triage</code> (issue state machine), <code>qa</code> (conversational bug filing), <code>diagnosing-bugs</code>, <code>domain-modeling</code>, <code>codebase-design</code>, <code>handoff</code>, <code>writing-great-skills</code>, <code>teach</code>, plus misc/personal ones (git guardrails, obsidian-vault, pre-commit setup&hellip;).</p></div>
+</div>
+
+<h2><span class="kicker">Changelog</span>What v1.1 actually changed</h2>
+<div class="tablewrap"><table>
+  <tr><th style="width:24%">Change</th><th>Why</th></tr>
+  <tr><td class="mono">to-prd → to-spec</td><td>What it produced was never really a PRD — “spec” is the honest, broader term. Skill still answers to “you may know this as a PRD.”</td></tr>
+  <tr><td class="mono">to-plan + to-issues → to-tickets</td><td>One skill, one artifact: tickets with blocking edges. “Issues” was GitHub/Linear bias; a local <code>.scratch/</code> tracker writes the same tickets as files.</td></tr>
+  <tr><td class="mono">decision-mapping → wayfinder</td><td>Graduated out of in-progress with a full reframe: destination, fog of war, frontier, HITL/AFK ticket types, native blocking, claim-by-assignment.</td></tr>
+  <tr><td class="mono">grilling</td><td>Confirmation gate before enacting; facts (look up) vs decisions (ask the human) — fixes the skill grilling <em>itself</em>, which Matt noted “was especially happening with Fable.”</td></tr>
+  <tr><td class="mono">code-review</td><td>Promoted from in-progress; gains the always-on <b>Fowler smell baseline</b> (12 smells from <em>Refactoring</em> ch.3) on the Standards axis.</td></tr>
+  <tr><td class="mono">implement <span style="color:var(--green)">new</span></td><td>Completes the lifecycle — the “what's the flow?” answer, one skill call per stage.</td></tr>
+  <tr><td class="mono">research <span style="color:var(--green)">new</span></td><td>Delegable reading legwork against primary sources, via background agent.</td></tr>
+  <tr><td class="mono">tdd</td><td>Reference-only. Red &rarr; green (refactor moved to code review). Leading word: <b>seams</b>, agreed before any test is written.</td></tr>
+  <tr><td class="mono">prototype</td><td>Now model-invoked so Wayfinder (and the agent) can reach for it autonomously.</td></tr>
+</table></div>
+
+<h2><span class="kicker">Reference</span>The Fowler smell baseline (code-review's cheat sheet)</h2>
+<p class="lede">Baked into every review whether or not the repo documents standards. Named after <em>Refactoring</em> ch.3 precisely because the terms are deep in every model's priors — naming the smell is enough to make the agent hunt it. Each is a judgement call, and a documented repo standard always overrides.</p>
+<div class="two">
+<div class="tablewrap"><table>
+  <tr><th>Smell</th><th>Fix</th></tr>
+  <tr><td><b>Mysterious Name</b></td><td>Rename; if no honest name comes, the design's murky</td></tr>
+  <tr><td><b>Duplicated Code</b></td><td>Extract the shared shape, call it from both</td></tr>
+  <tr><td><b>Feature Envy</b></td><td>Move the method onto the data it envies</td></tr>
+  <tr><td><b>Data Clumps</b></td><td>Bundle the travelling fields into one type</td></tr>
+  <tr><td><b>Primitive Obsession</b></td><td>Give the domain concept its own small type</td></tr>
+  <tr><td><b>Repeated Switches</b></td><td>Polymorphism, or one shared map</td></tr>
+</table></div>
+<div class="tablewrap"><table>
+  <tr><th>Smell</th><th>Fix</th></tr>
+  <tr><td><b>Shotgun Surgery</b></td><td>Gather what changes together into one module</td></tr>
+  <tr><td><b>Divergent Change</b></td><td>Split so each module changes for one reason</td></tr>
+  <tr><td><b>Speculative Generality</b></td><td>Delete it; inline until a real need shows</td></tr>
+  <tr><td><b>Message Chains</b></td><td>Hide the walk behind one method</td></tr>
+  <tr><td><b>Middle Man</b></td><td>Cut it, call the real target direct</td></tr>
+  <tr><td><b>Refused Bequest</b></td><td>Drop the inheritance, use composition</td></tr>
+</table></div>
+</div>
+
+<h2><span class="kicker">Proof</span>Live tests on this machine</h2>
+<p class="lede">I built a throwaway repo (<span class="mono">orderly</span>, a toy order-processing library) with a local-markdown tracker, deliberately planted defects, then ran the skills headlessly over GLM (the flat-rate backend, keeping Max usage untouched). Everything below is real output.</p>
+
+<div class="testhead"><h3>Test 1 — /code-review: does the Fowler baseline actually catch things?</h3></div>
+<div class="card">
+<p style="font-size:13.5px; color:var(--muted); margin-bottom:4px;">I committed a discount-codes feature branch with <b>seven deliberately planted defects</b> — smells, standards violations, a missing spec requirement, and out-of-scope code — then ran:</p>
+<pre class="cmd-block">claude -p "/code-review main"   <span class="c"># on the feature branch; spawned two parallel review sub-agents</span></pre>
+<div class="tablewrap"><table>
+  <tr><th>Planted defect</th><th>Axis</th><th>Result</th></tr>
+  <tr><td>Float arithmetic on money (<span class="mono">total * (1 - pct/100)</span>)</td><td>Standards (documented rule)</td><td class="ok">✓ caught — hard violation, cited the rule, proposed integer math; flagged again on the Spec axis (Req 4)</td></tr>
+  <tr><td>Default export</td><td>Standards (documented rule)</td><td class="ok">✓ caught</td></tr>
+  <tr><td>Function named <span class="mono">proc2</span></td><td>Mysterious Name</td><td class="ok">✓ caught — suggested <span class="mono">applyDiscountCode</span>, also spotted its unused param</td></tr>
+  <tr><td>Pipe-string codes (<span class="mono">"SAVE10|10|2026-12-31"</span>) parsed by hand in two places</td><td>Primitive Obsession + Duplicated Code</td><td class="ok">✓ caught as both smells</td></tr>
+  <tr><td><span class="mono">order.customer.profile.address.country.code</span> (two sites)</td><td>Message Chains</td><td class="ok">✓ caught — both sites</td></tr>
+  <tr><td><span class="mono">(street, city, zip, countryCode)</span> travelling through two signatures</td><td>Data Clumps</td><td class="ok">✓ caught — proposed an address type</td></tr>
+  <tr><td><span class="mono">DiscountStrategyRegistry</span> with hooks nobody calls</td><td>Speculative Generality</td><td class="ok">✓ caught — and independently flagged as scope creep on the Spec axis</td></tr>
+  <tr><td>Spec requires expired codes rejected — never implemented</td><td>Spec (missing requirement)</td><td class="ok">✓ caught — even noticed the seeded <span class="mono">HALFOFF</span> code is expired <em>today</em> and applies cleanly</td></tr>
+  <tr><td><span class="mono">autoApplyBestDiscount</span> — explicitly listed Out of Scope in the spec</td><td>Spec (scope creep)</td><td class="ok">✓ caught, spec line quoted</td></tr>
+</table></div>
+<div class="callout good" style="margin-top:14px;"><b>9/9 planted defects caught, zero false negatives</b> — plus two legitimate bonus findings I hadn't planted (Divergent Change: address formatters living in the discounts module; a duplicated <span class="mono">reduce</span> that should call the existing <span class="mono">orderTotalCents</span>). It also correctly <em>passed</em> the one requirement that was genuinely implemented (one-code-per-order) — no false positives. The closing line: <em>“The two axes converge on <span class="mono">proc2</span>: it's the defect on both.”</em></div>
+</div>
+
+<div class="testhead"><h3>Test 2 — /to-spec &rarr; /to-tickets: idea to dependency-ordered tickets</h3></div>
+<div class="card">
+<p style="font-size:13.5px; color:var(--muted); margin-bottom:4px;">Scenario: a gift-cards feature whose decisions were “already discussed” (supplied as context). Two runs:</p>
+<pre class="cmd-block">claude -p "/to-spec GIFT CARDS. Context from our discussion (decisions already made): ..."
+claude -p "/to-tickets .scratch/gift-cards/spec.md — I pre-approve the breakdown ..."</pre>
+<p style="font-size:13.5px; color:var(--muted);">What came out, all to the repo's local-markdown tracker:</p>
+<ul style="margin:8px 0 0 18px; font-size:13.5px; color:var(--muted);">
+  <li style="margin-bottom:5px;"><b style="color:var(--ink)">A full template spec</b> — problem &rarr; solution &rarr; <b>20 user stories</b> (shopper, recipient, operator, developer perspectives) &rarr; implementation + testing decisions &rarr; out of scope. It obeyed the “no file paths, they go stale” rule (“a new gift cards module”), kept the agreed single test seam, and honestly recorded what it left open for the implementer (code-generation strategy, denomination set).</li>
+  <li style="margin-bottom:5px;"><b style="color:var(--ink)">Three tracer-bullet tickets</b> under <span class="mono">.scratch/gift-cards/issues/</span> — issuance &rarr; redeem/balance &rarr; checkout integration — each a complete, demoable vertical slice with checkbox acceptance criteria and explicit <span class="mono">Blocked by</span> edges. Frontier: ticket 01.</li>
+  <li><b style="color:var(--ink)">A genuine catch:</b> ticket 02 noticed the generated spec contradicted itself (zero-balance redemption: “applied is zero” vs. “clear error”) and wrote the reconciliation into the ticket rather than letting two agents implement it two ways.</li>
+</ul>
+<div class="callout warn" style="margin-top:14px;"><b>Lesson learned the honest way.</b> My first attempt <em>mentioned</em> “run /to-spec” mid-prompt instead of starting with it — and the agent correctly reported the command didn't exist, then improvised. That's because <code>to-spec</code>, <code>to-tickets</code>, <code>wayfinder</code>, <code>implement</code>, and <code>grill-me</code> are all <b>user-invoked only</b> (<span class="mono">disable-model-invocation: true</span>): the model can't see or trigger them — only your literally-typed slash command does. Type them; don't ask for them.</div>
+</div>
+
+<div class="testhead"><h3>Test 3 — /wayfinder: chart a map for a foggy, oversized idea</h3></div>
+<div class="card">
+<p style="font-size:13.5px; color:var(--muted); margin-bottom:4px;">Loose idea handed in: <em>“Move orderly off in-memory/JSON data onto a real database. Maybe SQLite, maybe Postgres, unclear. Also unclear how discount codes migrate, and whether we need a migration tool for ~50k existing orders.”</em> Since a headless run can't interview anyone, the grilling answers were supplied as a transcript (done: a locked decision set for <code>/to-spec</code>; constraints: solo dev, zero new services).</p>
+<pre class="cmd-block">claude -p "/wayfinder — chart a map for this loose idea: ..."</pre>
+<p style="font-size:13.5px; color:var(--muted);">It produced a textbook map at <span class="mono">.scratch/db-migration/MAP.md</span> and <b>eight typed tickets with blocking edges</b> — then stopped, exactly as the skill demands (“charting the map is one session's work”):</p>
+<div class="tablewrap"><table>
+  <tr><th>#</th><th>Ticket</th><th>Type</th><th>Blocked by</th></tr>
+  <tr><td>01</td><td>Inventory the prod JSON order files</td><td class="mono">task</td><td>—&ensp;<span class="ok">frontier</span></td></tr>
+  <tr><td>02</td><td>Operational facts: volume / concurrency / downtime</td><td class="mono">grilling</td><td>—&ensp;<span class="ok">frontier</span></td></tr>
+  <tr><td>03</td><td>Survey persistence options under the constraints</td><td class="mono">research</td><td>—&ensp;<span class="ok">frontier</span></td></tr>
+  <tr><td>04</td><td>Lock the database choice</td><td class="mono">grilling</td><td>02, 03</td></tr>
+  <tr><td>05</td><td>Schema shape: relational vs JSON-document</td><td class="mono">grilling</td><td>02</td></tr>
+  <tr><td>06</td><td>Discount codes migration approach</td><td class="mono">grilling</td><td>05</td></tr>
+  <tr><td>07</td><td>Migration tool: needed &amp; fidelity</td><td class="mono">grilling</td><td>01, 05</td></tr>
+  <tr><td>08</td><td>Library persistence interface</td><td class="mono">grilling</td><td>04</td></tr>
+</table></div>
+<p style="font-size:13.5px; color:var(--muted); margin-top:10px;">The subtler behaviors all landed too: six fog items parked in <b>Not yet specified</b>, each noting which ticket has to resolve before it can sharpen (cutover strategy, schema refinement, migration-tool <em>design</em> as distinct from its ticketed <em>need</em>&hellip;); implementation, gift cards and HA-Postgres explicitly ruled <b>Out of scope</b> with reasons; the repo's own coding standards pulled into the map's Notes as binding constraints on every schema decision; and the SQLite lean flagged as <em>“a prior to be confirmed by 02/03, not a foregone conclusion.”</em></p>
+</div>
+
+<div class="testhead"><h3>Test 4 — /research: background-agent reading legwork</h3></div>
+<div class="card">
+<p style="font-size:13.5px; color:var(--muted);">Invoked the <code>research</code> skill in a live session with a question about the installer itself. It spun up a background agent (I kept working while it read), which returned a cited markdown file. Best finding — a correction to an assumption baked into my own prompt:</p>
+<pre class="out">The `skills` CLI invoked by `npx skills add mattpocock/skills` is NOT Matt Pocock's tool.
+It is the npm package `skills`, published by VERCEL LABS (repo vercel-labs/skills,
+maintainers rauchg + quuu) — the engine behind skills.sh. Matt's repo is a skill
+COLLECTION the CLI consumes: it shallow-clones the GitHub repo, discovers SKILL.md
+files, and installs them (canonical store ~/.agents/skills + per-agent symlinks).
+
+Telemetry: ON by default — GET to add-skill.vercel.sh/t on install/update/remove.
+Disable: DISABLE_TELEMETRY=1 or DO_NOT_TRACK=1. Auto-disabled in CI.</pre>
+<p style="font-size:13px; color:var(--muted); margin-top:8px;">Every claim in the full file carries its primary source (<span class="mono">npm view</span> output, the CLI's own <span class="mono">dist/cli.mjs</span>, README, skills.sh) — exactly the skill's contract.</p>
+</div>
+
+<h2><span class="kicker">House notes</span>On this machine specifically</h2>
+<div class="card">
+<ul style="margin-left:18px; font-size:13.5px; color:var(--muted);">
+  <li style="margin-bottom:6px;"><b style="color:var(--ink)">Where things live.</b> Canonical store is <code>~/.agents/skills</code> with per-agent links; the v1.1 additions were installed as copies into <code>~/.claude/skills</code>, which both Claude accounts share (<code>~/.claude-acct2/skills</code> is a symlink to it). Local house skills (crosstalk, sendit, the dragan plugin set) were untouched.</li>
+  <li style="margin-bottom:6px;"><b style="color:var(--ink)">Pruned on 2026-07-11:</b> <code>to-prd</code>, <code>to-issues</code>, <code>decision-mapping</code>, <code>diagnose</code>, <code>zoom-out</code> — all renamed or deleted upstream; verified against the repo's current tree before removal.</li>
+  <li style="margin-bottom:6px;"><b style="color:var(--ink)">New sessions only.</b> Skills are discovered at session start — restart Claude Code to see <code>/wayfinder</code>, <code>/to-spec</code>, <code>/to-tickets</code>, <code>/code-review</code>, <code>/implement</code>.</li>
+  <li style="margin-bottom:6px;"><b style="color:var(--ink)">Per-repo setup required for the flow skills.</b> <code>code-review</code>, <code>to-spec</code>, <code>to-tickets</code>, <code>triage</code> and <code>wayfinder</code> all read <code>docs/agents/issue-tracker.md</code>. Run <code>/setup-matt-pocock-skills</code> once in each repo you'll use them in (the test repo above shows what it produces).</li>
+  <li><b style="color:var(--ink)">Overlap warning.</b> The house skill set already has neighbours for some of these (<code>grilling</code> vs the house <code>grilling</code> — now the same skill, updated; <code>tdd</code> likewise; <code>research</code> vs <code>instant-topic-research-for-kevin</code>; <code>code-review</code> vs the built-in <code>/code-review</code> command). When both could answer, name the one you mean.</li>
+</ul>
+</div>
+
+<footer>
+  Sources: <a href="https://youtu.be/A8mokin_YOs">“New Skills! v1.1” video</a> (transcript reviewed in full) · <a href="https://github.com/mattpocock/skills/releases/tag/v1.1.0">v1.1.0 release notes</a> · the installed SKILL.md files (all read) · live test runs in <span class="mono">skillsv11-lab</span>, 2026-07-11. Built by Claude (Fable 5) as a background job.
+</footer>
+</div>
+</body>
+</html>
