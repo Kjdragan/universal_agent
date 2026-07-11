@@ -49,18 +49,45 @@ Given a research topic, produce a complete learning package sourced from the top
 
 ### Required Capabilities
 
-ArXiv tools (call directly via MCP — these are the ONLY supported way to reach arXiv):
-- mcp__arxiv-mcp-server__search_papers — search by topic, category, date range
+Paper DISCOVERY — local arXiv metadata index (PRIMARY; zero live API calls):
+
+    PYTHONPATH=/opt/universal_agent/src /opt/universal_agent/.venv/bin/python \
+      -m universal_agent.services.arxiv_local_index search \
+      --query "<topic>" --months 12 --limit 15
+
+Prints ONE JSON object: `status` ("ok" / "no_matches" / "unavailable") plus a
+`papers` list (paper_id, title, authors, categories, published, abstract).
+This searches a local SQLite index harvested nightly from arXiv's bulk OAI-PMH
+feed — a pure local read that CANNOT be rate-limited, so it needs no pacing,
+no retries, no backoff. It replaced the live `search_papers` call as step one
+after the 2026-07-10 run died on HTTP 429: arXiv throttles the VPS IP
+server-side, so ANY live search (MCP or hand-rolled) can be starved by other
+arXiv consumers on the same box. The same module also provides the offline
+last resort:
+
+    PYTHONPATH=/opt/universal_agent/src /opt/universal_agent/.venv/bin/python \
+      -m universal_agent.services.arxiv_local_index cache-fallback \
+      --query "<topic>" --limit 8
+
+which deterministically ranks the ALREADY-DOWNLOADED full-text cache by topic
+relevance (each result carries the on-disk `path` — no download needed).
+
+ArXiv MCP tools (for paper DOWNLOADS, and live search only as a fallback —
+these are the ONLY supported way to reach arxiv.org):
+- mcp__arxiv-mcp-server__search_papers — FALLBACK search, only when the local index is unavailable
 - mcp__arxiv-mcp-server__download_paper — download paper by arXiv ID
 - mcp__arxiv-mcp-server__read_paper — read full text of downloaded paper
 - mcp__arxiv-mcp-server__list_papers — list papers already downloaded locally
 
 The arxiv-mcp-server **enforces arXiv's 3-second rate limit automatically** and
 backs off on HTTP 429. You do NOT need to manage timing yourself. If a call ever
-returns a rate-limit error, wait ~60 seconds and retry the SAME MCP call once.
+returns a rate-limit error, retry the SAME MCP call at most once, then fall
+back to `cache-fallback` above rather than waiting out the cooldown.
 Do NOT fall back to the raw `arxiv` Python library, `curl`/`wget` against
 export.arxiv.org, or any hand-rolled HTTP — those bypass the rate limiter and
-cause the 429 storms this skill exists to avoid.
+cause the 429 storms this skill exists to avoid. (The `arxiv_local_index` CLI
+is allowed and preferred: its search/cache-fallback subcommands make no
+arxiv.org requests at all.)
 
 Paper cache contract (READ CAREFULLY — the 2026-06-22 silent no-op was a cache-check bug here)
 ------------------------------------------------------------------------------------------------------
@@ -158,12 +185,48 @@ building a new one — that is the recovery path after a deploy-restart.
 
 ### Pipeline Phases
 
-Phase A — Paper Discovery (direct MCP tools):
-1. Call mcp__arxiv-mcp-server__search_papers with the user's topic, max_results=5, sort_by=relevance, date_from 12 months ago, and relevant categories (cs.AI, cs.CL, cs.LG, cs.MA for AI/ML topics). Make ONE search call; the server already paces requests. If it returns a rate-limit/429 error, wait ~60s and retry the same call ONCE — never switch to the raw `arxiv` library or curl.
-2. For each paper, call download_paper (returns the paper text inline in its `content` field on `status: success`). One paper at a time — the server paces these for you. `download_paper` writes the paper to `<storage-path>/<paper_id>.md` BEFORE returning success, so a `status: success` return IS the cache-hit signal — do not re-call list_papers to verify. You MAY call read_paper to re-fetch the text if you need it again. If a single paper returns `status: error`, skip it and continue with the rest (see Paper cache contract above).
-3. Extract: title, authors, key findings, methodology, contributions
-4. Save paper metadata to work_products/paper_to_podcast/papers_metadata.json
-5. FAIL-LOUD CHECK: if ZERO papers downloaded successfully (every download_paper call returned `status: error`), do NOT proceed to Phase B and do NOT write a manifest claiming success. Exit the run with a clear failure message (write `work_products/paper_to_podcast/FAILURE.txt` describing the download failure and exit non-zero / report failure to the operator). The cron wrapper's post-run guard treats zero usable papers as a hard failure regardless.
+Phase A — Paper Discovery (LOCAL INDEX FIRST — zero live search calls):
+1. Run the `arxiv_local_index search` CLI (see Required Capabilities) with the
+   user's topic, `--months 12 --limit 15`. If `status` is `"ok"`, review the
+   candidates' titles+abstracts and PICK the 5 most relevant to the topic —
+   your judgment, not just the top 5 rows. This is a pure local read: no
+   pacing, no retry logic, no 429 risk.
+2. FALLBACK (only if the CLI reports `"unavailable"`/`"no_matches"` or errors):
+   call mcp__arxiv-mcp-server__search_papers with the topic, max_results=5,
+   sort_by=relevance, date_from 12 months ago, and relevant categories (cs.AI,
+   cs.CL, cs.LG, cs.MA for AI/ML topics). Make ONE call; if it returns a
+   rate-limit/429 error OR an MCP transport error (`MCP error -32000` /
+   "Connection closed" — the arxiv-mcp-server subprocess died; observed
+   2026-07-11), retry the same call ONCE immediately. If it still fails, move
+   to the offline last resort — do NOT wait out the cooldown and do NOT end
+   the run over a dead tool subprocess.
+3. OFFLINE LAST RESORT (both above failed): run `arxiv_local_index
+   cache-fallback --query "<topic>" --limit 8` and take the top-ranked
+   already-downloaded papers (their `path` field points at the full text on
+   disk — skip the download step for these). A podcast from cached
+   topic-relevant papers beats a no-op; note in the report + manifest that the
+   offline fallback was used.
+4. For each chosen paper NOT already on disk, call download_paper (returns the
+   paper text inline in its `content` field on `status: success`). Reuse any
+   paper already cached at `<storage-path>/<paper_id>.md` instead of
+   re-downloading. One paper at a time — the server paces these for you.
+   `download_paper` writes the paper to `<storage-path>/<paper_id>.md` BEFORE
+   returning success, so a `status: success` return IS the cache-hit signal —
+   do not re-call list_papers to verify. You MAY call read_paper to re-fetch
+   the text if you need it again. If a single paper returns `status: error`, a
+   429, or an MCP transport error, skip it and continue with the rest (see
+   Paper cache contract above); if you end up with fewer than 3 usable papers,
+   top back up from `cache-fallback`.
+5. Extract: title, authors, key findings, methodology, contributions (the
+   index search JSON already carries title/authors/published — reuse it).
+6. Save paper metadata to work_products/paper_to_podcast/papers_metadata.json
+7. FAIL-LOUD CHECK: if ZERO papers are usable (nothing downloaded AND the
+   cache fallback returned nothing), do NOT proceed to Phase B and do NOT
+   write a manifest claiming success. Exit the run with a clear failure
+   message (write `work_products/paper_to_podcast/FAILURE.txt` describing the
+   failure and exit non-zero / report failure to the operator). The cron
+   wrapper's post-run guard treats zero usable papers as a hard failure
+   regardless.
 
 Phase B — NotebookLM Content Generation (via the `nlm` CLI — see Required Capabilities):
 0. RESUME CHECK (deploy-restart recovery — do this BEFORE creating anything).
