@@ -14,6 +14,7 @@ import sqlite3
 from typing import Any
 
 from universal_agent import task_hub
+from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 from universal_agent.feature_flags import (
     proactive_demo_factory_run_cmd,
     proactive_demo_factory_script,
@@ -1670,20 +1671,6 @@ def finalize_desktop_gpu_demo(
         agent_id=agent_id,
         reason="desktop GPU build complete",
     )
-
-
-def _json_loads_obj(raw: Any) -> dict[str, Any]:
-    """Parse a JSON object from raw text or return the input if already a dict."""
-    if isinstance(raw, dict):
-        return dict(raw)
-    if isinstance(raw, str) and raw.strip():
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            return {}
-        if isinstance(parsed, dict):
-            return parsed
-    return {}
 
 
 if __name__ == "__main__":

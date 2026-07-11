@@ -14,6 +14,8 @@ import re
 import sqlite3
 from typing import Any, Optional
 
+from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
+
 ARTIFACT_STATUS_PRODUCED = "produced"
 ARTIFACT_STATUS_CANDIDATE = "candidate"
 ARTIFACT_STATUS_SURFACED = "surfaced"
@@ -55,19 +57,6 @@ def _now_iso() -> str:
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-
-
-def _json_loads_obj(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, dict):
-        return dict(raw)
-    if isinstance(raw, str) and raw.strip():
-        try:
-            parsed = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
-            return {}
-        if isinstance(parsed, dict):
-            return parsed
-    return {}
 
 
 def _normalize_list(value: Any) -> list[str]:

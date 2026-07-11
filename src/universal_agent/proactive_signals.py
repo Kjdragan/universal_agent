@@ -42,6 +42,8 @@ import re
 import sqlite3
 from typing import Any, Optional
 
+from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
+
 from universal_agent import task_hub
 
 logger = logging.getLogger(__name__)
@@ -823,16 +825,6 @@ def _hydrate_card(row: dict[str, Any]) -> dict[str, Any]:
     row["selected_action"] = _json_loads_obj(row.pop("selected_action_json", "{}"))
     row["metadata"] = _json_loads_obj(row.pop("metadata_json", "{}"))
     return row
-
-
-def _json_loads_obj(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, dict):
-        return raw
-    try:
-        parsed = json.loads(str(raw or "{}"))
-    except Exception:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
 
 
 def _json_loads_list(raw: Any) -> list[Any]:

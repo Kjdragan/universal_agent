@@ -14,6 +14,7 @@ import time
 from typing import Any, Callable, Optional
 
 from universal_agent import task_hub
+from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 from universal_agent.rate_limiter import _is_fup_error
 from universal_agent.services.llm_classifier import (
     _call_llm,
@@ -2694,20 +2695,6 @@ def _json_loads_list(raw: Any) -> list[Any]:
         if isinstance(parsed, list):
             return parsed
     return []
-
-
-def _json_loads_obj(raw: Any) -> dict[str, Any]:
-    """Parse a JSON object from raw text or return the input if already a dict."""
-    if isinstance(raw, dict):
-        return dict(raw)
-    if isinstance(raw, str) and raw.strip():
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            return {}
-        if isinstance(parsed, dict):
-            return parsed
-    return {}
 
 
 def _parse_time(raw: Any) -> Optional[datetime]:
