@@ -292,17 +292,11 @@ def _list_workspace_files_payload(workspace: Path, path: str = "") -> dict[str, 
     if not workspace.exists():
         return {"files": [], "error": "Workspace not found"}
 
-    target_path = workspace / path if path else workspace
-
-    try:
-        target_path = target_path.resolve()
-        workspace_resolved = workspace.resolve()
-        if not str(target_path).startswith(str(workspace_resolved)):
-            raise HTTPException(status_code=403, detail="Access denied")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
+    # Containment via _resolve_path_under_root (root in target.parents), NOT a
+    # string-prefix check: `str(target).startswith(str(workspace))` also accepts
+    # a sibling dir whose name shares the workspace's prefix (session_123 vs
+    # session_123_other), which allowed cross-session file access.
+    target_path = _resolve_path_under_root(workspace, path)
 
     if not target_path.exists():
         return {"files": [], "path": path}
@@ -333,10 +327,10 @@ def _list_workspace_files_payload(workspace: Path, path: str = "") -> dict[str, 
 
 
 def _read_workspace_file_response(workspace: Path, file_path: str) -> Response:
-    target = (workspace / file_path).resolve()
-    workspace_resolved = workspace.resolve()
-    if not str(target).startswith(str(workspace_resolved)):
-        raise HTTPException(status_code=403, detail="Access denied")
+    # Containment via _resolve_path_under_root (root in target.parents), NOT a
+    # string-prefix check — see _list_workspace_files_payload for why the prefix
+    # form let a sibling workspace escape.
+    target = _resolve_path_under_root(workspace, file_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
