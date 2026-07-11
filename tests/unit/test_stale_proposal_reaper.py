@@ -256,3 +256,109 @@ def test_reaper_malformed_timestamp_skipped():
 
     assert summary["closed_ids"] == ["good_ts"]
     assert summary["skipped_reasons"].get("malformed_timestamp") == 1
+
+
+# ─── 4. Stale-section protected-prune affordance (Gap A) ─────────────────────
+
+
+def test_stale_section_disables_prune_for_protected_items(monkeypatch):
+    """priority>=2 and human-only stale items appear but their prune (dismiss)
+    link is NOT rendered — the reaper spares them, so the report must not offer
+    a one-click prune. Promote stays active for every stale item."""
+    monkeypatch.setenv("UA_ARTIFACT_ACK_SECRET", "test-secret")
+    conn = _conn()
+    _seed(conn, task_id="prio2_stale", source_kind="reflection", priority=2, age_hours=24 * 5)
+    _seed(conn, task_id="human_stale", source_kind="brainstorm",
+          labels=["human-only"], age_hours=24 * 5)
+    _seed(conn, task_id="reapable_stale", source_kind="reflection", priority=1, age_hours=24 * 5)
+    stale = ideation_report.get_stale_proposals(conn, max_age_hours=72)
+
+    html = ideation_report.render_report_html(
+        [], base="https://gw.example", generated_ct="now", stale=stale,
+    )
+    # Protected items still appear in the section...
+    assert "prio2_stale" in html
+    assert "human_stale" in html
+    assert "protected" in html
+    # ...but their prune (dismiss) action link is NOT rendered.
+    assert "/api/v1/ideation/prio2_stale/action?a=dismiss" not in html
+    assert "/api/v1/ideation/human_stale/action?a=dismiss" not in html
+    # The reapable (non-protected) stale item keeps an active prune link.
+    assert "/api/v1/ideation/reapable_stale/action?a=dismiss" in html
+    # Promote stays active for all three.
+    assert "/api/v1/ideation/prio2_stale/action?a=promote" in html
+    assert "/api/v1/ideation/human_stale/action?a=promote" in html
+    assert "/api/v1/ideation/reapable_stale/action?a=promote" in html
+
+
+# ─── 5. Per-item disposition records + digest (Gap B) ─────────────────────────
+
+
+def test_reap_returns_per_item_disposition_records():
+    """reap_stale_proposals returns an `items` list with one record per
+    considered item (pruned AND skipped), fields {id, title, source_kind,
+    created_at, age, disposition, reason}."""
+    conn = _conn()
+    _seed(conn, task_id="reapable", source_kind="reflection", age_hours=24 * 20)
+    _seed(conn, task_id="prio2", source_kind="reflection", priority=2, age_hours=24 * 20)
+    _seed(conn, task_id="human", source_kind="brainstorm",
+          labels=["human-only"], age_hours=24 * 20)
+    _seed(conn, task_id="young", source_kind="reflection", age_hours=24 * 5)
+
+    summary = task_hub.reap_stale_proposals(conn, older_than_days=14)
+
+    items = {it["id"]: it for it in summary["items"]}
+    assert set(items) == {"reapable", "prio2", "human", "young"}
+    assert items["reapable"]["disposition"] == "pruned"
+    assert items["reapable"]["reason"] == "stale_proposal_reaped"
+    assert items["prio2"]["disposition"] == "skipped"
+    assert items["prio2"]["reason"] == "priority_protected"
+    assert items["human"]["disposition"] == "skipped"
+    assert items["human"]["reason"] == "human_only_protected"
+    assert items["young"]["disposition"] == "skipped"
+    assert items["young"]["reason"] == "below_ttl_window"
+    expected_fields = {"id", "title", "source_kind", "created_at", "age", "disposition", "reason"}
+    for it in items.values():
+        assert expected_fields <= set(it), it
+    # age populated for parseable timestamps (days, rounded).
+    assert items["reapable"]["age"] is not None and items["reapable"]["age"] >= 19
+
+
+def test_reaper_digest_writes_md_and_json(monkeypatch, tmp_path):
+    """_write_digest emits both stale_proposal_reaper_<YYYYMMDD>.json and .md
+    with one row per item carrying the spec fields."""
+    import json
+    import os
+
+    monkeypatch.setenv("UA_ARTIFACTS_DIR", str(tmp_path))
+    from universal_agent.scripts import stale_proposal_reaper
+
+    summary = {
+        "via": "weekly_cron",
+        "closed": 1,
+        "skipped": 1,
+        "skipped_reasons": {"priority_protected": 1},
+        "items": [
+            {"id": "t1", "title": "T1", "source_kind": "reflection",
+             "created_at": "2026-01-01T00:00:00+00:00", "age": 20.0,
+             "disposition": "pruned", "reason": "stale_proposal_reaped"},
+            {"id": "t2", "title": "T2", "source_kind": "brainstorm",
+             "created_at": "2026-01-01T00:00:00+00:00", "age": 20.0,
+             "disposition": "skipped", "reason": "priority_protected"},
+        ],
+    }
+    path = stale_proposal_reaper._write_digest(summary, older_than_days=14)
+    assert path is not None
+    assert path.endswith(".json")
+    md_path = path[:-5] + ".md"
+    assert os.path.exists(md_path), md_path
+
+    payload = json.loads(open(path, encoding="utf-8").read())
+    assert len(payload["items"]) == 2
+    assert payload["items"][0]["disposition"] == "pruned"
+    assert payload["items"][1]["disposition"] == "skipped"
+
+    md_text = open(md_path, encoding="utf-8").read()
+    assert "Stale Proposal Reaper Digest" in md_text
+    assert "t1" in md_text and "t2" in md_text
+    assert "pruned" in md_text and "priority_protected" in md_text

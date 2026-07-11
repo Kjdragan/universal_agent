@@ -18,7 +18,8 @@ code_paths:
   - src/universal_agent/proactive_signals.py
   - src/universal_agent/services/ideation_report.py
   - src/universal_agent/scripts/morning_ideation_report.py
-last_verified: 2026-07-06
+  - src/universal_agent/scripts/stale_proposal_reaper.py
+last_verified: 2026-07-11
 ---
 
 # Proactive Pipeline
@@ -214,14 +215,23 @@ wiring differs — some run continuously, some ship scaffolding only.
 > is the scratchpad review toolbar. *Stale-proposal handling (shipped 2026-07-11):* the report
 > also emits a **STALE PROPOSALS NEEDING VERDICT (>72h)** section
 > (`ideation_report.py::get_stale_proposals` — OPEN reflection/brainstorm items older than 72h,
-> oldest-first, same promote/dismiss affordance), and the weekly `stale_proposal_reaper` cron
+> oldest-first, with promote/prune affordances mirroring the held-proposal action pattern via
+> `ideation_report.py::_render_stale_card`). Protected items (`priority >= 2` or `human-only`,
+> detected by `ideation_report.py::_is_protected_proposal`) still appear but their **prune
+> button is disabled** — the reaper's HARD GATE spares them, so the report must not offer a
+> one-click prune the gateway handler (`gateway_server.py::ideation_action_get`) performs no
+> server-side guard for. The weekly `stale_proposal_reaper` cron
 > (`scripts/stale_proposal_reaper.py`, Sunday 06:40 CT, registered via
 > `gateway_server.py::_ensure_stale_proposal_reaper_cron_job`) parks OPEN proposals >14d through
 > the sanctioned per-item audit path (`task_hub.py::_park_stale_proposal_item` —
 > `metadata.stale_proposal_reap` marker + evaluation row; parked, never hard-deleted). HARD GATE:
-> `task_hub.py::reap_stale_proposals` never touches priority>=2 or `human-only` items; a
-> pruned-proposals digest is written to `work_products/stale_proposal_reaper/` under
-> `artifacts.py::resolve_artifacts_dir` so nothing vanishes silently. *Still pending:* enriching
+> `task_hub.py::reap_stale_proposals` never touches priority>=2 or `human-only` items (logged in
+> the digest as `skipped` with reason `priority_protected` / `human_only_protected`); a
+> **per-item digest** is written to
+> `work_products/stale_proposal_reaper/stale_proposal_reaper_<YYYYMMDD>.{md,json}` under
+> `artifacts.py::resolve_artifacts_dir` — one record per considered item (pruned AND skipped)
+> with `{id, title, source_kind, created_at, age, disposition, reason}` — so nothing vanishes
+> silently. *Still pending:* enriching
 > `build_reflection_context` with real goals/CSI/preference signals (idea-quality lever, separate
 > from delivery).
 

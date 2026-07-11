@@ -6892,6 +6892,11 @@ def reap_stale_proposals(
     ).fetchall()
 
     closed_ids: list[str] = []
+    # Per-item disposition records (pruned AND skipped) for the weekly digest.
+    # Each carries {id, title, source_kind, created_at, age, disposition, reason}
+    # so the reaper script can emit an auditable .md + .json of what it touched
+    # vs. spared — nothing vanishes silently.
+    items: list[dict[str, Any]] = []
     skipped_reasons: dict[str, int] = {
         "below_ttl_window": 0,
         "malformed_timestamp": 0,
@@ -6902,27 +6907,50 @@ def reap_stale_proposals(
     for row in rows:
         item = hydrate_item(dict(row))
         task_id = str(item.get("task_id") or "")
+        title = str(item.get("title") or "")
+        source_kind = str(item.get("source_kind") or "")
+        created_raw = str(item.get("created_at") or "")
         labels = {str(v).strip().lower() for v in (item.get("labels") or [])}
+        # Parse created_at once up front so every per-item record can carry an
+        # age, including protected skips. The HARD GATE check order below is
+        # unchanged (human-only, then priority, then malformed, then age).
+        created_dt = _parse_iso(created_raw)
+        age_hours = (
+            max(0.0, (now_dt - created_dt).total_seconds() / 3600.0)
+            if created_dt is not None
+            else None
+        )
+        age_days = age_hours / 24.0 if age_hours is not None else None
+        base_rec = {
+            "id": task_id,
+            "title": title,
+            "source_kind": source_kind,
+            "created_at": created_raw,
+            "age": round(age_days, 2) if age_days is not None else None,
+        }
         # HARD GATE — protective skips first, non-negotiable regardless of age.
         # A high-priority or human-only proposal must be surfaced by the morning
         # report, never silently reaped.
         if TASK_LABEL_HUMAN_ONLY in labels:
             skipped_reasons["human_only_protected"] += 1
+            items.append({**base_rec, "disposition": "skipped", "reason": "human_only_protected"})
             continue
         priority = _safe_int(item.get("priority"), 1)
         if priority >= 2:
             skipped_reasons["priority_protected"] += 1
+            items.append({**base_rec, "disposition": "skipped", "reason": "priority_protected"})
             continue
-        created_dt = _parse_iso(item.get("created_at"))
         if created_dt is None:
             skipped_reasons["malformed_timestamp"] += 1
+            items.append({**base_rec, "disposition": "skipped", "reason": "malformed_timestamp"})
             continue
-        age_hours = max(0.0, (now_dt - created_dt).total_seconds() / 3600.0)
         if age_hours < ttl_threshold_hours:
             skipped_reasons["below_ttl_window"] += 1
+            items.append({**base_rec, "disposition": "skipped", "reason": "below_ttl_window"})
             continue
         if dry_run:
             closed_ids.append(task_id)
+            items.append({**base_rec, "disposition": "pruned", "reason": "stale_proposal_reaped (dry_run)"})
             continue
         _park_stale_proposal_item(
             conn,
@@ -6930,10 +6958,11 @@ def reap_stale_proposals(
             agent_id=agent_id,
             via=via,
             now_iso=now_iso,
-            age_days=age_hours / 24.0,
+            age_days=age_days or 0.0,
             reason_text="",
         )
         closed_ids.append(task_id)
+        items.append({**base_rec, "disposition": "pruned", "reason": "stale_proposal_reaped"})
 
     if closed_ids and not dry_run:
         conn.commit()
@@ -6945,6 +6974,7 @@ def reap_stale_proposals(
         "skipped": sum(skipped_reasons.values()),
         "skipped_reasons": skipped_reasons,
         "closed_ids": closed_ids,
+        "items": items,
         "guard": {
             "older_than_days": ttl_days,
             "source_kinds": sorted(STALE_PROPOSAL_REAP_SOURCE_KINDS),
