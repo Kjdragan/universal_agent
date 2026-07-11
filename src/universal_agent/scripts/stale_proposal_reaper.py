@@ -34,26 +34,58 @@ DEFAULT_REAP_DAYS = 14
 
 
 def _write_digest(summary: dict, *, older_than_days: int) -> str | None:
-    """Write the pruned-proposals digest under the artifacts work_products dir.
+    """Write the per-item pruned-proposals digest (.md + .json) under artifacts.
 
-    Path resolved via ``artifacts.resolve_artifacts_dir`` — never guessed. The
-    digest is best-effort: a failure here must NOT fail the reaper (the parks
-    already committed); it only means no digest file for this run.
+    Path resolved via ``artifacts.resolve_artifacts_dir`` — never guessed. Both
+    files carry one record per considered item (pruned AND skipped) with the
+    fields ``{id, title, source_kind, created_at, age, disposition, reason}``
+    so nothing vanishes silently and the operator can audit what the reaper
+    touched vs. spared. Best-effort: a failure here must NOT fail the reaper
+    (the parks already committed); it only means no digest for this run.
     """
     try:
         root = resolve_artifacts_dir()
         out_dir = root / "work_products" / "stale_proposal_reaper"
         out_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        path = out_dir / f"digest-{stamp}.json"
+        # Date-stamped per spec (``<YYYYMMDD>``). A same-day catch-up rerun
+        # overwrites with the latest state, which is correct: items already
+        # pruned won't resurface as pruned a second time.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+        items = list(summary.get("items") or [])
         payload = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "older_than_days": older_than_days,
-            "summary": summary,
+            "via": summary.get("via"),
+            "closed": summary.get("closed", 0),
+            "skipped": summary.get("skipped", 0),
+            "skipped_reasons": summary.get("skipped_reasons", {}),
+            "items": items,
         }
-        path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-        logger.info("stale_proposal_reaper: digest written to %s", path)
-        return str(path)
+        json_path = out_dir / f"stale_proposal_reaper_{stamp}.json"
+        md_path = out_dir / f"stale_proposal_reaper_{stamp}.md"
+        json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        lines = [
+            f"# Stale Proposal Reaper Digest — {stamp}",
+            "",
+            f"- via: `{payload.get('via')}`",
+            f"- older_than_days: {older_than_days}",
+            f"- closed (pruned): {payload.get('closed')}",
+            f"- skipped: {payload.get('skipped')}",
+            f"- skipped_reasons: `{json.dumps(payload.get('skipped_reasons', {}))}`",
+            "",
+            "| id | title | source_kind | created_at | age (days) | disposition | reason |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for it in items:
+            title = str(it.get("title") or "").replace("|", "\\|")
+            lines.append(
+                f"| {it.get('id')} | {title} | {it.get('source_kind')} | "
+                f"{it.get('created_at')} | {it.get('age')} | "
+                f"{it.get('disposition')} | {it.get('reason')} |"
+            )
+        md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        logger.info("stale_proposal_reaper: digest written to %s (+ .md)", json_path)
+        return str(json_path)
     except Exception as exc:  # noqa: BLE001 — best-effort digest
         logger.error("stale_proposal_reaper: failed to write digest: %s", exc, exc_info=True)
         return None

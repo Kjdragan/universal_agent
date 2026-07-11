@@ -164,6 +164,74 @@ def _render_cards(proposals: list[dict[str, Any]], base: str) -> str:
     return "".join(_render_card(p, base) for p in proposals)
 
 
+def _is_protected_proposal(p: dict[str, Any]) -> bool:
+    """A stale proposal the reaper must spare: ``priority >= 2`` OR ``human-only``.
+
+    Mirrors ``task_hub.reap_stale_proposals``'s HARD GATE so the report's prune
+    affordance is disabled on exactly the items the reaper will not touch. The
+    operator can still promote a protected item, but cannot prune it from this
+    surface — the gateway handler (``ideation_action_get``) performs no
+    server-side guard, so disabling the link client-side is the actual gate.
+    """
+    try:
+        priority = int(p.get("priority") or 1)
+    except (TypeError, ValueError):
+        priority = 1
+    if priority >= 2:
+        return True
+    labels = {str(v).strip().lower() for v in _labels(p.get("labels_json"))}
+    return task_hub.TASK_LABEL_HUMAN_ONLY in labels
+
+
+def _render_stale_card(p: dict[str, Any], base: str) -> str:
+    """A stale-proposal card. Mirrors ``_render_card`` but DISABLES the prune
+    (dismiss) button for protected items (``priority >= 2`` or ``human-only``).
+
+    Protected items still appear (the report must surface them per spec) but
+    their prune button renders as a greyed, non-link stub with the reason — the
+    reaper spares them, so the report must not offer a one-click prune the
+    reaper itself refuses. Promote stays active for every stale item.
+    """
+    title = _html.escape(str(p.get("title") or "Untitled proposal"))
+    desc = _md_to_html(str(p.get("description") or ""))
+    labels = "".join(
+        f'<span style="display:inline-block;background:#eef1f4;color:#57606a;border-radius:5px;'
+        f'padding:2px 8px;font-size:11px;margin:0 6px 4px 0;">{_html.escape(l)}</span>'
+        for l in _labels(p.get("labels_json"))
+    )
+    promote = _action_button(base, str(p.get("task_id")), "promote", "✓ Promote", "#1a7f37")
+    if _is_protected_proposal(p):
+        try:
+            priority = int(p.get("priority") or 1)
+        except (TypeError, ValueError):
+            priority = 1
+        why = "priority &ge; 2" if priority >= 2 else "human-only"
+        prune = (
+            f'<span style="display:inline-block;padding:8px 16px;margin:0 8px 0 0;'
+            f'border-radius:6px;background:#e1e4e8;color:#6e7781;font-weight:600;font-size:13px;'
+            f'cursor:not-allowed;">✕ Prune (protected)</span>'
+            f'<span style="font-size:11px;color:#6e7781;vertical-align:middle;">'
+            f"{why} &mdash; spared by the reaper</span>"
+        )
+    else:
+        prune = _action_button(base, str(p.get("task_id")), "dismiss", "✕ Prune", "#6e7781")
+    buttons = (
+        f'<div style="margin-top:14px;">{promote}{prune}</div>'
+        if (promote or prune)
+        else '<div style="margin-top:14px;color:#cf222e;font-size:12px;">'
+        "(action links unavailable — promote/dismiss from the dashboard)</div>"
+    )
+    return (
+        '<div style="border:1px solid #d0d7de;border-radius:10px;padding:18px 20px;margin:0 0 16px 0;'
+        'background:#ffffff;">'
+        f'<div style="font-size:16px;font-weight:680;color:#1f2328;margin-bottom:8px;">{title}</div>'
+        f'<div style="margin-bottom:10px;">{labels}</div>'
+        f'<div style="font-size:13.5px;line-height:1.6;color:#3b4148;">{desc}</div>'
+        f'{buttons}'
+        "</div>"
+    )
+
+
 def _render_stale_section(stale: list[dict[str, Any]], base: str) -> str:
     if not stale:
         return ""
@@ -173,11 +241,12 @@ def _render_stale_section(stale: list[dict[str, Any]], base: str) -> str:
         '<div style="font-size:15px;font-weight:700;color:#7d4e00;">'
         f"STALE PROPOSALS NEEDING VERDICT (>72h) — {len(stale)} awaiting your call</div>"
         '<div style="font-size:12px;color:#7d4e00;margin-top:4px;">'
-        "Oldest first. Promote to dispatch, or Dismiss to park. The weekly reaper "
-        "auto-parks these at 14 days (priority >= 2 and human-only items are always spared).</div>"
+        "Oldest first. Promote to dispatch, or Prune to park. The weekly reaper "
+        "auto-parks these at 14 days (priority >= 2 and human-only items are always spared "
+        "— their Prune button is disabled below).</div>"
         "</div>"
     )
-    return header + _render_cards(stale, base)
+    return header + "".join(_render_stale_card(p, base) for p in stale)
 
 
 def _shell(inner: str, *, count: int, generated_ct: str) -> str:
