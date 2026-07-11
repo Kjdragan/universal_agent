@@ -16348,6 +16348,7 @@ async def dashboard_csi_digests(limit: int = 50):
 @app.post("/api/v1/dashboard/csi/digests/{digest_id}/send-to-simone")
 async def send_csi_digest_to_simone(digest_id: str, request: Request):
     """Email a CSI digest to Simone via AgentMail with optional user comment."""
+    _require_ops_auth(request)
     # Find the digest from SQLite
     target = None
     digests, _ = _get_csi_digests(500)
@@ -16407,8 +16408,9 @@ async def send_csi_digest_to_simone(digest_id: str, request: Request):
 
 
 @app.delete("/api/v1/dashboard/csi/digests/{digest_id}")
-async def dashboard_csi_delete_digest(digest_id: str):
+async def dashboard_csi_delete_digest(digest_id: str, request: Request):
     """Delete a single CSI digest by its ID."""
+    _require_ops_auth(request)
     deleted = _delete_csi_digest(digest_id)
     if not deleted:
         return JSONResponse(status_code=404, content={"ok": False, "error": "Digest not found"})
@@ -16416,14 +16418,15 @@ async def dashboard_csi_delete_digest(digest_id: str):
 
 
 @app.delete("/api/v1/dashboard/csi/digests")
-async def dashboard_csi_clear_all():
+async def dashboard_csi_clear_all(request: Request):
     """Clear all CSI digests from the list (notification-style dismiss)."""
+    _require_ops_auth(request)
     count = _clear_all_csi_digests()
     return {"ok": True, "cleared": count}
 
 
 @app.post("/api/v1/dashboard/csi/purge")
-async def dashboard_csi_purge():
+async def dashboard_csi_purge(request: Request):
     """Wipe all stale CSI data from the database and in-memory stores.
 
     Clears:
@@ -16433,6 +16436,7 @@ async def dashboard_csi_purge():
     - CSI-related task_hub_items
     - CSI _notifications from memory
     """
+    _require_ops_auth(request)
     counts: dict[str, int] = {}
 
     # 1. Clear CSI digests from SQLite
@@ -24968,6 +24972,7 @@ async def dashboard_csi_specialist_loop_action(
     payload: CSISpecialistLoopActionRequest,
     request: Request,
 ):
+    _require_ops_auth(request)
     action = str(payload.action or "").strip().lower()
     if not action:
         raise HTTPException(status_code=400, detail="action is required")
@@ -25021,6 +25026,7 @@ async def dashboard_csi_specialist_loop_action(
 
 @app.post("/api/v1/dashboard/csi/specialist-loops/triage")
 async def dashboard_csi_specialist_loop_triage(payload: CSISpecialistLoopTriageRequest, request: Request):
+    _require_ops_auth(request)
     max_items = max(1, min(int(payload.max_items or 50), 500))
     apply_changes = bool(payload.apply)
     request_followup = bool(payload.request_followup)
@@ -25153,6 +25159,7 @@ async def dashboard_csi_specialist_loop_triage(payload: CSISpecialistLoopTriageR
 
 @app.post("/api/v1/dashboard/csi/specialist-loops/cleanup")
 async def dashboard_csi_specialist_loop_cleanup(payload: CSISpecialistLoopCleanupRequest, request: Request):
+    _require_ops_auth(request)
     apply_changes = bool(payload.apply)
     max_items = max(1, min(int(payload.max_items or 200), 1000))
     older_than_days = max(1, min(int(payload.older_than_days or 7), 365))
