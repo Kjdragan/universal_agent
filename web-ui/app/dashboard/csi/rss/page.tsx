@@ -98,7 +98,7 @@ export default function CsiWatchlistPage() {
     setErrorMsg("");
     if (clearSuccess) setSuccessMsg(null);
     try {
-      const resp = await fetch("/api/v1/csi/watchlist");
+      const resp = await fetch("/api/dashboard/gateway/api/v1/csi/watchlist");
       if (!resp.ok) {
         throw new Error(`Failed to fetch watchlist: ${resp.status}`);
       }
@@ -117,8 +117,8 @@ export default function CsiWatchlistPage() {
     const filter = catFilter !== undefined ? catFilter : recentCategoryFilter;
     try {
       const url = filter 
-        ? `/api/v1/csi/watchlist/recent-videos?limit=60&category=${encodeURIComponent(filter)}`
-        : `/api/v1/csi/watchlist/recent-videos?limit=60`;
+        ? `/api/dashboard/gateway/api/v1/csi/watchlist/recent-videos?limit=60&category=${encodeURIComponent(filter)}`
+        : `/api/dashboard/gateway/api/v1/csi/watchlist/recent-videos?limit=60`;
       const resp = await fetch(url);
       if (resp.ok) {
         const data = await resp.json();
@@ -160,7 +160,7 @@ export default function CsiWatchlistPage() {
     setSuccessMsg(null);
     try {
       if (inputMode === 'category') {
-        const resp = await fetch("/api/v1/csi/watchlist/categories", {
+        const resp = await fetch("/api/dashboard/gateway/api/v1/csi/watchlist/categories", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: inputVal.trim() }),
@@ -171,7 +171,7 @@ export default function CsiWatchlistPage() {
         }
         setSuccessMsg(`Category "${inputVal.trim()}" created successfully.`);
       } else {
-        const resp = await fetch("/api/v1/csi/watchlist/add", {
+        const resp = await fetch("/api/dashboard/gateway/api/v1/csi/watchlist/add", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ url: inputVal.trim() }),
@@ -207,7 +207,7 @@ export default function CsiWatchlistPage() {
   const handleDeleteChannel = async (channelId: string) => {
     if (!confirm("Remove this channel from the watchlist?")) return;
     try {
-      const resp = await fetch(`/api/v1/csi/watchlist/${encodeURIComponent(channelId)}`, {
+      const resp = await fetch(`/api/dashboard/gateway/api/v1/csi/watchlist/${encodeURIComponent(channelId)}`, {
         method: "DELETE",
       });
       if (!resp.ok) throw new Error("Failed to remove channel");
@@ -225,7 +225,7 @@ export default function CsiWatchlistPage() {
       return;
     }
     try {
-      const resp = await fetch(`/api/v1/csi/watchlist/categories/${encodeURIComponent(oldName)}`, {
+      const resp = await fetch(`/api/dashboard/gateway/api/v1/csi/watchlist/categories/${encodeURIComponent(oldName)}`, {
         method: "PUT",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({ name: editCategoryVal.trim() })
@@ -242,7 +242,7 @@ export default function CsiWatchlistPage() {
   const handleDeleteCategory = async (name: string) => {
     if (!confirm(`Warning: Delete "${name}"? This cascades and removes all channels inside it from the DB! \n\nAre you sure?`)) return;
     try {
-      const resp = await fetch(`/api/v1/csi/watchlist/categories/${encodeURIComponent(name)}`, {
+      const resp = await fetch(`/api/dashboard/gateway/api/v1/csi/watchlist/categories/${encodeURIComponent(name)}`, {
         method: "DELETE",
       });
       if (!resp.ok) throw new Error("Failed to delete category");
@@ -285,7 +285,7 @@ export default function CsiWatchlistPage() {
       setChannels(prev => prev.map(c => c.channel_id === channelId ? { ...c, domain: newCategory } : c));
 
       try {
-          const resp = await fetch(`/api/v1/csi/watchlist/${encodeURIComponent(channelId)}`, {
+          const resp = await fetch(`/api/dashboard/gateway/api/v1/csi/watchlist/${encodeURIComponent(channelId)}`, {
               method: "PATCH",
               headers: {"Content-Type": "application/json"},
               body: JSON.stringify({ domain: newCategory })
