@@ -11,8 +11,8 @@ from pathlib import Path
 import shutil
 from typing import Iterable
 
-_TRUTHY = {"1", "true", "yes", "on"}
-_FALSY = {"0", "false", "no", "off"}
+from universal_agent.utils.env_utils import FALSY as _FALSY
+from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
 
 
 def _is_truthy(value: str | None) -> bool:

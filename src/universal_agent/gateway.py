@@ -42,6 +42,7 @@ from universal_agent.timeout_policy import (
     gateway_http_timeout_seconds,
     websocket_connect_kwargs,
 )
+from universal_agent.utils.env_utils import env_flag as _env_true
 from universal_agent.vp import (
     CoderVPRuntime,
     MissionDispatchRequest,
@@ -1435,12 +1436,6 @@ class InProcessGateway(Gateway):
         request: GatewayRequest,
         event_callback: Optional[Callable[[AgentEvent], Awaitable[None]]] = None,
     ) -> GatewayResult:
-        def _env_true(name: str, default: bool) -> bool:
-            raw = (os.getenv(name) or "").strip().lower()
-            if not raw:
-                return bool(default)
-            return raw in {"1", "true", "yes", "on"}
-
         sync_marker_enabled = _env_true("UA_RUNTIME_SYNC_READY_MARKER_ENABLED", True)
         sync_marker_filename = (
             (os.getenv("UA_RUNTIME_SYNC_READY_MARKER_FILENAME") or "").strip() or "sync_ready.json"

@@ -38,6 +38,7 @@ from universal_agent.services.inference_health_tracker import (
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.clients.claude_code_client import ClaudeCodeClient
 from universal_agent.vp.clients.claude_generalist_client import ClaudeGeneralistClient
+from universal_agent.utils.env_utils import env_flag as _env_true
 from universal_agent.vp.profiles import get_vp_profile
 
 logger = logging.getLogger(__name__)
@@ -1700,13 +1701,6 @@ def _mission_source_context(mission_row: Any) -> dict[str, Any]:
     if reply_mode:
         context["reply_mode"] = reply_mode
     return context
-
-
-def _env_true(name: str, default: bool) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "on"}
 
 
 def _mission_workspace_dir(*, mission_id: str, result_ref: str, workspace_root: Path) -> Path:

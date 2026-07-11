@@ -4,7 +4,7 @@ import html
 import os
 from pathlib import Path
 
-_TRUTHY = {"1", "true", "yes", "on"}
+from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
 
 
 def _env_truthy(name: str, default: bool = False) -> bool:

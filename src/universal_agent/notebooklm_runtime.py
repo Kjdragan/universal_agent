@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 from typing import Any
 
+from universal_agent.utils.env_utils import env_flag_3state as _env_flag
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -72,21 +74,6 @@ def is_auth_hint(hint: str | None) -> bool:
         marker in lowered
         for marker in ("nlm login", "authenticate", "auth", "expired", "re-auth")
     )
-
-
-_TRUE_VALUES = {"1", "true", "yes", "on"}
-_FALSE_VALUES = {"0", "false", "no", "off"}
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, "")).strip().lower()
-    if not raw:
-        return default
-    if raw in _TRUE_VALUES:
-        return True
-    if raw in _FALSE_VALUES:
-        return False
-    return default
 
 
 def _safe_error(exc: Exception) -> str:

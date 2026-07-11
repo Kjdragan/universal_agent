@@ -49,6 +49,8 @@ from datetime import datetime, timezone
 import os
 from typing import Mapping, Optional, Union
 
+from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
+
 __all__ = [
     "HOUSTON_TZ",
     "ACTIVE_START_HOUR",
@@ -72,9 +74,6 @@ HOUSTON_TZ = "America/Chicago"
 ACTIVE_START_HOUR = 6
 ACTIVE_END_HOUR = 22  # 10 PM
 
-# Truthy spellings accepted for the should_run() env override; any other
-# value (falsy or unrecognized) maps to the non-dormancy "always" mode.
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 # Accepted "now" inputs: None (use current time), a UNIX epoch (int/float
 # seconds), or a datetime (tz-aware or naive).

@@ -56,10 +56,10 @@ from universal_agent.services.email_tags import (
     format_tagged_subject,
     promote_text_to_html,
 )
+from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
 
 logger = logging.getLogger(__name__)
 
-_TRUTHY = {"1", "true", "yes", "on"}
 _NON_ACTION_TRIAGE_CLASSIFICATIONS = {"fyi", "social", "status_update"}
 
 

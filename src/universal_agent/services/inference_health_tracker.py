@@ -45,6 +45,8 @@ import threading
 import time
 from typing import Any, Optional
 
+from universal_agent.utils.env_utils import env_int as _env_int
+
 logger = logging.getLogger(__name__)
 
 # ── Conservative defaults (operator-chosen; enabled out of the box) ──────────
@@ -59,16 +61,6 @@ def _env_flag(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
-    raw = os.getenv(name)
-    if raw is None or not str(raw).strip():
-        return default
-    try:
-        return max(minimum, int(str(raw).strip()))
-    except (TypeError, ValueError):
-        return default
 
 
 def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
@@ -115,7 +107,7 @@ class InferenceHealthTracker:
     ) -> None:
         self._fail_count = (
             fail_count if fail_count is not None
-            else _env_int("UA_INFERENCE_DEGRADE_FAIL_COUNT", DEFAULT_FAIL_COUNT)
+            else _env_int("UA_INFERENCE_DEGRADE_FAIL_COUNT", DEFAULT_FAIL_COUNT, minimum=1)
         )
         self._window_seconds = (
             (window_minutes if window_minutes is not None

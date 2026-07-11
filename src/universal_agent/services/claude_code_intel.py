@@ -35,6 +35,7 @@ from universal_agent.services.proactive_artifacts import (
 from universal_agent.utils.model_resolution import resolve_opus
 from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.utils.anthropic_client import call_llm_text, has_llm_key
+from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
 
 DEFAULT_HANDLE = "ClaudeDevs"
 DEFAULT_HANDLES = ["ClaudeDevs", "bcherny"]
@@ -46,7 +47,6 @@ SOURCE_KIND_SCAFFOLD_REQUEST = "cody_scaffold_request"
 LANE_SLUG = "claude_code_intel"
 KB_SLUG = "claude-code-intelligence"
 
-_TRUTHY = {"1", "true", "yes", "on"}
 _URL_RE = re.compile(r"https?://[^\s<>)\"']+", re.IGNORECASE)
 _VERSION_RE = re.compile(r"\bv?\d+\.\d+(?:\.\d+)?(?:[-+][A-Za-z0-9_.-]+)?\b")
 

@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 import jwt
 
+from universal_agent.utils.env_utils import env_flag_3state as _env_flag
+
 
 @dataclass(frozen=True)
 class OpsAuthValidationResult:
@@ -17,17 +19,6 @@ class OpsAuthValidationResult:
     subject: Optional[str]
     claims: Optional[dict[str, Any]]
     error: Optional[str] = None
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, "")).strip().lower()
-    if not raw:
-        return default
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 def allow_legacy_ops_auth() -> bool:

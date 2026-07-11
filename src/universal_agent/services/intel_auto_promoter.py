@@ -38,10 +38,9 @@ import sqlite3
 from typing import Any
 
 from universal_agent.services import csi_demo_triage
+from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
 
 logger = logging.getLogger(__name__)
-
-_TRUTHY = {"1", "true", "yes", "on"}
 
 _DEFAULT_MIN_SCORE = 7.5
 _DEFAULT_DAILY_CAP = 2

@@ -41,10 +41,9 @@ from universal_agent.services.wiki_rescue_policy import (
     RESCUABLE_MISSION_TYPES,
     decide_wiki_rescue,
 )
+from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
 
 logger = logging.getLogger(__name__)
-
-_TRUTHY = {"1", "true", "yes", "on"}
 
 
 def _enabled() -> bool:

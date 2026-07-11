@@ -8,6 +8,7 @@ import threading
 from typing import Any
 
 from universal_agent.runtime_role import resolve_machine_slug, resolve_runtime_stage
+from universal_agent.utils.env_utils import env_flag_3state as _env_flag
 
 logger = logging.getLogger(__name__)
 
@@ -68,17 +69,6 @@ class SecretBootstrapResult:
     machine_slug: str = ""
     deployment_profile: str = ""
     errors: tuple[str, ...] = field(default_factory=tuple)
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, "")).strip().lower()
-    if not raw:
-        return default
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 def _resolve_profile(profile: str | None) -> str:

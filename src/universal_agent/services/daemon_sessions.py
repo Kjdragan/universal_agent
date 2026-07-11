@@ -22,6 +22,8 @@ import time
 from typing import Any, Callable, Optional
 import uuid
 
+from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
+
 logger = logging.getLogger(__name__)
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
@@ -33,8 +35,6 @@ DAEMON_ROLE_TODO = "todo"
 _DEFAULT_AGENT_ROLE_MAP: dict[str, tuple[str, ...]] = {
     "simone": (DAEMON_ROLE_HEARTBEAT, DAEMON_ROLE_TODO),
 }
-
-_TRUTHY = {"1", "true", "yes", "on"}
 
 
 def _is_truthy(value: str | None) -> bool:
