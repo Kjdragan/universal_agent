@@ -182,7 +182,7 @@ verified `active waiting`, none failed, 2026-06-22.
 `scratch_pruning` · `vault_lint_contradictions` · `architecture_canvas_drift` · `vp_coder_workspace_pruning` · `proactive_report_morning` · `proactive_report_midday` · `proactive_report_afternoon` · `proactive_artifact_digest` · `intel_auto_promoter` · `codie_proactive_cleanup` · `hourly_intel_digest` · `csi_convergence_sync` · `youtube_daily_digest` · `youtube_gold_channel_poller` · `youtube_oauth_watchdog` · `nightly_wiki` · `morning_briefing` · `evening_briefing` · `csi_demo_triage_rank` · `cron_artifact_reminders_sweep`.
 
 Plus host/infra + CSI-ingester timers not in the frozenset but live on the box: `service-watchdog`
-(30s), `oom-alert` (1m), `proactive-health` (10m), `session-reaper`, `uv-cache-prune`,
+(30s), `oom-alert` (1m), `proactive-health` (10m), `session-reaper`, `uv-cache-prune`, `arxiv-index-harvest` (04:40 CT OAI-PMH metadata sync feeding paper_to_podcast discovery),
 `proactive-signal-card-sync`, `proactive-demo-build-sweep`, `proactive-demo-nuggets` (23:50 America/Chicago end-of-day golden-nuggets demo judge; `UA_PROACTIVE_DEMO_NUGGETS_ENABLED` code-default OFF, **set `1` in prod 2026-07-01**), `backlog-triage`, `skill-gap-finder`,
 `csi-rss-semantic-enrich` (4h), `csi-threads-semantic-enrich` (4h), `csi-youtube-transcript-canary`
 (hourly), `csi-replay-dlq` (4h), `csi-daily-summary`, `csi-db-backup`, `csi-threads-token-refresh-sync`,

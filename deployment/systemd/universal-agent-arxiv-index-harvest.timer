@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the Universal Agent arXiv local-index harvest daily at 04:40 America/Chicago (deploy-independent)
+
+[Timer]
+# Fixed-time overnight slot (dormancy does not gate fixed-time jobs): well
+# before the 21:00 CT paper_to_podcast_daily cron consumes the index, and in
+# arXiv's quiet hours for politeness. DST handled by systemd; Persistent
+# replays a slot missed inside a deploy window.
+OnCalendar=*-*-* 04:40:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=300
+AccuracySec=1min
+Unit=universal-agent-arxiv-index-harvest.service
+
+[Install]
+WantedBy=timers.target
