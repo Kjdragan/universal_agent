@@ -4362,7 +4362,9 @@ class HooksService:
             # Explicitly allow open webhook mappings when no token is configured.
             return True
         token = self._extract_token(request)
-        return bool(token and token == self.config.token)
+        # Constant-time compare (CWE-208) — matches the composio_hmac branch
+        # above; `==` on a secret leaks a timing oracle.
+        return bool(token and hmac.compare_digest(str(token), str(self.config.token)))
 
     def _cleanup_seen_webhook_ids(self, now_epoch: int) -> None:
         expired = [wid for wid, exp in self._seen_webhook_ids.items() if exp <= now_epoch]

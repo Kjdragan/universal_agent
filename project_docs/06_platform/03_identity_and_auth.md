@@ -177,6 +177,13 @@ toward JWTs from `/auth/ops-token`.
 - Bootstrap-gated by `_require_ops_token_issuance_auth`: caller must present
   `SESSION_API_TOKEN` (`UA_INTERNAL_API_TOKEN`) or `UA_OPS_TOKEN`. If neither is
   configured → 503 (can't bootstrap-issue without a bootstrap credential).
+
+> All raw shared-token comparisons in the gateway auth guards
+> (`_require_ops_token_issuance_auth`, `_require_session_api_auth`,
+> `_require_session_ws_auth`, `_require_youtube_ingest_auth`) go through the
+> constant-time `_tokens_match` helper (`hmac.compare_digest`), matching
+> `validate_ops_token`'s legacy path — a plain `==` on a secret is a timing
+> oracle (CWE-208).
 - Requires `UA_OPS_JWT_SECRET` (else 503). Mints a 3600s JWT for the requested
   `subject` (default `"ops"`).
 
