@@ -798,8 +798,47 @@ class VpWorkerLoop:
         # ── VP identity & mission briefing ────────────────────────────
         self._seed_vp_soul(mission)
         self._write_mission_briefing(mission)
-        
-        workspace_path = await self._provision_workspace(mission)
+
+        # Provision with a concurrent lease heartbeat. The provision git work is
+        # offloaded to a thread (loop stays free), and this short-lived renewer
+        # keeps the mission lease alive across a slow (up to ~180s) provision so
+        # the lease TTL (default 120s) can't expire mid-provision and let another
+        # worker reclaim + double-execute the mission. The steady-state heartbeat
+        # task below takes over once provisioning returns.
+        _prov_stop = asyncio.Event()
+
+        async def _provision_lease_heartbeat() -> None:
+            interval = max(5, self.lease_ttl_seconds // 3)
+            while not _prov_stop.is_set():
+                try:
+                    await asyncio.wait_for(_prov_stop.wait(), timeout=interval)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    heartbeat_vp_mission_claim(
+                        self.conn,
+                        mission_id=mission_id,
+                        vp_id=self.vp_id,
+                        worker_id=self.worker_id,
+                        lease_ttl_seconds=self.lease_ttl_seconds,
+                    )
+                except Exception as _hb_exc:
+                    logger.warning(
+                        "VP provision-lease heartbeat failed: mission_id=%s err=%s",
+                        mission_id, _hb_exc,
+                    )
+
+        _prov_hb_task = asyncio.create_task(_provision_lease_heartbeat())
+        try:
+            workspace_path = await self._provision_workspace(mission)
+        finally:
+            _prov_stop.set()
+            _prov_hb_task.cancel()
+            try:
+                await _prov_hb_task
+            except asyncio.CancelledError:
+                pass
 
         logger.info(
             "VP mission starting: vp_id=%s soul=%s mission_id=%s mission_type=%s",
@@ -1496,8 +1535,19 @@ class VpWorkerLoop:
         return (self.profile.workspace_root / (mission_id or "mission")).resolve()
 
     async def _provision_workspace(self, mission: Any) -> Path:
-        """Provision the workspace for the mission.
-        
+        """Provision the mission workspace off the event loop.
+
+        The body does blocking git I/O (``git fetch`` + ``worktree add``) that
+        can take up to ~180s; running it inline would freeze the VP worker's
+        single event loop — starving the lease heartbeat (see the concurrent
+        provision-lease renewer in ``_execute_mission_logic``) and every other
+        coroutine. Offload the whole synchronous body to a worker thread.
+        """
+        return await asyncio.to_thread(self._provision_workspace_blocking, mission)
+
+    def _provision_workspace_blocking(self, mission: Any) -> Path:
+        """Provision the workspace for the mission (synchronous git worktree work).
+
         If this is vp.coder.primary and the target path is a git repository,
         this provisions an ephemeral git worktree for the mission.
         Otherwise, it returns the standard workspace path.

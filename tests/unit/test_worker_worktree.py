@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 import sqlite3
@@ -7,6 +8,38 @@ import pytest
 
 from universal_agent.vp.profiles import VpProfile
 from universal_agent.vp.worker_loop import VpWorkerLoop
+
+
+@pytest.mark.asyncio
+async def test_provision_workspace_offloads_to_thread(tmp_path: Path):
+    """_provision_workspace must run its blocking git/path work OFF the event
+    loop (via asyncio.to_thread) — the sync body was extracted to
+    _provision_workspace_blocking so a slow provision can't freeze the worker's
+    single loop and starve the lease heartbeat."""
+    profile = VpProfile(
+        vp_id="vp.general.primary",  # non-coder → plain workspace, no git
+        display_name="GENERAL",
+        runtime_id="runtime.general",
+        client_kind="claude_code",
+        workspace_root=tmp_path / "workspaces",
+    )
+    conn = MagicMock(spec=sqlite3.Connection)
+    with patch("universal_agent.vp.worker_loop.get_vp_profile", return_value=profile):
+        loop = VpWorkerLoop(
+            conn=conn,
+            vp_id="vp.general.primary",
+            worker_id="worker-1",
+            workspace_base=tmp_path,
+        )
+    mission = {"mission_id": "m-offload", "payload_json": json.dumps({"objective": "x"})}
+
+    with patch("universal_agent.vp.worker_loop.asyncio.to_thread", wraps=asyncio.to_thread) as spy:
+        ws = await loop._provision_workspace(mission)
+
+    assert isinstance(ws, Path) and ws.exists()
+    # The blocking body was dispatched through to_thread, not run inline.
+    assert spy.called
+    assert spy.call_args[0][0] == loop._provision_workspace_blocking
 
 
 @pytest.mark.asyncio
