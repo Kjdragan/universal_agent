@@ -24,6 +24,7 @@ import httpx
 from pydantic import BaseModel, HttpUrl, field_validator
 
 from universal_agent.utils.model_resolution import resolve_opus
+from universal_agent.utils.anthropic_client import call_llm_structured, has_llm_key
 
 logger = logging.getLogger(__name__)
 
@@ -320,63 +321,21 @@ _URL_JUDGE_TOOL = {
 
 def _has_llm_key() -> bool:
     """Check if an Anthropic-compatible API key is available."""
-    return bool(
-        str(
-            os.getenv("ANTHROPIC_API_KEY")
-            or os.getenv("ANTHROPIC_AUTH_TOKEN")
-            or os.getenv("ZAI_API_KEY")
-            or ""
-        ).strip()
-    )
+    return has_llm_key()
 
 
 def _call_llm_structured(*, system: str, user: str, tool: dict[str, Any], max_retries: int = 2) -> dict[str, Any]:
-    """Call LLM with tool_use for structured output. Returns the tool input dict."""
-    from anthropic import Anthropic
+    """Call LLM with tool_use for structured output. Returns the tool input dict.
 
-    api_key = (
-        os.getenv("ANTHROPIC_API_KEY")
-        or os.getenv("ANTHROPIC_AUTH_TOKEN")
-        or os.getenv("ZAI_API_KEY")
+    Delegates to the shared ``utils.anthropic_client.call_llm_structured``
+    (same key precedence, base-url, thinking-disable, forced tool_choice,
+    retry shape). The 1000-token budget is this site's own: the URL-judge
+    verdict list is small.
+    """
+    return call_llm_structured(
+        system=system, user=user, tool=tool,
+        max_tokens=1000, max_retries=max_retries, label="LLM URL judge",
     )
-    if not api_key:
-        raise RuntimeError("No Anthropic-compatible API key available")
-
-    client_kwargs: dict[str, Any] = {"api_key": api_key}
-    base_url = os.getenv("ANTHROPIC_BASE_URL")
-    if base_url:
-        client_kwargs["base_url"] = base_url
-
-    client = Anthropic(**client_kwargs)
-
-    for attempt in range(max_retries):
-        try:
-            response = client.messages.create(
-                model=resolve_opus(),  # → glm-5.2 (opus tier) via ZAI map
-                max_tokens=1000,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                tools=[tool],
-                tool_choice={"type": "tool", "name": tool["name"]},
-                # glm-5.2 defaults thinking ON (10-24x tokens); this is a cheap
-                # structured-output pass with forced tool_choice, so keep it disabled.
-                thinking={"type": "disabled"},
-            )
-            # Extract tool_use block
-            for block in response.content:
-                if hasattr(block, "type") and block.type == "tool_use":
-                    return block.input  # type: ignore[return-value]
-
-            # No tool_use block found — retry
-            logger.warning("LLM URL judge attempt %d: no tool_use block in response", attempt + 1)
-            continue
-
-        except Exception as exc:
-            logger.warning("LLM URL judge attempt %d failed: %s", attempt + 1, exc)
-            if attempt == max_retries - 1:
-                raise
-
-    raise RuntimeError(f"LLM URL judge failed after {max_retries} attempts")
 
 
 def _heuristic_judge_fallback(urls: list[str]) -> list[EnrichmentRecord]:

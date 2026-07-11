@@ -42,6 +42,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 from universal_agent.utils.model_resolution import resolve_opus
+from universal_agent.utils.anthropic_client import call_llm_structured
 
 logger = logging.getLogger(__name__)
 
@@ -316,63 +317,14 @@ def _call_llm_structured(
     """Call the opus-tier model (glm-5.2) via the Anthropic SDK with tool_use for structured output.
 
     Returns the tool's input dict (the VaultDelta JSON the model emitted).
-    Mirrors ``csi_url_judge._call_llm_structured`` but allows a larger
-    output token budget since vault deltas can be substantial.
+    Delegates to the shared ``utils.anthropic_client.call_llm_structured``;
+    the larger default output budget is this site's own — vault deltas can
+    be substantial.
     """
-    from anthropic import Anthropic
-
-    api_key = (
-        os.getenv("ANTHROPIC_API_KEY")
-        or os.getenv("ANTHROPIC_AUTH_TOKEN")
-        or os.getenv("ZAI_API_KEY")
-    )
-    if not api_key:
-        raise RuntimeError(
-            "No Anthropic-compatible API key available "
-            "(checked ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ZAI_API_KEY)"
-        )
-
-    client_kwargs: dict[str, Any] = {"api_key": api_key}
-    base_url = os.getenv("ANTHROPIC_BASE_URL")
-    if base_url:
-        client_kwargs["base_url"] = base_url
-
-    client = Anthropic(**client_kwargs)
-
-    last_exc: Optional[Exception] = None
-    for attempt in range(max_retries):
-        try:
-            response = client.messages.create(
-                model=resolve_opus(),  # → glm-5.2 (opus tier) via ZAI map
-                max_tokens=max_output_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                tools=[tool],
-                tool_choice={"type": "tool", "name": tool["name"]},
-                # glm-5.2 defaults thinking ON (10-24x tokens); this is a cheap
-                # structured-output pass with forced tool_choice, so keep it disabled.
-                thinking={"type": "disabled"},
-            )
-            for block in response.content:
-                if hasattr(block, "type") and block.type == "tool_use":
-                    return dict(block.input)  # type: ignore[arg-type]
-
-            logger.warning(
-                "CSI intelligence pass attempt %d: no tool_use block in response",
-                attempt + 1,
-            )
-        except Exception as exc:  # pragma: no cover — network / SDK errors
-            last_exc = exc
-            logger.warning(
-                "CSI intelligence pass attempt %d failed: %s", attempt + 1, exc
-            )
-            if attempt == max_retries - 1:
-                raise
-
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError(
-        f"CSI intelligence pass returned no tool_use block after {max_retries} attempts"
+    return call_llm_structured(
+        system=system, user=user, tool=tool,
+        max_tokens=max_output_tokens, max_retries=max_retries,
+        label="CSI intelligence pass",
     )
 
 

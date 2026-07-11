@@ -34,6 +34,7 @@ from universal_agent.services.proactive_artifacts import (
 )
 from universal_agent.utils.model_resolution import resolve_opus
 from universal_agent.utils.json_utils import extract_json_payload
+from universal_agent.utils.anthropic_client import call_llm_text, has_llm_key
 
 DEFAULT_HANDLE = "ClaudeDevs"
 DEFAULT_HANDLES = ["ClaudeDevs", "bcherny"]
@@ -1714,42 +1715,17 @@ def _auth_headers(token: str) -> dict[str, str]:
 
 
 def _has_llm_key() -> bool:
-    return bool(
-        str(
-            os.getenv("ANTHROPIC_API_KEY")
-            or os.getenv("ANTHROPIC_AUTH_TOKEN")
-            or os.getenv("ZAI_API_KEY")
-            or ""
-        ).strip()
-    )
+    """Check if an Anthropic-compatible API key is available."""
+    return has_llm_key()
 
 
 def _call_sync_llm(*, system: str, user: str, max_tokens: int = 600) -> str:  # doubled from 300 per audit
-    from anthropic import Anthropic
+    """Single-shot plain-text call via the shared client helper.
 
-    api_key = (
-        os.getenv("ANTHROPIC_API_KEY")
-        or os.getenv("ANTHROPIC_AUTH_TOKEN")
-        or os.getenv("ZAI_API_KEY")
-    )
-    if not api_key:
-        raise RuntimeError("No Anthropic-compatible API key available")
-    client_kwargs: dict[str, Any] = {"api_key": api_key}
-    base_url = os.getenv("ANTHROPIC_BASE_URL")
-    if base_url:
-        client_kwargs["base_url"] = base_url
-    client = Anthropic(**client_kwargs)
-    response = client.messages.create(
-        model=resolve_opus(),
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    chunks: list[str] = []
-    for block in response.content:
-        if hasattr(block, "text"):
-            chunks.append(block.text)
-    return "".join(chunks).strip()
+    Deliberately NO retry loop: the classify caller wraps this in
+    try/except and falls back to its heuristic path on any failure.
+    """
+    return call_llm_text(system=system, user=user, max_tokens=max_tokens)
 
 
 def _parse_json_object(raw: str) -> dict[str, Any]:
