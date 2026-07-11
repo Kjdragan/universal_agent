@@ -169,10 +169,14 @@ order:
   subject OR first body line *starts with* `(ignore)` / `[ignore]` / `ignore:` /
   `(test)` are dropped (FYI-only, no task), mirroring the automated/VP-FYI gates.
   Start-anchored so legitimate mail mentioning "ignore" mid-sentence is unaffected.
-- **Dedup** (`_claim_seen_message_id`): atomic claim against the
-  `agentmail_seen_messages` table; duplicates are skipped. On any later
-  exception the claim is released (`_release_seen_message_id`) so the message
-  can be retried.
+- **Dedup** (`_claim_seen_message_id` / `_claim_seen_message_id_async`): a fast
+  in-memory claim (`_claim_seen_message_id_in_memory`) plus an atomic write to
+  the `agentmail_seen_messages` table; duplicates are skipped. Async inbound
+  paths call the `_async` variant, which keeps the in-memory dedup on the loop
+  thread but offloads the blocking DB persist (`_persist_seen_message_id`, a
+  lock-retry loop) to a worker thread via `asyncio.to_thread` so it never stalls
+  the shared event loop. On any later exception the claim is released
+  (`_release_seen_message_id`) so the message can be retried.
 
 It then extracts the new reply text from quoted thread history
 (`_extract_reply_text` → `_strip_html_quotes`), handling Gmail
