@@ -39,6 +39,7 @@ from typing import Any
 
 from universal_agent import task_hub
 from universal_agent.feature_flags import task_hub_missions_enabled
+from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.services.mission_control_cards import (
     SEVERITY_CRITICAL,
     SEVERITY_INFORMATIONAL,
@@ -435,19 +436,18 @@ async def discover_tier1_cards(evidence: dict[str, Any]) -> tuple[list[CardUpser
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:].strip()
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start >= 0 and end > start:
-            return json.loads(cleaned[start : end + 1])
-        raise
+    """Parse the LLM's JSON object via the canonical robust parser.
+
+    Consolidated onto ``utils.json_utils.extract_json_payload`` (the shared
+    5-layer parser: json.loads -> json_repair -> brace extraction ->
+    Python-literal normalization). Keeps this module's local contract:
+    always returns a dict, raises ``ValueError`` when no object can be
+    recovered (callers wrap in try/except and fall back).
+    """
+    payload = extract_json_payload(text)
+    if not isinstance(payload, dict):
+        raise ValueError("LLM response JSON is not an object")
+    return payload
 
 
 def _card_upsert_from_llm(raw: dict[str, Any], model: str) -> CardUpsert:
