@@ -278,6 +278,7 @@ class InferenceHealthTracker:
     # ------------------------------------------------------------------
 
     def snapshot(self, *, now: Optional[float] = None) -> dict[str, Any]:
+        """Point-in-time health view (pruned window counts + hold state)."""
         now = time.time() if now is None else now
         with self._lock:
             self._prune(now)

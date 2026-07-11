@@ -32,6 +32,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 from typing import Any, Callable, Optional
 
@@ -450,7 +451,7 @@ def _register_and_email(
 def select_and_build_nuggets(
     *,
     dry_run: bool,
-    conn=None,
+    conn: sqlite3.Connection | None = None,
     call_llm: Optional[Callable[[str, str], str]] = None,
     build_runner: Optional[Callable[[list[str]], subprocess.CompletedProcess]] = None,
     notifier: Optional[Callable[..., Any]] = None,
