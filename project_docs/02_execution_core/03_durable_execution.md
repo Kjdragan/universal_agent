@@ -199,7 +199,11 @@ orphaned by a crash), `mark_replay_status`, and the pending-receipt set used by 
 
 `prepare_tool_call`'s `INSERT` is wrapped in a `try/except sqlite3.IntegrityError`:
 - **UNIQUE violation** (two workers prepared the same key concurrently) → fetch the existing row and
-  return it as a valid receipt.
+  return it as a valid receipt. The row's `status`, `response_ref`, and `idempotency_key` are read by
+  **column name** (`row_factory=sqlite3.Row`), and the returned second element is the
+  `idempotency_key` string — matching every other return path. (Reading `SELECT *` columns by
+  positional offset here previously mismapped those fields and dropped `response_ref`, which silently
+  defeated the dedupe of duplicate side effects on exactly this race.)
 - **FOREIGN KEY violation** (the `step_id` doesn't exist yet — common during MCP schema prefetch
   before a step is created, and during crash/shutdown) → log a debug line and return a **phantom
   receipt** with `status="phantom"` and `deduped=True` so the process continues. This deliberately
