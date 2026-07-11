@@ -1256,6 +1256,68 @@ def _record_mission_token_usage(
         )
 
 
+# ── Least-privilege env for the spawned `claude` CLI (trust boundary) ──────
+# The `claude` CLI is an installed tool that runs an autonomous agent with Bash
+# + tool access, frequently acting on externally-influenced content (GitHub
+# issues, fetched pages, webhook objectives). Handing it the full parent
+# `os.environ` means a prompt injection or a buggy tool call could read every
+# Infisical-loaded secret — most dangerously INFISICAL_CLIENT_SECRET, the
+# machine identity that can fetch the ENTIRE vault. Restrict the spawned env to
+# a minimal allow-list: operational vars + the CLI's own auth + the specific
+# secrets its configured MCP servers document needing (.mcp.json → AgentMail /
+# Discord / ZAI). Everything else (Infisical creds, GitHub/Composio/other
+# service keys, UA_* secret vars) is dropped.
+#
+# Kill-switch: set UA_CLI_ENV_LEAST_PRIVILEGE=0 to restore the old full-env
+# behavior instantly (no redeploy) if a mission needs a dropped var.
+_CLI_ENV_ALLOW_PREFIXES = (
+    "ANTHROPIC_",  # zai-mode routing (ANTHROPIC_BASE_URL/AUTH_TOKEN) + anthropic auth
+    "CLAUDE_",     # CLAUDE_CODE_* config + CLAUDE_CODE_OAUTH_TOKEN
+    "ZAI_",        # ZAI_API_KEY (web-reader/web-search MCP) + ZAI_BASE_URL
+    "LC_", "LANG", "XDG_", "NPM_", "NODE_", "UV_", "NVM_", "PYENV_", "PYTHON",
+    "GIT_",        # npx/uvx/uv (MCP server launchers) + the agent's own git
+)
+_CLI_ENV_ALLOW_EXACT = frozenset({
+    # operational / system
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP",
+    "PWD", "LANGUAGE", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE",
+    "REQUESTS_CA_BUNDLE", "COLORTERM", "HOSTNAME", "VIRTUAL_ENV",
+    "PYDANTIC_DISABLE_PLUGINS", "FACTORY_ROLE",
+    # MCP server secrets the spawned CLI must forward (from .mcp.json). ZAI_API_KEY
+    # is covered by the ZAI_ prefix above.
+    "AGENTMAIL_API_KEY", "DISCORD_BOT_TOKEN",
+})
+# UA_* app config is allowed EXCEPT secret-named vars (UA_OPS_TOKEN,
+# UA_*_SECRET, …). Config like UA_DEPLOYMENT_PROFILE / UA_ARTIFACTS_DIR passes.
+_CLI_ENV_UA_SECRET_SUFFIXES = (
+    "_TOKEN", "_SECRET", "_KEY", "_PASSWORD", "_PASSPHRASE", "_JWT", "_HMAC",
+    "_CREDENTIAL", "_CREDENTIALS",
+)
+
+
+def _cli_env_least_privilege_enabled() -> bool:
+    return os.getenv("UA_CLI_ENV_LEAST_PRIVILEGE", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
+def _cli_env_key_allowed(key: str) -> bool:
+    if key in _CLI_ENV_ALLOW_EXACT:
+        return True
+    if key.startswith(_CLI_ENV_ALLOW_PREFIXES):
+        return True
+    if key.startswith("UA_"):
+        return not key.endswith(_CLI_ENV_UA_SECRET_SUFFIXES)
+    return False
+
+
+def _filter_cli_env_least_privilege(env: dict[str, str]) -> dict[str, str]:
+    """Drop every inherited env var that isn't on the allow-list. The
+    app-controlled vars set explicitly after this (workspace paths, agent-teams
+    flag) are added by the caller and are unaffected."""
+    return {k: v for k, v in env.items() if _cli_env_key_allowed(k)}
+
+
 def _build_cli_env(
     enable_agent_teams: bool,
     workspace_dir: Path,
@@ -1307,6 +1369,12 @@ def _build_cli_env(
         env = dict(os.environ)
         if enable_agent_teams:
             env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+
+    # Trust-boundary least-privilege: strip inherited secrets the CLI/MCP don't
+    # need (Infisical machine identity, unrelated service keys) before the
+    # app-controlled vars below are added. Kill-switch: UA_CLI_ENV_LEAST_PRIVILEGE=0.
+    if _cli_env_least_privilege_enabled():
+        env = _filter_cli_env_least_privilege(env)
 
     env["CURRENT_RUN_WORKSPACE"] = str(workspace_dir)
     env["CURRENT_SESSION_WORKSPACE"] = str(workspace_dir)

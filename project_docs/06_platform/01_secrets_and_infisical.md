@@ -226,6 +226,23 @@ Interactive `claude` sessions do **not** run the UA service bootstrap, so `${VAR
 
 The `exclude_prefixes` parameter on `initialize_runtime_secrets` exists specifically for this path. **UA Python services call without it** — they need the `ANTHROPIC_*` keys for direct-SDK code paths. The wrapper also auto-injects `--dangerously-skip-permissions` for interactive sessions but skips it for management subcommands (`agents`, `auth`, `doctor`, `mcp`, etc.).
 
+## Autonomous `claude` CLI — least-privilege env (trust boundary)
+
+The VP/Cody path spawns the `claude` CLI directly (not via the interactive
+launcher) to run an autonomous agent with Bash + tool access on
+externally-influenced objectives. `vp/clients/claude_cli_client.py::_build_cli_env`
+therefore filters the child env to a **minimal allow-list** before spawn rather
+than inheriting the full `os.environ`: operational vars (`PATH`, `HOME`, `LANG`,
+`SSL_*`, `NPM_`/`UV_`/`NODE_`/`GIT_` for the `npx`/`uvx` MCP launchers), the CLI's
+own auth (`ANTHROPIC_*` / `CLAUDE_*`), the specific MCP-server secrets from
+`.mcp.json` (`AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`, `ZAI_API_KEY`), and
+non-secret `UA_*` config. **Everything else is dropped — most importantly
+`INFISICAL_CLIENT_ID`/`INFISICAL_CLIENT_SECRET`** (the machine identity that can
+fetch the *entire* vault), plus unrelated service keys and `UA_*` secret vars.
+This closes the exfiltration surface where a prompt injection could read the full
+secret set. Kill-switch: `UA_CLI_ENV_LEAST_PRIVILEGE=0` restores full inheritance
+instantly (no redeploy) if a mission turns out to need a dropped var.
+
 ## `.mcp.json` rule
 
 Every value in `.mcp.json` MUST be a `${VAR}` placeholder, never a literal token. Resolution happens via the launcher above. `infisical run` (the CLI) is the wrong primitive — no headless auth context on the VPS.
