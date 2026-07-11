@@ -58,8 +58,10 @@ def test_derives_title_and_entry_without_sidecar(tmp_path):
     html, count = bsi.build_index(tmp_path, TS)
     assert count == 1
     assert "Derived Title" in html
-    # index.html is preferred as the entry
-    assert f"https://{TS}/scratch/raw-bbb222/index.html" in html
+    # index.html entry → link the dir URL; /index.html 301-redirects to the
+    # index itself under tailscale serve, so we never emit it.
+    assert f"https://{TS}/scratch/raw-bbb222/" in html
+    assert f"https://{TS}/scratch/raw-bbb222/index.html" not in html
 
 
 def test_sorted_newest_first(tmp_path):
