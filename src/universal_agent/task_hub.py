@@ -28,6 +28,10 @@ TASK_STATUS_WAITING_ON_REPLY = "waiting-on-reply"  # Email reply sent, awaiting 
 # Common task labels — single source of truth for label string literals used
 # across services, bridges, and the gateway.
 TASK_LABEL_AGENT_READY = "agent-ready"
+# Operator-off-limits label — tasks a human must handle; autonomous agents
+# (and the stale-proposal reaper) must never touch them. Documented in
+# SOUL.md and prompt_builder.py; single source of truth for the literal.
+TASK_LABEL_HUMAN_ONLY = "human-only"
 
 # stale_state marker for terminal-SUCCESS tasks the operator cleared off the
 # dashboard. Such rows keep ``status = completed`` — they are deliberately NOT
@@ -93,6 +97,20 @@ AMBIENT_CLOSE_LAST_DISPOSITION = "ambient_closed"
 AMBIENT_CLOSE_EVAL_SOURCE = "vp_mission_failure_ambient_close"
 DEFAULT_AMBIENT_TTL_DAYS = 7
 DEFAULT_AMBIENT_GUARD_HOURS = 48
+
+# ── Stale-proposal reaper (weekly cron) ─────────────────────────────────────
+# ``reflection`` / ``brainstorm`` proposals that sit OPEN without a verdict
+# accumulate indefinitely. The morning ideation report surfaces them at >72h
+# (``ideation_report.get_stale_proposals``); the weekly reaper
+# (``reap_stale_proposals``) PARKS them at >14d so the backlog is bounded —
+# parked, never hard-deleted, because ``parked`` is the canonical retire-an-
+# open-item verb and the audit trail must survive. HARD GATE: priority>=2
+# and ``human-only`` items are never reaped regardless of age.
+STALE_PROPOSAL_REAP_SOURCE_KINDS = frozenset({"reflection", "brainstorm"})
+DEFAULT_STALE_PROPOSAL_REAP_DAYS = 14
+STALE_PROPOSAL_REAP_EVAL_SOURCE = "stale_proposal_reaper"
+STALE_PROPOSAL_REAP_REASON = "stale_proposal_reaped"
+STALE_PROPOSAL_REAP_STALE_STATE = "parked_stale_proposal"
 DEFAULT_AMBIENT_MAX_FAILURE_COUNT = 1
 
 VALID_ACTIONS = {
@@ -6746,6 +6764,191 @@ def close_ambient_vp_failures(
             "within_hours": guard_hours,
             "older_than_days": ttl_days,
             "max_failure_count": max_fc,
+        },
+        "dry_run": bool(dry_run),
+    }
+
+
+def _park_stale_proposal_item(
+    conn: sqlite3.Connection,
+    item: dict[str, Any],
+    *,
+    agent_id: str,
+    via: str,
+    now_iso: str,
+    age_days: float,
+    reason_text: str,
+) -> None:
+    """Park ONE stale reflection/brainstorm proposal through the sanctioned
+    per-item audit path (NOT a set-level bulk UPDATE).
+
+    Mirrors the ``park`` action's audit shape —
+    ``_complete_active_assignments_for_task`` + a per-row status UPDATE with a
+    fresh ``stale_state`` + an evaluation row — plus the honest
+    ``metadata.stale_proposal_reap`` marker that distinguishes a reaper-park
+    from a manual operator park. Status goes to ``parked`` (terminal), NOT
+    deleted: ``parked`` is the canonical retire-an-open-item verb and keeps the
+    row queryable for audit / undo.
+    """
+    task_id = str(item.get("task_id") or "")
+    metadata = _resolve_dispatch_metadata(
+        dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso
+    )
+    dispatch_meta = dict(metadata.get("dispatch") or {})
+    dispatch_meta["last_disposition"] = STALE_PROPOSAL_REAP_REASON
+    dispatch_meta["last_disposition_reason"] = (
+        reason_text or f"{STALE_PROPOSAL_REAP_REASON} (open > {int(age_days)}d, no verdict)"
+    )
+    metadata["dispatch"] = dispatch_meta
+    metadata["stale_proposal_reap"] = {
+        "reason": STALE_PROPOSAL_REAP_REASON,
+        "via": via,
+        "closed_at": now_iso,
+        "age_days": round(float(age_days), 2),
+    }
+    _complete_active_assignments_for_task(
+        conn,
+        task_id=task_id,
+        result_summary=reason_text or STALE_PROPOSAL_REAP_REASON,
+        ended_at=now_iso,
+        outcome="reclaimed",
+    )
+    conn.execute(
+        "UPDATE task_hub_items SET status=?, stale_state=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+        (
+            TASK_STATUS_PARKED,
+            STALE_PROPOSAL_REAP_STALE_STATE,
+            "unseized",
+            _json_dumps(metadata),
+            now_iso,
+            task_id,
+        ),
+    )
+    _record_evaluation(
+        conn,
+        task_id=task_id,
+        agent_id=agent_id,
+        decision="park",
+        reason=STALE_PROPOSAL_REAP_REASON,
+        score=_safe_float(item.get("score"), 0.0),
+        score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+        judge_payload={
+            "source": STALE_PROPOSAL_REAP_EVAL_SOURCE,
+            "via": via,
+            "age_days": round(float(age_days), 2),
+        },
+    )
+
+
+def reap_stale_proposals(
+    conn: sqlite3.Connection,
+    *,
+    older_than_days: int = DEFAULT_STALE_PROPOSAL_REAP_DAYS,
+    dry_run: bool = False,
+    agent_id: str = STALE_PROPOSAL_REAP_EVAL_SOURCE,
+    via: str = "weekly_cron",
+) -> dict[str, Any]:
+    """Park OPEN reflection/brainstorm proposals older than ``older_than_days``.
+
+    Self-healing counterpart to the morning ideation report's >72h surface.
+    Without it, proposals the operator never promoted or dismissed accumulate
+    indefinitely. Parks each qualifying item through
+    ``_park_stale_proposal_item`` (the sanctioned per-item audit path — never a
+    set-level bulk UPDATE), so the audit trail (``metadata.stale_proposal_reap``
+    + an evaluation row tagged ``source=stale_proposal_reaper``) survives.
+
+    HARD GATE — an item is reaped only if ALL hold:
+
+    * ``status = open`` (held proposals awaiting a verdict; in-progress /
+      blocked / already-terminal items are left alone),
+    * ``source_kind`` in ``STALE_PROPOSAL_REAP_SOURCE_KINDS`` (reflection /
+      brainstorm),
+    * ``created_at`` parses cleanly (malformed timestamps are skipped, never
+      reaped — never auto-prune something we cannot age),
+    * age (by ``created_at``) >= ``older_than_days`` (default 14d),
+    * ``priority < 2`` — priority 2/3/4 items are NEVER reaped, regardless of
+      age (priority semantics: higher number == higher priority, range 1-4,
+      verified in ``_priority_weight``),
+    * no ``human-only`` label (``TASK_LABEL_HUMAN_ONLY``) — operator-off-limits
+      items are NEVER reaped.
+
+    Returns ``{via, closed, skipped, skipped_reasons, closed_ids, guard, dry_run}``.
+    ``dry_run=True`` reports the summary without writing.
+    """
+    ensure_schema(conn)
+    now_dt = datetime.now(timezone.utc)
+    now_iso = _now_iso()
+    ttl_days = max(0, _safe_int(older_than_days, DEFAULT_STALE_PROPOSAL_REAP_DAYS))
+    ttl_threshold_hours = float(ttl_days) * 24.0
+
+    placeholders = ",".join("?" for _ in STALE_PROPOSAL_REAP_SOURCE_KINDS)
+    rows = conn.execute(
+        f"""
+        SELECT * FROM task_hub_items
+        WHERE status = ?
+          AND source_kind IN ({placeholders})
+        """,
+        (TASK_STATUS_OPEN, *STALE_PROPOSAL_REAP_SOURCE_KINDS),
+    ).fetchall()
+
+    closed_ids: list[str] = []
+    skipped_reasons: dict[str, int] = {
+        "below_ttl_window": 0,
+        "malformed_timestamp": 0,
+        "priority_protected": 0,
+        "human_only_protected": 0,
+    }
+
+    for row in rows:
+        item = hydrate_item(dict(row))
+        task_id = str(item.get("task_id") or "")
+        labels = {str(v).strip().lower() for v in (item.get("labels") or [])}
+        # HARD GATE — protective skips first, non-negotiable regardless of age.
+        # A high-priority or human-only proposal must be surfaced by the morning
+        # report, never silently reaped.
+        if TASK_LABEL_HUMAN_ONLY in labels:
+            skipped_reasons["human_only_protected"] += 1
+            continue
+        priority = _safe_int(item.get("priority"), 1)
+        if priority >= 2:
+            skipped_reasons["priority_protected"] += 1
+            continue
+        created_dt = _parse_iso(item.get("created_at"))
+        if created_dt is None:
+            skipped_reasons["malformed_timestamp"] += 1
+            continue
+        age_hours = max(0.0, (now_dt - created_dt).total_seconds() / 3600.0)
+        if age_hours < ttl_threshold_hours:
+            skipped_reasons["below_ttl_window"] += 1
+            continue
+        if dry_run:
+            closed_ids.append(task_id)
+            continue
+        _park_stale_proposal_item(
+            conn,
+            item,
+            agent_id=agent_id,
+            via=via,
+            now_iso=now_iso,
+            age_days=age_hours / 24.0,
+            reason_text="",
+        )
+        closed_ids.append(task_id)
+
+    if closed_ids and not dry_run:
+        conn.commit()
+        rebuild_dispatch_queue(conn)
+
+    return {
+        "via": via,
+        "closed": len(closed_ids),
+        "skipped": sum(skipped_reasons.values()),
+        "skipped_reasons": skipped_reasons,
+        "closed_ids": closed_ids,
+        "guard": {
+            "older_than_days": ttl_days,
+            "source_kinds": sorted(STALE_PROPOSAL_REAP_SOURCE_KINDS),
+            "status": TASK_STATUS_OPEN,
         },
         "dry_run": bool(dry_run),
     }
