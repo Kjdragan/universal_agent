@@ -188,7 +188,7 @@ Plus host/infra + CSI-ingester timers not in the frozenset but live on the box: 
 (hourly), `csi-replay-dlq` (4h), `csi-daily-summary`, `csi-db-backup`, `csi-threads-token-refresh-sync`,
 `m3-token-delta` (weekly, never-fired-yet). Global rollback: `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1`.
 
-### 4b. Still in-process (LIVE — 4 jobs)
+### 4b. Still in-process (LIVE — 5 jobs)
 
 These do not AND-in `is_migrated_to_systemd`, so `cron_service.py::CronService` fires them inside the
 autonomous worker. Some are in-process *by design* (need the agent runtime/skills/MCP).
@@ -199,6 +199,7 @@ autonomous worker. Some are in-process *by design* (need the agent runtime/skill
 | `vp_mission_pr_reconciler` | `*/15` 6-20 CT | `UA_VP_MISSION_PR_RECONCILER_ENABLED` (ON) | LIVE ✅ | housekeeping |
 | `paper_to_podcast_daily` | `0 21` CT | `UA_PAPER_TO_PODCAST_ENABLED` (ON) | LIVE ✅ | a daily *prompt* — needs runtime/skills/MCP |
 | `morning_ideation_report` | `30 6` CT | `UA_IDEATION_REPORT_ENABLED` (ON) | LIVE ✅ | Simone ideation prompt (distinct from convergence) |
+| `stale_proposal_reaper` | `0 7 * * 0` CT | `UA_STALE_PROPOSAL_REAPER_ENABLED` (ON) | LIVE ✅ | lightweight weekly reaper — parks open reflection/brainstorm >14d via `action="park"` (protected skipped); md+json digest to `work_products/` |
 | `hackernews_snapshot` | `0,30` 6-21 CT | `UA_HACKERNEWS_SNAPSHOT_ENABLED` (code ON, **prod=0**) | PARKED ⏸️ | parked in prod |
 
 ### 4c. Tombstones (do not "fix" these on)

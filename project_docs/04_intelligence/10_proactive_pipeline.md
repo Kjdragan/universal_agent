@@ -18,7 +18,8 @@ code_paths:
   - src/universal_agent/proactive_signals.py
   - src/universal_agent/services/ideation_report.py
   - src/universal_agent/scripts/morning_ideation_report.py
-last_verified: 2026-07-06
+  - src/universal_agent/scripts/stale_proposal_reaper.py
+last_verified: 2026-07-11
 ---
 
 # Proactive Pipeline
@@ -213,6 +214,23 @@ wiring differs — some run continuously, some ship scaffolding only.
 > the dispatch threshold so the next `dispatch_sweep` claims it); **dismiss** parks it; **refine**
 > is the scratchpad review toolbar. *Still pending:* enriching `build_reflection_context` with
 > real goals/CSI/preference signals (idea-quality lever, separate from delivery).
+
+> **Phase 2c (shipped): stale-verdict lane + weekly reaper.** The reflection lane was a
+> graveyard (~116 open reflection/brainstorm proposals, ~104 older than 72h, lifetime 0
+> pruned), so the morning report now also renders a **"Stale proposals needing verdict
+> (>72h)"** section (`services/ideation_report.py::get_stale_proposals` — every open
+> `source_kind IN ('reflection','brainstorm')` item older than 72h, oldest first, deduped
+> against the held cards). Each stale card has one-click **Promote** (always) and **Prune**
+> (disabled for protected items). "Prune" reuses the existing `dismiss` action —
+> `gateway_server.py::ideation_action_get` maps `dismiss` to `perform_task_action(action="park")`
+> — so no new action-URL scheme is introduced. Protected = `priority >= 2` OR a `human-only`
+> label (`services/ideation_report.py::is_protected_proposal`); revenue-critical / human-only
+> proposals keep Promote but can't be pruned from the report. The weekly `stale_proposal_reaper`
+> cron (`scripts/stale_proposal_reaper.py`, Sun 07:00 CT, `lightweight`) auto-prunes the
+> remainder at 14 days via `action="park"` (NEVER deletes rows), enforcing the SAME protection
+> gate, and emits a md+json digest to its cron-workspace `work_products/` (fields: id, title,
+> source_kind, created_at, age, disposition, reason) so nothing is lost silently. Registered
+> via `gateway_server.py::_ensure_stale_proposal_reaper_cron_job`.
 
 ### 1. Convergence + ideation (the centerpiece) — WIRED
 

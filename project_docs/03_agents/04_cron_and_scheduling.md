@@ -70,11 +70,14 @@ units + registration removed, dropped from the frozenset).
 
 **Still in-process (NOT migrated):** the minute/15m/30m loops and live-agent
 prompt jobs stay on the gateway tick. Of the persisted `cron_jobs.json` roster,
-exactly **4 are enabled and genuinely fire in-process** (the rest are migration
+exactly **5 are enabled and genuinely fire in-process** (the rest are migration
 tombstones, see § 4c): `simone_chat_auto_complete` (`*/1`, housekeeping),
 `vp_mission_pr_reconciler` (`*/15` active-window, housekeeping),
-`paper_to_podcast_daily` (`0 21 * * *` CT, `UA_PAPER_TO_PODCAST_ENABLED`), and
-`morning_ideation_report` (`30 6 * * *` CT, `UA_IDEATION_REPORT_ENABLED`). See
+`paper_to_podcast_daily` (`0 21 * * *` CT, `UA_PAPER_TO_PODCAST_ENABLED`),
+`morning_ideation_report` (`30 6 * * *` CT, `UA_IDEATION_REPORT_ENABLED`), and
+`stale_proposal_reaper` (`0 7 * * 0` CT weekly, `UA_STALE_PROPOSAL_REAPER_ENABLED`,
+`lightweight` — parks open reflection/brainstorm proposals older than 14d via
+`task_hub.perform_task_action(action="park")`, protected items skipped). See
 [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) § 4b.
 
 Units are `deployment/systemd/universal-agent-<job>.{timer,service}`; the
