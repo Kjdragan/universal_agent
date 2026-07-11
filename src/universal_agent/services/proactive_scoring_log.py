@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import json
 import sqlite3
 from typing import Any, Iterable, Optional
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 # Delivery slot constants — keep aligned with hourly_insight_email composer.
 SLOT_INSIGHT_1 = "insight_1"
@@ -63,10 +64,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def log_score(

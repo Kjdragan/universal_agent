@@ -12,10 +12,7 @@ import json
 import math
 import sqlite3
 from typing import Any
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 
 def _json_dumps(value: Any) -> str:

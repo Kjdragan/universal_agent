@@ -34,6 +34,7 @@ from typing import Any
 
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.services.claude_code_intel import KB_SLUG, LANE_SLUG
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +143,6 @@ class BackfillStats:
                 for r in self.records
             ],
         }
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def run_backfill(

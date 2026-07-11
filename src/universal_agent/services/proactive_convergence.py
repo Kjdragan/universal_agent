@@ -28,6 +28,7 @@ from universal_agent.services.proactive_artifacts import (
     upsert_artifact,
 )
 from universal_agent.services.proactive_task_builder import queue_proactive_task
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -2709,8 +2710,3 @@ def _parse_time(raw: Any) -> Optional[datetime]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
-
-
-def _now_iso() -> str:
-    """Return the current UTC time as an ISO-8601 string."""
-    return datetime.now(timezone.utc).isoformat()

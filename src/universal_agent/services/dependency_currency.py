@@ -23,6 +23,7 @@ import logging
 from pathlib import Path
 import re
 from typing import Any, Iterable
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -270,10 +271,6 @@ def detect_release_announcement(*, text: str, links: list[str]) -> dict[str, Any
 
 
 # ── Vault infrastructure writers ────────────────────────────────────────────
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _infrastructure_dir(vault_path: Path) -> Path:

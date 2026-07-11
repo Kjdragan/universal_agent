@@ -23,6 +23,7 @@ from universal_agent.wiki.llm import (
     generate_summary,
 )
 from universal_agent.workspace_catalog import list_workspace_summaries
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 
 def _candidate_lines(body: str) -> list[str]:
@@ -153,10 +154,6 @@ class VaultContext:
     slug: str
     title: str
     path: Path
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _timestamp_slug() -> str:

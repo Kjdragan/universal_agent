@@ -29,6 +29,7 @@ from pathlib import Path
 import re
 import sqlite3
 from typing import Any, Iterable, Optional
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +55,6 @@ def _default_index_path() -> Path:
     # Mirror gateway_server.py:284 — BASE_DIR / AGENT_RUN_WORKSPACES.
     base_dir = Path(__file__).resolve().parents[3]
     return base_dir / "AGENT_RUN_WORKSPACES" / "recent_briefs_index.md"
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _parse_iso(text: str) -> Optional[datetime]:

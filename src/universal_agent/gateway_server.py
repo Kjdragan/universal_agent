@@ -32,6 +32,7 @@ from typing import Any, Awaitable, Callable, Optional
 import urllib.parse
 import uuid
 from zoneinfo import ZoneInfo
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 try:
     import httpx
@@ -2796,10 +2797,6 @@ CONTINUITY_EVENT_RETENTION_SECONDS = max(
 NOTIFICATION_SNOOZE_MINUTES_DEFAULT = int(os.getenv("UA_NOTIFICATION_SNOOZE_MINUTES_DEFAULT", "30") or 30)
 NOTIFICATION_SNOOZE_MINUTES_MAX = int(os.getenv("UA_NOTIFICATION_SNOOZE_MINUTES_MAX", "1440") or 1440)
 WS_SEND_TIMEOUT_SECONDS = gateway_ws_send_timeout_seconds()
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _increment_metric(name: str, amount: int = 1) -> None:

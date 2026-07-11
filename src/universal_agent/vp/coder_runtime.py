@@ -34,6 +34,7 @@ from universal_agent.feature_flags import (
     coder_vp_workspace_dir,
 )
 from universal_agent.utils.env_utils import env_flag as _env_true
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -325,7 +326,7 @@ class CoderVPRuntime:
     ) -> str:
         mission_id = f"vp-mission-{uuid.uuid4().hex}"
         vp_identifier = coder_vp_id()
-        started_at = self._now_iso()
+        started_at = _now_iso()
 
         upsert_vp_mission(
             self._conn,
@@ -383,7 +384,7 @@ class CoderVPRuntime:
         if mission is None:
             return
 
-        completed_at = self._now_iso()
+        completed_at = _now_iso()
         normalized_result_ref = self._normalize_result_ref(mission_id=mission_id, result_ref=result_ref)
         upsert_vp_mission(
             self._conn,
@@ -433,7 +434,7 @@ class CoderVPRuntime:
         if mission is None:
             return
 
-        completed_at = self._now_iso()
+        completed_at = _now_iso()
         normalized_result_ref = self._normalize_result_ref(
             mission_id=mission_id,
             result_ref=str(mission["result_ref"] or ""),
@@ -641,8 +642,3 @@ class CoderVPRuntime:
             except Exception:
                 return None
         return None
-
-    @staticmethod
-    def _now_iso() -> str:
-        return datetime.now(timezone.utc).isoformat()
-

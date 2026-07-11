@@ -14,10 +14,7 @@ from universal_agent.durable.state import (
     list_runs_with_status,
     release_run_lease,
 )
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 
 def _repo_root() -> str:

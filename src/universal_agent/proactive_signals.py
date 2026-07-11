@@ -45,6 +45,7 @@ from typing import Any, Optional
 from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 
 from universal_agent import task_hub
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -858,10 +859,6 @@ def _is_short_subject(subject: dict[str, Any]) -> bool:
     except Exception:
         duration = 0
     return duration > 0 and duration <= 75
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 async def distill_feedback_to_rules(card_dict: dict[str, Any], feedback_text: str, feedback_tags: list[str] = None) -> None:

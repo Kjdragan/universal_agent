@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 _HEARTBEAT_ARTIFACT_REL_PATHS = (
     "heartbeat_state.json",
@@ -120,7 +121,3 @@ def _cleanup_note(workspace: Path, archived_paths: list[str], missing_paths: lis
 
 def _timestamp_slug() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()

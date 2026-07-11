@@ -4,10 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional
 import uuid
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 
 @dataclass

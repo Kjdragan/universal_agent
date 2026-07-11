@@ -26,6 +26,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 import uuid
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,6 @@ def _project_root() -> Path:
         return Path(env).resolve()
     # Walk up from this file: services/ -> universal_agent/ -> src/ -> repo
     return Path(__file__).resolve().parents[3]
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 # ── Data Model ──────────────────────────────────────────────────────────────

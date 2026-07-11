@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any
+from universal_agent.utils.time_utils import parse_iso as _parse_iso
 
 logger = logging.getLogger(__name__)
 from urllib.parse import urlparse
@@ -154,16 +155,6 @@ def _safe_markdown(path: Path) -> str:
 
 def _timestamp_slug() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
-
-def _parse_iso(value: str) -> datetime | None:
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except Exception:
-        return None
 
 
 def _priority_source_type(source_type: str) -> int:

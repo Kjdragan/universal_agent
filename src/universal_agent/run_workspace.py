@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import shutil
 from typing import Any, Optional
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 _ATTEMPT_SNAPSHOT_STATUSES = {
     "completed",
@@ -22,10 +23,6 @@ _ROOT_EVIDENCE_FILENAMES = (
     "session_checkpoint.json",
     "session_checkpoint.md",
 )
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def attempt_subdir_name(attempt_number: int) -> str:

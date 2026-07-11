@@ -13,6 +13,7 @@ import uuid
 
 from universal_agent.feature_flags import task_hub_missions_enabled
 from universal_agent.utils.env_utils import env_flag_3state as _env_bool
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 TASK_STATUS_OPEN = "open"
 TASK_STATUS_IN_PROGRESS = "in_progress"
@@ -211,12 +212,6 @@ class TaskHubPolicy:
     stale_enabled: bool
     stale_min_cycles: int
     stale_min_age_minutes: int
-
-
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:

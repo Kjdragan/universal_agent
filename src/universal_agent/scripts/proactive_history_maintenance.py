@@ -15,12 +15,9 @@ from typing import Any
 
 from universal_agent import task_hub
 from universal_agent.durable.db import get_activity_db_path
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 DEFAULT_CUTOVER_ISO = "2026-04-30T00:00:00-05:00"
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _parse_dt(raw: str) -> datetime | None:
