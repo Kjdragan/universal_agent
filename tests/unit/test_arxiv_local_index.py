@@ -8,11 +8,18 @@ search, and the offline cache fallback — with no network anywhere.
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
 from universal_agent.services import arxiv_local_index as ali
+
+# Relative seed dates so the 12-month recency cutoff never ages these out
+# (scripts/check_test_date_literals.py guard).
+RECENT = (date.today() - timedelta(days=30)).isoformat()
+RECENT_2 = (date.today() - timedelta(days=60)).isoformat()
+ANCIENT = "2020-01-01"  # date-pinned-ok (deliberately far outside any window)
 
 
 OAI_PAGE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -75,9 +82,9 @@ class TestParseOaiListrecords:
         assert rec["title"] == "Retrieval-Augmented Generation with Fresh Indexes"
         assert rec["authors"] == "Grace Ada, Alan Turing"
         assert rec["categories"] == "cs.CL cs.AI"
-        assert rec["published"] == "2026-06-01"
+        assert rec["published"] == "2026-06-01"  # date-pinned-ok (static XML fixture)
         # No <updated> element -> falls back to the header datestamp.
-        assert rec["updated"] == "2026-06-02"
+        assert rec["updated"] == "2026-06-02"  # date-pinned-ok (static XML fixture)
 
     def test_no_records_match_is_empty_not_error(self):
         records, token = ali.parse_oai_listrecords(NO_RECORDS_PAGE.encode())
@@ -116,11 +123,11 @@ class TestSearchIndex:
             conn,
             [
                 ("2506.1", "Retrieval-augmented generation advances",
-                 "RAG with retrieval quality metrics", "2026-06-01"),
+                 "RAG with retrieval quality metrics", RECENT),
                 ("2505.2", "Diffusion models for images",
-                 "Denoising diffusion probabilistic models", "2026-05-01"),
+                 "Denoising diffusion probabilistic models", RECENT_2),
                 ("2001.3", "Ancient retrieval-augmented generation",
-                 "Old RAG paper outside the window", "2020-01-01"),
+                 "Old RAG paper outside the window", ANCIENT),
             ],
         )
         results = ali.search_index(
@@ -131,7 +138,7 @@ class TestSearchIndex:
         assert "2001.3" not in ids  # 12-month cutoff
 
     def test_hazardous_topic_strings_do_not_raise(self, conn):
-        _seed(conn, [("2506.1", "A title", "An abstract", "2026-06-01")])
+        _seed(conn, [("2506.1", "A title", "An abstract", RECENT)])
         for topic in [
             'Vision "language" models',
             "Mixture-of-experts (MoE) — sparse!",
@@ -141,8 +148,8 @@ class TestSearchIndex:
             ali.search_index(conn, topic, months=12, limit=5)  # must not raise
 
     def test_upsert_replaces_and_fts_stays_in_sync(self, conn):
-        _seed(conn, [("2506.1", "Old title about diffusion", "x", "2026-06-01")])
-        _seed(conn, [("2506.1", "New title about retrieval", "x", "2026-06-01")])
+        _seed(conn, [("2506.1", "Old title about diffusion", "x", RECENT)])
+        _seed(conn, [("2506.1", "New title about retrieval", "x", RECENT)])
         assert ali.search_index(conn, "diffusion", months=12) == []
         results = ali.search_index(conn, "retrieval", months=12)
         assert [r["paper_id"] for r in results] == ["2506.1"]
@@ -190,7 +197,7 @@ class TestCli:
         monkeypatch.setenv("UA_ARXIV_INDEX_DB", str(db))
         _seed(
             ali.connect_index(db),
-            [("2506.1", "Agentic AI architectures", "Multi-agent systems", "2026-06-01")],
+            [("2506.1", "Agentic AI architectures", "Multi-agent systems", RECENT)],
         )
         rc = ali.main(
             ["search", "--query", "Agentic AI architectures and multi-agent systems"]
@@ -207,8 +214,8 @@ class TestMonthWindows:
         from datetime import date
 
         windows = ali._month_windows(3, date(2026, 7, 11))
-        assert windows[0][0] == "2026-04-01"
-        assert windows[-1][1] == "2026-07-11"
+        assert windows[0][0] == "2026-04-01"  # date-pinned-ok (fixed input date)
+        assert windows[-1][1] == "2026-07-11"  # date-pinned-ok (fixed input date)
         # Contiguous: each window starts the day after the previous ends.
         for (_, prev_end), (next_start, _) in zip(windows, windows[1:]):
             from datetime import date as _d, timedelta as _td
