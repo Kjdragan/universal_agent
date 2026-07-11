@@ -34,6 +34,7 @@ import sqlite3
 from typing import Any, Optional
 
 from universal_agent import task_hub
+from universal_agent.wiki.core import _slugify as _base_slugify
 from universal_agent.feature_flags import directed_demo_enabled
 
 logger = logging.getLogger(__name__)
@@ -54,8 +55,14 @@ _NL_DEMO_RE = re.compile(r"^build(?:\s+me)?\s+a\s+demo\s+of[:\s]+(.+)$", re.IGNO
 
 
 def _slugify(text: str, *, fallback: str) -> str:
-    slug = _SLUG_RE.sub("-", str(text or "").lower()).strip("-")[:40].strip("-")
-    return slug or fallback
+    # Canonical charset/case work lives in wiki.core._slugify; only the
+    # truncation bound is local. The 40-char bound is a CROSS-MODULE contract:
+    # directed_demo_builds and tutorial_demo_finalize must produce
+    # byte-identical slugs for the same input, because vp/worker_loop.py's
+    # legacy fallback recomputes a directed-demo dir name with the
+    # proactive-lane function. Change both together or not at all.
+    base = _base_slugify(str(text or ""), fallback=fallback)
+    return base[:40].strip("-") or fallback
 
 
 def directed_demo_slug(seed: str) -> str:
