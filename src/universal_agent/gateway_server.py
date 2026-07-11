@@ -15305,6 +15305,7 @@ async def lifespan(app: FastAPI):
                 _ensure_architecture_canvas_drift_cron_job()
                 _ensure_hackernews_snapshot_cron_job()
                 _ensure_atlas_direct_dispatch_cron_job()
+                _ensure_stale_proposal_reaper_cron_job()
                 _ensure_simone_chat_autocomplete_cron_job()
                 _ensure_vault_lint_contradictions_cron_job()
             except Exception as exc:
@@ -21239,6 +21240,45 @@ def _ensure_proactive_report_morning_cron_job() -> Optional[dict[str, Any]]:
         and not _is_migrated_to_systemd("proactive_report_morning"),
         cron_env_var="UA_PROACTIVE_REPORT_MORNING_CRON",
         timezone_env_var="UA_PROACTIVE_REPORTS_TIMEZONE",
+    )
+
+
+def _ensure_stale_proposal_reaper_cron_job() -> Optional[dict[str, Any]]:
+    """Weekly reaper for stale reflection/brainstorm Task Hub proposals.
+
+    Parks OPEN proposals older than 14 days (default) so the ideation backlog is
+    bounded. Counterpart to the morning ideation report's >72h surface: the
+    report flags stale proposals, the reaper retires them. Parks (never
+    hard-deletes) through ``task_hub.reap_stale_proposals`` with a
+    ``metadata.stale_proposal_reap`` marker + evaluation row, so the audit trail
+    survives. HARD GATE: priority>=2 and ``human-only`` items are always spared.
+    A pruned-proposals digest is written to ``work_products/stale_proposal_reaper/``
+    under ``artifacts.resolve_artifacts_dir()`` so nothing vanishes silently.
+
+    Operator knobs: ``UA_STALE_PROPOSAL_REAPER_ENABLED`` (on/off),
+    ``UA_STALE_PROPOSAL_REAPER_CRON`` / ``_TIMEZONE`` (schedule),
+    ``UA_STALE_PROPOSAL_REAP_DAYS`` (threshold, read by the script).
+
+    Weekly fixed-time cron (Sunday 06:40 CT) — fixed-time crons are exempt from
+    dormancy (project_docs/08_operations/03_dormancy_and_operating_hours.md).
+    ``skip_task_hub_link=True`` + ``lightweight=True`` — pure sqlite housekeeping
+    + a JSON digest, no agent session.
+    """
+    return _register_system_cron_job(
+        system_job="stale_proposal_reaper",
+        default_cron="40 6 * * 0",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.stale_proposal_reaper",
+        description=(
+            "Weekly reaper — parks OPEN reflection/brainstorm proposals older than "
+            "14 days (priority>=2 and human-only always spared). Digest to work_products/."
+        ),
+        timeout_seconds=120,
+        enabled=_proactive_cron_enabled("UA_STALE_PROPOSAL_REAPER_ENABLED"),
+        cron_env_var="UA_STALE_PROPOSAL_REAPER_CRON",
+        timezone_env_var="UA_STALE_PROPOSAL_REAPER_TIMEZONE",
+        skip_task_hub_link=True,
+        lightweight=True,
     )
 
 

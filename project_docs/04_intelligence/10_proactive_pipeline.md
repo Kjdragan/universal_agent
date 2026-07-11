@@ -211,8 +211,19 @@ wiring differs — some run continuously, some ship scaffolding only.
 > `gateway_server.py::ideation_action_get` (`GET /api/v1/ideation/{task_id}/action`): **promote**
 > runs the new `task_hub.py` `ACTION_PROMOTE` verb (open + `agent_ready=1` + score floored above
 > the dispatch threshold so the next `dispatch_sweep` claims it); **dismiss** parks it; **refine**
-> is the scratchpad review toolbar. *Still pending:* enriching `build_reflection_context` with
-> real goals/CSI/preference signals (idea-quality lever, separate from delivery).
+> is the scratchpad review toolbar. *Stale-proposal handling (shipped 2026-07-11):* the report
+> also emits a **STALE PROPOSALS NEEDING VERDICT (>72h)** section
+> (`ideation_report.py::get_stale_proposals` — OPEN reflection/brainstorm items older than 72h,
+> oldest-first, same promote/dismiss affordance), and the weekly `stale_proposal_reaper` cron
+> (`scripts/stale_proposal_reaper.py`, Sunday 06:40 CT, registered via
+> `gateway_server.py::_ensure_stale_proposal_reaper_cron_job`) parks OPEN proposals >14d through
+> the sanctioned per-item audit path (`task_hub.py::_park_stale_proposal_item` —
+> `metadata.stale_proposal_reap` marker + evaluation row; parked, never hard-deleted). HARD GATE:
+> `task_hub.py::reap_stale_proposals` never touches priority>=2 or `human-only` items; a
+> pruned-proposals digest is written to `work_products/stale_proposal_reaper/` under
+> `artifacts.py::resolve_artifacts_dir` so nothing vanishes silently. *Still pending:* enriching
+> `build_reflection_context` with real goals/CSI/preference signals (idea-quality lever, separate
+> from delivery).
 
 ### 1. Convergence + ideation (the centerpiece) — WIRED
 

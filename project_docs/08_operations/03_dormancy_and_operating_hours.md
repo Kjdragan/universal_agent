@@ -159,6 +159,7 @@ field to the active window. Examples (code-verified):
 | `hackernews_snapshot` | `0,30 6-21 * * *` | America/Chicago | half-hourly, active hours only |
 | `vault_lint_contradictions` | `0 7 1 * *` | America/Chicago | monthly, 07:00 Central |
 | `vp_coder_workspace_pruning` | `5 17 * * 0` | America/Chicago | Sunday 5:05 PM |
+| `stale_proposal_reaper` | `40 6 * * 0` | America/Chicago | Sunday 06:40 CT — weekly fixed-time (dormancy-exempt). Parks OPEN reflection/brainstorm proposals >14d via `task_hub.py::reap_stale_proposals`; HARD GATE spares priority>=2 and `human-only`. Added 2026-07-11. |
 | `vp_coder_workspace_regenerable_reap` | `25 6 * * *` | America/Chicago | Daily 06:25 CT — fixed-time (dormancy-exempt) but kept inside the 06:00-21:00 active window so a missed catch-up still lands in the operator's day. Removes only regenerable names (`.venv`, `__pycache__`, `node_modules`, `.pytest_cache`, `.ruff_cache`, `dist`, `build`, `.next`) from each VP-coder mission dir; added 2026-06-25 after the disk-critical incident. Migrated to a deploy-independent systemd timer (`universal-agent-vp-coder-regenerable-reap.timer`, 2026-06-30) — schedule + dormancy behavior unchanged |
 
 Each registration carries a `cron_env_var` (e.g. `UA_HACKERNEWS_SNAPSHOT_CRON`) and
@@ -378,6 +379,7 @@ registrations in `gateway_server.py` plus the systemd timers under
 | `proactive_report_midday` | 12:05 PM daily |
 | `proactive_report_afternoon` | 4:05 PM daily |
 | `vp_coder_workspace_pruning` | 5:05 PM Sundays |
+| `stale_proposal_reaper` | 6:40 AM Sundays (added 2026-07-11) |
 | `vp_coder_workspace_regenerable_reap` | 06:25 AM daily (added 2026-06-25) |
 | `evening_briefing` | 6:00 PM daily |
 

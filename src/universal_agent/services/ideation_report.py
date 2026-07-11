@@ -15,7 +15,7 @@ its own pipeline; this is Simone's idle-time ideation. Delivered link-first
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import html as _html
 import logging
 import os
@@ -59,6 +59,49 @@ def get_held_proposals(conn: sqlite3.Connection, *, limit: int = 25) -> list[dic
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+DEFAULT_STALE_PROPOSAL_SURFACE_HOURS = 72
+
+
+def get_stale_proposals(
+    conn: sqlite3.Connection,
+    *,
+    max_age_hours: int = DEFAULT_STALE_PROPOSAL_SURFACE_HOURS,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """OPEN reflection/brainstorm proposals older than ``max_age_hours``, OLDEST FIRST.
+
+    Distinct from ``get_held_proposals`` (newest-first, ``agent_ready=0``,
+    reflection-only): this surfaces every OPEN reflection OR brainstorm item that
+    has sat without a verdict past the surface threshold, so the morning report
+    can flag the backlog the operator hasn't actioned. No ``agent_ready`` filter
+    (a promoted-but-never-dispatched proposal is just as stale) and no
+    priority/label exclusion — the HARD GATE belongs to the reaper
+    (``task_hub.reap_stale_proposals``), not the surface: the report must SHOW
+    high-priority and human-only stale items, not hide them.
+    """
+    task_hub.ensure_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT task_id, title, description, priority, labels_json, score, created_at
+        FROM task_hub_items
+        WHERE source_kind IN ('reflection', 'brainstorm')
+          AND status = 'open'
+        ORDER BY created_at ASC
+        """,
+    ).fetchall()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=int(max_age_hours))
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        created = task_hub._parse_iso(r["created_at"])
+        if created is None:
+            continue  # malformed — can't age it; don't surface
+        if created < cutoff:
+            out.append(dict(r))
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _md_to_html(text: str) -> str:
@@ -121,6 +164,22 @@ def _render_cards(proposals: list[dict[str, Any]], base: str) -> str:
     return "".join(_render_card(p, base) for p in proposals)
 
 
+def _render_stale_section(stale: list[dict[str, Any]], base: str) -> str:
+    if not stale:
+        return ""
+    header = (
+        '<div style="margin:32px 0 14px;padding:14px 16px;border:1px solid #d4a72c;'
+        'border-radius:10px;background:#fff8c5;">'
+        '<div style="font-size:15px;font-weight:700;color:#7d4e00;">'
+        f"STALE PROPOSALS NEEDING VERDICT (>72h) — {len(stale)} awaiting your call</div>"
+        '<div style="font-size:12px;color:#7d4e00;margin-top:4px;">'
+        "Oldest first. Promote to dispatch, or Dismiss to park. The weekly reaper "
+        "auto-parks these at 14 days (priority >= 2 and human-only items are always spared).</div>"
+        "</div>"
+    )
+    return header + _render_cards(stale, base)
+
+
 def _shell(inner: str, *, count: int, generated_ct: str) -> str:
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -143,52 +202,77 @@ def _shell(inner: str, *, count: int, generated_ct: str) -> str:
     )
 
 
-def render_report_html(proposals: list[dict[str, Any]], *, base: str, generated_ct: str) -> str:
-    return _shell(_render_cards(proposals, base), count=len(proposals), generated_ct=generated_ct)
+def render_report_html(
+    proposals: list[dict[str, Any]],
+    *,
+    base: str,
+    generated_ct: str,
+    stale: list[dict[str, Any]] | None = None,
+) -> str:
+    stale = stale or []
+    inner = _render_cards(proposals, base) + _render_stale_section(stale, base)
+    return _shell(inner, count=len(proposals) + len(stale), generated_ct=generated_ct)
 
 
-def _email_html(proposals: list[dict[str, Any]], *, base: str, generated_ct: str, scratch_url: str | None) -> str:
+def _email_html(
+    proposals: list[dict[str, Any]],
+    *,
+    base: str,
+    generated_ct: str,
+    scratch_url: str | None,
+    stale: list[dict[str, Any]] | None = None,
+) -> str:
+    stale = stale or []
     link = (
         f'<p style="margin:0 0 18px;"><a href="{scratch_url}" style="color:#8250df;font-weight:600;">'
         f'Open the full report →</a></p>'
         if scratch_url
         else ""
     )
-    return _shell(link + _render_cards(proposals, base), count=len(proposals), generated_ct=generated_ct)
+    inner = link + _render_cards(proposals, base) + _render_stale_section(stale, base)
+    return _shell(inner, count=len(proposals) + len(stale), generated_ct=generated_ct)
 
 
 async def deliver_ideation_report(conn: sqlite3.Connection, mail_service: Any, recipient: str) -> dict[str, Any]:
     """Compose + deliver the morning ideation report. Skips delivery when empty."""
     proposals = get_held_proposals(conn)
+    stale = get_stale_proposals(conn, max_age_hours=DEFAULT_STALE_PROPOSAL_SURFACE_HOURS)
     now_ct = datetime.now(timezone.utc).astimezone(_CENTRAL)
     generated_ct = now_ct.strftime("%a %b %-d, %-I:%M %p %Z")
 
-    if not proposals:
-        logger.info("ideation_report: no held proposals — nothing to send")
+    if not proposals and not stale:
+        logger.info("ideation_report: no held or stale proposals — nothing to send")
         return {"status": "no_proposals", "count": 0, "email_sent": False, "scratch_url": None}
 
+    total = len(proposals) + len(stale)
     base = _action_base_url()
-    html_doc = render_report_html(proposals, base=base, generated_ct=generated_ct)
+    html_doc = render_report_html(proposals, base=base, generated_ct=generated_ct, stale=stale)
 
     scratch_url = publish_html_to_scratch(
         html_doc,
         slug=now_ct.strftime("ideation-%Y%m%d"),
         filename="report.html",
         title="Morning Ideation Report",
-        description=f"{len(proposals)} proposal(s) awaiting review",
+        description=f"{total} proposal(s) awaiting review",
     )
 
-    subject = f"[FYI/IDEATION] Morning Ideation Report — {len(proposals)} proposal(s)"
+    subject = f"[FYI/IDEATION] Morning Ideation Report — {total} proposal(s)"
+    lines = [
+        f"- {p.get('title')}\n  {(' '.join(str(p.get('description') or '').split()))[:240]}"
+        for p in proposals
+    ] + [
+        f"- [STALE >72h] {s.get('title')}\n  {(' '.join(str(s.get('description') or '').split()))[:240]}"
+        for s in stale
+    ]
     text = (
-        f"{len(proposals)} autonomous ideation proposal(s) awaiting your call "
+        f"{total} proposal(s) awaiting your call ({len(proposals)} new, {len(stale)} stale >72h) "
         f"(generated {generated_ct}).\n"
         + ("Full report: " + scratch_url + "\n\n" if scratch_url else "\n")
-        + "\n\n".join(
-            f"- {p.get('title')}\n  {(' '.join(str(p.get('description') or '').split()))[:240]}"
-            for p in proposals
-        )
+        + "\n\n".join(lines)
     )
-    email_html = _email_html(proposals, base=base, generated_ct=generated_ct, scratch_url=scratch_url)
+    email_html = _email_html(
+        proposals, base=base, generated_ct=generated_ct, scratch_url=scratch_url, stale=stale,
+    )
 
     email_sent = False
     message_id = ""
@@ -206,12 +290,12 @@ async def deliver_ideation_report(conn: sqlite3.Connection, mail_service: Any, r
         logger.error("ideation_report: email send failed: %s", exc, exc_info=True)
 
     logger.info(
-        "ideation_report delivered: proposals=%d email_sent=%s scratch=%s",
-        len(proposals), email_sent, scratch_url,
+        "ideation_report delivered: proposals=%d stale=%d email_sent=%s scratch=%s",
+        len(proposals), len(stale), email_sent, scratch_url,
     )
     return {
         "status": "delivered",
-        "count": len(proposals),
+        "count": total,
         "email_sent": email_sent,
         "email_message_id": message_id,
         "scratch_url": scratch_url,
