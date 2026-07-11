@@ -245,12 +245,14 @@ flowchart TD
     A[claim_next_dispatch_tasks] --> B[rebuild_dispatch_queue]
     B --> C[SELECT eligible=1 rows for newest queue_build_id<br/>status IN open,needs_review<br/>+ optional trigger_type / forbidden_source_kind filters]
     C --> D{for each candidate}
-    D --> E[re-read live item via get_item]
+    D --> E[re-read live item via get_item — fast-path filter]
     E --> F{still open/review?<br/>completion_token unset?}
     F -- no --> D
-    F -- yes --> G[INSERT assignment state=seized]
-    G --> H[_open_run row]
-    H --> I[UPDATE item status=in_progress, seizure_state=seized<br/>+ stamp dispatch.active_* lineage]
+    F -- yes --> G[ATOMIC CLAIM: UPDATE item status=in_progress, seizure_state=seized,<br/>+ dispatch.active_* lineage<br/>WHERE task_id=? AND status IN open,review]
+    G --> R{rowcount == 1?}
+    R -- no: lost race --> D
+    R -- yes: won --> H[INSERT assignment state=seized]
+    H --> I[_open_run row]
     I --> J[record seize evaluation]
     J --> D
     D --> K[commit, return claimed list]
@@ -261,10 +263,19 @@ Key behaviors verified in code:
 - **It always rebuilds the queue first**, then claims from that fresh snapshot.
 - **Re-validation under the claim:** even though the candidate came from the
   eligible snapshot, each one is re-read with `get_item` and re-checked for
-  `status IN {open, needs_review}` and a missing `completion_token` before the
-  assignment is inserted. A set `completion_token` hard-blocks re-claim and logs
-  a warning — this is the idempotency lock that stops a completed task being
-  worked twice.
+  `status IN {open, needs_review}` and a missing `completion_token`. A set
+  `completion_token` hard-blocks re-claim and logs a warning — this is the
+  idempotency lock that stops a completed task being worked twice.
+- **The claim is atomic (not check-then-act):** the `get_item` re-read is only a
+  fast-path filter. The authoritative claim is the status flip itself —
+  `UPDATE task_hub_items SET status='in_progress', … WHERE task_id=? AND status
+  IN (open, review)` — and the code proceeds only when `rowcount == 1`. Because
+  `connect_runtime_db` is autocommit and SQLite serializes writers, a concurrent
+  claimer (a second process on the same DB) that already flipped the row makes
+  the loser's `rowcount` 0, so it skips instead of double-dispatching. The
+  assignment/run rows are written **after** the claim is won, so a loser never
+  leaves a phantom assignment. (There is no `UNIQUE(task_id)` on
+  `task_hub_assignments`, so this status guard is the sole atomic gate.)
 - **`forbidden_source_kinds`** plumbs into the SQL `NOT IN` filter. The ToDo
   dispatcher passes `["vp_mission"]` so it never claims VP visibility-mirror
   rows (defense-in-depth against the 2026-05-07 rogue-branch incident; the
