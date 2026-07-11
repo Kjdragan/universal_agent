@@ -81,9 +81,14 @@ def collect(days, cap):
         cwd, name, first, summ = scan(f)
         if not cwd:
             continue
+        # worktree cwds (<repo>/.claude/worktrees/<x>) consolidate silently into
+        # their parent repo — worktrees are plumbing the operator never sees
+        repo = os.path.basename(cwd)
+        if "/.claude/worktrees/" in cwd:
+            repo = os.path.basename(cwd.partition("/.claude/worktrees/")[0])
         out.append(dict(mtime=mt, acct=label, launcher=launcher,
                         sid=os.path.basename(f)[:-6],
-                        repo=os.path.basename(cwd), cwd=cwd, name=name,
+                        repo=repo, cwd=cwd, name=name,
                         first=(first or "")[:200], summary=(summ or "")[:280]))
     return out
 
@@ -117,9 +122,15 @@ Updated {time.strftime('%Y-%m-%d %H:%M %Z')}.</div></div></header><div class="wr
         parts.append(f'<h2><span class="n">{len(rs)}·</span> {e(repo)}</h2>')
         for r in rs:
             when = time.strftime("%a %m-%d %H:%M", time.localtime(r["mtime"]))
-            nm = f'<span class="nm">{e(r["name"])}</span>' if r["name"] else \
-                 f'<span class="unnamed">(unnamed)</span>'
-            topic = r["summary"] or r["first"]
+            # unnamed sessions wear their first prompt as the title — an
+            # empty "(unnamed)" marker tells the operator nothing
+            if r["name"]:
+                nm = f'<span class="nm">{e(r["name"])}</span>'
+                topic = r["summary"] or r["first"]
+            else:
+                nm = ('<span class="nm" style="font-weight:500">'
+                      f'{e((r["first"] or r["summary"] or "(empty session)")[:110])}</span>')
+                topic = r["summary"] or ""
             parts.append(
                 f'<div class="s"><span class="when">{when}</span> {nm}'
                 f'<span class="acct">{r["acct"]}</span>'
@@ -130,10 +141,34 @@ Updated {time.strftime('%Y-%m-%d %H:%M %Z')}.</div></div></header><div class="wr
     return "".join(parts)
 
 
+def find(rows, query, limit=8):
+    """Token-cheap lookup for in-session use: compact matches, resume-ready.
+    A skill should call THIS, never Read the atlas HTML into context."""
+    terms = [w for w in query.lower().split() if w]
+    scored = []
+    for r in rows:
+        hay = " ".join([r["repo"], r["name"] or "", r["first"], r["summary"]]).lower()
+        score = sum(hay.count(w) for w in terms)
+        if score:
+            scored.append((score, r))
+    scored.sort(key=lambda s: (-s[0], -s[1]["mtime"]))
+    if not scored:
+        print(f"no sessions match: {query}")
+        return
+    for score, r in scored[:limit]:
+        when = time.strftime("%m-%d %H:%M", time.localtime(r["mtime"]))
+        topic = (r["name"] or r["summary"] or r["first"])[:110]
+        print(f"{when}  [{r['repo']}]  {topic}")
+        print(f"        cd {r['cwd']} && {r['launcher']} --resume {r['sid']}")
+
+
 def main():
     a = sys.argv[1:]
     days = int(a[a.index("--days") + 1]) if "--days" in a else 45
     cap = int(a[a.index("--max") + 1]) if "--max" in a else 140
+    if "--find" in a:
+        rows = collect(max(days, 90), 400)
+        return find(rows, a[a.index("--find") + 1]) or 0
     rows = collect(days, cap)
     open(OUT, "w").write(render(rows, days))
     print(f"atlas: {len(rows)} sessions → {OUT}")
