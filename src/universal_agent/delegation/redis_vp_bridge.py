@@ -249,7 +249,10 @@ class RedisVpBridge:
         mission_id = f"bridge-{envelope.job_id}"
         mission_type = mission_kind or "delegated_task"
         objective = envelope.payload.task
-        priority = envelope.priority or 100
+        # `or 100` would demote an intentional priority=0 (the most-urgent value
+        # under claim_next_vp_mission's ASC ordering) to the low-urgency default.
+        # Only substitute when priority is genuinely unset.
+        priority = envelope.priority if envelope.priority is not None else 100
 
         payload = {
             "task": envelope.payload.task,

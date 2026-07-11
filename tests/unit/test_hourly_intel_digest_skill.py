@@ -508,7 +508,13 @@ class InlineFeedbackLinkTests(unittest.TestCase):
 
 class PauseTokenTests(unittest.TestCase):
     def test_round_trip_with_secret(self) -> None:
-        with patch.dict(os.environ, {"UA_FEEDBACK_HMAC_SECRET": "x" * 32}):
+        # sign_digest_pause_token now delegates to cron_artifact_notifier, whose
+        # _ack_secret reads UA_ARTIFACT_ACK_SECRET / UA_OPS_TOKEN /
+        # UA_INTERNAL_API_TOKEN — NOT UA_FEEDBACK_HMAC_SECRET. The emitter and the
+        # live /api/v1/digest/pause verifier now share this one chain (previously
+        # the emitter checked UA_FEEDBACK_HMAC_SECRET first, silently breaking the
+        # link when that var was set). Patch the var the signer actually reads.
+        with patch.dict(os.environ, {"UA_ARTIFACT_ACK_SECRET": "x" * 32}):
             tok = digest.sign_digest_pause_token(24)
             self.assertTrue(tok)
             self.assertTrue(digest.verify_digest_pause_token(24, tok))
