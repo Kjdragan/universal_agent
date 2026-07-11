@@ -10,6 +10,7 @@ from typing import Any
 from universal_agent import feature_flags
 from universal_agent.codebase_policy import normalize_codebase_access
 from universal_agent.ops_config import apply_merge_patch
+from universal_agent.utils.env_utils import env_int as _env_int
 
 _MONEY_RE = re.compile(r"\b(pay|purchase|buy|checkout|wire|transfer|invoice|payment)\b", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"\b(email|gmail|send mail|send an email)\b", re.IGNORECASE)
@@ -19,15 +20,6 @@ _DESTRUCTIVE_RE = re.compile(
     re.IGNORECASE,
 )
 _MEMORY_SCOPES = {"direct_only", "all"}
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        return int(str(raw).strip())
-    except Exception:
-        return default
 
 
 def _notification_email_default() -> str:

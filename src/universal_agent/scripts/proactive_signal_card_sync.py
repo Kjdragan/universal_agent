@@ -29,11 +29,9 @@ import sys
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.proactive_signals import generate_signal_cards
 from universal_agent.services.dormancy import should_run
+from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
 
 logger = logging.getLogger(__name__)
-
-# Truthy spellings for the 24/7 escape hatch.
-_TRUTHY = {"1", "true", "yes", "on"}
 
 
 def _csi_db_path() -> Path:

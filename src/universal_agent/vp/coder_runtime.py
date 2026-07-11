@@ -33,6 +33,7 @@ from universal_agent.feature_flags import (
     coder_vp_shadow_mode,
     coder_vp_workspace_dir,
 )
+from universal_agent.utils.env_utils import env_flag as _env_true
 
 logger = logging.getLogger(__name__)
 
@@ -645,9 +646,3 @@ class CoderVPRuntime:
     def _now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
 
-
-def _env_true(name: str, default: bool) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "on"}

@@ -12,6 +12,7 @@ from typing import Any, Callable, Optional
 import uuid
 
 from universal_agent.feature_flags import task_hub_missions_enabled
+from universal_agent.utils.env_utils import env_flag_3state as _env_bool
 
 TASK_STATUS_OPEN = "open"
 TASK_STATUS_IN_PROGRESS = "in_progress"
@@ -5038,15 +5039,6 @@ def prune_settled_tasks(
 # task_hub_settings key persisting the last successful activity-db VACUUM so
 # the throttle survives process restarts.
 _VACUUM_SETTING_KEY = "activity_db_last_vacuum"
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, "")).strip().lower()
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 def _fmt_bytes(n: int) -> str:

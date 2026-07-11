@@ -7,6 +7,8 @@ import os
 import socket
 from typing import Optional
 
+from universal_agent.utils.env_utils import env_flag_3state as _env_flag
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,17 +44,6 @@ class FactoryRuntimePolicy:
     @property
     def is_headquarters(self) -> bool:
         return self.role == FactoryRole.HEADQUARTERS.value
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, "")).strip().lower()
-    if not raw:
-        return default
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 def resolve_runtime_stage(raw_stage: Optional[str] = None) -> Optional[str]:

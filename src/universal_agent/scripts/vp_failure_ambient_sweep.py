@@ -33,15 +33,9 @@ import sys
 
 from universal_agent import task_hub
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+from universal_agent.utils.env_utils import env_int as _env_int
 
 logger = logging.getLogger(__name__)
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
 
 
 def main() -> int:

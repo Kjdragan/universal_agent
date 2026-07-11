@@ -13,15 +13,13 @@ give M2/M3 a clean import seam; behaviour is unchanged.
 
 from __future__ import annotations
 
-import os
 from typing import Any
+
+from universal_agent.utils.env_utils import env_int as _env_int
 
 
 def _env_positive_int(name: str, default: int) -> int:
-    try:
-        return max(0, int(os.getenv(name, str(default)) or default))
-    except Exception:
-        return default
+    return _env_int(name, default, minimum=0)
 
 
 def _vp_active_counts(active_assignments: list[dict[str, Any]] | None) -> tuple[int, int]:

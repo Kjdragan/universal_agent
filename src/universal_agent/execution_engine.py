@@ -41,6 +41,7 @@ from universal_agent.timeout_policy import (
     process_turn_idle_kill_seconds,
     process_turn_timeout_seconds,
 )
+from universal_agent.utils.env_utils import env_flag as _env_truthy
 from universal_agent.utils.model_resolution import ZAI_MODEL_MAP
 
 try:
@@ -87,13 +88,6 @@ def _is_terminated_process_error(exc: Exception) -> bool:
     if not lowered:
         return False
     return any(token in lowered for token in _TERMINATED_PROCESS_ERROR_TOKENS)
-
-
-def _env_truthy(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 USE_PROCESS_STDIO_REDIRECT = _env_truthy("UA_GATEWAY_PROCESS_STDIO_REDIRECT", default=False)

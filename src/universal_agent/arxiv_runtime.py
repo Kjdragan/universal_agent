@@ -56,10 +56,9 @@ from pathlib import Path
 import shutil
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from universal_agent.utils.env_utils import env_flag_3state as _env_flag
 
-_TRUE_VALUES = {"1", "true", "yes", "on"}
-_FALSE_VALUES = {"0", "false", "no", "off"}
+logger = logging.getLogger(__name__)
 
 # Canonical default location for the arxiv-mcp-server paper cache. Defaults to
 # the server's own historical default (~/.arxiv-mcp-server/papers) so the
@@ -128,17 +127,6 @@ def is_paper_cached(paper_id: str) -> bool:
     are converted to markdown and the intermediate PDF is deleted).
     """
     return resolve_cached_paper_path(paper_id).is_file()
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, "")).strip().lower()
-    if not raw:
-        return default
-    if raw in _TRUE_VALUES:
-        return True
-    if raw in _FALSE_VALUES:
-        return False
-    return default
 
 
 def arxiv_mcp_enabled() -> bool:
