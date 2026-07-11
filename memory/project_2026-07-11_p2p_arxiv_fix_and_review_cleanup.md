@@ -100,3 +100,49 @@ can't break gated tests.
   `.claude/skills/` is canonical (skills_system doc gotcha) — do not "sync" it.
 - CI `check_test_date_literals.py` blocks new quoted YYYY-MM-DD in tests/ —
   use relative dates or `# date-pinned-ok`.
+
+## Workstream C — style pass (operator approved; executed same session)
+
+Audits first (3 read-only scouts), then curated PRs. Verdicts worth keeping:
+docstring/type-hint debt was NEGLIGIBLE (9+9 gaps in 912 public functions);
+naming discipline already clean; the REAL finds were duplicated tiny-helper
+families and dead code.
+
+- **#1379** polish: every audited type-hint + docstring gap closed (verified
+  annotations against real types).
+- **#1380** dead code: 16 files / ~1,400 lines removed — never-wired
+  `agent_operator/` package, orphaned `gateway_server_patch.py` (fn lives
+  inline in gateway_server), island `bot/execution_logger.py`, 10 one-off
+  Composio debug scripts, 3 completed one-shot scripts. Every removal
+  verified against src imports, tests, skills/agents, HEARTBEAT, systemd,
+  docs code_paths, AND the VPS crontab/units. Kept: corporation/ Redis-
+  factory .env.example vars (active scaffolding), services/invariants/*
+  (@invariant self-registration looks import-dead but isn't).
+- **#1381** env helpers ×~20 → `utils/env_utils` (env_flag 2-state vs
+  env_flag_3state kept SEPARATE — junk-value semantics differ; env_int with
+  optional minimum clamp). Drifted families left local: not-in-FALSY
+  permissive, raw-is-None empty-string-sensitive, positive-or-default ints.
+- **#1382** timestamp helpers: 33 of 65 audited defs → `utils/time_utils`
+  (now_iso/parse_iso). The 9 format-drifted now_iso copies (strftime-Z etc.)
+  persist/compare their strings — NOT migrated; 22 parse variants with tz
+  coercion / float returns left local.
+
+Found-but-skipped (judgment): `proactive_signals.py` → services/ move (34
+importers, forever-shim for tidiness only), `gateway_server.py` route
+extraction (37k lines, 316 routes; dashboard 145 + ops 106 cluster cleanly —
+future dedicated refactor), circular-import lazy imports (19 across 17 files,
+benign density).
+
+## Follow-ups (known, deliberate)
+
+- ~7 more `_utc_now_iso` copies + a `_now`/`_event_timestamp` family
+  (durable/*, todo_dispatch_service, mission_control_*) — same pattern,
+  different names; natural next consolidation pass.
+- **Memory-store test-isolation bug**: running the unit suite on the desktop
+  writes real `proactive_outcome` entries into the repo's own
+  `memory/MEMORY.md` + `memory/index.json` + dated files (this is why every
+  worktree showed dirty memory files on 2026-07-11). Same leak class the
+  scratch/email conftest fixtures close — needs a workspace-dir pin for
+  whatever test drives memory writes.
+- 4th `safe_slug` variant in `utils/session_workspace.py` (underscore
+  separator, max_len=80) — different contract, noted not merged.
