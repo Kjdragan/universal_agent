@@ -145,7 +145,11 @@ def render_index(records: list[dict], ts_host: str) -> str:
     """Self-contained, light-mode, client-side-searchable index page."""
     rows = []
     for r in records:
-        url = f"https://{ts_host}/scratch/{r['slug']}/{r['entry']}"
+        # ponytail: link the dir URL for index.html entries — /<slug>/index.html
+        # 301-redirects to /scratch/./ (back to this index) under tailscale serve;
+        # the trailing-slash dir serves 200 directly. Non-index files link direct.
+        _base = f"https://{ts_host}/scratch/{r['slug']}/"
+        url = _base if r["entry"] == "index.html" else _base + r["entry"]
         title = html.escape(r["title"] or r["slug"])
         desc = html.escape(r["description"])
         kind = html.escape(r["kind"])
