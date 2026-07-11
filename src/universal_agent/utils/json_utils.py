@@ -105,3 +105,26 @@ def _validate(data: Any, model: Optional[Type[T]], require_model: bool) -> Union
         if require_model:
             raise ValueError(f"Extracted data did not match required schema {model.__name__}: {e}")
         return data
+
+
+def json_loads_obj(raw: Any) -> Dict[str, Any]:
+    """Strict best-effort "give me a dict" coercion for JSON-encoded fields.
+
+    dict in -> shallow copy out; str in -> strict ``json.loads``; anything
+    else or any failure -> ``{}``. NEVER raises.
+
+    Deliberately STRICT (plain ``json.loads``, not ``extract_json_payload``'s
+    repair layers): its call sites parse DB/Task-Hub-stored JSON written by
+    ``json.dumps``, where a corrupt row should collapse to ``{}`` rather than
+    be creatively repaired into a half-garbage dict. Use
+    ``extract_json_payload`` for LLM output, this for stored fields.
+    """
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
