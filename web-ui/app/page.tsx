@@ -1613,8 +1613,10 @@ function ChatInterface() {
       for (const file of Array.from(files)) {
         const formData = new FormData();
         formData.append("file", file);
+        // Route through the dashboard proxy (GATEWAY_API_BASE) so the ops token
+        // is injected server-side — the upload endpoint now requires auth.
         const res = await fetch(
-          `${API_BASE}/api/v1/sessions/${encodeURIComponent(effectiveSessionId)}/upload`,
+          `${GATEWAY_API_BASE}/api/v1/sessions/${encodeURIComponent(effectiveSessionId)}/upload`,
           { method: "POST", body: formData }
         );
         if (!res.ok) {
