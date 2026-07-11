@@ -33,6 +33,7 @@ from universal_agent.services.proactive_artifacts import (
     upsert_artifact,
 )
 from universal_agent.utils.model_resolution import resolve_opus
+from universal_agent.utils.json_utils import extract_json_payload
 
 DEFAULT_HANDLE = "ClaudeDevs"
 DEFAULT_HANDLES = ["ClaudeDevs", "bcherny"]
@@ -1752,12 +1753,16 @@ def _call_sync_llm(*, system: str, user: str, max_tokens: int = 600) -> str:  # 
 
 
 def _parse_json_object(raw: str) -> dict[str, Any]:
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        lines = [line for line in cleaned.splitlines() if not line.strip().startswith("```")]
-        cleaned = "\n".join(lines).strip()
-    parsed = json.loads(cleaned)
-    return parsed if isinstance(parsed, dict) else {}
+    """Parse the LLM's JSON via the canonical robust parser.
+
+    Consolidated onto ``utils.json_utils.extract_json_payload`` (shared
+    5-layer parser). Local contract kept: returns ``{}`` when the payload is
+    valid JSON but not an object; raises when nothing is recoverable —
+    every caller (here and claude_code_intel_rollup) wraps in
+    ``try/except Exception`` and falls back to its heuristic path.
+    """
+    payload = extract_json_payload(raw)
+    return payload if isinstance(payload, dict) else {}
 
 
 def _get_json_with_auth_fallbacks(
