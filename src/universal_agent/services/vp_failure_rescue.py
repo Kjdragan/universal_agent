@@ -20,6 +20,7 @@ import logging
 from pathlib import Path
 import sqlite3
 from typing import Any, Optional
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,6 @@ _TRANSCRIPT_TAIL_MAX_BYTES = 2000
 # How many bytes of original_objective to embed verbatim (long objectives
 # get truncated; full text lives in vp_missions row).
 _OBJECTIVE_PREVIEW_MAX_BYTES = 600
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _workspace_path_from_result_ref(result_ref: Optional[str]) -> Optional[str]:

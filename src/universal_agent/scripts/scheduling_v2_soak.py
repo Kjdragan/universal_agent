@@ -17,6 +17,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from universal_agent.utils.time_utils import now_iso as _iso_now
 
 
 @dataclass(frozen=True)
@@ -49,10 +50,6 @@ CHECKS: list[CheckSpec] = [
         expects_json=False,
     ),
 ]
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:

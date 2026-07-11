@@ -38,6 +38,7 @@ from universal_agent.services.demo_workspace import (
     provision_demo_workspace,
 )
 from universal_agent.wiki.core import _slugify
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -278,10 +279,6 @@ class ScaffoldArtifacts:
                 str(self.source_derived_from) if self.source_derived_from else None
             ),
         }
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def write_brief_template(

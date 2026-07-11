@@ -50,6 +50,7 @@ from universal_agent.services.mission_control_tiles import (
     TileState,
     all_tiles,
 )
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -385,11 +386,6 @@ class MissionControlSweeper:
         readout would synthesize from stale cards and re-stale the
         operator-visible brief (the bug we are fixing).
         """
-        from datetime import datetime, timezone
-
-        def _now_iso() -> str:
-            return datetime.now(timezone.utc).isoformat()
-
         def _emit(_phase: str, **payload: Any) -> None:
             if progress is None:
                 return

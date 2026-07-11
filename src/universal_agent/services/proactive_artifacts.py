@@ -15,6 +15,7 @@ import sqlite3
 from typing import Any, Optional
 
 from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 ARTIFACT_STATUS_PRODUCED = "produced"
 ARTIFACT_STATUS_CANDIDATE = "candidate"
@@ -49,10 +50,6 @@ VALID_DELIVERY_STATES = {
 ARTIFACT_TYPE_INTEL_BRIEF = "intel_brief"
 
 _ARTIFACT_ID_RE = re.compile(r"\bpa_[a-f0-9]{16}\b", re.IGNORECASE)
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _json_dumps(value: Any) -> str:

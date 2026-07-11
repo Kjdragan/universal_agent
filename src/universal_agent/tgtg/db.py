@@ -19,14 +19,12 @@ import json
 import logging
 from pathlib import Path
 import sqlite3
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 log = logging.getLogger(__name__)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _extract_fields(raw: dict) -> dict:

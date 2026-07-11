@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from universal_agent.utils.time_utils import now_iso as _iso_now
 
 
 def _safe_int(value: Any, default: int = 0) -> int:

@@ -27,14 +27,11 @@ from datetime import datetime, timezone
 import logging
 import sqlite3
 from typing import Any, Optional
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
 _WINDOW_SETTING_KEY = "cody_token_tracking_window"
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:

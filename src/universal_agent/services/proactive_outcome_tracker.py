@@ -27,6 +27,7 @@ from universal_agent.task_hub import (
     ACTION_PARK,
     ACTION_REVIEW,
 )
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -688,10 +689,6 @@ def _outcome_memory_enabled() -> bool:
     return os.getenv("UA_PROACTIVE_OUTCOME_MEMORY", "true").strip().lower() in (
         "true", "1", "yes",
     )
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _cutoff_iso(hours: int) -> str:

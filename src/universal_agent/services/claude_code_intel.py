@@ -36,6 +36,7 @@ from universal_agent.utils.model_resolution import resolve_opus
 from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.utils.anthropic_client import call_llm_text, has_llm_key
 from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 DEFAULT_HANDLE = "ClaudeDevs"
 DEFAULT_HANDLES = ["ClaudeDevs", "bcherny"]
@@ -1924,10 +1925,6 @@ def _next_state(*, state: dict[str, Any], handle: str, user_id: str, posts: list
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True), encoding="utf-8")
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _bounded_int(raw: Any, default: int, *, low: int, high: int) -> int:

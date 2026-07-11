@@ -33,6 +33,7 @@ from universal_agent.task_hub import (
     ACTION_REVIEW,
 )
 from universal_agent.utils.model_resolution import resolve_opus
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -734,8 +735,3 @@ def _row_to_recap(row: sqlite3.Row) -> dict[str, Any]:
         "updated_at": str(row["updated_at"] or ""),
         "generated_at": str(row["updated_at"] or ""),
     }
-
-
-def _now_iso() -> str:
-    """Return the current UTC time as an ISO-8601 string."""
-    return datetime.now(timezone.utc).isoformat()

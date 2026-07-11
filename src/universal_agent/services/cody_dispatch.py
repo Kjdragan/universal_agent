@@ -27,16 +27,13 @@ from universal_agent.feature_flags import (
     proactive_use_demo_factory,
 )
 from universal_agent.services.proactive_artifacts import upsert_artifact
+from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
 
 SOURCE_KIND_CODY_DEMO_TASK = "cody_demo_task"
 DEFAULT_WALL_TIME_MAX_MINUTES = 30
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _stable_task_id(*, demo_id: str, entity_slug: str) -> str:

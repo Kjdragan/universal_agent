@@ -31,6 +31,8 @@ import sqlite3
 from typing import Any, Optional
 
 from universal_agent import task_hub
+from universal_agent.utils.time_utils import now_iso as _now_iso
+from universal_agent.utils.time_utils import parse_iso as _parse_iso
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +41,6 @@ PROJECT_KEY = "immediate"
 DEFAULT_LABELS = ["simone-chat", task_hub.TASK_LABEL_AGENT_READY]
 TASK_ID_PREFIX = "simone_chat:"
 TITLE_MAX_LEN = 120
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def task_id_for(session_id: str) -> str:
@@ -234,15 +232,6 @@ def reopen(
         },
     }
     return task_hub.upsert_item(conn, update)
-
-
-def _parse_iso(value: Any) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        return None
 
 
 def auto_complete_stale(
