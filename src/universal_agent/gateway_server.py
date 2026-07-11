@@ -15293,6 +15293,7 @@ async def lifespan(app: FastAPI):
                 # moved to convergence_candidates + the hourly_intel_digest path.
                 _ensure_proactive_report_morning_cron_job()
                 _ensure_morning_ideation_report_cron_job()
+                _ensure_stale_proposal_reaper_cron_job()
                 _ensure_proactive_report_midday_cron_job()
                 _ensure_proactive_report_afternoon_cron_job()
                 _ensure_proactive_artifact_digest_cron_job()
@@ -21255,6 +21256,29 @@ def _ensure_morning_ideation_report_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_IDEATION_REPORT_ENABLED"),
         cron_env_var="UA_MORNING_IDEATION_REPORT_CRON",
         timezone_env_var="UA_PROACTIVE_REPORTS_TIMEZONE",
+    )
+
+
+def _ensure_stale_proposal_reaper_cron_job() -> Optional[dict[str, Any]]:
+    # Weekly reaper for the reflection/ideation lane.
+    # Parks (NEVER deletes) open source_kind IN ('reflection','brainstorm') items
+    # older than UA_STALE_PROPOSAL_REAPER_MAX_AGE_DAYS (default 14), gated to never
+    # touch priority >= 2 or human-only items (ideation_report.is_protected_proposal).
+    # Emits a md+json digest to the cron workspace work_products/. Schedule
+    # 0 7 * * 0 (Sun 07:00 CT) — fixed-time weekly cron, exempt from dormancy.
+    # lightweight=True: pure sqlite3 + file I/O, no agent session.
+    return _register_system_cron_job(
+        system_job="stale_proposal_reaper",
+        default_cron="0 7 * * 0",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.stale_proposal_reaper",
+        description="Weekly reaper — parks open reflection/brainstorm proposals older than 14d (protected items skipped).",
+        timeout_seconds=300,
+        # Fixed-time weekly cron → exempt from dormancy.
+        enabled=_proactive_cron_enabled("UA_STALE_PROPOSAL_REAPER_ENABLED"),
+        cron_env_var="UA_STALE_PROPOSAL_REAPER_CRON",
+        timezone_env_var="UA_STALE_PROPOSAL_REAPER_TIMEZONE",
+        lightweight=True,
     )
 
 
