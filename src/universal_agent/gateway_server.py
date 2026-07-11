@@ -15,6 +15,7 @@ import contextlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
+import hmac
 import json
 import logging
 import mimetypes
@@ -14500,9 +14501,9 @@ def _require_ops_auth(request: Request, token_override: Optional[str] = None) ->
 
 def _require_ops_token_issuance_auth(request: Request) -> None:
     token = _extract_auth_token_from_headers(request.headers)
-    if SESSION_API_TOKEN and token == SESSION_API_TOKEN:
+    if _tokens_match(token, SESSION_API_TOKEN):
         return
-    if OPS_TOKEN and token == OPS_TOKEN:
+    if _tokens_match(token, OPS_TOKEN):
         return
     if not SESSION_API_TOKEN and not OPS_TOKEN:
         raise HTTPException(
@@ -14542,6 +14543,16 @@ def _require_headquarters_role_for_fleet() -> None:
         )
 
 
+def _tokens_match(supplied: str, expected: str) -> bool:
+    """Constant-time token comparison (CWE-208, avoids a `==` timing oracle on a
+    secret). Returns False when *expected* is unset, preserving the old
+    ``if EXPECTED and token == EXPECTED`` guard so an empty configured token
+    never matches an empty supplied token."""
+    if not expected:
+        return False
+    return hmac.compare_digest(str(supplied or ""), str(expected))
+
+
 def _extract_auth_token_from_headers(headers: Any) -> str:
     header = str(headers.get("authorization", "")).strip()
     token = ""
@@ -14564,12 +14575,12 @@ def _require_session_api_auth(request: Request) -> None:
     if not SESSION_API_TOKEN:
         raise HTTPException(status_code=503, detail="Session API token is not configured.")
     token = _extract_auth_token_from_headers(request.headers)
-    if token == SESSION_API_TOKEN:
+    if _tokens_match(token, SESSION_API_TOKEN):
         return
     # Also accept OPS_TOKEN as a valid alternative — the dashboard proxy sends
     # UA_OPS_TOKEN, while SESSION_API_TOKEN may resolve to a separate
     # UA_INTERNAL_API_TOKEN from Infisical.  Both are legitimate credentials.
-    if OPS_TOKEN and token == OPS_TOKEN:
+    if _tokens_match(token, OPS_TOKEN):
         return
     raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -14578,7 +14589,7 @@ def _require_youtube_ingest_auth(request: Request) -> None:
     explicit_token = (os.getenv("UA_YOUTUBE_INGEST_TOKEN") or "").strip()
     if explicit_token:
         token = _extract_auth_token_from_headers(request.headers)
-        if token != explicit_token:
+        if not _tokens_match(token, explicit_token):
             raise HTTPException(status_code=401, detail="Unauthorized")
         return
     _require_session_api_auth(request)
@@ -14591,10 +14602,10 @@ async def _require_session_ws_auth(websocket: WebSocket) -> bool:
         await websocket.close(code=1011, reason="Session API token is not configured.")
         return False
     token = _extract_auth_token_from_headers(websocket.headers)
-    if token == SESSION_API_TOKEN:
+    if _tokens_match(token, SESSION_API_TOKEN):
         return True
     # Accept OPS_TOKEN as valid alternative (see _require_session_api_auth)
-    if OPS_TOKEN and token == OPS_TOKEN:
+    if _tokens_match(token, OPS_TOKEN):
         return True
     await websocket.close(code=4401, reason="Unauthorized")
     return False
