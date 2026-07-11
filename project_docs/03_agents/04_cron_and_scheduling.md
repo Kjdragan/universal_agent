@@ -11,6 +11,7 @@ code_paths:
   - src/universal_agent/services/paper_to_podcast_guard.py
   - src/universal_agent/services/paper_to_podcast_workspace.py
   - src/universal_agent/arxiv_runtime.py
+  - src/universal_agent/services/arxiv_local_index.py
   - deployment/systemd/
   - scripts/install_vps_phase_a_batch1_timers.sh
   - scripts/install_vps_phase_a_batch2_timers.sh
@@ -411,6 +412,46 @@ The cache-path half of the same RCA was fixed in
 arxiv-mcp-server writes ``.md`` files to (HTML-source AND PDF-source; the
 server converts PDFs to markdown and deletes the intermediate PDF, so the
 pipeline cache check must look for ``.md``, never ``.pdf``).
+
+### Local arXiv metadata index (2026-07-11 — the HTTP-429 discovery fix)
+
+The 2026-07-10 run (`run_id 78c38721000a`) died at step one: the single live
+``mcp__arxiv-mcp-server__search_papers`` call returned HTTP 429 because arXiv
+throttles the VPS IP **server-side**, keyed to cumulative traffic from every
+arXiv consumer on the box. Client-side pacing (what the third-party MCP server
+provides) cannot prevent that, and any hand-rolled client against the same
+``export.arxiv.org/api/query`` endpoint would hit the identical limit — so the
+fix changes the *access pattern*, not the client:
+
+- ``services/arxiv_local_index.py`` maintains a **local SQLite FTS5 metadata
+  index** (``~/.arxiv-local-index/arxiv_index.db``, override
+  ``UA_ARXIV_INDEX_DB`` — resolver
+  ``arxiv_local_index.py::canonical_index_db_path``) harvested in bulk via
+  arXiv's sanctioned OAI-PMH interface (``export.arxiv.org/oai2``,
+  ``metadataPrefix=arXiv``, sets ``cs,stat,eess``).
+- The systemd timer ``universal-agent-arxiv-index-harvest.timer`` (04:40
+  America/Chicago daily, installer
+  ``scripts/install_vps_arxiv_index_harvest_timer.sh``, hooked into
+  ``remote_deploy.sh``) runs ``harvest --days 3`` — a handful of polite OAI
+  page requests; upsert-by-id makes the 3-day overlap idempotent. A failed
+  harvest just leaves the index a day stale; the pipeline still works.
+- One-time bootstrap after first deploy: ``harvest --backfill-months 12``
+  (month-granularity windows, resumable per set — see
+  ``arxiv_local_index.py::harvest_window``).
+- Discovery becomes a **pure local read**: ``search`` (bm25-ranked FTS over
+  title+abstract with a published-within-N-months cutoff,
+  ``arxiv_local_index.py::search_index``) — zero live arXiv calls. Only the
+  ~5 selected papers are then downloaded live via ``download_paper``.
+- Last-resort offline path: ``cache-fallback``
+  (``arxiv_local_index.py::cache_fallback_candidates``) deterministically
+  ranks the already-downloaded full-text cache
+  (``arxiv_runtime.py::canonical_arxiv_storage_path``) by topic-term overlap,
+  so a run that cannot reach arXiv at all still assembles topic-relevant
+  papers instead of no-op'ing.
+
+All subcommands print one JSON object to stdout and exit 0 even when the
+index is unavailable — agent callers branch on ``status``
+(``ok`` / ``no_matches`` / ``unavailable``), not exit codes.
 
 ## Deploy-window detection (suppress restart noise)
 

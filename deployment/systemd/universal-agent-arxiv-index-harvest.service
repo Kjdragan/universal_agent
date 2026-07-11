@@ -1,0 +1,32 @@
+[Unit]
+Description=Universal Agent arXiv local-index harvest (OAI-PMH metadata -> SQLite FTS; NO secrets)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Pure public-HTTP + home-dir SQLite job: no Infisical, no secrets. The .env
+# line is kept only so every maintenance unit is structurally identical to its
+# siblings (and to pick up UA_ARXIV_INDEX_DB if the operator ever relocates
+# the index).
+EnvironmentFile=-/opt/universal_agent/.env
+# Incremental harvest of the last 3 days (overlap absorbs a missed day or
+# two; upsert-by-id makes the overlap idempotent). Writes to
+# ~/.arxiv-local-index/arxiv_index.db (services/arxiv_local_index.py::
+# canonical_index_db_path) — home-dir so the index survives /opt deploys,
+# mirroring the arxiv-mcp-server paper cache convention.
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.services.arxiv_local_index harvest --days 3
+MemoryMax=512M
+# A normal incremental harvest is a handful of OAI pages (~1-2 min). The cap
+# covers a multi-day catch-up after downtime; a genuinely hung harvest
+# self-heals at the next day's slot.
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target

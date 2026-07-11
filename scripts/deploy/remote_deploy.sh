@@ -390,6 +390,13 @@ sudo bash "$PROD_DIR/scripts/install_vps_proactive_signal_card_sync_timer.sh" \
 echo "--> Installing session-reaper timer (daily AGENT_RUN_WORKSPACES disk GC)..."
 sudo bash "$PROD_DIR/scripts/install_vps_session_reaper_timer.sh" \
   || echo "WARN: install_vps_session_reaper_timer.sh failed (non-fatal)"
+# Daily arXiv local-index harvest (04:40 CT): keeps ~/.arxiv-local-index/
+# arxiv_index.db fresh via OAI-PMH so paper_to_podcast discovery makes zero
+# live arXiv API calls (2026-07-10 HTTP-429 RCA). Pure public HTTP + home-dir
+# SQLite - no secrets, no Infisical. Non-fatal.
+echo "--> Installing arXiv local-index harvest timer (daily OAI-PMH metadata sync)..."
+sudo bash "$PROD_DIR/scripts/install_vps_arxiv_index_harvest_timer.sh" \
+  || echo "WARN: install_vps_arxiv_index_harvest_timer.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the
