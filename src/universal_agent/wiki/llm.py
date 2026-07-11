@@ -14,6 +14,7 @@ import re
 from typing import Any, Optional
 
 from universal_agent.utils.model_resolution import resolve_opus, resolve_sonnet
+from universal_agent.utils.anthropic_client import build_anthropic_client
 
 logger = logging.getLogger(__name__)
 
@@ -23,26 +24,18 @@ class SemanticExtractionError(Exception):
 
 
 def _get_anthropic_client():
-    """Create a synchronous Anthropic client using the ZAI emulation layer."""
+    """Create a synchronous Anthropic client using the ZAI emulation layer.
+
+    Delegates to the shared ``utils.anthropic_client.build_anthropic_client``
+    and translates its failures into this module's ``SemanticExtractionError``
+    contract (callers catch that, not RuntimeError).
+    """
     try:
-        from anthropic import Anthropic
+        return build_anthropic_client()
     except ImportError as exc:
         raise SemanticExtractionError("anthropic package not installed") from exc
-
-    api_key = (
-        os.getenv("ANTHROPIC_API_KEY")
-        or os.getenv("ANTHROPIC_AUTH_TOKEN")
-        or os.getenv("ZAI_API_KEY")
-    )
-    if not api_key:
-        raise SemanticExtractionError("No Anthropic API key available")
-
-    client_kwargs: dict[str, Any] = {"api_key": api_key}
-    base_url = os.getenv("ANTHROPIC_BASE_URL")
-    if base_url:
-        client_kwargs["base_url"] = base_url
-
-    return Anthropic(**client_kwargs)
+    except RuntimeError as exc:
+        raise SemanticExtractionError("No Anthropic API key available") from exc
 
 
 def _call_llm(
