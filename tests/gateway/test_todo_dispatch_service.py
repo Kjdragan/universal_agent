@@ -104,6 +104,48 @@ async def test_todo_dispatch_service_executes_claimed_tasks(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_sweep_passes_executing_sessions_to_protect_live_peers(monkeypatch):
+    """The sweep must forward `executing_sessions` as `additional_running_sessions`
+    so a peer session that is legitimately still executing isn't reaped as stale."""
+    conn = _conn()
+    service = ToDoDispatchService(execution_callback=AsyncMock())
+    # A peer session is mid-execution while THIS session runs its sweep.
+    service.executing_sessions.add("peer-session-live")
+
+    session = GatewaySession(
+        session_id="daemon_simone_todo",
+        user_id="daemon",
+        workspace_dir="/tmp/daemon_simone_todo",
+        metadata={"source": "daemon", "session_role": "todo_execution", "run_kind": "todo_execution"},
+    )
+
+    captured: dict = {}
+
+    def _capturing_sweep(_conn, **kwargs):
+        captured.update(kwargs)
+        return []  # empty batch → sweep loop exits immediately
+
+    monkeypatch.setattr("universal_agent.durable.db.connect_runtime_db", lambda *a, **k: conn)
+    monkeypatch.setattr(
+        "universal_agent.services.dispatch_service.dispatch_sweep", _capturing_sweep
+    )
+    monkeypatch.setattr(
+        "universal_agent.services.capacity_governor.CapacityGovernor.get_instance",
+        lambda: type("Governor", (), {"can_dispatch": staticmethod(lambda: (True, "capacity_available"))})(),
+    )
+    monkeypatch.setattr(
+        "universal_agent.services.capacity_governor.capacity_snapshot",
+        lambda: {"available_slots": 1, "active_slots": 0, "max_concurrent": 2, "in_backoff": False},
+    )
+
+    service.register_session(session)
+    await service._process_session(session)
+
+    assert "additional_running_sessions" in captured
+    assert "peer-session-live" in set(captured["additional_running_sessions"])
+
+
+@pytest.mark.asyncio
 async def test_todo_dispatch_service_requeues_when_capacity_blocked(monkeypatch):
     conn = _conn()
     callback = AsyncMock()

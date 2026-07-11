@@ -719,6 +719,14 @@ class ToDoDispatchService:
                         provider_session_id=session.session_id,
                         workspace_dir=None,
                         forbidden_source_kinds=["vp_mission"],
+                        # Protect ALL sessions currently mid-execution from the
+                        # top-of-sweep stale release — not just this caller
+                        # (auto-excluded via provider_session_id). Without this,
+                        # a peer session that is legitimately still executing a
+                        # task past UA_DISPATCH_STALE_AFTER_SECONDS could have its
+                        # live assignment reaped as "abandoned" and the task
+                        # re-dispatched mid-flight.
+                        additional_running_sessions=set(self.executing_sessions),
                     )
                     if not batch:
                         break
