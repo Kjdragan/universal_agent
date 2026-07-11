@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily Claude session atlas refresh (07:30 America/Chicago; Persistent catches up after sleep)
+
+[Timer]
+OnCalendar=07:30 America/Chicago
+Persistent=true
+
+[Install]
+WantedBy=timers.target

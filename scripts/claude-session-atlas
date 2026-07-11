@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""claude-session-atlas — the standing map of what's building across ALL Claude
+Code sessions (both accounts): per-project groups, session names, topic
+snippets, and ready-to-paste resume commands, published as ONE living
+scratchpad page (stable URL) the operator can open whenever he's lost.
+
+Companion to `claude-sessions` (the terminal lister). Deterministic — no LLM:
+topic signal = session name + first real user message + newest compaction
+summary the harness wrote into the transcript.
+
+  claude-session-atlas                  # write HTML to stdout-path + print URL hint
+  claude-session-atlas --publish        # also publish to scratch/session-atlas (same-slug update)
+  claude-session-atlas --days 30 --max 150
+
+Scheduled: desktop user timer claude-session-atlas.timer (daily 07:30 CT,
+Persistent=true — catches up after sleep). Install:
+  cp ~/lrepos/universal_agent/deployment/desktop-systemd-user/claude-session-atlas.* \
+     ~/.config/systemd/user/ && systemctl --user daemon-reload && \
+  systemctl --user enable --now claude-session-atlas.timer
+"""
+import glob, html, json, os, subprocess, sys, time
+
+HOMES = [("a1", "claudereal", os.path.expanduser("~/.claude/projects")),
+         ("a2", "claude2",    os.path.expanduser("~/.claude-acct2/projects"))]
+PUBLISH = os.path.expanduser("~/lrepos/universal_agent/scripts/publish_scratch.sh")
+OUT = "/tmp/claude-session-atlas.html"
+
+
+def _text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+    return ""
+
+
+def scan(path, max_lines=4000):
+    """Cheap single pass: cwd, session name, first real user msg, last summary."""
+    cwd = name = first_user = last_summary = None
+    try:
+        with open(path, errors="replace") as fh:
+            for i, ln in enumerate(fh):
+                if i > max_lines and cwd and (first_user or name):
+                    break
+                try:
+                    rec = json.loads(ln)
+                except Exception:
+                    continue
+                if cwd is None and rec.get("cwd"):
+                    cwd = rec["cwd"]
+                if rec.get("type") == "summary" and rec.get("summary"):
+                    last_summary = rec["summary"]
+                m = rec.get("message") or {}
+                if rec.get("type") == "user" and first_user is None:
+                    t = _text(m.get("content")).strip()
+                    if t and not t.startswith("<") and "Caveat:" not in t[:40]:
+                        first_user = t
+                if name is None and "named this session" in ln:
+                    s = _text(m.get("content"))
+                    j = s.find("named this session")
+                    if j >= 0:
+                        name = s[j + 18:].split(".")[0].strip().strip(' "“”')
+    except Exception:
+        pass
+    return cwd, name, first_user, last_summary
+
+
+def collect(days, cap):
+    cutoff = time.time() - days * 86400
+    rows = []
+    for label, launcher, root in HOMES:
+        for f in glob.glob(os.path.join(root, "*", "*.jsonl")):
+            if "/-tmp" in f or ".orphaned-" in f or "-claude-jobs-" in f:
+                continue
+            mt = os.path.getmtime(f)
+            if mt >= cutoff and os.path.getsize(f) > 2000:
+                rows.append((mt, label, launcher, f))
+    rows.sort(reverse=True)
+    out = []
+    for mt, label, launcher, f in rows[:cap]:
+        cwd, name, first, summ = scan(f)
+        if not cwd:
+            continue
+        out.append(dict(mtime=mt, acct=label, launcher=launcher,
+                        sid=os.path.basename(f)[:-6],
+                        repo=os.path.basename(cwd), cwd=cwd, name=name,
+                        first=(first or "")[:200], summary=(summ or "")[:280]))
+    return out
+
+
+def render(rows, days):
+    groups = {}
+    for r in rows:
+        groups.setdefault(r["repo"], []).append(r)
+    ordered = sorted(groups.items(), key=lambda kv: -kv[1][0]["mtime"])
+    e = html.escape
+    parts = [f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude session atlas</title><style>
+body{{margin:0;background:#faf9f7;color:#1a1a1f;font:15px/1.55 Inter,-apple-system,sans-serif;padding:0 0 60px}}
+.wrap{{max-width:960px;margin:0 auto;padding:0 20px}}
+header{{border-bottom:3px solid #e04e00;background:#fff;padding:26px 0 18px;margin-bottom:26px}}
+h1{{font-size:24px;margin:0 0 4px}} .sub{{color:#5c5a55;font-size:13px}}
+h2{{font-size:17px;margin:26px 0 8px}} h2 .n{{color:#e04e00;font-family:monospace;font-size:13px}}
+.s{{background:#fff;border:1px solid #e6e3dd;border-radius:9px;padding:12px 15px;margin:8px 0}}
+.when{{font-family:monospace;font-size:11.5px;color:#a05a00}}
+.nm{{font-weight:650}} .unnamed{{color:#5c5a55;font-weight:400;font-style:italic}}
+.topic{{font-size:13px;color:#5c5a55;margin:3px 0}}
+code{{font-family:monospace;font-size:12px;background:#f2f0ec;border-radius:4px;padding:1px 6px}}
+.acct{{display:inline-block;font-family:monospace;font-size:10.5px;padding:0 6px;border-radius:9px;margin-left:6px;background:#eaf2f9;color:#20507a}}
+</style></head><body><header><div class="wrap">
+<h1>Claude session atlas</h1><div class="sub">What every conversation has been building — last {days} days,
+both accounts, grouped by project, newest first. Regenerated daily 07:30 CT (and on demand:
+<code>claude-session-atlas --publish</code>). Resume any session by pasting its command in a terminal.
+Updated {time.strftime('%Y-%m-%d %H:%M %Z')}.</div></div></header><div class="wrap">"""]
+    for repo, rs in ordered:
+        parts.append(f'<h2><span class="n">{len(rs)}·</span> {e(repo)}</h2>')
+        for r in rs:
+            when = time.strftime("%a %m-%d %H:%M", time.localtime(r["mtime"]))
+            nm = f'<span class="nm">{e(r["name"])}</span>' if r["name"] else \
+                 f'<span class="unnamed">(unnamed)</span>'
+            topic = r["summary"] or r["first"]
+            parts.append(
+                f'<div class="s"><span class="when">{when}</span> {nm}'
+                f'<span class="acct">{r["acct"]}</span>'
+                f'<div class="topic">{e(topic)}</div>'
+                f'<code>{e(r["launcher"])} --resume {r["sid"]}</code>'
+                f' <code style="opacity:.6">cd {e(r["cwd"])}</code></div>')
+    parts.append("</div></body></html>")
+    return "".join(parts)
+
+
+def main():
+    a = sys.argv[1:]
+    days = int(a[a.index("--days") + 1]) if "--days" in a else 45
+    cap = int(a[a.index("--max") + 1]) if "--max" in a else 140
+    rows = collect(days, cap)
+    open(OUT, "w").write(render(rows, days))
+    print(f"atlas: {len(rows)} sessions → {OUT}")
+    if "--publish" in a:
+        env = dict(os.environ, UA_SCRATCH_ARCHIVE_ENABLED="0")  # living page — no per-day archive churn
+        r = subprocess.run([PUBLISH, OUT, "session-atlas"], env=env,
+                           capture_output=True, text=True)
+        print(r.stdout.strip() or r.stderr.strip()[-300:])
+        return r.returncode
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
