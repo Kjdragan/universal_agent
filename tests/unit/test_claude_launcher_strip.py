@@ -190,7 +190,13 @@ def test_inject_skips_excluded_prefixes(monkeypatch):
         "DISCORD_BOT_TOKEN",
     )
     for key in sentinel_keys:
-        monkeypatch.delenv(key, raising=False)
+        # setenv-then-delenv registers a failure-safe teardown: inject() below
+        # writes os.environ DIRECTLY (it is the function under test), and a
+        # bare delenv on an absent key registers no undo — the injected fake
+        # keys then leak into every later test (caught by
+        # test_outbound_channel_isolation in CI, 2026-07-11).
+        monkeypatch.setenv(key, "__pre_inject_placeholder__")
+        monkeypatch.delenv(key)
 
     inserted = inject(
         {
@@ -223,7 +229,10 @@ def test_inject_default_no_filter_loads_all(monkeypatch):
 
     sentinel_keys = ("ANTHROPIC_API_KEY", "AGENTMAIL_API_KEY")
     for key in sentinel_keys:
-        monkeypatch.delenv(key, raising=False)
+        # Failure-safe teardown for the direct os.environ writes below — see
+        # the comment in test_inject_excludes_anthropic_routing_vars.
+        monkeypatch.setenv(key, "__pre_inject_placeholder__")
+        monkeypatch.delenv(key)
 
     inserted = inject(
         {
