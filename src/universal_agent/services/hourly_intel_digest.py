@@ -30,8 +30,6 @@ render in ``America/Chicago``.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
-import hmac
 import html as html_lib
 import json
 import logging
@@ -614,35 +612,19 @@ def mark_superseded(conn: sqlite3.Connection, artifact_ids: list[str]) -> None:
     conn.commit()
 
 
-# ── Pause-token signing (PR-B shim) ────────────────────────────────────
-
-
-def _digest_pause_secret() -> bytes:
-    raw = (
-        os.getenv("UA_FEEDBACK_HMAC_SECRET")
-        or os.getenv("UA_ARTIFACT_ACK_SECRET")
-        or os.getenv("UA_OPS_TOKEN")
-        or os.getenv("UA_INTERNAL_API_TOKEN")
-        or ""
-    ).strip()
-    return raw.encode("utf-8") if raw else b""
-
-
-def sign_digest_pause_token(hours: int) -> str:
-    """HMAC over ``f"digest_pause:{hours}"`` truncated to 16 hex."""
-    secret = _digest_pause_secret()
-    if not secret:
-        return ""
-    msg = f"digest_pause:{int(hours)}".encode("utf-8")
-    return hmac.new(secret, msg, hashlib.sha256).hexdigest()[:16]
-
-
-def verify_digest_pause_token(hours: int, token: str) -> bool:
-    """Verify an HMAC token authorising a digest pause of *hours* hours."""
-    expected = sign_digest_pause_token(hours)
-    if not expected or not token:
-        return False
-    return hmac.compare_digest(expected, token.strip())
+# ── Pause-token signing ────────────────────────────────────────────────
+# The canonical implementation lives in cron_artifact_notifier. This module is
+# the EMITTER (it mints the "pause digest 24h" link into the digest email); the
+# live /api/v1/digest/pause endpoint VERIFIES with cron_artifact_notifier's
+# copy. Previously this module had its own sign/verify whose secret chain
+# checked UA_FEEDBACK_HMAC_SECRET first while the verifier's (_ack_secret) did
+# not — so setting that var (which exists solely for this feature) silently made
+# every emailed pause link fail verification. Re-export the canonical functions
+# so emit and verify share ONE secret chain by construction.
+from universal_agent.services.cron_artifact_notifier import (  # noqa: E402
+    sign_digest_pause_token,
+    verify_digest_pause_token,
+)
 
 
 # ── Near-duplicate suppression (Phase 4 — digest deterministic backstop) ──

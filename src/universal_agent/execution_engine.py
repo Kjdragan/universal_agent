@@ -1240,8 +1240,13 @@ class ProcessTurnAdapter:
             elif event.type == EventType.ITERATION_END:
                 trace_id = event.data.get("trace_id")
             elif event.type == EventType.ERROR:
-                error = event.data.get("error")
-        
+                # ERROR events carry their text under "message" (both yield
+                # sites in execute() use data["message"]). Reading "error" alone
+                # always returned None, so "success" below was always True even
+                # for a failed or watchdog-killed run. Fall back to "error" for
+                # forward-compatibility with any future emitter.
+                error = event.data.get("message") or event.data.get("error")
+
         return {
             "response_text": response_text,
             "tool_calls": tool_calls,
