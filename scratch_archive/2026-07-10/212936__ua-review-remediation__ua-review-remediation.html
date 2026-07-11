@@ -1,0 +1,89 @@
+<title>UA Ultra-Review — Remediation Shipped</title>
+<style>
+  :root{--bg:#f6f7f9;--card:#fff;--ink:#14161a;--muted:#5b636e;--line:#e4e7ec;--ok:#067647;--sec:#6941c6;--hi:#b42318;--med:#b25f00;--accent:#1d4ed8;--chip:#eef1f5;--code:#f2f4f7}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-size:25px;margin:0 0 6px;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:14px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+  .pill{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:16px 0 24px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .stat b{display:block;font-size:22px;line-height:1.1}.stat span{color:var(--muted);font-size:12px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:28px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#fafbfc;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+  tr:last-child td{border-bottom:none}
+  .pr{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--accent);white-space:nowrap}
+  .tag{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:5px;border:1px solid transparent;white-space:nowrap}
+  .t-sec{background:#f4f3ff;color:var(--sec);border-color:#d9d6fe}
+  .t-cor{background:#fef3f2;color:var(--hi);border-color:#fecdca}
+  .t-rel{background:#fff6e7;color:var(--med);border-color:#fddca6}
+  .t-live{background:#ecfdf3;color:var(--ok);border-color:#abefc6}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:11px 0}
+  .card h3{margin:0 0 6px;font-size:15px}
+  .card p{margin:5px 0;font-size:13.5px;color:#3a3f47}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;background:var(--code);padding:1px 5px;border-radius:4px}
+  .scroll{overflow-x:auto}
+  footer{margin-top:36px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  @media (prefers-color-scheme: dark){:root{--bg:#f6f7f9}}
+</style>
+<div class="wrap">
+<h1>Ultra-Review → Remediation</h1>
+<div class="sub">Every actionable finding fixed and shipped · Claude Fable · 2026-07-10</div>
+<div class="meta">
+  <span class="pill">13 PRs · #1336–1349</span>
+  <span class="pill">all merged, CI-gated, with tests + docs</span>
+  <span class="pill">5 unauth endpoints → 401 verified LIVE on prod</span>
+  <span class="pill">deploys green, gateway healthy</span>
+</div>
+<div class="grid">
+  <div class="stat"><b>13</b><span>fix PRs merged</span></div>
+  <div class="stat"><b>5</b><span>LIVE unauth endpoints closed</span></div>
+  <div class="stat"><b>~30</b><span>new regression tests</span></div>
+  <div class="stat"><b>2</b><span>deferred / by-design</span></div>
+</div>
+
+<h2>Shipped fixes</h2>
+<div class="scroll">
+<table>
+<tr><th>PR</th><th>Fix</th><th>Type</th></tr>
+<tr><td class="pr">#1345</td><td>Ops-auth on CSI <code>watchlist</code> + <code>discord</code> routers (gated at mount) + frontend proxy routing</td><td><span class="tag t-sec">security</span> <span class="tag t-live">live 401</span></td></tr>
+<tr><td class="pr">#1341</td><td>Ops-auth on mutating <code>/dashboard/csi/*</code> (purge, digest delete/send, specialist-loops)</td><td><span class="tag t-sec">security</span> <span class="tag t-live">live 401</span></td></tr>
+<tr><td class="pr">#1344</td><td>Auth on <code>POST /sessions/{id}/upload</code> (was unauth prompt-injection / disk-fill) + proxy routing</td><td><span class="tag t-sec">security</span> <span class="tag t-live">live 401</span></td></tr>
+<tr><td class="pr">#1342</td><td>Workspace file access: containment check (no sibling-prefix path escape)</td><td><span class="tag t-sec">security</span></td></tr>
+<tr><td class="pr">#1343</td><td>Constant-time token comparison across gateway auth guards (CWE-208)</td><td><span class="tag t-sec">security</span></td></tr>
+<tr><td class="pr">#1346</td><td>GPU-demo approval token: 7-day expiry + single-use (no replay to flip a decision)</td><td><span class="tag t-sec">security</span></td></tr>
+<tr><td class="pr">#1336</td><td>Idempotency ledger race branch read wrong columns → duplicate email/Slack sends</td><td><span class="tag t-cor">correctness</span></td></tr>
+<tr><td class="pr">#1347</td><td>Task-Hub <b>atomic claim</b> (status-guarded UPDATE + rowcount) — closes double-dispatch race</td><td><span class="tag t-cor">correctness</span></td></tr>
+<tr><td class="pr">#1348</td><td>VP provision git I/O offloaded + lease heartbeat during provision (no double-execute)</td><td><span class="tag t-cor">correctness</span></td></tr>
+<tr><td class="pr">#1339</td><td><code>execute_simple</code> always-success + <code>priority=0</code> demotion + digest-pause HMAC secret-chain mismatch</td><td><span class="tag t-cor">correctness</span></td></tr>
+<tr><td class="pr">#1338</td><td>AgentMail: blocking sqlite-retry sleep + gws subprocess moved off the gateway event loop</td><td><span class="tag t-rel">reliability</span></td></tr>
+<tr><td class="pr">#1337</td><td>Close leaked fds (per-turn journal handle) + unclosed sqlite connections</td><td><span class="tag t-rel">reliability</span></td></tr>
+<tr><td class="pr">#1349</td><td>Todo sweep forwards <code>executing_sessions</code> so live peers aren't reaped as stale</td><td><span class="tag t-rel">reliability</span></td></tr>
+</table>
+</div>
+
+<h2>Production verification</h2>
+<div class="card">
+<p>Re-probed the endpoints the review found open. On the running gateway: <code>GET /api/v1/csi/watchlist</code>, <code>/api/v1/csi/discord</code>, and <code>/api/v1/dashboard/csi/*</code> now return <b>401</b> (were 200), while a real auth-gated control behaves unchanged. Backend + Next.js frontend deploy atomically (<code>remote_deploy.sh</code> rebuilds web-ui), and the dashboard reaches the gateway through the token-injecting proxy — so gating didn't break the UI. Every deploy landed green; <code>/api/v1/version</code> = 200, gateway active.</p>
+</div>
+
+<h2>Deliberately not changed</h2>
+<div class="card">
+<h3>Fail-open ops auth — by design</h3>
+<p><code>_require_ops_auth</code> intentionally fails open when no ops token is configured (tailnet-trust). The dangerous <code>sudo systemctl</code> activity surface is <i>already</i> fail-closed on the vps profile via <code>_require_ops_auth_for_sudo_surface</code>. Left as-is — not an oversight.</p>
+</div>
+<div class="card">
+<h3>Least-privilege env for the spawned <code>claude</code> CLI — deferred (needs care)</h3>
+<p>The correct fix is a minimal env allow-list instead of full <code>os.environ</code>, but the CLI and its stdio MCP servers need many <code>${VAR}</code>s resolved from <code>.mcp.json</code>; too narrow a list breaks Cody/VP execution. Recommended follow-up: enumerate the MCP-required vars from <code>.mcp.json</code>, build the allow-list, and test against a real Cody run before shipping. (The Link/Stripe bridge is a trusted deliberate exception.)</p>
+</div>
+<div class="card">
+<h3>Quality / reuse cleanup — separate pass</h3>
+<p>6+ duplicate LLM-JSON parsers vs the existing <code>utils/json_utils.extract_json_payload</code>; <code>_slugify</code> reimplemented ×6; a triple-copied Anthropic-client/retry block; and <code>calendar_task_bridge.py</code> is fully-built dead code the docs call "IMPLEMENTED". Non-urgent drift-risk — worth one cleanup PR.</p>
+</div>
+
+<footer>Each PR is independently CI-gated (py_compile · ruff · pytest tests/unit) and independently revertable, with a regression test that fails on the pre-fix code and a matching canonical-doc update. Findings that were latent (masked by single-process serialization) were still fixed at the root, not band-aided.</footer>
+</div>
