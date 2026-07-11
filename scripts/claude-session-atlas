@@ -32,7 +32,7 @@ OUT = "/tmp/claude-session-atlas.html"
 CACHE = os.path.expanduser("~/.cache/claude-session-atlas/summaries.json")
 LIVE_DIR = os.path.expanduser("~/.claude/sessions")  # per-pid live registry
 BOILER = "This session is being continued from a previous conversation"
-GIST_PER_REPO = 3  # only the newest N sessions per repo get an LLM gist
+GIST_PER_REPO = 5  # only the newest N sessions per repo get an LLM gist
 GIST_PROMPT = (
     "Below is the tail end of a Claude Code working session transcript. In 1-2 "
     "sentences (max 45 words), state where the work currently stands and what is "
