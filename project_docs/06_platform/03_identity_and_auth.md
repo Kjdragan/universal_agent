@@ -133,6 +133,13 @@ under `/api/v1/ops/`).
 > gating them is transparent to the browser. A missing per-route call is a real
 > exposure: the gateway app is proxied to the public dashboard host, so an
 > ungated mutating route is internet-reachable with no credentials.
+>
+> For a **whole APIRouter** mounted on the gateway (e.g. `csi_watchlist`,
+> `csi_discord`), gate it at the mount rather than per-handler:
+> `app.include_router(router, dependencies=[Depends(_require_ops_auth)])` — one
+> guard covering every route, reusing the canonical function without the router
+> importing the gateway module. Its frontend must then call through the proxy
+> prefix (`/api/dashboard/gateway/...`), not the raw `/api/v1/...` path.
 
 ### Token model — JWT preferred, legacy bearer tolerated
 

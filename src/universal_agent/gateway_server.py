@@ -41,6 +41,7 @@ except Exception:  # pragma: no cover - degraded runtime fallback
 BASE_DIR = Path(__file__).parent.parent.parent
 from fastapi import (
     BackgroundTasks,
+    Depends,
     FastAPI,
     File,
     HTTPException,
@@ -15932,8 +15933,19 @@ try:
         router as csi_discord_watchlist_router,
     )
     from universal_agent.api.routers.csi_watchlist import router as csi_watchlist_router
-    app.include_router(csi_watchlist_router)
-    app.include_router(csi_discord_watchlist_router)
+    # Gate the whole CSI watchlist router with ops auth. These routes are
+    # outside the /api/v1/ops/* middleware, and the router itself imports no
+    # auth helper, so every route (add/delete/patch/reclassify channels &
+    # categories, plus the reads) was unauthenticated. Applying the guard at the
+    # mount reuses the canonical _require_ops_auth (single source of truth) and
+    # avoids the router importing the 37k-line gateway module. The dashboard now
+    # reaches these through the token-injecting proxy (web-ui/.../rss/page.tsx).
+    app.include_router(
+        csi_watchlist_router, dependencies=[Depends(_require_ops_auth)]
+    )
+    app.include_router(
+        csi_discord_watchlist_router, dependencies=[Depends(_require_ops_auth)]
+    )
 except Exception:
     logger.warning("Could not mount CSI watchlist router on gateway", exc_info=True)
 

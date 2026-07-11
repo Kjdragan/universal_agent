@@ -1,6 +1,6 @@
 "use client";
 // Discord message API calls → /api/dashboard/gateway/ (injects session auth)
-// CSI watchlist API calls   → /api/v1/csi/discord      (Next.js route, no auth needed)
+// CSI Discord watchlist API calls → /api/dashboard/gateway/api/v1/csi/discord (proxy injects ops auth; router now gated)
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
@@ -517,7 +517,7 @@ export default function CsiDiscordWatchlistPage() {
     setLoadingList(true);
     setListError("");
     try {
-      const r = await fetch("/api/v1/csi/discord");
+      const r = await fetch("/api/dashboard/gateway/api/v1/csi/discord");
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = (await r.json()) as WatchlistResponse;
       setServers(d.servers ?? []);
@@ -589,7 +589,7 @@ export default function CsiDiscordWatchlistPage() {
       }
     ));
     try {
-      const r = await fetch(`/api/v1/csi/discord/${encodeURIComponent(activeServerId)}/channels/${encodeURIComponent(channelId)}`, {
+      const r = await fetch(`/api/dashboard/gateway/api/v1/csi/discord/${encodeURIComponent(activeServerId)}/channels/${encodeURIComponent(channelId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ is_watched: !current }),
@@ -608,13 +608,13 @@ export default function CsiDiscordWatchlistPage() {
     setFormError("");
     try {
       if (isAddingCategory) {
-        const r = await fetch("/api/v1/csi/discord/categories", {
+        const r = await fetch("/api/dashboard/gateway/api/v1/csi/discord/categories", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: inputVal.trim() }),
         });
         if (!r.ok) throw new Error("Failed to create category");
       } else {
-        const r = await fetch("/api/v1/csi/discord/add", {
+        const r = await fetch("/api/dashboard/gateway/api/v1/csi/discord/add", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ server_id: inputVal.trim() }),
         });
@@ -632,7 +632,7 @@ export default function CsiDiscordWatchlistPage() {
   /* ── Delete server ────────────────────────────────────────────────── */
   const deleteServer = useCallback(async (serverId: string) => {
     if (!confirm("Remove this server from the watchlist?")) return;
-    await fetch(`/api/v1/csi/discord/${encodeURIComponent(serverId)}`, { method: "DELETE" });
+    await fetch(`/api/dashboard/gateway/api/v1/csi/discord/${encodeURIComponent(serverId)}`, { method: "DELETE" });
     if (activeServerId === serverId) { setActiveServerId(null); setMessages([]); }
     await loadWatchlist();
   }, [activeServerId, loadWatchlist]);
@@ -640,7 +640,7 @@ export default function CsiDiscordWatchlistPage() {
   /* ── Rename category ──────────────────────────────────────────────── */
   const renameCategory = useCallback(async (oldName: string) => {
     if (!editCategoryVal.trim() || editCategoryVal === oldName) { setEditingCategory(null); return; }
-    await fetch(`/api/v1/csi/discord/categories/${encodeURIComponent(oldName)}`, {
+    await fetch(`/api/dashboard/gateway/api/v1/csi/discord/categories/${encodeURIComponent(oldName)}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: editCategoryVal.trim() }),
     });
@@ -651,7 +651,7 @@ export default function CsiDiscordWatchlistPage() {
   /* ── Delete category ──────────────────────────────────────────────── */
   const deleteCategory = useCallback(async (name: string) => {
     if (!confirm(`Delete category "${name}"? All servers in it will also be removed.`)) return;
-    await fetch(`/api/v1/csi/discord/categories/${encodeURIComponent(name)}`, { method: "DELETE" });
+    await fetch(`/api/dashboard/gateway/api/v1/csi/discord/categories/${encodeURIComponent(name)}`, { method: "DELETE" });
     await loadWatchlist();
   }, [loadWatchlist]);
 
