@@ -1289,15 +1289,24 @@ def verify_ideation_token(task_id: str, action: str, token: str) -> bool:
 # distinct, so a gpu_demo token cannot be replayed as any other token shape.
 
 
-def _gpu_demo_payload(task_id: str, action: str) -> bytes:
-    return f"gpu_demo:{task_id}:{action}".encode("utf-8")
+# Emailed GPU-demo approval links carry a TTL so a leaked/forwarded message
+# doesn't stay actionable forever (mirrors proactive_health_notifier's
+# sign_finding_ack_token '{exp}.{sig}' shape).
+GPU_DEMO_TOKEN_TTL_SECONDS = 7 * 86400  # 7 days
 
 
-def sign_gpu_demo_token(task_id: str, action: str) -> str:
-    """HMAC-SHA256 over f"gpu_demo:{task_id}:{action}", truncated to 16 hex.
+def _gpu_demo_payload(task_id: str, action: str, exp: int) -> bytes:
+    return f"gpu_demo:{task_id}:{action}:{exp}".encode("utf-8")
 
-    action must be "approve" or "reject"; anything else returns "" so
-    the token cannot validate against a foreign action shape.
+
+def sign_gpu_demo_token(
+    task_id: str, action: str, *, ttl_seconds: int = GPU_DEMO_TOKEN_TTL_SECONDS
+) -> str:
+    """Return ``"{expires_epoch}.{hex_sig}"`` authorising a GPU-demo approve/reject.
+
+    action must be "approve" or "reject"; anything else returns "" so the token
+    cannot validate against a foreign action shape. The token EXPIRES (default
+    7 days) — the emitter passes it opaquely as the ``t=`` URL param.
     """
     secret = _ack_secret()
     if not secret:
@@ -1308,19 +1317,39 @@ def sign_gpu_demo_token(task_id: str, action: str) -> str:
     clean_id = (task_id or "").strip()
     if not clean_id:
         return ""
-    mac = hmac.new(secret, _gpu_demo_payload(clean_id, clean_action), hashlib.sha256)
-    return mac.hexdigest()[:16]
+    exp = int(datetime.now(timezone.utc).timestamp()) + int(ttl_seconds)
+    sig = hmac.new(
+        secret, _gpu_demo_payload(clean_id, clean_action, exp), hashlib.sha256
+    ).hexdigest()[:16]
+    return f"{exp}.{sig}"
 
 
 def verify_gpu_demo_token(task_id: str, action: str, token: str) -> bool:
-    """Constant-time HMAC verification for a GPU-demo approval link.  False on any error."""
-    expected = sign_gpu_demo_token(task_id, action)
-    if not expected:
+    """Constant-time HMAC verification for a GPU-demo approval link, including
+    the embedded expiry. False on any error / expired token."""
+    secret = _ack_secret()
+    if not secret:
         return False
     supplied = (token or "").strip()
-    if not supplied:
+    if "." not in supplied:
+        return False  # legacy (non-expiring) tokens are no longer accepted
+    exp_str, _, sig = supplied.partition(".")
+    try:
+        exp = int(exp_str)
+    except (TypeError, ValueError):
         return False
-    return hmac.compare_digest(expected, supplied)
+    if exp < int(datetime.now(timezone.utc).timestamp()):
+        return False  # expired
+    clean_action = (action or "").strip().lower()
+    if clean_action not in {"approve", "reject"}:
+        return False
+    clean_id = (task_id or "").strip()
+    if not clean_id:
+        return False
+    expected = hmac.new(
+        secret, _gpu_demo_payload(clean_id, clean_action, exp), hashlib.sha256
+    ).hexdigest()[:16]
+    return hmac.compare_digest(expected, sig.strip())
 
 
 def _digest_pause_payload(hours: int) -> bytes:

@@ -104,9 +104,13 @@ for `ollama`, `gguf`, `llama.cpp`, `localhost:11434`, etc.),
 `proactive_tutorial_builds.py::classify_and_gate_gpu_demo` parks the task
 (`agent_ready=False` so CODIE never auto-claims it), stamps
 `metadata.gpu_approval.state="pending"`, and emails Kevin an HMAC-signed approve
-link. Approving hits `gateway_server.py::gpu_demo_approve_get` on the always-on
+link. The link token is `{exp}.{sig}` and **expires** (default 7 days,
+`GPU_DEMO_TOKEN_TTL_SECONDS`) so a leaked/forwarded email doesn't stay actionable
+forever. Approving hits `gateway_server.py::gpu_demo_approve_get` on the always-on
 VPS gateway, which records `state="approved"` and prints the
-`/gpu-demo-build <task_id>` command. Kevin runs that **interactively** on the
+`/gpu-demo-build <task_id>` command. The endpoint is **single-use**: once a
+terminal state (`approved`/`rejected`/`built`) is recorded, a replayed link shows
+the standing decision instead of flipping it. Kevin runs that **interactively** on the
 desktop; it provisions via the skill, builds the demo locally, and finalizes the
 task. Gated by `feature_flags.py::gpu_demo_desktop_approval_enabled`
 (`UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED`, enabled in prod 2026-06-22).
