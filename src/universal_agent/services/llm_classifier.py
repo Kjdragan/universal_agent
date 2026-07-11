@@ -311,6 +311,13 @@ def _coerce_score(raw: Any) -> Optional[float]:
     return max(0.0, min(100.0, score))
 
 
+# NOTE(json-consolidation, 2026-07-11): deliberately NOT migrated to
+# utils.json_utils.extract_json_payload. This parser's raw_decode scan
+# recovers the FIRST valid object even when leading prose contains a stray
+# brace ("Note {ignore me}: {...}"); the canonical parser's greedy
+# first-{-to-last-} regex layer silently returns a corrupted dict for that
+# input (verified 2026-07-11), and callers here rely on the strict
+# json.JSONDecodeError contract pinned by tests. Keep this implementation.
 def _parse_json_response(raw: str) -> dict[str, Any]:
     """Parse JSON from an LLM response, tolerating fencing and trailing junk.
 

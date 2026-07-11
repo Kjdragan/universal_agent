@@ -37,6 +37,7 @@ import time
 from typing import Any, Optional
 
 from universal_agent.services import proactive_artifacts
+from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.services.email_tags import ActionTag, KindTag
 
 logger = logging.getLogger(__name__)
@@ -994,20 +995,18 @@ def _build_llm_prompt(
 
 
 def _parse_llm_json(raw: str) -> dict[str, Any]:
-    text = (raw or "").strip()
-    # Tolerate markdown code-fence wrapping.
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
-    text = text.strip()
+    """Parse the LLM's JSON via the canonical robust parser.
+
+    Consolidated onto ``utils.json_utils.extract_json_payload`` (shared
+    5-layer parser). Local contract kept exactly: NEVER raises — returns
+    ``{}`` on any unparseable/non-object payload, because the caller feeds
+    the result straight into ``.get()`` chains with string fallbacks.
+    """
     try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-    return {}
+        payload = extract_json_payload(raw)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _fallback_title(
