@@ -18411,6 +18411,7 @@ _ALLOWED_EXTENSIONS = _TEXT_EXTENSIONS | _IMAGE_EXTENSIONS
 @app.post("/api/v1/sessions/{session_id}/upload")
 async def upload_session_file(
     session_id: str,
+    request: Request,
     file: UploadFile = File(...),
 ):
     """Upload a file to a run workspace for chat attachment.
@@ -18420,6 +18421,12 @@ async def upload_session_file(
     Image files (.png, .jpg, …) are saved and their path is returned
     so the agent can reference them via ZAI Vision MCP tools.
     """
+    # Auth: this endpoint auto-creates a workspace and returns file content the
+    # frontend injects into the session prompt, so an unauthenticated caller
+    # could fill disk or inject a prompt into another session. The dashboard
+    # reaches it through the token-injecting proxy (see the GATEWAY_API_BASE
+    # switch in web-ui/app/page.tsx), which supplies the ops token.
+    _require_session_api_auth(request)
     safe_id = _sanitize_session_id_or_400(session_id)
     session_root = WORKSPACES_DIR / safe_id
     # Auto-create workspace if it doesn't exist yet (user may upload before agent runs)
