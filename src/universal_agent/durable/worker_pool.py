@@ -175,8 +175,8 @@ class Worker:
                 await asyncio.sleep(self.config.heartbeat_interval_seconds)
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Worker {self.config.worker_id} heartbeat error: {e}")
+            except Exception:
+                logger.exception("Worker %s heartbeat error", self.config.worker_id)
                 await asyncio.sleep(5)
 
     async def _process_loop(self) -> None:
@@ -303,7 +303,7 @@ class Worker:
                                 logger.warning(f"Worker {self.config.worker_id} failed run {run_id}")
                         
                         except Exception as e:
-                            logger.error(f"Worker {self.config.worker_id} error processing run {run_id}: {e}")
+                            logger.exception("Worker %s error processing run %s", self.config.worker_id, run_id)
                             update_run_status(self.conn, run_id, "failed")
                             if "attempt_id" in locals() and attempt_id:
                                 update_run_attempt(
@@ -339,8 +339,8 @@ class Worker:
             
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Worker {self.config.worker_id} process loop error: {e}")
+            except Exception:
+                logger.exception("Worker %s process loop error", self.config.worker_id)
                 await asyncio.sleep(5)
 
 
@@ -484,8 +484,8 @@ class WorkerPoolManager:
             
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Worker pool monitor error: {e}")
+            except Exception:
+                logger.exception("Worker pool monitor error")
                 await asyncio.sleep(10)
 
     async def _default_run_handler(self, run_id: str, workspace_dir: str) -> bool:
@@ -529,8 +529,8 @@ class WorkerPoolManager:
             logger.info(f"Run {run_id} completed: {result.tool_calls} tool calls")
             return True
         
-        except Exception as e:
-            logger.error(f"Run handler error for {run_id}: {e}")
+        except Exception:
+            logger.exception("Run handler error for %s", run_id)
             return False
 
     def get_pool_stats(self) -> Dict[str, Any]:

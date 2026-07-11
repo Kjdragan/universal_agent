@@ -417,3 +417,69 @@ class TestQueueRun:
             Path("/tmp/worker-pool-run/attempts/001/attempt_meta.json").read_text(encoding="utf-8")
         )
         assert attempt_meta["status"] == "completed"
+
+
+@pytest.mark.skipif(not WORKER_POOL_AVAILABLE, reason="Worker pool module not available")
+class TestWorkerPoolErrorLogging:
+    """Error-path logging in except blocks must preserve the traceback.
+
+    Worker-pool except handlers previously used ``logger.error(f"...: {e}")``,
+    which interpolates the exception's ``str()`` but drops the traceback and
+    defeats lazy logging. These tests pin the contract that an unexpected
+    exception in a worker loop is logged at ERROR level with ``exc_info``
+    attached (via ``logger.exception``) so operators can diagnose the failure.
+    """
+
+    @pytest.mark.asyncio
+    async def test_process_loop_logs_traceback_when_run_handler_raises(self, tmp_path, caplog):
+        """A failing run_handler must produce an ERROR record with exc_info."""
+        import logging
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON;")
+        ensure_schema(conn)
+
+        workspace_dir = str(tmp_path / "worker-pool-fail")
+        queue_run(
+            conn,
+            run_id="job_fail",
+            prompt="Process this",
+            workspace_dir=workspace_dir,
+        )
+
+        config = WorkerConfig(
+            worker_id="worker_fail",
+            poll_interval_seconds=0,
+            heartbeat_interval_seconds=60,
+        )
+        worker_holder: dict = {}
+
+        async def failing_handler(run_id: str, workspace_dir: str) -> bool:
+            # Stop the outer loop after this run so the test terminates.
+            worker_holder["worker"]._shutdown_event.set()
+            raise RuntimeError("boom from handler")
+
+        worker = Worker(config, conn, failing_handler)
+        worker_holder["worker"] = worker
+
+        with (
+            caplog.at_level(logging.ERROR, logger="universal_agent.durable.worker_pool"),
+            patch("universal_agent.durable.worker_pool.ensure_run_workspace_scaffold"),
+        ):
+            await asyncio.wait_for(worker._process_loop(), timeout=2)
+
+        error_records = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.ERROR and "job_fail" in r.getMessage()
+        ]
+        assert error_records, "expected an ERROR log record mentioning the failed run"
+        rec = error_records[-1]
+        assert "worker_fail" in rec.getMessage()
+        # The key contract: the except-block log must carry the traceback.
+        assert rec.exc_info is not None, (
+            "except-block log must attach exc_info (use logger.exception, not logger.error)"
+        )
+        assert rec.exc_info[0] is RuntimeError
+        assert "boom" in str(rec.exc_info[1])
