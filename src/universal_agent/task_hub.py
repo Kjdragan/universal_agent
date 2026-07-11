@@ -2752,6 +2752,54 @@ def claim_next_dispatch_tasks(
         resolved_workflow_run_id = str(workflow_run_id or "").strip() or None
         resolved_workflow_attempt_id = str(workflow_attempt_id or "").strip() or None
         resolved_workspace_dir = str(workspace_dir or "").strip() or None
+
+        metadata = dict(current.get("metadata") or {})
+        dispatch_meta = dict(metadata.get("dispatch") or {})
+        dispatch_meta.update(
+            {
+                "active_assignment_id": assignment_id,
+                "active_agent_id": agent_id,
+                "active_provider_session_id": resolved_provider_session_id,
+                "active_workspace_dir": resolved_workspace_dir,
+                "active_workflow_run_id": resolved_workflow_run_id,
+                "active_workflow_attempt_id": resolved_workflow_attempt_id,
+                "last_assignment_started_at": _now_iso(),
+            }
+        )
+        metadata["dispatch"] = dispatch_meta
+
+        # ── Atomic claim gate ──
+        # Flip status to in_progress ONLY if it is still open/review. The
+        # get_item read above is a fast-path filter; THIS guarded UPDATE is the
+        # authoritative claim. connect_runtime_db is autocommit and SQLite
+        # serializes writers, so a concurrent claimer (e.g. a second process on
+        # the same DB) that already flipped the row makes rowcount 0 here — and
+        # we skip instead of double-claiming. There is no UNIQUE(task_id) on
+        # task_hub_assignments, so this status guard is the sole atomic gate;
+        # the assignment/run rows are only written AFTER the claim is won, so a
+        # loser never leaves a phantom assignment behind.
+        claim_cur = conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? "
+            "WHERE task_id=? AND status IN (?, ?)",
+            (
+                TASK_STATUS_IN_PROGRESS,
+                "seized",
+                _json_dumps(metadata),
+                _now_iso(),
+                task_id,
+                TASK_STATUS_OPEN,
+                TASK_STATUS_REVIEW,
+            ),
+        )
+        if claim_cur.rowcount != 1:
+            logger.info(
+                "⏭️ Skipping claim of %s — lost the atomic claim race "
+                "(status no longer open/review)",
+                task_id,
+            )
+            continue
+
+        # Claim won — now durably record the assignment + run for this attempt.
         conn.execute(
             """
             INSERT INTO task_hub_assignments (
@@ -2791,24 +2839,6 @@ def claim_next_dispatch_tasks(
                 task_id,
                 assignment_id,
             )
-        metadata = dict(current.get("metadata") or {})
-        dispatch_meta = dict(metadata.get("dispatch") or {})
-        dispatch_meta.update(
-            {
-                "active_assignment_id": assignment_id,
-                "active_agent_id": agent_id,
-                "active_provider_session_id": resolved_provider_session_id,
-                "active_workspace_dir": resolved_workspace_dir,
-                "active_workflow_run_id": resolved_workflow_run_id,
-                "active_workflow_attempt_id": resolved_workflow_attempt_id,
-                "last_assignment_started_at": _now_iso(),
-            }
-        )
-        metadata["dispatch"] = dispatch_meta
-        conn.execute(
-            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
-            (TASK_STATUS_IN_PROGRESS, "seized", _json_dumps(metadata), _now_iso(), task_id),
-        )
         _record_evaluation(
             conn,
             task_id=task_id,
