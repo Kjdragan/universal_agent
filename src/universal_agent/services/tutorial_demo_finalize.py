@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+from universal_agent.wiki.core import _slugify as _base_slugify
 import logging
 import os
 from pathlib import Path
@@ -45,8 +46,14 @@ def _demos_root() -> Path:
 
 
 def _slugify(text: str, *, fallback: str) -> str:
-    slug = _SLUG_RE.sub("-", str(text or "").lower()).strip("-")[:40].strip("-")
-    return slug or fallback
+    # Canonical charset/case work lives in wiki.core._slugify; only the
+    # truncation bound is local. The 40-char bound is a CROSS-MODULE contract:
+    # directed_demo_builds and tutorial_demo_finalize must produce
+    # byte-identical slugs for the same input, because vp/worker_loop.py's
+    # legacy fallback recomputes a directed-demo dir name with the
+    # proactive-lane function. Change both together or not at all.
+    base = _base_slugify(str(text or ""), fallback=fallback)
+    return base[:40].strip("-") or fallback
 
 
 def proactive_demo_slug(video_title: str) -> str:

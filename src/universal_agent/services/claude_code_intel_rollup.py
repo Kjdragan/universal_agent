@@ -21,6 +21,7 @@ from universal_agent.services.claude_code_intel import (
     _parse_json_object,
     resolve_lane_root,
 )
+from universal_agent.wiki.core import _slugify
 
 
 def _env_int(name: str, default: int) -> int:
@@ -149,12 +150,6 @@ def _safe_markdown(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except Exception:
         return ""
-
-
-def _slugify(value: str, *, fallback: str) -> str:
-    text = re.sub(r"[^a-z0-9]+", "-", value.strip().lower())
-    text = re.sub(r"-{2,}", "-", text).strip("-")
-    return text or fallback
 
 
 def _timestamp_slug() -> str:

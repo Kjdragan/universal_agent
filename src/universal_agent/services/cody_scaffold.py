@@ -37,6 +37,7 @@ from universal_agent.services.demo_workspace import (
     WorkspaceProvisionResult,
     provision_demo_workspace,
 )
+from universal_agent.wiki.core import _slugify
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +89,6 @@ class VaultEntity:
         return [str(t).strip() for t in raw if str(t).strip()]
 
 
-def _slugify(value: str, fallback: str = "entity") -> str:
-    text = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
-    return text or fallback
-
-
 def find_vault_entity(slug_or_name: str, vault_root: Path) -> Path | None:
     """Locate an entity page. Accepts either a slug or a human title."""
     entities_dir = vault_root / "entities"
@@ -104,7 +100,7 @@ def find_vault_entity(slug_or_name: str, vault_root: Path) -> Path | None:
     direct = entities_dir / f"{raw}.md"
     if direct.exists():
         return direct
-    slug = _slugify(raw)
+    slug = _slugify(raw, fallback="entity")
     direct_slug = entities_dir / f"{slug}.md"
     if direct_slug.exists():
         return direct_slug

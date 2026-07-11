@@ -25,13 +25,15 @@ import re
 import sys
 
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+from universal_agent.wiki.core import _slugify as _base_slugify
 from universal_agent.services.cody_dispatch import dispatch_cody_demo_task
 from universal_agent.services.demo_workspace import provision_demo_workspace
 
 
 def _slugify(text: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", text.strip().lower()).strip("-")
-    return (s or "direct-demo")[:48]
+    # Canonical charset/case work via wiki.core._slugify; local 48-char bound
+    # (standalone CLI, no consumer shares this bound).
+    return _base_slugify(text, fallback="direct-demo")[:48]
 
 
 def _default_brief(feature: str, endpoint_required: str, cody_mode: str) -> str:
