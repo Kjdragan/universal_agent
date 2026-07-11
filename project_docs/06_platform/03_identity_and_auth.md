@@ -124,6 +124,16 @@ factory, etc. — ~150 `_require_ops_auth(request)` call sites in `gateway_serve
 plus a blanket middleware `enforce_ops_auth_http_surface` that gates every path
 under `/api/v1/ops/`).
 
+> **State-mutating endpoints OUTSIDE `/api/v1/ops/` must call `_require_ops_auth`
+> per-route** — the middleware only covers the `/api/v1/ops/` prefix, so anything
+> else (e.g. the `/api/v1/dashboard/csi/*` digest send/delete/clear, `purge`, and
+> specialist-loop action/triage/cleanup endpoints) is unauthenticated unless the
+> handler calls the guard itself. These are reached from the UI through the
+> dashboard proxy (`/api/dashboard/gateway/*`), which injects the ops token, so
+> gating them is transparent to the browser. A missing per-route call is a real
+> exposure: the gateway app is proxied to the public dashboard host, so an
+> ungated mutating route is internet-reachable with no credentials.
+
 ### Token model — JWT preferred, legacy bearer tolerated
 
 `validate_ops_token(token, *, jwt_secret, legacy_token, allow_legacy)` returns an
