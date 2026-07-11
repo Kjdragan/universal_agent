@@ -144,7 +144,7 @@ a task type. Owner: [`02_execution_core/02_task_hub.md`](../02_execution_core/02
 | `approval` | canonical | Operator-approval-gated tasks | `services/dispatch_service.py::dispatch_on_approval` |
 | `mission_control_card_dispatch` | canonical | Operator dispatches a Mission Control card to Cody | `gateway_server.py::dashboard_mission_control_dispatch_to_codie` |
 | `dashboard_quick_add` / `system_command` | canonical | Operator quick-add / directives (e.g. `schedule_task`) | `task_hub.py::_is_system_schedule_task` |
-| `calendar` | active_secondary | Upcoming Google Calendar events → tasks | `services/calendar_task_bridge.py::CalendarTaskBridge` |
+| `calendar` | active_secondary | Upcoming Google Calendar events → tasks. **Code-complete but NOT wired in production:** `CalendarTaskBridge` is fully built + unit-tested behind `UA_CALENDAR_BRIDGE_ENABLED`, but has **no non-test caller** — nothing constructs it or runs its sync, so calendar events do **not** currently flow into Task Hub. Wiring it up is the remaining work. | `services/calendar_task_bridge.py::CalendarTaskBridge` |
 | `cody_demo_task` | active_secondary | Cody picks up a scaffolded demo workspace | `services/cody_dispatch.py::dispatch_cody_demo_task` |
 | `cody_scaffold_request` / `claude_code_update` / `claude_code_kb_update` | active_secondary | ClaudeDevs X-intel artifacts; `cody_scaffold_request` is the canonical demo-scaffold request | `services/claude_code_intel.py` |
 | `reflection` | active_secondary | Idle-only autonomous ideation | `services/reflection_engine.py::build_reflection_context` |
