@@ -1926,7 +1926,7 @@ class AgentMailService:
                     sender_email, subject, message_id,
                 )
                 if message_id:
-                    self._claim_seen_message_id(message_id)
+                    await self._claim_seen_message_id_async(message_id)
                 return
 
             # ── Suppress VP FYI CC emails ──
@@ -1956,7 +1956,7 @@ class AgentMailService:
                     message_id=message_id,
                 )
                 if message_id:
-                    self._claim_seen_message_id(message_id)
+                    await self._claim_seen_message_id_async(message_id)
                 return
 
             # ── Drop operator test-send "(ignore)" emails ──
@@ -1969,11 +1969,11 @@ class AgentMailService:
                     sender_email, subject,
                 )
                 if message_id:
-                    self._claim_seen_message_id(message_id)
+                    await self._claim_seen_message_id_async(message_id)
                 return
 
             if message_id:
-                claimed_message = self._claim_seen_message_id(message_id)
+                claimed_message = await self._claim_seen_message_id_async(message_id)
                 if not claimed_message:
                     logger.debug("📧 Skipping duplicate inbound message_id=%s", message_id)
                     return
@@ -2487,7 +2487,11 @@ class AgentMailService:
                     f"Task ID: {task_id}\n"
                     f"Thread: {thread_id}"
                 )
-                result = subprocess.run(
+                # Offload the blocking gws CLI call to a thread so a slow
+                # calendar API round-trip (up to 15s) can't stall the shared
+                # AgentMail event loop (inbox poll, websocket, trusted queue).
+                result = await asyncio.to_thread(
+                    subprocess.run,
                     [
                         "gws", "calendar", "events", "create",
                         "--calendar-id", "primary",
@@ -3990,7 +3994,7 @@ class AgentMailService:
                     getattr(msg, "labels", None), getattr(msg, "to", None),
                 )
             ):
-                self._claim_seen_message_id(message_id)
+                await self._claim_seen_message_id_async(message_id)
                 continue
             # Filter automated / bounce / DSN emails in the polling path too.
             subject = str(getattr(msg, "subject", "") or "")
@@ -3999,7 +4003,7 @@ class AgentMailService:
                     "📧 Poll: suppressing automated/bounce email from=%s subject=%r",
                     sender_email, subject,
                 )
-                self._claim_seen_message_id(message_id)
+                await self._claim_seen_message_id_async(message_id)
                 continue
             hydrated_msg = msg
             try:
@@ -4286,17 +4290,25 @@ class AgentMailService:
             logger.warning("📧 SQLite seen_messages check failed: %s", exc)
         return False
 
-    def _claim_seen_message_id(self, message_id: str) -> bool:
+    def _claim_seen_message_id_in_memory(self, message_id: str) -> Optional[str]:
+        """Fast, synchronous in-memory dedup claim. Returns the cleaned id when
+        newly claimed, or None when empty/already-seen. Runs on the caller's
+        thread (no await) so the check-and-append stays atomic."""
         clean_id = str(message_id or "").strip()
         if not clean_id:
-            return False
+            return None
         if self._seen_message_id(clean_id):
-            return False
+            return None
         self._seen_message_ids.append(clean_id)
         self._seen_message_id_set.add(clean_id)
         maxlen = self._seen_message_ids.maxlen
         if maxlen is not None and len(self._seen_message_id_set) > maxlen:
             self._seen_message_id_set = set(self._seen_message_ids)
+        return clean_id
+
+    def _persist_seen_message_id(self, clean_id: str) -> None:
+        """Blocking DB persist with lock-retry. Safe to run in a worker thread;
+        the time.sleep here must never run on the event loop."""
             
         try:
             self._ensure_queue_schema()
@@ -4317,6 +4329,24 @@ class AgentMailService:
             logger.error("📧 SQLite seen_messages insert failed permanently: %s", exc)
             self._release_seen_message_id(clean_id)
             raise RuntimeError(f"Failed to record seen message id in db: {exc}")
+
+    def _claim_seen_message_id(self, message_id: str) -> bool:
+        """Synchronous claim (in-memory dedup + blocking DB persist). Prefer
+        _claim_seen_message_id_async in async contexts so the DB retry's
+        time.sleep runs off the event loop."""
+        clean_id = self._claim_seen_message_id_in_memory(message_id)
+        if clean_id is None:
+            return False
+        self._persist_seen_message_id(clean_id)
+        return True
+
+    async def _claim_seen_message_id_async(self, message_id: str) -> bool:
+        """Async claim: fast in-memory dedup on the loop thread, blocking DB
+        persist offloaded to a worker thread so it can't stall the event loop."""
+        clean_id = self._claim_seen_message_id_in_memory(message_id)
+        if clean_id is None:
+            return False
+        await asyncio.to_thread(self._persist_seen_message_id, clean_id)
         return True
 
     def _release_seen_message_id(self, message_id: str) -> None:
