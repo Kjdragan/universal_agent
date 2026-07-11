@@ -315,6 +315,7 @@ class ReclaimReport:
     error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the cleanup outcome for logging / run records."""
         return {
             "scratch_dir": str(self.scratch_dir),
             "demo_id": self.demo_id,

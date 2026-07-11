@@ -100,6 +100,7 @@ async def _run() -> None:
 
 
 def main() -> None:
+    """systemd timer entrypoint: run one mission-control sweep cycle."""
     logging.basicConfig(
         level=os.getenv("UA_MISSION_CONTROL_SWEEPER_LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",

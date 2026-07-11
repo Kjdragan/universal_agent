@@ -6,6 +6,7 @@ Tracks per-message token counts and truncates oldest pairs when over threshold.
 """
 
 import os
+from typing import Any
 
 import logfire
 
@@ -42,7 +43,7 @@ class MessageHistory:
         self._system_prompt_tokens = system_prompt_tokens
         self._truncation_count = 0
     
-    def add_message(self, role: str, content, usage=None) -> None:
+    def add_message(self, role: str, content: str | list, usage: Any = None) -> None:
         """
         Add message and track tokens from API response.
         

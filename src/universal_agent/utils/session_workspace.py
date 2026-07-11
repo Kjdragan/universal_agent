@@ -16,6 +16,7 @@ CURRENT_WORKSPACE_MARKER_FILENAMES = (
 
 
 def safe_slug(text: str, *, fallback: str = "run", max_len: int = 80) -> str:
+    """Filesystem-safe slug (underscore separator) for workspace dir names."""
     s = (text or "").strip()
     if not s:
         return fallback

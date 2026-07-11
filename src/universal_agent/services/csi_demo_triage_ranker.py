@@ -23,6 +23,8 @@ from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
+import sqlite3
+from pathlib import Path
 from typing import Any, Iterator
 import uuid
 
@@ -205,8 +207,8 @@ def _parse_lines(raw: str) -> list[dict[str, Any]]:
 
 def run_ranking(
     *,
-    conn=None,
-    artifacts_root=None,
+    conn: sqlite3.Connection | None = None,
+    artifacts_root: Path | None = None,
     rescore_after_hours: float = 24.0,
     max_candidates: int = 60,
 ) -> RankingResult:

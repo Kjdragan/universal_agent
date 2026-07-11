@@ -121,6 +121,7 @@ class PollerResult:
     dry_run: bool = False
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the poll outcome for logging / run records."""
         return {
             "inspected_channels": self.inspected_channels,
             "rss_fetch_failures": self.rss_fetch_failures,
