@@ -67,6 +67,44 @@ def _isolate_scratch_root(tmp_path_factory):
             os.environ["UA_SCRATCH_ARCHIVE_ROOT"] = prev_archive
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_outbound_channels():
+    """Never let a test send REAL email/messages to the operator.
+
+    Same systemic-backstop pattern as ``_isolate_scratch_root``, for outbound
+    channels. On 2026-07-11 a desktop test run (developer shells here load
+    real Infisical secrets into the environment) drove the real notification
+    pipeline: five "[ERROR] ... unit_test_raiser / heartbeat_service failed"
+    fixture emails landed in the operator's Gmail via Simone's live AgentMail
+    inbox. CI is already green with none of these vars present, so scrubbing
+    them cannot break any gated test; tests that exercise send paths set fake
+    keys themselves via monkeypatch (which runs after this session fixture).
+
+    - AGENTMAIL_API_KEY removed -> AgentMailService refuses to start a real
+      client (services/agentmail_service.py reads it at client init).
+    - UA_AGENTMAIL_GMAIL_FALLBACK=0 -> the gws Gmail-CLI fallback stays off
+      even where ~/.config/gws holds live desktop credentials.
+    - TELEGRAM_BOT_TOKEN removed -> the bot adapters cannot push to the
+      operator's phone.
+    - UA_INFISICAL_ENABLED=0 -> initialize_runtime_secrets() cannot re-fetch
+      the scrubbed keys from Infisical mid-test.
+    """
+    removed = {}
+    for key in ("AGENTMAIL_API_KEY", "TELEGRAM_BOT_TOKEN"):
+        removed[key] = os.environ.pop(key, None)
+    forced = {"UA_AGENTMAIL_GMAIL_FALLBACK": "0", "UA_INFISICAL_ENABLED": "0"}
+    prev_forced = {key: os.environ.get(key) for key in forced}
+    os.environ.update(forced)
+    try:
+        yield
+    finally:
+        for key, value in {**removed, **prev_forced}.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 @pytest.fixture
 def temp_workspace(tmp_path):
     """Create temporary workspace directory for tests."""
