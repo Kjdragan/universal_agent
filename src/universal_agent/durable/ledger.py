@@ -250,15 +250,22 @@ class ToolCallLedger:
                     (idempotency_key,),
                 ).fetchone()
                 if existing:
+                    # Return the already-persisted row so the caller can dedupe
+                    # against its real cached response. Read columns by name
+                    # (row_factory=sqlite3.Row) — positional indices are a
+                    # landmine here because SELECT * follows the physical table
+                    # order and silently mismaps status/idempotency_key/
+                    # response_ref. Second element is the idempotency_key
+                    # string, matching the contract of every other return path.
                     return (
                         LedgerReceipt(
-                            tool_call_id=existing[0],
-                            status=existing[14],
-                            response_ref=None,
-                            external_correlation_id=None,
-                            idempotency_key=existing[13],
+                            tool_call_id=existing["tool_call_id"],
+                            status=existing["status"],
+                            response_ref=existing["response_ref"],
+                            external_correlation_id=existing["external_correlation_id"],
+                            idempotency_key=existing["idempotency_key"],
                         ),
-                        False,
+                        idempotency_key,
                     )
             elif "foreign key" in str(e).lower():
                  # Handle Missing Step ID (FK Constraint): Log and return phantom receipt
@@ -266,6 +273,13 @@ class ToolCallLedger:
                  self.logger.debug("ledger_insert_fk_phantom run_id=%s step_id=%s error=%s", run_id, step_id, e)
                  # Return a "success" receipt that isn't actually in DB to allows process to continue
                  # This sacrifices auditability for stability during crashes/shutdowns
+                 # Phantom receipt (not persisted): execution proceeds because
+                 # response_ref is None (the caller's cache check treats an
+                 # empty cached result as "retry"). Second element is the
+                 # idempotency_key string per the return contract — returning a
+                 # bool here previously leaked ``True`` into
+                 # ToolDecision.idempotency_key and, via
+                 # _inject_provider_idempotency, into provider ``client_request_id``.
                  return (
                      LedgerReceipt(
                          tool_call_id=tool_call_id,
@@ -274,7 +288,7 @@ class ToolCallLedger:
                          external_correlation_id=None,
                          idempotency_key=idempotency_key,
                      ),
-                     True, # Treat as "new" so we execute it
+                     idempotency_key,
                  )
             
             # Re-raise other integrity errors

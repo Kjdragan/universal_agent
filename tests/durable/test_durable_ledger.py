@@ -172,6 +172,65 @@ def test_prepare_allow_duplicate_creates_new_row():
     assert row["status"] == "prepared"
 
 
+def test_unique_race_branch_returns_correctly_mapped_receipt():
+    """Regression: the UNIQUE-constraint race branch must surface the existing
+    row's real status/response_ref/idempotency_key (read by column name), and
+    return the idempotency_key *string* as the second tuple element.
+
+    The prior code read ``existing[14]``/``existing[13]`` positionally against
+    ``SELECT *`` and hardcoded ``response_ref=None``/returned ``False`` — which
+    swapped status<->idempotency_key, dropped the cached response (defeating
+    dedupe of duplicate side effects), and leaked a bool into the provider
+    idempotency token. Every assertion below flips on that bug.
+    """
+    conn = _setup_conn()
+    run_id = "run-race"
+    step_id = "step-race"
+    _insert_run_and_step(conn, run_id, step_id)
+
+    ledger = ToolCallLedger(conn)
+    tool_input = {"to": "person@example.com", "subject": "Race"}
+
+    # First prepare persists a row (status "prepared"), returns no receipt.
+    receipt, idem_key = ledger.prepare_tool_call(
+        tool_call_id="tool-race-1",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="GMAIL_SEND_EMAIL",
+        tool_namespace="composio",
+        tool_input=tool_input,
+    )
+    assert receipt is None
+
+    # Simulate the racing peer having advanced the row: a real response_ref and
+    # a non-"succeeded" status (so the pre-check short-circuit does NOT fire and
+    # the second prepare falls into the UNIQUE-constraint race branch).
+    conn.execute(
+        "UPDATE tool_calls SET status = ?, response_ref = ? WHERE idempotency_key = ?",
+        ("running", "cached-response-payload", idem_key),
+    )
+    conn.commit()
+
+    # Second prepare with identical args → same idempotency_key → UNIQUE
+    # violation → race branch.
+    receipt2, key2 = ledger.prepare_tool_call(
+        tool_call_id="tool-race-2",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="GMAIL_SEND_EMAIL",
+        tool_namespace="composio",
+        tool_input=tool_input,
+    )
+    assert receipt2 is not None
+    # Columns mapped by name, not by physical offset:
+    assert receipt2.status == "running"
+    assert receipt2.response_ref == "cached-response-payload"
+    assert receipt2.idempotency_key == idem_key
+    # Second element is the key string, not a bool:
+    assert key2 == idem_key
+    assert isinstance(key2, str)
+
+
 def test_mark_abandoned_on_resume_updates_status():
     conn = _setup_conn()
     run_id = "run-2"
