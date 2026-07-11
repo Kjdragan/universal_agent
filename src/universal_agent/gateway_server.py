@@ -22880,6 +22880,24 @@ async def gpu_demo_approve_get(task_id: str, a: str = "", t: str = ""):
             gpu_approval = meta.get("gpu_approval")
             if not isinstance(gpu_approval, dict):
                 gpu_approval = {}
+            # Single-use: if a terminal decision was already recorded, do NOT let
+            # a replayed link (e.g. an old 'approve' clicked after the operator
+            # later 'reject'ed via the dashboard) flip it. Show the standing
+            # decision instead of overwriting it.
+            _existing_state = str(gpu_approval.get("state") or "").strip().lower()
+            if _existing_state in {"approved", "rejected", "built"}:
+                _when = str(gpu_approval.get("approved_at") or "").strip()
+                return HTMLResponse(
+                    content=_brief_chrome(
+                        "Already decided",
+                        f"<p>This GPU demo build was already "
+                        f"<b>{_existing_state}</b>"
+                        + (f" on <code>{_when}</code>" if _when else "")
+                        + ". Use the dashboard to change it.</p>",
+                        status_color="#0969da",
+                    ),
+                    status_code=200,
+                )
             # Map the click action to the canonical lifecycle state. The desktop
             # build path (finalize_desktop_gpu_demo) and the /gpu-demo-build
             # command both gate on state == "approved" / "rejected" — NOT the raw
