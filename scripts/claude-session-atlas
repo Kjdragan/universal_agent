@@ -843,12 +843,21 @@ def refresh_http():
         env.setdefault("DISPLAY", ":0")
         env.setdefault("DBUS_SESSION_BUS_ADDRESS",
                        "unix:path=/run/user/%d/bus" % os.getuid())
-        subprocess.Popen(
+        respond(b"200 OK", b"launched on the desktop")
+        try:  # let the browser go before the terminal handshake
+            os.close(0)
+            os.close(1)
+        except Exception:
+            pass
+        log = open("/tmp/claude-session-atlas.refresh.log", "ab")
+        p = subprocess.Popen(
             ["gnome-terminal", "--working-directory", cwd, "--", "bash", "-ic",
              "%s --resume %s; exec bash -i" % (launcher, sid)],
-            env=env, start_new_session=True,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        respond(b"200 OK", b"launched on the desktop")
+            env=env, start_new_session=True, stdout=log, stderr=log)
+        # exiting immediately would let systemd kill the unit cgroup while the
+        # terminal client is still mid-D-Bus-handshake — wait for the handoff
+        # (the window's shell lives in gnome-terminal-server's unit, not ours)
+        p.wait()
         return 0
 
     lock = open("/tmp/claude-session-atlas.refresh.lock", "w")

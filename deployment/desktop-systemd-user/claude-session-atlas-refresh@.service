@@ -7,3 +7,4 @@ StandardInput=socket
 StandardOutput=socket
 StandardError=journal
 TimeoutStartSec=600
+KillMode=process
