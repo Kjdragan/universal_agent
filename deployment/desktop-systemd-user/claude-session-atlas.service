@@ -3,5 +3,5 @@ Description=Claude session atlas — regenerate + publish the living session map
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -lc '/home/kjdragan/lrepos/universal_agent/scripts/claude-session-atlas --publish'
-TimeoutStartSec=300
+ExecStart=/bin/bash -lc '/home/kjdragan/.local/bin/claude-session-atlas --publish'
+TimeoutStartSec=600

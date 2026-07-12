@@ -2,7 +2,7 @@
 Description=Claude session atlas refresh handler (per-connection, socket-activated)
 
 [Service]
-ExecStart=/home/kjdragan/lrepos/universal_agent/scripts/claude-session-atlas --refresh-http
+ExecStart=/home/kjdragan/.local/bin/claude-session-atlas --refresh-http
 StandardInput=socket
 StandardOutput=socket
 StandardError=journal
