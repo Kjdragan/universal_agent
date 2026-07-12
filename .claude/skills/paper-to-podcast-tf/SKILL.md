@@ -230,9 +230,12 @@ Phase A — Paper Discovery (LOCAL INDEX FIRST — zero live search calls):
 
 Phase B — NotebookLM Content Generation (via the `nlm` CLI — see Required Capabilities):
 0. RESUME CHECK (deploy-restart recovery — do this BEFORE creating anything).
-   Look for `.nlm_resume.json` in the workspace root. If it exists, parse it, and
-   if its `status` is not `"done"` AND `run_started_at` is within the last 24
-   hours:
+   Run `PYTHONPATH=/opt/universal_agent/src /opt/universal_agent/.venv/bin/python
+   -m universal_agent.services.nlm_resume_check` from the workspace root. It
+   prints ONE verdict line and owns the adopt-vs-fresh decision — do NOT parse
+   `.nlm_resume.json` or apply the status/24h rules yourself. If it prints
+   `FRESH: ...`, follow any cleanup it names and proceed to step 1 with today's
+   topic. If it prints `RESUME: ...`, adopt the notebook it names:
    a. `export NLM_PROFILE=default`, then verify auth with `nlm notebook list`
       (NOT `nlm login --check` — it false-fails on the VPS; see Required
       Capabilities). If `nlm notebook list` itself fails, STOP per Anti-Patterns
@@ -246,8 +249,8 @@ Phase B — NotebookLM Content Generation (via the `nlm` CLI — see Required Ca
         package + email). This recovers a run a deploy restart interrupted.
       - If the notebook is missing/errored/expired, delete `.nlm_resume.json` and
         fall through to step 1 (fresh run).
-   If there is no checkpoint, or it is stale (>24h) or already `"done"`, proceed
-   to step 1.
+   If the verdict was `FRESH`, proceed to step 1 (the module already applied
+   the no-checkpoint / stale / done rules — do not second-guess it).
 1. `export NLM_PROFILE=default`, then verify auth with `nlm notebook list` (NOT `nlm login --check`,
    which false-fails on the VPS). Only if `nlm notebook list` itself fails, STOP per Anti-Patterns
    (report that desktop re-auth is needed — never fabricate audio/quiz/flashcards).

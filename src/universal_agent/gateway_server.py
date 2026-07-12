@@ -20407,16 +20407,16 @@ def _paper_to_podcast_command() -> str:
     return "\n".join(
         [
             (
-                "DEPLOY-RESTART RESUME CHECK FIRST: before anything else, look for a "
-                "`.nlm_resume.json` checkpoint in the workspace root. If it names an "
-                "in-flight or completed NotebookLM notebook from a run started within "
-                'the last 24h (status not "done"), RESUME that notebook — re-poll if '
-                "needed, then download, package, and email — instead of creating a new "
-                "one, and use the TOPIC recorded in that checkpoint rather than the "
-                "topic named below (a deploy restart that crosses midnight must still "
-                "finish the SAME podcast it started). Only if there is no usable "
-                "checkpoint, proceed with the topic below and create a new notebook. "
-                "The skill's Phase B.0 describes this; follow it exactly."
+                "DEPLOY-RESTART RESUME CHECK FIRST: before anything else, run "
+                "`PYTHONPATH=/opt/universal_agent/src /opt/universal_agent/.venv/bin/python "
+                "-m universal_agent.services.nlm_resume_check` from the workspace root. "
+                "It prints exactly ONE verdict line and owns the adopt-vs-fresh decision "
+                "— do NOT re-derive it by reading `.nlm_resume.json` yourself. "
+                "`RESUME: ...` names the notebook and TOPIC to finish (re-poll, download, "
+                "package, email — never create a new notebook, never switch to the topic "
+                "below; a deploy restart that crosses midnight must still finish the SAME "
+                "podcast it started). `FRESH: ...` means proceed with the topic below and "
+                "create a new notebook. The skill's Phase B.0 has the resume steps."
             ),
             f'Run the paper-to-podcast skill for the topic: "{topic}". Load and follow the skill instructions exactly.',
             "PAPER DISCOVERY — LOCAL INDEX FIRST (zero live search calls; this replaced the live search that died on HTTP 429 on 2026-07-10): run `PYTHONPATH=/opt/universal_agent/src /opt/universal_agent/.venv/bin/python -m universal_agent.services.arxiv_local_index search --query \"<topic>\" --months 12 --limit 15` and, if its JSON says status=ok, pick the 5 candidates most relevant to the topic. Only if it reports unavailable/no_matches, fall back to ONE mcp__arxiv-mcp-server__search_papers call. Then download the chosen papers with download_paper (+ read_paper as needed). Do NOT pip install the `arxiv` library, use curl/wget, or write raw HTTP requests to arxiv.org — those bypass the rate limiter and fail with HTTP 429 (the arxiv_local_index CLI is allowed: search/cache-fallback make no arxiv.org requests).",

@@ -159,15 +159,20 @@ Implementation for `paper_to_podcast` (no shared-code changes — see §5):
   it after a verified download. It is a **dotfile** so
   `_organize_workspace_outputs` (skips `.`-prefixed files) leaves it at the root
   and the artifact notifier never lists it.
-- **Resume-first re-entry.** Both the command template
-  (`_paper_to_podcast_command`) and the skill (Phase B.0) check for a *fresh*
-  checkpoint (`status != "done"` and `run_started_at` within 24h, mirroring the
-  requeue's own `_backfill_max_age`) before creating anything. If
-  `nlm studio status <notebook_id>` shows the audio completed or still
-  generating, the run **adopts** that notebook (re-poll → download → email) and
-  uses the checkpoint's `topic`. Otherwise it falls through to a normal
-  from-scratch run. Resume is strictly additive: a missing/stale/unreadable
-  checkpoint yields exactly today's behavior.
+- **Resume-first re-entry.** The adopt-vs-fresh decision is owned by
+  `universal_agent.services.nlm_resume_check` (2026-07-11): the command template
+  (`_paper_to_podcast_command`) and the skill (Phase B.0) instruct the agent to
+  run `python -m universal_agent.services.nlm_resume_check` as its FIRST step
+  and obey the single verdict line it prints. The module applies the fresh-
+  checkpoint rules (`status != "done"` and `run_started_at` within 24h,
+  mirroring the requeue's own `_backfill_max_age`) deterministically —
+  previously this logic was prose interpreted by the agent each run, and the
+  weekly skill-gap finder measured it being misapplied 16x. A `RESUME` verdict
+  names the notebook and topic; the agent verifies via
+  `nlm studio status <notebook_id>` and **adopts** (re-poll → download → email)
+  with the checkpoint's `topic`. A `FRESH` verdict (missing/stale/corrupt/done
+  checkpoint) yields exactly the from-scratch behavior. Unit-tested in
+  `tests/unit/test_nlm_resume_check.py`.
 - **Dispatch-time topic re-render (2026-07-07).** The topic is derived from
   `datetime.now().timetuple().tm_yday` inside
   `gateway_server.py::_paper_to_podcast_command`. Originally that ran only at

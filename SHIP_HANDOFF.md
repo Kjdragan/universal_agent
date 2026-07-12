@@ -1,6 +1,24 @@
 # SHIP_HANDOFF
 
-**Status:** Phase 2 producer shipped 2026-05-06. CSI tier-3 actions now produce `cody_scaffold_request` rows, routed to Simone for Phase 2 scaffolding.
+**Status:** Skill-gap remediation cycle shipped 2026-07-11 (see below). Prior: Phase 2 producer shipped 2026-05-06.
+
+---
+
+## Latest cycle: skill-gap finder remediation (2026-07-11 weekly report)
+
+Branch `claude/skill-gap-remedies`. Executes the operator-approved remedies for the 2026-07-11 "[UA skill-gap] 8 candidate(s)" report:
+
+**What changed for the system:**
+- `services/nlm_resume_check.py` (NEW) — deterministic `.nlm_resume.json` adopt-vs-fresh verdict for the paper-to-podcast cron; `_paper_to_podcast_command` + skill Phase B.0 now tell the agent to run it and obey, instead of interpreting checkpoint prose (candidate #7, 16x). Tests: `tests/unit/test_nlm_resume_check.py` (5 green).
+- `hooks.py` heredoc-guard denial now steers to `write_text_file` + `work_products/` — it used to recommend the native `Write` tool that the heartbeat File Write Rules forbid, a contradiction behind the 113x repeat violations (candidate #6).
+- Both workspace path-guard denials (`hooks.py`, `guardrails/workspace_guard.py`) now teach where TO write (candidates #3/#4).
+- `heartbeat_service.py` File Write Rules gain two standing lines: no orient.py / no /tmp scripts (orientation = self-brief-and-attest), and UA state DB queries go through the `activity-state-db-inspector` skill (candidates #1/#3/#4).
+- `.claude/skills/activity-state-db-inspector/` (NEW, mirror; canonical in dragan-plugins) — read-only `asdb.py` CLI over `activity_state.db` + `coder_vp_state.db`; documents that `vp_missions` lives in `coder_vp_state.db` (candidates #1+#5, 47x).
+- `skill_gap_finder.py` — candidates now carry a `remedy` field (`skill|code-fix|prompt-fix|error-message-fix|already-automated`), and the SYSTEM prompt flags machine-templated prompts as automation, not operator toil (the "Run research pass N" 50x false positive, candidate #8).
+
+**Not done, deliberately:** candidate #2 (arxiv backoff) — already solved by arxiv-mcp-server routing; candidate #8 needs no build (the loop exists as `daily-eight-research-loop`).
+
+**Verification honesty (8 rules):** unit tests + CI-scope ruff green locally; skill-deployed ≠ skill-invoked — the asdb mirror and the resume verdict have NOT yet been exercised by a live Simone/cron run. First real evidence arrives with the next paper-to-podcast cron run (verdict line in its transcript) and the next heartbeat that queries state DBs. `nlm_resume_check` was smoke-run on the VPS against a synthetic checkpoint pre-merge.
 
 ---
 

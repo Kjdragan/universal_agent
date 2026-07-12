@@ -188,7 +188,8 @@ def test_build_report_empty() -> None:
 def test_build_report_with_candidates() -> None:
     candidates = [
         {"title": "uv-sync-helper", "problem": "uv sync rerun manually",
-         "evidence": "ran 3x", "frequency": 3, "skill_fit": "new", "score": 0.9},
+         "evidence": "ran 3x", "frequency": 3, "skill_fit": "new",
+         "remedy": "prompt-fix", "score": 0.9},
         {"title": "read-before-edit", "problem": "File not read yet error",
          "evidence": ["3 errors"], "frequency": 3, "kind": "new", "score": 0.8},
     ]
@@ -196,6 +197,8 @@ def test_build_report_with_candidates() -> None:
     assert "uv-sync-helper" in report
     assert "read-before-edit" in report
     assert "score: 0.9" in report
+    assert "**Remedy:** prompt-fix" in report  # remedy renders when present
+    assert report.count("**Remedy:**") == 1    # and is omitted when absent
     assert "human" in report.lower()
 
 
