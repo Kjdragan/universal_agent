@@ -41,6 +41,9 @@ OUT2 = "/tmp/claude-session-timeline.html"
 OUT3 = "/tmp/claude-session-ladder.html"
 ATLAS_URL = "https://uaonvps.taildcc090.ts.net/scratch/session-atlas/claude-session-atlas.html"
 LADDER_URL = "https://uaonvps.taildcc090.ts.net/scratch/session-ladder/claude-session-ladder.html"
+# the ladder's ↻ button GETs this — a socket-activated handler on the desktop
+# (claude-session-atlas-refresh.socket) behind `tailscale serve --https=8747`
+REFRESH_URL = "https://mint-desktop.taildcc090.ts.net:8747/"
 REDIRECT = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta http-equiv="refresh" content="0;url=%s"><title>moved</title>'
             '</head><body><p>This design was retired — continue to the '
@@ -56,7 +59,8 @@ TL_DEEP = 400       # newest N sessions also get transcript-TAIL words in the se
                     # (titles alone miss what a session became — e.g. a session titled by
                     # its first prompt that spent the day building something else entirely)
 CACHE = os.path.expanduser("~/.cache/claude-session-atlas/summaries.json")
-LIVE_DIR = os.path.expanduser("~/.claude/sessions")  # per-pid live registry
+LIVE_DIRS = [os.path.expanduser("~/.claude/sessions"),        # per-pid live registry,
+             os.path.expanduser("~/.claude-acct2/sessions")]  # both accounts
 BOILER = "This session is being continued from a previous conversation"
 GIST_DAYS = 30     # gist eligibility: younger than this AND within GIST_MAX newest
 GIST_MAX = 450     # operator call: no need to gist further back than the newest 450
@@ -153,6 +157,43 @@ def tail_records(path, tail_bytes=262144, keep=24):
     return texts[-keep:], late_name
 
 
+def _ensure_zai_key():
+    """The gist step needs a ZAI key, but timers/services carry no secrets.
+    Least-privilege bootstrap: universal-auth via the infisical CLI, fetch
+    ONLY the one key, export it for _glm_gist. Silent no-op on any failure
+    (the page degrades to cached gists — old behavior)."""
+    if os.environ.get("ZAI_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        return
+    try:
+        creds = {}
+        for ln in open(os.path.expanduser("~/lrepos/universal_agent/.env")):
+            k, _, v = ln.strip().partition("=")
+            if k in ("INFISICAL_CLIENT_ID", "INFISICAL_CLIENT_SECRET"):
+                creds[k] = v.strip().strip('"')
+        if len(creds) < 2:
+            return
+        tok = subprocess.run(
+            ["infisical", "login", "--method=universal-auth",
+             "--client-id=" + creds["INFISICAL_CLIENT_ID"],
+             "--client-secret=" + creds["INFISICAL_CLIENT_SECRET"],
+             "--plain", "--silent"],
+            capture_output=True, text=True, timeout=30).stdout.strip()
+        if not tok:
+            return
+        for name in ("ZAI_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+            r = subprocess.run(
+                ["infisical", "secrets", "get", name,
+                 "--projectId=9970e5b7-d48a-4ed8-a8af-43e923e67572",
+                 "--env=development", "--plain", "--silent"],
+                capture_output=True, text=True, timeout=30,
+                env=dict(os.environ, INFISICAL_TOKEN=tok))
+            if r.returncode == 0 and r.stdout.strip():
+                os.environ[name] = r.stdout.strip()
+                return
+    except Exception:
+        pass
+
+
 def _glm_gist(tail_texts, timeout=45):
     """One bounded glm-5-turbo call (ZAI flat plan, stdlib urllib — no deps).
     Returns None on any failure or when no key is in the environment."""
@@ -235,16 +276,17 @@ def build_deep_index(rows):
 def live_status():
     """sessionId -> status for currently-running sessions (best-effort)."""
     out = {}
-    try:
-        for f in glob.glob(os.path.join(LIVE_DIR, "*.json")):
-            try:
-                d = json.load(open(f))
-                if d.get("sessionId") and d.get("status") == "running":
-                    out[d["sessionId"]] = "running"
-            except Exception:
-                continue
-    except Exception:
-        pass
+    for live_dir in LIVE_DIRS:
+        try:
+            for f in glob.glob(os.path.join(live_dir, "*.json")):
+                try:
+                    d = json.load(open(f))
+                    if d.get("sessionId") and d.get("status") == "running":
+                        out[d["sessionId"]] = "running"
+                except Exception:
+                    continue
+        except Exception:
+            pass
     return out
 
 
@@ -430,8 +472,8 @@ padding:5px;font:12px Inter,sans-serif;color:#5c5a55;cursor:pointer;margin:0 0 8
 .slim .dh{font-size:11px;color:#898781}
 </style>"""
 
-def _pill(r, color, tfmt):
-    """One session card — shared by the timeline and ladder pages."""
+def _pill(r, color, tfmt, live={}):
+    """One session card."""
     e = html.escape
     repo, name, first = r["repo"], r["name"] or "", r["first"]
     c = color.get(repo, TL_OTHER)
@@ -458,17 +500,20 @@ def _pill(r, color, tfmt):
     cmd = "cd %s && %s --resume %s" % (r["cwd"], r["launcher"], r["sid"])
     detail.append('<div class="row"><code>%s</code>'
                   '<button class="cp">copy</button></div>' % e(cmd))
-    return ('<div class="p" data-r="%s"%s data-s="%s" style="border-left-color:%s">'
+    run = r["sid"] in live
+    badge = '<span class="live">● running</span>' if run else ""
+    return ('<div class="p" data-r="%s"%s data-s="%s" data-sid="%s"%s style="border-left-color:%s">'
+            '<button class="op" title="open this session in a desktop terminal">▶ open</button>'
             '<div class="ph"><span class="tm">%s</span><span class="rp">%s</span>'
-            '<span class="acct">%s</span><div class="%s">%s</div></div>'
+            '<span class="acct">%s</span>%s<div class="%s">%s</div></div>'
             '<div class="pd">%s</div></div>'
-            % (e(repo), other, hay, c, hh, e(repo), r["acct"], hl_cls,
-               e(head), "".join(detail)))
+            % (e(repo), other, hay, r["sid"], ' data-live="1"' if run else "", c,
+               hh, e(repo), r["acct"], badge, hl_cls, e(head), "".join(detail)))
 
 
-def _col(color, cls, dd, extra, label, rs, show_n, tfmt):
+def _col(color, cls, dd, extra, label, rs, show_n, tfmt, live={}):
     """One filterable group (a day, or a week bucket) of session cards."""
-    pills = "".join(_pill(r, color, tfmt) for r in rs)
+    pills = "".join(_pill(r, color, tfmt, live) for r in rs)
     more = ('<button class="mr">+ %d more ▾</button>' % (len(rs) - show_n)
             if len(rs) > show_n else "")
     return ('<div class="day%s" data-d="%s"%s data-n="%d">'
@@ -539,6 +584,23 @@ section h2 .n{color:#e04e00;font-family:monospace;font-size:12px;margin-left:8px
 .slim .ph .hl{margin-top:0;flex:1}
 .slim .p{margin:0 0 6px}
 .mr{width:auto;padding:5px 14px;margin:2px 0 0}
+#rf{border:1px solid #d8d5cf;background:#fff;border-radius:8px;padding:6px 12px;
+font:12.5px Inter,sans-serif;cursor:pointer;color:#1a1a1f}
+#rf:disabled{opacity:.55;cursor:default}
+.gr.cols{display:flex;gap:10px;overflow-x:auto;align-items:flex-start;padding-bottom:4px}
+.rcol{flex:0 0 262px;min-width:262px}
+.rh{font:600 12.5px Inter,sans-serif;color:#3d3c38;padding:2px 2px 8px;
+display:flex;align-items:center;gap:6px}
+.rh i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.rh span{color:#e04e00;font-family:monospace;font-size:11px}
+.p{position:relative}
+.op{position:absolute;top:6px;right:6px;display:none;border:1px solid #d8d5cf;
+background:#fff;border-radius:6px;font:11px Inter,sans-serif;padding:2px 8px;
+cursor:pointer;color:#20507a;z-index:2}
+.p:hover .op{display:block}
+@media (hover:none){.op{display:block}}
+.live{display:inline-block;font-size:10.5px;font-weight:600;padding:0 6px;
+border-radius:9px;margin-left:6px;background:#e8f7ec;color:#0a7d33}
 </style>"""
 
 LD_JS = """<script>
@@ -567,12 +629,37 @@ function filter(){
       else if(mshown>SHOW){mb.style.display='';mb.textContent='+ '+(mshown-SHOW)+' more \\u25be';}
       else{mb.style.display='none';}}
     d.classList.toggle('dim',!mshown);});
+  document.querySelectorAll('.rcol').forEach(function(rc){
+    var any=false;rc.querySelectorAll('.p').forEach(function(p){
+      if(p.style.display!=='none')any=true;});
+    rc.style.display=any?'':'none';});
   document.querySelectorAll('section').forEach(function(s){
     var any=s.querySelector('.day:not(.dim)');s.style.display=any?'':'none';});
   cnt.textContent=vis+' of '+total;}
 q.addEventListener('input',filter);
 document.addEventListener('click',function(ev){
-  var el=ev.target.closest('.lg');
+  var el=ev.target.closest('.op');
+  if(el){var p=el.closest('.p');
+    if(p.hasAttribute('data-live')&&!confirm("This session looks like it's running right now \\u2014 resuming opens a second instance and forks the conversation. Continue?"))return;
+    el.textContent='launching\\u2026';
+    var base=document.getElementById('rf').getAttribute('data-u');
+    fetch(base+'launch?sid='+p.getAttribute('data-sid')).then(function(r){
+      el.textContent=r.ok?'opened \\u2713':'launch failed';
+      setTimeout(function(){el.textContent='\\u25b6 open';},3000);
+    }).catch(function(){el.textContent='desktop unreachable';
+      setTimeout(function(){el.textContent='\\u25b6 open';},3000);});
+    return;}
+  el=ev.target.closest('#rf');
+  if(el){el.disabled=true;el.textContent='asking the desktop\\u2026';
+    fetch(el.getAttribute('data-u')).then(function(r){return r.text();}).then(function(){
+      var n=90;el.textContent='rebuilding \\u2014 reload in '+n+'s';
+      var iv=setInterval(function(){n-=5;
+        if(n<=0){clearInterval(iv);location.reload();}
+        else el.textContent='rebuilding \\u2014 reload in '+n+'s';},5000);
+    }).catch(function(){el.textContent='desktop unreachable';
+      setTimeout(function(){el.disabled=false;el.textContent='\\u21bb refresh';},4000);});
+    return;}
+  el=ev.target.closest('.lg');
   if(el){var r=el.getAttribute('data-r');
     if(active.has(r))active.delete(r);else active.add(r);
     el.classList.toggle('on');filter();return;}
@@ -606,10 +693,12 @@ def render_ladder(rows, days):
     """Design B: a vertical recency ladder. Today in full cards, this week in
     medium cards, this month as compact rows, older weeks collapsed to single
     groups — screen density falls off with age, no sideways scrolling."""
+    e = html.escape
     counts, ranked, color = _project_colors(rows)
     keys, buckets = _day_buckets(rows, days)
     ov = _overview(keys, buckets)
     lg = _legend(counts, ranked, color)
+    live = live_status()
     nk = len(keys)
 
     def wdlbl(k):
@@ -622,11 +711,27 @@ def render_ladder(rows, days):
             continue
         rs = list(reversed(rs))  # newest first within a group
         if age == 0:
-            today_html = _col(color, " t0", k, "", wdlbl(k), rs, 999, "%H:%M")
+            # today fans out into one column per repo, most recently
+            # active repo first, that repo's sessions stacked beneath it
+            groups = {}
+            for x in rs:
+                groups.setdefault(x["repo"], []).append(x)
+            order = sorted(groups, key=lambda g: -groups[g][0]["mtime"])
+            rcols = []
+            for g in order:
+                gs = groups[g]
+                pills = "".join(_pill(x, color, "%H:%M", live) for x in gs)
+                rcols.append('<div class="rcol"><div class="rh"><i style="background:%s">'
+                             '</i>%s<span>%d</span></div>%s</div>'
+                             % (color.get(g, TL_OTHER), e(g), len(gs), pills))
+            today_html = ('<div class="day t0" data-d="%s" data-n="999">'
+                          '<div class="dh">%s<span>%d</span></div>'
+                          '<div class="gr cols">%s</div></div>'
+                          % (k, wdlbl(k), len(rs), "".join(rcols)))
         elif age <= 7:
-            week.append(_col(color, " t1", k, "", wdlbl(k), rs, 10, "%H:%M"))
+            week.append(_col(color, " t1", k, "", wdlbl(k), rs, 10, "%H:%M", live))
         else:
-            month.append(_col(color, " t2 slim", k, "", wdlbl(k), rs, 5, "%H:%M"))
+            month.append(_col(color, " t2 slim", k, "", wdlbl(k), rs, 5, "%H:%M", live))
 
     older, j = [], 0
     while j < nk and (nk - 1 - j) > 30:
@@ -638,7 +743,7 @@ def render_ladder(rows, days):
         if rs:
             older.append(_col(color, " t3 slim", wk_keys[0], ' data-e="%s"' % wk_keys[-1],
                               "wk of %s" % wk_keys[0][5:], list(reversed(rs)), 5,
-                              "%m-%d %H:%M"))
+                              "%m-%d %H:%M", live))
     older.reverse()
 
     secs = []
@@ -662,11 +767,12 @@ List view: <a href="%s">session atlas</a>.
 Updated %s.</div></div></header>
 <div class="wrap">
 <div class="ctl"><input id="q" type="search" placeholder="search %d sessions…">
-<span id="cnt">%d of %d</span>%s</div>
+<span id="cnt">%d of %d</span>
+<button id="rf" data-u="%s" title="regenerate now from the desktop">↻ refresh</button>%s</div>
 <div class="ov">%s</div>
 %s
 </div>""" % (len(rows), days, ATLAS_URL, stamp, len(rows), len(rows),
-             len(rows), lg, ov, "".join(secs))
+             len(rows), REFRESH_URL, lg, ov, "".join(secs))
             + LD_JS + "</body></html>")
 
 
@@ -692,8 +798,82 @@ def find(rows, query, limit=8):
         print(f"        cd {r['cwd']} && {r['launcher']} --resume {r['sid']}")
 
 
+def refresh_http():
+    """Socket-activated (Accept=yes) one-shot HTTP handler: stdin/stdout ARE
+    the connection. GET / regenerates + republishes (lock guards double-
+    clicks); GET /launch?sid=<uuid> opens that session in a desktop terminal
+    with the right launcher for its account. Only a sid is accepted from the
+    request — cwd and launcher are resolved server-side from the transcript."""
+    import fcntl
+    from urllib.parse import urlparse, parse_qs
+    try:
+        req = sys.stdin.buffer.readline().decode("latin1", "replace")
+    except Exception:
+        req = ""
+    parts = req.split()
+    u = urlparse(parts[1] if len(parts) > 1 else "/")
+
+    def respond(status, body):
+        sys.stdout.buffer.write(
+            b"HTTP/1.1 %s\r\nAccess-Control-Allow-Origin: *\r\n"
+            b"Content-Type: text/plain\r\nContent-Length: %d\r\n"
+            b"Connection: close\r\n\r\n%s" % (status, len(body), body))
+        sys.stdout.buffer.flush()
+
+    if u.path == "/launch":
+        sid = (parse_qs(u.query).get("sid") or [""])[0]
+        if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid):
+            respond(b"400 Bad Request", b"bad sid")
+            return 0
+        hit = None
+        for _label, launcher, root in HOMES:
+            g = glob.glob(os.path.join(root, "*", sid + ".jsonl"))
+            if g:
+                hit = (launcher, g[0])
+                break
+        if not hit:
+            respond(b"404 Not Found", b"unknown session")
+            return 0
+        launcher, tpath = hit
+        cwd = scan(tpath)[0]
+        if not cwd or not os.path.isdir(cwd):
+            cwd = os.path.expanduser("~")
+        env = dict(os.environ)
+        env.setdefault("DISPLAY", ":0")
+        env.setdefault("DBUS_SESSION_BUS_ADDRESS",
+                       "unix:path=/run/user/%d/bus" % os.getuid())
+        subprocess.Popen(
+            ["gnome-terminal", "--working-directory", cwd, "--", "bash", "-ic",
+             "%s --resume %s; exec bash -i" % (launcher, sid)],
+            env=env, start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        respond(b"200 OK", b"launched on the desktop")
+        return 0
+
+    lock = open("/tmp/claude-session-atlas.refresh.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        status, body = b"202 Accepted", b"refresh started; page rebuilds in ~1-2 min"
+    except OSError:
+        status, body = b"429 Too Many Requests", b"already refreshing"
+    respond(status, body)
+    if status[:3] != b"202":
+        return 0
+    try:  # release the browser before the slow part
+        os.close(0)
+        os.close(1)
+    except Exception:
+        pass
+    log = open("/tmp/claude-session-atlas.refresh.log", "ab")
+    return subprocess.run(
+        [sys.executable, os.path.abspath(__file__), "--publish"],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=log).returncode
+
+
 def main():
     a = sys.argv[1:]
+    if "--refresh-http" in a:
+        return refresh_http()
     days = int(a[a.index("--days") + 1]) if "--days" in a else 45
     cap = int(a[a.index("--max") + 1]) if "--max" in a else 140
     if "--find" in a:
@@ -703,6 +883,7 @@ def main():
     # the window, the atlas stays the curated newest-N list with fresh gists
     tl_rows = collect(days, TL_MAX)
     rows = tl_rows[:cap]
+    _ensure_zai_key()
     add_gists(tl_rows)
     build_deep_index(tl_rows)
     open(OUT, "w").write(render(rows, days))

@@ -1,0 +1,9 @@
+[Unit]
+Description=Claude session atlas — on-demand refresh endpoint (desktop; tailnet-exposed via `tailscale serve --bg --https=8747 8747`)
+
+[Socket]
+ListenStream=127.0.0.1:8747
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
