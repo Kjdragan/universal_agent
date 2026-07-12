@@ -14,8 +14,12 @@ ZAI_API_KEY/ANTHROPIC_AUTH_TOKEN from the login shell); with no key in the
 environment the LLM step is skipped and the page degrades to the old behavior.
 
   claude-session-atlas                  # write HTML to stdout-path + print URL hint
-  claude-session-atlas --publish        # also publish to scratch/session-atlas (same-slug update)
+  claude-session-atlas --publish        # publish BOTH pages (session-atlas + session-timeline slugs)
   claude-session-atlas --days 30 --max 150
+
+Every run renders TWO living pages from the same scan: the per-project atlas
+(slug session-atlas) and a horizontally-scrolling day-by-day timeline with
+click-to-expand session cards and live search (slug session-timeline).
 
 Scheduled: desktop user timer claude-session-atlas.timer (daily 07:30 CT,
 Persistent=true — catches up after sleep). Install:
@@ -23,12 +27,25 @@ Persistent=true — catches up after sleep). Install:
      ~/.config/systemd/user/ && systemctl --user daemon-reload && \
   systemctl --user enable --now claude-session-atlas.timer
 """
-import glob, html, json, os, subprocess, sys, time
+import glob, html, json, os, re, subprocess, sys, time
 
 HOMES = [("a1", "claudereal", os.path.expanduser("~/.claude/projects")),
          ("a2", "claude2",    os.path.expanduser("~/.claude-acct2/projects"))]
 PUBLISH = os.path.expanduser("~/lrepos/universal_agent/scripts/publish_scratch.sh")
 OUT = "/tmp/claude-session-atlas.html"
+OUT2 = "/tmp/claude-session-timeline.html"
+ATLAS_URL = "https://uaonvps.taildcc090.ts.net/scratch/session-atlas/claude-session-atlas.html"
+TIMELINE_URL = "https://uaonvps.taildcc090.ts.net/scratch/session-timeline/claude-session-timeline.html"
+# dataviz reference categorical palette (light mode, validated order — top 8
+# projects by session count keep a fixed hue, everything else folds to neutral)
+TL_COLORS = ["#2a78d6", "#1baf7a", "#eda100", "#008300",
+             "#4a3aa7", "#e34948", "#e87ba4", "#eb6834"]
+TL_OTHER = "#898781"
+TL_MAX = 2000       # timeline carries every session in the window (atlas stays curated)
+TL_DAY_SHOW = 10    # cards shown per day before the "+N more" expander
+TL_DEEP = 400       # newest N sessions also get transcript-TAIL words in the search index
+                    # (titles alone miss what a session became — e.g. a session titled by
+                    # its first prompt that spent the day building something else entirely)
 CACHE = os.path.expanduser("~/.cache/claude-session-atlas/summaries.json")
 LIVE_DIR = os.path.expanduser("~/.claude/sessions")  # per-pid live registry
 BOILER = "This session is being continued from a previous conversation"
@@ -180,6 +197,21 @@ def add_gists(rows):
         json.dump(cache, open(CACHE, "w"))
 
 
+def attach_cached_gists(rows):
+    """Decorate rows with already-cached gists/names — zero LLM calls. The
+    atlas pass (add_gists) keeps the cache warm; the timeline just reads it."""
+    try:
+        cache = json.load(open(CACHE))
+    except Exception:
+        return
+    for r in rows:
+        c = cache.get(r["sid"])
+        if c:
+            r["gist"] = c.get("gist") or ""
+            if not r["name"] and c.get("name"):
+                r["name"] = c["name"]
+
+
 def live_status():
     """sessionId -> status for currently-running sessions (best-effort)."""
     out = {}
@@ -279,7 +311,8 @@ code{{font-family:monospace;font-size:12px;background:#f2f0ec;border-radius:4px;
 both accounts, grouped by project, <b>most recently active repo first</b>. The newest sessions in each
 repo carry a GLM-written "where we left off" gist from the transcript tail. Regenerated daily 07:30 CT
 (and on demand: <code>claude-session-atlas --publish</code>). Resume any session by pasting its command
-in a terminal. Updated {time.strftime('%Y-%m-%d %H:%M %Z')}.</div></div></header><div class="wrap">"""]
+in a terminal. Timeline view: <a href="{TIMELINE_URL}">session timeline</a>.
+Updated {time.strftime('%Y-%m-%d %H:%M %Z')}.</div></div></header><div class="wrap">"""]
     live = live_status()
     for repo, rs in ordered:
         ago = _ago(time.time() - rs[0]["mtime"])
@@ -305,6 +338,242 @@ in a terminal. Updated {time.strftime('%Y-%m-%d %H:%M %Z')}.</div></div></header
                 f' <code style="opacity:.6">cd {e(r["cwd"])}</code></div>')
     parts.append("</div></body></html>")
     return "".join(parts)
+
+
+TL_CSS = """<style>
+body{margin:0;background:#faf9f7;color:#1a1a1f;font:15px/1.55 Inter,-apple-system,sans-serif;padding:0 0 60px}
+.wrap{max-width:1160px;margin:0 auto;padding:0 20px}
+header{border-bottom:3px solid #e04e00;background:#fff;padding:26px 0 18px;margin-bottom:18px}
+h1{font-size:24px;margin:0 0 4px} .sub{color:#5c5a55;font-size:13px}
+a{color:#20507a}
+code{font-family:monospace;font-size:11px;background:#f2f0ec;border-radius:4px;padding:3px 6px}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
+#q{padding:7px 12px;border:1px solid #d8d5cf;border-radius:8px;font:14px Inter,sans-serif;width:250px;background:#fff}
+#cnt{font-family:monospace;font-size:12px;color:#5c5a55;min-width:86px}
+.lg{border:1px solid #e6e3dd;background:#fff;border-radius:999px;padding:3px 10px 3px 8px;font:12px Inter,sans-serif;
+cursor:pointer;display:inline-flex;gap:6px;align-items:center;color:#1a1a1f}
+.lg i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.lg span{color:#898781;font-size:11px} .lg.on{border-color:#1a1a1f;box-shadow:inset 0 0 0 1px #1a1a1f}
+.ov{display:flex;align-items:flex-end;gap:2px;height:96px;padding:8px 2px 20px;border-bottom:1px solid #e1e0d9;
+margin-bottom:12px;position:relative}
+.ob{flex:1 1 0;min-width:4px;height:100%;display:flex;align-items:flex-end;justify-content:center;cursor:pointer;position:relative}
+.ob i{display:block;width:100%;max-width:14px;background:#2a78d6;border-radius:3px 3px 0 0}
+.ob.z i{background:#e6e3dd} .ob:hover i{background:#1c5cab}
+.ob b{position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);font:400 10px monospace;color:#898781;white-space:nowrap}
+#tgl{margin:2px 0 12px;border:1px solid #d8d5cf;background:#fff;border-radius:8px;padding:7px 14px;
+font:13.5px Inter,sans-serif;cursor:pointer}
+.tlw{overflow-x:auto;border:1px solid #e6e3dd;border-radius:12px;background:#fff}
+.tlw.hide{display:none}
+.tl{display:flex;align-items:flex-start;padding:0 8px 14px;min-height:180px}
+.day{width:238px;flex:0 0 auto;padding:0 6px;border-left:1px dashed #eeece7}
+.day.wk{background:#fbfaf5}
+.day.empty{width:14px;min-height:150px}
+.day.dim{display:none}
+.day.hit{background:#fff4ec}
+.dh{font:600 12px/1.2 Inter,sans-serif;color:#5c5a55;padding:10px 4px 8px;white-space:nowrap}
+.dh span{color:#e04e00;font-family:monospace;font-size:11px;margin-left:6px}
+.p{background:#fff;border:1px solid #e6e3dd;border-left:4px solid #898781;border-radius:8px;
+padding:8px 10px;margin:0 0 8px;cursor:pointer;transition:box-shadow .15s}
+.p:hover{box-shadow:0 2px 8px rgba(11,11,11,.08)}
+.p.open{border-color:#c9c5bd;cursor:default}
+.tm{font-family:monospace;font-size:11px;color:#a05a00}
+.rp{font-size:10.5px;color:#898781;margin-left:6px}
+.acct{display:inline-block;font-family:monospace;font-size:10.5px;padding:0 6px;border-radius:9px;
+margin-left:6px;background:#eaf2f9;color:#20507a}
+.hl{font-size:13px;font-weight:600;line-height:1.35;margin-top:3px;display:-webkit-box;
+-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.hl.un{font-weight:450;color:#3d3c38}
+.p.open .hl{-webkit-line-clamp:unset}
+.pd{display:none;margin-top:8px;border-top:1px solid #f0eee9;padding-top:8px}
+.p.open .pd{display:block}
+.g{font-size:12.5px;color:#3d3c38;margin-bottom:6px}
+.fp{font-size:12px;color:#5c5a55;font-style:italic;margin-bottom:6px}
+.row{display:flex;gap:6px;align-items:flex-start}
+.row code{word-break:break-all;flex:1}
+.cp{border:1px solid #d8d5cf;background:#fff;border-radius:6px;font-size:11px;padding:2px 8px;cursor:pointer}
+.mr{display:block;width:100%;border:1px dashed #d8d5cf;background:#fff;border-radius:8px;
+padding:5px;font:12px Inter,sans-serif;color:#5c5a55;cursor:pointer;margin:0 0 8px}
+.mr:hover{border-color:#a09d96}
+</style>"""
+
+TL_JS = """<script>
+(function(){
+var tlw=document.getElementById('tlw'),tgl=document.getElementById('tgl'),
+    q=document.getElementById('q'),cnt=document.getElementById('cnt'),
+    total=document.querySelectorAll('.p').length,active=new Set();
+function open(on){tlw.classList.toggle('hide',!on);
+  tgl.textContent=on?'\\u25b4 collapse the timeline':'\\u25be expand the timeline';
+  if(on)tlw.scrollLeft=tlw.scrollWidth;}
+tgl.addEventListener('click',function(){open(tlw.classList.contains('hide'));});
+function match(p){
+  var t=q.value.trim().toLowerCase();
+  if(t){var ws=t.split(/\\s+/),s=p.getAttribute('data-s');
+    for(var i=0;i<ws.length;i++)if(s.indexOf(ws[i])<0)return false;}
+  if(!active.size)return true;
+  if(p.hasAttribute('data-o'))return active.has('~other');
+  return active.has(p.getAttribute('data-r'));}
+function filter(){
+  var fa=!!(q.value.trim()||active.size),vis=0,SHOW=10;
+  document.querySelectorAll('.day:not(.empty)').forEach(function(d){
+    var exp=d.classList.contains('exp'),mshown=0;
+    d.querySelectorAll('.p').forEach(function(p){
+      var m=match(p),show=false;
+      if(m){show=fa||exp||mshown<SHOW;mshown++;vis++;}
+      p.style.display=show?'':'none';});
+    var mb=d.querySelector('.mr');
+    if(mb){
+      if(fa){mb.style.display='none';}
+      else if(exp){mb.style.display='';mb.textContent='\\u25b4 fewer';}
+      else if(mshown>SHOW){mb.style.display='';mb.textContent='+ '+(mshown-SHOW)+' more \\u25be';}
+      else{mb.style.display='none';}}
+    d.classList.toggle('dim',!mshown);});
+  cnt.textContent=vis+' of '+total;
+  if(fa&&tlw.classList.contains('hide'))open(true);}
+q.addEventListener('input',filter);
+filter();
+document.addEventListener('click',function(ev){
+  var el=ev.target.closest('.lg');
+  if(el){var r=el.getAttribute('data-r');
+    if(active.has(r))active.delete(r);else active.add(r);
+    el.classList.toggle('on');filter();return;}
+  el=ev.target.closest('.cp');
+  if(el){var c=el.parentNode.querySelector('code');
+    navigator.clipboard.writeText(c.textContent).then(function(){
+      el.textContent='\\u2713';setTimeout(function(){el.textContent='copy';},1200);});
+    return;}
+  el=ev.target.closest('.mr');
+  if(el){el.closest('.day').classList.toggle('exp');filter();return;}
+  el=ev.target.closest('.ob');
+  if(el){open(true);
+    var d=document.querySelector('.day[data-d="'+el.getAttribute('data-d')+'"]');
+    if(d&&!d.classList.contains('empty')){
+      d.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+      d.classList.add('hit');setTimeout(function(){d.classList.remove('hit');},1600);}
+    return;}
+  el=ev.target.closest('.ph');
+  if(el){var p=el.parentNode,was=p.classList.contains('open');
+    document.querySelectorAll('.p.open').forEach(function(x){x.classList.remove('open');});
+    if(!was)p.classList.add('open');}
+});
+})();
+</script>"""
+
+
+def render_timeline(rows, days):
+    """Second living page: a sideways-scrolling day-by-day timeline. Condensed
+    by default (overview strip only); the full lane expands on demand, and
+    every marker explodes into a detail card with a copyable resume command."""
+    e = html.escape
+    now = time.time()
+    # deep search index: unique words from the transcript tail of the newest
+    # sessions, so search matches what a session DID, not just how it started
+    from collections import Counter
+    for r in rows[:TL_DEEP]:
+        texts, late_name = tail_records(r["path"])
+        if late_name and not r["name"]:
+            r["name"] = late_name
+        words = re.findall(r"[a-z0-9][a-z0-9_.-]{2,24}", " ".join(texts).lower())
+        # frequency-ranked so truncation drops rare noise, not whole alphabet ranges
+        r["deep"] = " ".join(w for w, _ in Counter(words).most_common(300))[:2500]
+
+    counts = {}
+    for r in rows:
+        counts[r["repo"]] = counts.get(r["repo"], 0) + 1
+    ranked = sorted(counts, key=lambda k: (-counts[k], k))
+    color = {repo: TL_COLORS[i] for i, repo in enumerate(ranked[:len(TL_COLORS)])}
+
+    lt = time.localtime(now)
+    day0 = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    keys = [time.strftime("%Y-%m-%d", time.localtime(day0 - d * 86400))
+            for d in range(days - 1, -1, -1)]
+    buckets = {k: [] for k in keys}
+    for r in rows:
+        k = time.strftime("%Y-%m-%d", time.localtime(r["mtime"]))
+        if k in buckets:
+            buckets[k].append(r)
+    for k in keys:
+        buckets[k].sort(key=lambda r: r["mtime"])
+    peak = max([len(v) for v in buckets.values()] + [1])
+
+    ov = []
+    for i, k in enumerate(keys):
+        n = len(buckets[k])
+        h = max(6, round(64 * n / peak)) if n else 2
+        z = "" if n else " z"
+        plural = "s" if n != 1 else ""
+        lbl = "<b>%s</b>" % k[5:] if i % 7 == 0 else ""
+        ov.append('<div class="ob%s" data-d="%s" title="%s · %d session%s">'
+                  '<i style="height:%dpx"></i>%s</div>' % (z, k, k, n, plural, h, lbl))
+
+    lg = []
+    for i, repo in enumerate(ranked[:len(TL_COLORS)]):
+        lg.append('<button class="lg" data-r="%s"><i style="background:%s"></i>%s'
+                  '<span>%d</span></button>' % (e(repo), TL_COLORS[i], e(repo), counts[repo]))
+    rest = sum(counts[r] for r in ranked[len(TL_COLORS):])
+    if rest:
+        lg.append('<button class="lg" data-r="~other"><i style="background:%s"></i>'
+                  'other<span>%d</span></button>' % (TL_OTHER, rest))
+
+    cols = []
+    for k in keys:
+        rs = buckets[k]
+        wd = time.strftime("%a", time.strptime(k, "%Y-%m-%d"))
+        wk = " wk" if wd in ("Sat", "Sun") else ""
+        if not rs:
+            cols.append('<div class="day empty%s" data-d="%s" title="%s %s — quiet"></div>'
+                        % (wk, k, wd, k))
+            continue
+        pills = []
+        for r in rs:
+            repo, name, first = r["repo"], r["name"] or "", r["first"]
+            c = color.get(repo, TL_OTHER)
+            other = "" if repo in color else ' data-o="1"'
+            hh = time.strftime("%H:%M", time.localtime(r["mtime"]))
+            head = name or (first or r["summary"] or "(empty session)")[:90]
+            hl_cls = "hl" if name else "hl un"
+            hay = e(" ".join([repo, name, first, r["summary"],
+                              r.get("gist") or "", r.get("deep") or ""]).lower())
+            gist = r.get("gist") or r["summary"]
+            detail = []
+            if gist:
+                detail.append('<div class="g">%s</div>' % e(gist))
+            if first and first != head:
+                detail.append('<div class="fp">“%s”</div>' % e(first))
+            cmd = "cd %s && %s --resume %s" % (r["cwd"], r["launcher"], r["sid"])
+            detail.append('<div class="row"><code>%s</code>'
+                          '<button class="cp">copy</button></div>' % e(cmd))
+            pills.append(
+                '<div class="p" data-r="%s"%s data-s="%s" style="border-left-color:%s">'
+                '<div class="ph"><span class="tm">%s</span><span class="rp">%s</span>'
+                '<span class="acct">%s</span><div class="%s">%s</div></div>'
+                '<div class="pd">%s</div></div>'
+                % (e(repo), other, hay, c, hh, e(repo), r["acct"], hl_cls,
+                   e(head), "".join(detail)))
+        more = ('<button class="mr">+ %d more ▾</button>' % (len(rs) - TL_DAY_SHOW)
+                if len(rs) > TL_DAY_SHOW else "")
+        cols.append('<div class="day%s" data-d="%s"><div class="dh">%s %s<span>%d</span></div>%s%s</div>'
+                    % (wk, k, wd, k[5:], len(rs), "".join(pills), more))
+
+    stamp = time.strftime("%Y-%m-%d %H:%M %Z")
+    return ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude session timeline</title>""" + TL_CSS + """</head><body>
+<header><div class="wrap"><h1>Claude session timeline</h1>
+<div class="sub">%d sessions · last %d days · both accounts · one sideways-scrolling lane.
+The strip below shows sessions per day — click a bar to jump to that day. Click any card
+to expand its gist and resume command. Search covers titles, first prompts, gists — and for
+recent sessions, words from the transcript tail (what the session actually became).
+Busy days show 10 cards; "+ N more" reveals the rest.
+List view: <a href="%s">session atlas</a>. Updated %s.</div></div></header>
+<div class="wrap">
+<div class="ctl"><input id="q" type="search" placeholder="search %d sessions…">
+<span id="cnt">%d of %d</span>%s</div>
+<div class="ov">%s</div>
+<button id="tgl">▾ expand the timeline</button>
+<div id="tlw" class="tlw hide"><div class="tl">%s</div></div>
+</div>""" % (len(rows), days, ATLAS_URL, stamp, len(rows), len(rows), len(rows),
+             "".join(lg), "".join(ov), "".join(cols))
+            + TL_JS + "</body></html>")
 
 
 def find(rows, query, limit=8):
@@ -336,16 +605,24 @@ def main():
     if "--find" in a:
         rows = collect(max(days, 90), 400)
         return find(rows, a[a.index("--find") + 1]) or 0
-    rows = collect(days, cap)
+    # one scan feeds both pages: the timeline carries EVERY session in the
+    # window, the atlas stays the curated newest-N list with fresh LLM gists
+    tl_rows = collect(days, TL_MAX)
+    rows = tl_rows[:cap]
     add_gists(rows)
     open(OUT, "w").write(render(rows, days))
-    print(f"atlas: {len(rows)} sessions → {OUT}")
+    attach_cached_gists(tl_rows)
+    open(OUT2, "w").write(render_timeline(tl_rows, days))
+    print(f"atlas: {len(rows)} sessions → {OUT} + timeline: {len(tl_rows)} → {OUT2}")
     if "--publish" in a:
-        env = dict(os.environ, UA_SCRATCH_ARCHIVE_ENABLED="0")  # living page — no per-day archive churn
-        r = subprocess.run([PUBLISH, OUT, "session-atlas"], env=env,
-                           capture_output=True, text=True)
-        print(r.stdout.strip() or r.stderr.strip()[-300:])
-        return r.returncode
+        env = dict(os.environ, UA_SCRATCH_ARCHIVE_ENABLED="0")  # living pages — no per-day archive churn
+        rc = 0
+        for path, slug in ((OUT, "session-atlas"), (OUT2, "session-timeline")):
+            r = subprocess.run([PUBLISH, path, slug], env=env,
+                               capture_output=True, text=True)
+            print(r.stdout.strip() or r.stderr.strip()[-300:])
+            rc = rc or r.returncode
+        return rc
     return 0
 
 
