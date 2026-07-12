@@ -654,7 +654,8 @@ document.addEventListener('click',function(ev){
     fetch(el.getAttribute('data-u')).then(function(r){return r.text();}).then(function(){
       var n=90;el.textContent='rebuilding \\u2014 reload in '+n+'s';
       var iv=setInterval(function(){n-=5;
-        if(n<=0){clearInterval(iv);location.reload();}
+        if(n<=0){clearInterval(iv);
+          location.replace(location.pathname+'?r='+Date.now());}
         else el.textContent='rebuilding \\u2014 reload in '+n+'s';},5000);
     }).catch(function(){el.textContent='desktop unreachable';
       setTimeout(function(){el.disabled=false;el.textContent='\\u21bb refresh';},4000);});
