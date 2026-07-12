@@ -7,7 +7,7 @@ code_paths:
   - src/universal_agent/runtime_role.py
   - src/universal_agent/runtime_bootstrap.py
   - src/universal_agent/infisical_loader.py
-last_verified: 2026-06-22
+last_verified: 2026-07-12
 ---
 
 # Runtime Bootstrap & Profiles
