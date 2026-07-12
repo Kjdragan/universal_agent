@@ -5,8 +5,8 @@ snippets, and ready-to-paste resume commands, published as ONE living
 scratchpad page (stable URL) the operator can open whenever he's lost.
 
 Companion to `claude-sessions` (the terminal lister). Mostly deterministic;
-the top few sessions per repo additionally carry a GLM-written "where we left
-off" gist derived from the TAIL of the transcript (bounded read — an 800k-token
+every session younger than GIST_DAYS additionally carries a GLM-written "where
+we left off" gist derived from the TAIL of the transcript (bounded read — an 800k-token
 session costs the same as a short one), cached per (session, mtime) in
 ~/.cache/claude-session-atlas/summaries.json so regenerations only pay for
 sessions that actually changed. Runs on the ZAI flat plan (glm-5-turbo via
@@ -14,14 +14,16 @@ ZAI_API_KEY/ANTHROPIC_AUTH_TOKEN from the login shell); with no key in the
 environment the LLM step is skipped and the page degrades to the old behavior.
 
   claude-session-atlas                  # write HTML to stdout-path + print URL hint
-  claude-session-atlas --publish        # publish BOTH pages (session-atlas + session-timeline slugs)
+  claude-session-atlas --publish        # publish all slugs (atlas + ladder + redirect stub)
   claude-session-atlas --days 30 --max 150
 
-Every run renders THREE living pages from the same scan: the per-project atlas
-(slug session-atlas) plus two recency-weighted full-window views — a
-horizontally-scrolling day-by-day timeline (slug session-timeline) and a
-vertical recency ladder (slug session-ladder) — both with click-to-expand
-session cards and live deep search.
+Every run renders TWO living pages from the same scan: the per-project atlas
+(slug session-atlas) and the vertical recency ladder (slug session-ladder) —
+every session in the window, newest first, density falling with age, with
+click-to-expand cards (initial query + GLM "left off" tail gist + resume
+command) and live deep search. The retired session-timeline slug redirects
+to the ladder. Every session younger than GIST_DAYS carries a tail gist,
+cached per (sid, mtime) and refreshed at most GIST_BUDGET calls per run.
 
 Scheduled: desktop user timer claude-session-atlas.timer (daily 07:30 CT,
 Persistent=true — catches up after sleep). Install:
@@ -29,7 +31,7 @@ Persistent=true — catches up after sleep). Install:
      ~/.config/systemd/user/ && systemctl --user daemon-reload && \
   systemctl --user enable --now claude-session-atlas.timer
 """
-import glob, html, json, os, re, subprocess, sys, time
+import calendar, glob, html, json, os, re, subprocess, sys, time
 
 HOMES = [("a1", "claudereal", os.path.expanduser("~/.claude/projects")),
          ("a2", "claude2",    os.path.expanduser("~/.claude-acct2/projects"))]
@@ -38,22 +40,26 @@ OUT = "/tmp/claude-session-atlas.html"
 OUT2 = "/tmp/claude-session-timeline.html"
 OUT3 = "/tmp/claude-session-ladder.html"
 ATLAS_URL = "https://uaonvps.taildcc090.ts.net/scratch/session-atlas/claude-session-atlas.html"
-TIMELINE_URL = "https://uaonvps.taildcc090.ts.net/scratch/session-timeline/claude-session-timeline.html"
 LADDER_URL = "https://uaonvps.taildcc090.ts.net/scratch/session-ladder/claude-session-ladder.html"
+REDIRECT = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta http-equiv="refresh" content="0;url=%s"><title>moved</title>'
+            '</head><body><p>This design was retired — continue to the '
+            '<a href="%s">Claude session ladder</a>.</p></body></html>'
+            % (LADDER_URL, LADDER_URL))
 # dataviz reference categorical palette (light mode, validated order — top 8
 # projects by session count keep a fixed hue, everything else folds to neutral)
 TL_COLORS = ["#2a78d6", "#1baf7a", "#eda100", "#008300",
              "#4a3aa7", "#e34948", "#e87ba4", "#eb6834"]
 TL_OTHER = "#898781"
-TL_MAX = 2000       # timeline carries every session in the window (atlas stays curated)
-TL_DAY_SHOW = 10    # cards shown per day before the "+N more" expander
+TL_MAX = 2000       # ladder carries every session in the window (atlas stays curated)
 TL_DEEP = 400       # newest N sessions also get transcript-TAIL words in the search index
                     # (titles alone miss what a session became — e.g. a session titled by
                     # its first prompt that spent the day building something else entirely)
 CACHE = os.path.expanduser("~/.cache/claude-session-atlas/summaries.json")
 LIVE_DIR = os.path.expanduser("~/.claude/sessions")  # per-pid live registry
 BOILER = "This session is being continued from a previous conversation"
-GIST_PER_REPO = 5  # only the newest N sessions per repo get an LLM gist
+GIST_DAYS = 30     # every session younger than this gets a "left off" tail gist
+GIST_BUDGET = 150  # max NEW gist LLM calls per run — the timer converges over days
 GIST_PROMPT = (
     "Below is the tail end of a Claude Code working session transcript. In 1-2 "
     "sentences (max 45 words), state where the work currently stands and what is "
@@ -71,8 +77,9 @@ def _text(content):
 
 
 def scan(path, max_lines=4000):
-    """Cheap single pass: cwd, session name, first real user msg, last summary."""
-    cwd = name = first_user = last_summary = None
+    """Cheap single pass: cwd, session name, first real user msg, last
+    summary, and the session's start timestamp (first record's ISO ts)."""
+    cwd = name = first_user = last_summary = started = None
     try:
         with open(path, errors="replace") as fh:
             for i, ln in enumerate(fh):
@@ -82,6 +89,8 @@ def scan(path, max_lines=4000):
                     rec = json.loads(ln)
                 except Exception:
                     continue
+                if started is None and rec.get("timestamp"):
+                    started = rec["timestamp"]
                 if cwd is None and rec.get("cwd"):
                     cwd = rec["cwd"]
                 if rec.get("type") == "summary" and rec.get("summary"):
@@ -105,7 +114,7 @@ def scan(path, max_lines=4000):
                         name = s[j + 18:].split(".")[0].strip().strip(' "“”')
     except Exception:
         pass
-    return cwd, name, first_user, last_summary
+    return cwd, name, first_user, last_summary, started
 
 
 def tail_records(path, tail_bytes=262144, keep=24):
@@ -168,34 +177,40 @@ def _glm_gist(tail_texts, timeout=45):
 
 
 def add_gists(rows):
-    """Give the newest GIST_PER_REPO sessions of each repo a 'where we left
-    off' gist from the transcript tail. Cached per (sid, mtime): regenerations
-    only pay LLM cost for sessions that changed since the last run."""
+    """Give every session younger than GIST_DAYS a 'where we left off' gist
+    from the transcript tail. Cached per (sid, mtime): the past never changes,
+    so regenerations only pay LLM cost for sessions that changed since the
+    last run — and at most GIST_BUDGET new calls per run (the daily timer
+    converges over a few days; interactive runs stay bounded). Older rows
+    still get their cached gist/name back."""
     try:
         cache = json.load(open(CACHE))
     except Exception:
         cache = {}
-    seen_per_repo = {}
+    cutoff = time.time() - GIST_DAYS * 86400
+    has_key = bool(os.environ.get("ZAI_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+    budget = GIST_BUDGET if has_key else 0
     dirty = False
     for r in rows:  # rows arrive newest-first
-        k = seen_per_repo.get(r["repo"], 0)
-        if k >= GIST_PER_REPO:
-            continue
-        seen_per_repo[r["repo"]] = k + 1
         c = cache.get(r["sid"])
-        if c and c.get("mtime") == int(r["mtime"]):
+        if c:
             r["gist"] = c.get("gist") or ""
             if not r["name"] and c.get("name"):
                 r["name"] = c["name"]
+        if r["mtime"] < cutoff or (c and c.get("mtime") == int(r["mtime"]) and c.get("gist")):
             continue
+        if budget <= 0:
+            continue
+        budget -= 1
         texts, late_name = tail_records(r["path"])
         if late_name:
             r["name"] = late_name
         g = _glm_gist(texts)
-        r["gist"] = g or ""
-        cache[r["sid"]] = {"mtime": int(r["mtime"]), "gist": r["gist"],
-                           "name": r["name"] or ""}
-        dirty = True
+        if g:  # never cache a failed call — it would block the retry forever
+            r["gist"] = g
+            cache[r["sid"]] = {"mtime": int(r["mtime"]), "gist": g,
+                               "name": r["name"] or ""}
+            dirty = True
     if dirty:
         os.makedirs(os.path.dirname(CACHE), exist_ok=True)
         json.dump(cache, open(CACHE, "w"))
@@ -213,21 +228,6 @@ def build_deep_index(rows):
         words = re.findall(r"[a-z0-9][a-z0-9_.-]{2,24}", " ".join(texts).lower())
         # frequency-ranked so truncation drops rare noise, not alphabet ranges
         r["deep"] = " ".join(w for w, _ in Counter(words).most_common(300))[:2500]
-
-
-def attach_cached_gists(rows):
-    """Decorate rows with already-cached gists/names — zero LLM calls. The
-    atlas pass (add_gists) keeps the cache warm; the timeline just reads it."""
-    try:
-        cache = json.load(open(CACHE))
-    except Exception:
-        return
-    for r in rows:
-        c = cache.get(r["sid"])
-        if c:
-            r["gist"] = c.get("gist") or ""
-            if not r["name"] and c.get("name"):
-                r["name"] = c["name"]
 
 
 def live_status():
@@ -259,15 +259,21 @@ def collect(days, cap):
     rows.sort(reverse=True)
     out = []
     for mt, label, launcher, f in rows[:cap]:
-        cwd, name, first, summ = scan(f)
+        cwd, name, first, summ, started = scan(f)
         if not cwd:
             continue
+        start = None
+        if started:
+            try:
+                start = calendar.timegm(time.strptime(started[:19], "%Y-%m-%dT%H:%M:%S"))
+            except Exception:
+                start = None
         # worktree cwds (<repo>/.claude/worktrees/<x>) consolidate silently into
         # their parent repo — worktrees are plumbing the operator never sees
         repo = os.path.basename(cwd)
         if "/.claude/worktrees/" in cwd:
             repo = os.path.basename(cwd.partition("/.claude/worktrees/")[0])
-        out.append(dict(mtime=mt, acct=label, launcher=launcher,
+        out.append(dict(mtime=mt, start=start, acct=label, launcher=launcher,
                         sid=os.path.basename(f)[:-6], path=f,
                         repo=repo, cwd=cwd, name=name, gist="",
                         first=(first or "")[:200], summary=(summ or "")[:280]))
@@ -329,7 +335,7 @@ code{{font-family:monospace;font-size:12px;background:#f2f0ec;border-radius:4px;
 both accounts, grouped by project, <b>most recently active repo first</b>. The newest sessions in each
 repo carry a GLM-written "where we left off" gist from the transcript tail. Regenerated daily 07:30 CT
 (and on demand: <code>claude-session-atlas --publish</code>). Resume any session by pasting its command
-in a terminal. Timeline view: <a href="{TIMELINE_URL}">session timeline</a>.
+in a terminal. Ladder view: <a href="{LADDER_URL}">session ladder</a>.
 Updated {time.strftime('%Y-%m-%d %H:%M %Z')}.</div></div></header><div class="wrap">"""]
     live = live_status()
     for repo, rs in ordered:
@@ -406,6 +412,9 @@ margin-left:6px;background:#eaf2f9;color:#20507a}
 .p.open .pd{display:block}
 .g{font-size:12.5px;color:#3d3c38;margin-bottom:6px}
 .fp{font-size:12px;color:#5c5a55;font-style:italic;margin-bottom:6px}
+.lb{display:inline-block;color:#a05a00;font-style:normal;font-weight:650;font-size:10px;
+text-transform:uppercase;letter-spacing:.5px;margin-right:5px}
+.mt{font-family:monospace;font-size:10.5px;color:#a09d96;margin-bottom:6px}
 .row{display:flex;gap:6px;align-items:flex-start}
 .row code{word-break:break-all;flex:1}
 .cp{border:1px solid #d8d5cf;background:#fff;border-radius:6px;font-size:11px;padding:2px 8px;cursor:pointer}
@@ -418,69 +427,6 @@ padding:5px;font:12px Inter,sans-serif;color:#5c5a55;cursor:pointer;margin:0 0 8
 .slim .p.open .hl{-webkit-line-clamp:unset}
 .slim .dh{font-size:11px;color:#898781}
 </style>"""
-
-TL_JS = """<script>
-(function(){
-var tlw=document.getElementById('tlw'),tgl=document.getElementById('tgl'),
-    q=document.getElementById('q'),cnt=document.getElementById('cnt'),
-    total=document.querySelectorAll('.p').length,active=new Set();
-function open(on){tlw.classList.toggle('hide',!on);
-  tgl.textContent=on?'\\u25b4 collapse the timeline':'\\u25be expand the timeline';
-  if(on)tlw.scrollLeft=tlw.scrollWidth;}
-tgl.addEventListener('click',function(){open(tlw.classList.contains('hide'));});
-function match(p){
-  var t=q.value.trim().toLowerCase();
-  if(t){var ws=t.split(/\\s+/),s=p.getAttribute('data-s');
-    for(var i=0;i<ws.length;i++)if(s.indexOf(ws[i])<0)return false;}
-  if(!active.size)return true;
-  if(p.hasAttribute('data-o'))return active.has('~other');
-  return active.has(p.getAttribute('data-r'));}
-function filter(){
-  var fa=!!(q.value.trim()||active.size),vis=0;
-  document.querySelectorAll('.day:not(.empty)').forEach(function(d){
-    var exp=d.classList.contains('exp'),mshown=0,SHOW=parseInt(d.getAttribute('data-n'))||10;
-    d.querySelectorAll('.p').forEach(function(p){
-      var m=match(p),show=false;
-      if(m){show=fa||exp||mshown<SHOW;mshown++;vis++;}
-      p.style.display=show?'':'none';});
-    var mb=d.querySelector('.mr');
-    if(mb){
-      if(fa){mb.style.display='none';}
-      else if(exp){mb.style.display='';mb.textContent='\\u25b4 fewer';}
-      else if(mshown>SHOW){mb.style.display='';mb.textContent='+ '+(mshown-SHOW)+' more \\u25be';}
-      else{mb.style.display='none';}}
-    d.classList.toggle('dim',!mshown);});
-  cnt.textContent=vis+' of '+total;
-  if(fa&&tlw.classList.contains('hide'))open(true);}
-q.addEventListener('input',filter);
-filter();
-document.addEventListener('click',function(ev){
-  var el=ev.target.closest('.lg');
-  if(el){var r=el.getAttribute('data-r');
-    if(active.has(r))active.delete(r);else active.add(r);
-    el.classList.toggle('on');filter();return;}
-  el=ev.target.closest('.cp');
-  if(el){var c=el.parentNode.querySelector('code');
-    navigator.clipboard.writeText(c.textContent).then(function(){
-      el.textContent='\\u2713';setTimeout(function(){el.textContent='copy';},1200);});
-    return;}
-  el=ev.target.closest('.mr');
-  if(el){el.closest('.day').classList.toggle('exp');filter();return;}
-  el=ev.target.closest('.ob');
-  if(el){open(true);
-    var d=document.querySelector('.day[data-d="'+el.getAttribute('data-d')+'"]');
-    if(d&&!d.classList.contains('empty')){
-      d.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
-      d.classList.add('hit');setTimeout(function(){d.classList.remove('hit');},1600);}
-    return;}
-  el=ev.target.closest('.ph');
-  if(el){var p=el.parentNode,was=p.classList.contains('open');
-    document.querySelectorAll('.p.open').forEach(function(x){x.classList.remove('open');});
-    if(!was)p.classList.add('open');}
-});
-})();
-</script>"""
-
 
 def _pill(r, color, tfmt):
     """One session card — shared by the timeline and ladder pages."""
@@ -495,10 +441,18 @@ def _pill(r, color, tfmt):
                       r.get("gist") or "", r.get("deep") or ""]).lower())
     gist = r.get("gist") or r["summary"]
     detail = []
+    fmt = "%a %m-%d %H:%M"
+    last = time.strftime(fmt, time.localtime(r["mtime"]))
+    if r.get("start"):
+        meta = "started %s · last active %s" % (
+            time.strftime(fmt, time.localtime(r["start"])), last)
+    else:
+        meta = "last active %s" % last
+    detail.append('<div class="mt">%s</div>' % meta)
     if gist:
-        detail.append('<div class="g">%s</div>' % e(gist))
+        detail.append('<div class="g"><b class="lb">left off</b>%s</div>' % e(gist))
     if first and first != head:
-        detail.append('<div class="fp">“%s”</div>' % e(first))
+        detail.append('<div class="fp"><b class="lb">asked</b>“%s”</div>' % e(first))
     cmd = "cd %s && %s --resume %s" % (r["cwd"], r["launcher"], r["sid"])
     detail.append('<div class="row"><code>%s</code>'
                   '<button class="cp">copy</button></div>' % e(cmd))
@@ -702,84 +656,16 @@ def render_ladder(rows, days):
 Today in full cards, this week medium, this month compact, older weeks collapsed.
 Click a card to expand its gist and resume command. Search covers titles, first prompts,
 gists — and for recent sessions, words from the transcript tail. The strip jumps to any day.
-Alt design: <a href="%s">horizontal timeline</a>. List view: <a href="%s">session atlas</a>.
+List view: <a href="%s">session atlas</a>.
 Updated %s.</div></div></header>
 <div class="wrap">
 <div class="ctl"><input id="q" type="search" placeholder="search %d sessions…">
 <span id="cnt">%d of %d</span>%s</div>
 <div class="ov">%s</div>
 %s
-</div>""" % (len(rows), days, TIMELINE_URL, ATLAS_URL, stamp, len(rows), len(rows),
+</div>""" % (len(rows), days, ATLAS_URL, stamp, len(rows), len(rows),
              len(rows), lg, ov, "".join(secs))
             + LD_JS + "</body></html>")
-
-
-def render_timeline(rows, days):
-    """Design A: a sideways-scrolling day-by-day timeline. Condensed by
-    default (overview strip only); the full lane expands on demand, and
-    every marker explodes into a detail card with a copyable resume command."""
-    counts, ranked, color = _project_colors(rows)
-    keys, buckets = _day_buckets(rows, days)
-    ov = _overview(keys, buckets)
-    lg = _legend(counts, ranked, color)
-
-    # recency-weighted scale: the last week gets a full column per day, days
-    # 8-30 get slim one-line columns, older than a month whole weeks collapse
-    # into one slim column each — screen space follows how likely the operator
-    # is to be looking for that period
-    cols = []
-    j, nk = 0, len(keys)
-    while j < nk:
-        age = nk - 1 - j
-        if age > 30:
-            wk_keys = []
-            while j < nk and (nk - 1 - j) > 30 and len(wk_keys) < 7:
-                wk_keys.append(keys[j])
-                j += 1
-            rs = [r for kk in wk_keys for r in buckets[kk]]
-            k0, ke = wk_keys[0], wk_keys[-1]
-            if rs:
-                cols.append(_col(color, " slim", k0, ' data-e="%s"' % ke,
-                                 "wk %s" % k0[5:], rs, 5, "%m-%d %H:%M"))
-            else:
-                cols.append('<div class="day empty" data-d="%s" data-e="%s" '
-                            'title="wk %s — quiet"></div>' % (k0, ke, k0[5:]))
-            continue
-        k = keys[j]
-        j += 1
-        rs = buckets[k]
-        wd = time.strftime("%a", time.strptime(k, "%Y-%m-%d"))
-        wkc = " wk" if wd in ("Sat", "Sun") else ""
-        label = "%s %s" % (wd, k[5:])
-        if not rs:
-            cols.append('<div class="day empty%s" data-d="%s" title="%s %s — quiet"></div>'
-                        % (wkc, k, wd, k))
-        elif age > 7:
-            cols.append(_col(color, " slim" + wkc, k, "", label, rs, 5, "%H:%M"))
-        else:
-            cols.append(_col(color, wkc, k, "", label, rs, TL_DAY_SHOW, "%H:%M"))
-
-    stamp = time.strftime("%Y-%m-%d %H:%M %Z")
-    return ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude session timeline</title>""" + TL_CSS + """</head><body>
-<header><div class="wrap"><h1>Claude session timeline</h1>
-<div class="sub">%d sessions · last %d days · both accounts · one sideways-scrolling lane.
-The strip below shows sessions per day — click a bar to jump to that day. Click any card
-to expand its gist and resume command. Search covers titles, first prompts, gists — and for
-recent sessions, words from the transcript tail (what the session actually became).
-Busy days show 10 cards; "+ N more" reveals the rest.
-Alt design: <a href="%s">recency ladder</a>. List view: <a href="%s">session atlas</a>.
-Updated %s.</div></div></header>
-<div class="wrap">
-<div class="ctl"><input id="q" type="search" placeholder="search %d sessions…">
-<span id="cnt">%d of %d</span>%s</div>
-<div class="ov">%s</div>
-<button id="tgl">▾ expand the timeline</button>
-<div id="tlw" class="tlw hide"><div class="tl">%s</div></div>
-</div>""" % (len(rows), days, LADDER_URL, ATLAS_URL, stamp, len(rows), len(rows),
-             len(rows), lg, ov, "".join(cols))
-            + TL_JS + "</body></html>")
 
 
 def find(rows, query, limit=8):
@@ -815,13 +701,12 @@ def main():
     # the window, the atlas stays the curated newest-N list with fresh gists
     tl_rows = collect(days, TL_MAX)
     rows = tl_rows[:cap]
-    add_gists(rows)
-    open(OUT, "w").write(render(rows, days))
-    attach_cached_gists(tl_rows)
+    add_gists(tl_rows)
     build_deep_index(tl_rows)
-    open(OUT2, "w").write(render_timeline(tl_rows, days))
+    open(OUT, "w").write(render(rows, days))
+    open(OUT2, "w").write(REDIRECT)  # retired timeline slug → ladder
     open(OUT3, "w").write(render_ladder(tl_rows, days))
-    print(f"atlas: {len(rows)} sessions → {OUT} + timeline/ladder: {len(tl_rows)} → {OUT2}, {OUT3}")
+    print(f"atlas: {len(rows)} sessions → {OUT} + ladder: {len(tl_rows)} → {OUT3}")
     if "--publish" in a:
         env = dict(os.environ, UA_SCRATCH_ARCHIVE_ENABLED="0")  # living pages — no per-day archive churn
         rc = 0
