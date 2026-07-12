@@ -22,8 +22,8 @@ Every run renders TWO living pages from the same scan: the per-project atlas
 every session in the window, newest first, density falling with age, with
 click-to-expand cards (initial query + GLM "left off" tail gist + resume
 command) and live deep search. The retired session-timeline slug redirects
-to the ladder. Every session younger than GIST_DAYS carries a tail gist,
-cached per (sid, mtime) and refreshed at most GIST_BUDGET calls per run.
+to the ladder. The newest GIST_MAX sessions younger than GIST_DAYS carry a
+tail gist, cached per (sid, mtime), at most GIST_BUDGET new calls per run.
 
 Scheduled: desktop user timer claude-session-atlas.timer (daily 07:30 CT,
 Persistent=true — catches up after sleep). Install:
@@ -58,7 +58,8 @@ TL_DEEP = 400       # newest N sessions also get transcript-TAIL words in the se
 CACHE = os.path.expanduser("~/.cache/claude-session-atlas/summaries.json")
 LIVE_DIR = os.path.expanduser("~/.claude/sessions")  # per-pid live registry
 BOILER = "This session is being continued from a previous conversation"
-GIST_DAYS = 30     # every session younger than this gets a "left off" tail gist
+GIST_DAYS = 30     # gist eligibility: younger than this AND within GIST_MAX newest
+GIST_MAX = 450     # operator call: no need to gist further back than the newest 450
 GIST_BUDGET = 150  # max NEW gist LLM calls per run — the timer converges over days
 GIST_PROMPT = (
     "Below is the tail end of a Claude Code working session transcript. In 1-2 "
@@ -191,13 +192,14 @@ def add_gists(rows):
     has_key = bool(os.environ.get("ZAI_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
     budget = GIST_BUDGET if has_key else 0
     dirty = False
-    for r in rows:  # rows arrive newest-first
+    for i, r in enumerate(rows):  # rows arrive newest-first
         c = cache.get(r["sid"])
         if c:
             r["gist"] = c.get("gist") or ""
             if not r["name"] and c.get("name"):
                 r["name"] = c["name"]
-        if r["mtime"] < cutoff or (c and c.get("mtime") == int(r["mtime"]) and c.get("gist")):
+        if (i >= GIST_MAX or r["mtime"] < cutoff
+                or (c and c.get("mtime") == int(r["mtime"]) and c.get("gist"))):
             continue
         if budget <= 0:
             continue
