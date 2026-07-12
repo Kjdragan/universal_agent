@@ -369,6 +369,8 @@ def _build_report(candidates: list[dict]) -> str:
         kind = c.get("skill_fit") or c.get("kind")
         if kind:
             lines.append(f"- **Fit:** {kind}")
+        if c.get("remedy"):
+            lines.append(f"- **Remedy:** {c['remedy']}")
         lines.append("")
     lines.append("---")
     lines.append("_Candidates are advisory. A human must approve before any skill is created._")
@@ -413,9 +415,18 @@ SYSTEM = (
     "skills. Identify NEW skills worth building — recurring manual workflows, repeated "
     "errors, or multi-step command lineages — that are NOT already covered by an existing "
     "skill. Dedupe hard against the existing-skills list. Prioritize by frequency, impact, "
-    "and actionability. Respond with ONLY a JSON object: "
+    "and actionability. Classify each candidate's remedy — what kind of fix actually "
+    "removes the pain: 'skill' (an invocable skill), 'code-fix' (belongs in pipeline/"
+    "service code, e.g. retry/backoff or a deterministic pre-check), 'prompt-fix' (a "
+    "standing-instructions/CLAUDE.md line), 'error-message-fix' (a guardrail's rejection "
+    "text should teach the correct alternative), or 'already-automated' (the evidence is "
+    "machine-templated prompts emitted by an existing automation loop — a false positive; "
+    "score it near 0). Identically-phrased prompts that differ only by a counter (e.g. "
+    "'Run research pass N now') are automation output, not operator toil. "
+    "Respond with ONLY a JSON object: "
     '{"candidates":[{"title":"...","problem":"...","evidence":"...","frequency":N,'
-    '"skill_fit":"new|update <existing-skill>","score":0.0}]}. '
+    '"skill_fit":"new|update <existing-skill>",'
+    '"remedy":"skill|code-fix|prompt-fix|error-message-fix|already-automated","score":0.0}]}. '
     "Empty candidates list if nothing recurs enough to justify a skill."
 )
 

@@ -190,7 +190,9 @@ def validate_tool_paths(
                 # Re-raise with more context
                 raise WorkspaceGuardError(
                     f"Tool input '{key}' contains path '{original}' which "
-                    f"is outside the run workspace '{workspace_root}'"
+                    f"is outside the run workspace '{workspace_root}'. "
+                    f"Write outputs under '{workspace_root}/work_products/' "
+                    f"instead — /tmp and system paths are blocked from missions."
                 )
     
     return modified

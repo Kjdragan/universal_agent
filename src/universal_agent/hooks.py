@@ -1335,7 +1335,9 @@ class AgentHookSet:
                         msg = (
                             f"Tool input 'path' contains path '{raw_path}' which is outside the "
                             f"run workspace, UA_ARTIFACTS_DIR, and any authorized codebase roots. "
-                            f"Correct workspace root: {ws_root}"
+                            f"Correct workspace root: {ws_root}. Write new files under "
+                            f"{ws_root}/work_products/ via write_text_file — /tmp and repo "
+                            f"source paths are blocked."
                         )
                         logfire.warning(
                             "workspace_guard_blocked",
@@ -2505,7 +2507,7 @@ class AgentHookSet:
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": "Blocked massive Bash heredoc/redirect pattern. Do NOT use Bash to manually write large files or synthesize data. Use programmatic file writing tools (e.g. Write) or the designated pipeline tools.",
+                    "permissionDecisionReason": "Blocked massive Bash heredoc/redirect pattern. Do NOT use Bash to write file content (heredocs, cat/echo/tee redirects). Create files with the `write_text_file` tool targeting your run workspace's work_products/ directory; use Edit for small changes to existing files. Bash is for running commands, not authoring file content.",
                 },
             }
         return {}

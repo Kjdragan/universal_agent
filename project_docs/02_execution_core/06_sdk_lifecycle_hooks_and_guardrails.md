@@ -196,8 +196,12 @@ positives.
 - `on_pre_bash_warn_dependency_installs` — soft `systemMessage` discouraging
   `pip install` / `uv add` in favor of PEP 723 + `uv run` (does **not** block).
 - `on_pre_bash_block_large_heredocs` — denies very long (>2000 char) commands that
-  use heredocs / `cat >` / `echo` / `tee` / redirects, steering large file writes to
-  the `Write` tool.
+  use heredocs / `cat >` / `echo` / `tee` / redirects. Its denial message steers
+  authoring to `write_text_file` targeting the workspace `work_products/` dir
+  (`Edit` for small changes) — NOT the native `Write` tool, which the heartbeat
+  File Write Rules forbid for new files; the message and the standing rules must
+  keep naming the same alternative or agents ping-pong between guards
+  (the 113x repeat-violation finding, skill-gap finder 2026-07-11).
 - `on_pre_bash_block_composio_sdk` — denies direct Composio SDK/CLI use in Bash;
   must use `mcp__composio__*`.
 - `on_pre_bash_block_playwright_non_html` / `on_pre_bash_redirect_pdf_conversion` —
