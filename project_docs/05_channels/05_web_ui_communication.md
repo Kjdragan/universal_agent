@@ -14,7 +14,7 @@ code_paths:
   - web-ui/lib/dashboardAuth.ts
   - web-ui/app/api/dashboard/auth/login/route.ts
   - web-ui/app/api/dashboard/gateway/[...path]/route.ts
-last_verified: 2026-06-22
+last_verified: 2026-07-13
 ---
 
 # Web UI Communication
