@@ -19,9 +19,9 @@ project_docs/06_platform/13_resumable_external_jobs_adr.md.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import sys
 import time
-from pathlib import Path
 
 CHECKPOINT_NAME = ".nlm_resume.json"
 MAX_AGE_SECONDS = 24 * 3600

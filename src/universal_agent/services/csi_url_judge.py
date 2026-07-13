@@ -23,8 +23,8 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, HttpUrl, field_validator
 
-from universal_agent.utils.model_resolution import resolve_opus
 from universal_agent.utils.anthropic_client import call_llm_structured, has_llm_key
+from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
 

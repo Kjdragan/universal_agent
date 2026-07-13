@@ -41,8 +41,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from universal_agent.utils.model_resolution import resolve_opus
 from universal_agent.utils.anthropic_client import call_llm_structured
+from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
 

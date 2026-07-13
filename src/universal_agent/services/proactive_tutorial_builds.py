@@ -14,7 +14,6 @@ import sqlite3
 from typing import Any
 
 from universal_agent import task_hub
-from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 from universal_agent.feature_flags import (
     proactive_demo_factory_run_cmd,
     proactive_demo_factory_script,
@@ -28,6 +27,7 @@ from universal_agent.services.proactive_artifacts import (
 from universal_agent.services.proactive_task_builder import queue_proactive_task
 from universal_agent.services.tutorial_demo_finalize import proactive_demo_slug
 from universal_agent.utils.day_boundary import chicago_day_start_iso
+from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 
 logger = logging.getLogger(__name__)
 

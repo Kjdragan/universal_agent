@@ -37,8 +37,8 @@ import time
 from typing import Any, Optional
 
 from universal_agent.services import proactive_artifacts
-from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.services.email_tags import ActionTag, KindTag
+from universal_agent.utils.json_utils import extract_json_payload
 
 logger = logging.getLogger(__name__)
 
