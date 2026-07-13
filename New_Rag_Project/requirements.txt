@@ -12,7 +12,7 @@ google-genai>=1.0.0
 openai>=2.45.0
 
 # Web Interface
-streamlit>=1.59.0
+streamlit>=1.59.2
 
 # Utilities
 python-dotenv>=1.0.0
