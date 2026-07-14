@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assessment — #1/#2/#3/#6 (2026-07-14)</title>
+<style>
+  :root{ color-scheme: light; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:#eef1f5; color:#1f2328;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; line-height:1.52; }
+  .wrap{ max-width:1000px; margin:0 auto; padding:26px 18px 70px; }
+  .kicker{ font-size:12px; letter-spacing:.09em; text-transform:uppercase; color:#8250df; font-weight:700; }
+  h1{ font-size:26px; margin:6px 0 4px; letter-spacing:-.01em; }
+  .sub{ color:#57606a; font-size:14px; margin:0 0 20px; }
+  .tldr{ background:#fff; border:1px solid #d7dde3; border-left:4px solid #0969da; border-radius:11px; padding:16px 18px; margin:0 0 12px; font-size:14px; }
+  .tldr b{ color:#1f2328; }
+  .correct{ background:#fff8f0; border:1px solid #f0c99a; border-left:4px solid #bc4c00; border-radius:11px; padding:13px 16px; margin:0 0 24px; font-size:13.5px; }
+  .correct h3{ margin:0 0 7px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:#bc4c00; }
+  .correct li{ margin:3px 0; }
+  .card{ background:#fff; border:1px solid #d7dde3; border-radius:12px; padding:0; margin:0 0 16px; overflow:hidden; }
+  .chead{ display:flex; align-items:center; gap:11px; padding:14px 18px; border-bottom:1px solid #eaeef2; flex-wrap:wrap; }
+  .cnum{ font-weight:800; font-size:15px; color:#8250df; }
+  .ctitle{ font-weight:700; font-size:16px; flex:1; min-width:200px; }
+  .cbody{ padding:14px 18px 16px; font-size:13.6px; }
+  .row{ margin:0 0 11px; }
+  .lbl{ font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:#6e7781; display:block; margin-bottom:2px; }
+  .q{ background:#f6f8fa; border-radius:8px; padding:9px 12px; margin:0 0 11px; font-size:13.3px; }
+  .q b{ color:#0550ae; }
+  .badge{ display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; padding:3px 9px; border-radius:20px; }
+  .b-do{ background:#dafbe1; color:#116329; }
+  .b-decide{ background:#ddf4ff; color:#0550ae; }
+  .b-done{ background:#eef1f4; color:#57606a; }
+  .b-flag{ background:#fff8c5; color:#7a5900; }
+  ul{ margin:4px 0 0; padding-left:20px; }
+  li{ margin:2px 0; }
+  code{ background:#f0f2f5; padding:1px 5px; border-radius:4px; font-size:12px; }
+  .done-line{ color:#6e7781; font-size:12.8px; }
+  .act{ background:#f6fbf7; border:1px solid #b7e4c7; border-radius:8px; padding:9px 12px; font-size:13.3px; margin-top:4px; }
+  .act.flag{ background:#fffdf2; border-color:#e6d894; }
+  .act.decide{ background:#f2f8ff; border-color:#a9d3f5; }
+  .bonus{ background:#fff; border:1px dashed #d0aa55; border-radius:10px; padding:13px 16px; margin:6px 0 0; font-size:13px; }
+  h2{ font-size:14px; text-transform:uppercase; letter-spacing:.05em; color:#424a53; margin:26px 0 10px; }
+  .foot{ color:#8a929c; font-size:12px; margin-top:26px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">UA · Session Assessment — Fronts #1 / #2 / #3 / #6</div>
+  <h1>What's real, what's already built, what needs your call</h1>
+  <p class="sub">11-agent adversarially-verified assessment (code at origin/main + live VPS state), 2026-07-14. A1 &amp; Tier 2 set aside per your direction.</p>
+
+  <div class="tldr">
+    <b>The reframe:</b> you asked me to fix four things — but the deep dive found <b>three of the four were largely built and deployed weeks ago</b>.
+    So the real remaining work is smaller and more targeted than the 137-proposal pile implied. <b>#1</b> has genuine, high-leverage work (the shipped
+    dedup doesn't actually work). <b>#2</b> is substantially done and calm — two cheap fixes + one architecture decision. <b>#3</b> is a <b>policy decision
+    for you</b> (assessment complete). <b>#6</b> is one small fix. Nothing in production has been changed yet.
+  </div>
+
+  <div class="correct">
+    <h3>⚠ Two stale facts I corrected along the way</h3>
+    <ul>
+      <li><b>Project <code>CLAUDE.md</code> is wrong about Cody's inference:</b> it says "Cody defaults to Anthropic Max for every task." Verified against
+        Infisical (<code>UA_CODY_DEFAULT_MODE=zai</code>) + code — Cody/VP were flipped <b>back to ZAI on 2026-06-07</b> when Anthropic began billing the Max SDK path.
+        So your premise (UA is the heaviest ZAI caller) is <b>correct</b>. I'll fix the doc.</li>
+      <li><b>The gateway event-loop hang fix (PR #1404) is already merged &amp; live</b> — the history agent read a pre-merge code snapshot and wrongly
+        flagged it as open. No action needed there.</li>
+    </ul>
+  </div>
+
+  <!-- #1 -->
+  <div class="card">
+    <div class="chead"><span class="cnum">#1</span><span class="ctitle">Ideation over-emission (dedup + verify-against-reality)</span>
+      <span class="badge b-do">I'll implement</span></div>
+    <div class="cbody">
+      <div class="q"><b>Your question — why do duplicates pile up?</b> Because the only dedup is a <b>lexical exact-title match</b>, and the ideating LLM is
+        <b>never shown its own open backlog</b>.</div>
+      <div class="row"><span class="lbl">Root cause (verified on live data)</span>
+        137 open reflection proposals map to <b>130 distinct dedup keys</b> — the lexical dedup collapses essentially nothing, because the LLM re-words the
+        same idea every cycle and a reworded title = a new key. And <code>reflection_engine.py::build_reflection_context</code> feeds the model recent
+        completions + a bare open-count, but <b>not its open proposals</b> — so it's structurally blind to what it already proposed.
+        <br><span style="color:#8250df;">Smoking gun: the backlog itself contains repeated proposals to "dedup the ideation lane" and "add a verify-against-reality gate" — it's re-proposing the fix for its own bug.</span></div>
+      <div class="row"><span class="lbl">Already shipped (don't rebuild)</span>
+        <span class="done-line">Insert-time lexical dedup (#1125), dispatch pre-flight dedup (#1326), structured held-proposals + morning report (#1105/#1106). All real — but the dedup is ineffective by design (lexical).</span></div>
+      <div class="row"><span class="lbl">Genuinely remaining</span>
+        <ul><li><b>Make the ideator backlog-aware</b> — inject its open proposals into the prompt so it <em>advances/supersedes</em> instead of duplicating. Single highest-leverage fix; verifier: "(1) alone should cut over-emission dramatically."</li>
+        <li><b>Verify-against-reality gate</b> — a cheap grounding check ("is this already done or already open?") before a proposal is held. This is the "missing half."</li></ul></div>
+      <div class="act">▶ <b>Action:</b> implement backlog-aware context + a lightweight grounding gate. LLM-native, low-risk, no schema change.</div>
+    </div>
+  </div>
+
+  <!-- #2 -->
+  <div class="card">
+    <div class="chead"><span class="cnum">#2</span><span class="ctitle">ZAI 529 / concurrency</span>
+      <span class="badge b-do">2 cheap fixes</span> <span class="badge b-decide">1 decision</span></div>
+    <div class="cbody">
+      <div class="q"><b>Your framing:</b> ZAI is token-rich but concurrency-limited; UA is the heaviest caller; redesign so we stop causing 529/FUP/1313.
+        <b>Verdict: the redesign already largely landed and is working.</b></div>
+      <div class="row"><span class="lbl">Reality check (live)</span>
+        <b>0 FUP in 7 days, ~1 real overload in 24h.</b> The residual ~11 transient 529s/72h all come from <b>one serialized lane</b> (Simone heartbeat,
+        concurrency ≈ 1) → they're ZAI provider-side blips, <b>not us overloading</b>. (Naive log greps over-count 10× — SSH command echo + tracebacks.)</div>
+      <div class="row"><span class="lbl">Already shipped (don't rebuild)</span>
+        <span class="done-line">AIMD per-tier limiter (#946), FUP circuit breaker (#940), per-loop primitives (#937), upstream-health breaker (#1299), opus pacing/batching/serialization. Prod caps opus=1/mid=2/sonnet=3, 8s opus pacing.</span></div>
+      <div class="row"><span class="lbl">Genuine gaps</span>
+        <ul><li><b>(cheap)</b> A 529 that returns as heartbeat <em>response text</em> is logged as a <em>successful</em> cycle → backoff never fires, the cycle is wasted (~3-4×/day).</li>
+        <li><b>(architecture)</b> The limiter is <b>per-process</b> — no account-wide cap, and the two heaviest callers (CSI ingester + spawned <code>claude</code> CLI missions) <b>bypass it entirely</b>. Real account-wide opus concurrency is ~6-7, not 1. Robustness gap, <em>not a current fire</em>.</li></ul></div>
+      <div class="act">▶ <b>Action (implement):</b> detect 529 in the heartbeat response-text path (engage backoff + retry); fix the stale <code>CLAUDE.md</code> Cody=ZAI fact.</div>
+      <div class="act flag">⚑ <b>Flag for your decision (I won't do unilaterally — touches throughput + spend):</b> build the account-wide cross-process concurrency gate + bring CSI/CLI missions under it; and/or add a ZAI→Anthropic-Max <b>inference fallback</b> for heartbeat principals (today a sustained ZAI outage silently no-ops the whole autonomous org). Both are real engineering; neither is on fire.</div>
+    </div>
+  </div>
+
+  <!-- #3 -->
+  <div class="card">
+    <div class="chead"><span class="cnum">#3</span><span class="ctitle">Demo-factory backlog (541 tutorial_build)</span>
+      <span class="badge b-decide">Your decision</span></div>
+    <div class="cbody">
+      <div class="q"><b>Your questions, answered directly:</b></div>
+      <div class="row"><span class="lbl">Does /demo contaminate the queue?</span>
+        <b>No.</b> All 536 open rows are proactively-minted (CSI channel-watch 631 + YouTube-digest 57); <b>zero</b> from interactive <code>/demo</code>.
+        <code>/demo</code> runs the <code>demo_factory</code> engine directly and never touches the queue. You're in the clear.</div>
+      <div class="row"><span class="lbl">Is there an "~8/day" cap?</span>
+        There's a cap <em>system</em> (<code>proactive_demo_daily_cap</code> + <code>UA_DEMO_BUILD_DAILY_CEILING</code>), but both are <b>set to 0</b> —
+        fully gated since your 2026-07-05 decision. So auto-build is <b>OFF (0/day)</b>, not 8/day. The "~8/day" you remember isn't active.</div>
+      <div class="row"><span class="lbl">Why 536 backing up?</span>
+        The producer mints <b>~23/day</b> into a pending-approval pile with <b>no cap and no expiry</b>; the only drain is a manual approve-click that rarely
+        happens → monotonic growth, oldest <b>33 days</b>. The consumer is <b>idle</b> (0 approved items waiting) — it is <b>not</b> a throughput problem, so raising concurrency would be wrong.</div>
+      <div class="row"><span class="lbl">Already shipped vs remaining</span>
+        <span class="done-line">Shipped: the cap/gate mechanism (#1230/#1278) + directed-lane separation. NOT shipped: any bound or TTL on the pending pile — that's the genuine gap.</span></div>
+      <div class="act decide">▶ <b>My recommendation:</b> keep auto-build gated (your curated-inbox posture), but stop the pile growing forever:
+        <b>(a)</b> one-time purge the aged tail (~292 rows &gt;14d old); <b>(b)</b> add an approval-decay TTL that auto-iceboxes pending rows after ~14 days
+        (keyed off <code>created_at</code> — note: there's no <code>expires_at</code> column, so it's a status transition, not a column flip); <b>(c)</b> add a
+        producer backlog-bound (stop minting once pending &gt; ~50). This drains it and prevents recurrence without changing your gating decision.
+        <b>Alternative</b> if you'd rather it self-drain: set the ceiling to ~3-5/day (but Cody is on ZAI + one coder slot, so that adds ZAI load). <b>→ I need your call below.</b></div>
+    </div>
+  </div>
+
+  <!-- #6 -->
+  <div class="card">
+    <div class="chead"><span class="cnum">#6</span><span class="ctitle">Proactive-health watchdog false positives</span>
+      <span class="badge b-do">1 small fix</span></div>
+    <div class="cbody">
+      <div class="row"><span class="lbl">Finding</span>
+        The denoising batch already landed. <b>Exactly one</b> false positive still fires: <code>csi_convergence_sync_freshness</code> — it warns when no
+        convergence candidate has landed in 5h during the day, but convergence is <b>signal-gated (bursty)</b>, so a quiet afternoon on a <b>healthy</b>
+        pipeline trips it (firing right now, warn-only).</div>
+      <div class="act">▶ <b>Action (implement):</b> raise the threshold 5h→26h + fix the stale message, mirroring the existing <code>nightly_wiki</code>
+        "quiet-is-legitimate" pattern. One file, warn-only, low-risk.</div>
+      <div class="bonus"><b>Two bonus finds while I was in there:</b>
+        <ul><li><b>Possible real failure:</b> <code>morning_briefing_freshness</code> is <em>also</em> firing — no <code>DAILY_BRIEFING.md</code> for today.
+          You may have gotten <b>no morning briefing today</b>. Want me to chase that?</li>
+        <li><b>Still genuinely open (from the #1404 hang):</b> no "loop-liveness" watchdog exists — <code>systemctl</code> reported "active" through the entire
+          hang. A watchdog that pings <code>/api/v1/version</code> and restarts on timeout would have caught it. The root-cause fix landed; loop-responsiveness monitoring didn't.</li></ul></div>
+    </div>
+  </div>
+
+  <h2>The one other thing worth a look</h2>
+  <div class="card"><div class="cbody" style="padding-top:14px;">
+    <b>The <code>proactive-demo-nuggets</code> build lane is failing 100% of builds (rc=3).</b> It's the one demo lane with a live ceiling (5/day), and it
+    produces nothing — every build errors. Separate from the backlog issue. <span class="badge b-flag" style="margin-left:6px;">flag</span>
+    &nbsp;I can investigate the rc=3 root cause if you want (question below).
+  </div></div>
+
+  <div class="foot">Assessment: 7 investigators (code + live VPS + git/PR history) → 4 adversarial verifiers, all "mostly confirmed". Full raw findings retained in session. No production changes made yet.</div>
+</div>
+</body>
+</html>
