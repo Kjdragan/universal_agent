@@ -62,7 +62,7 @@ async def test_agent_metrics_empty_database(monkeypatch, tmp_path):
     """Endpoint returns zero-valued metrics when database has no data."""
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
 
-    response = await gateway_server.dashboard_agent_metrics()
+    response = gateway_server.dashboard_agent_metrics()
 
     assert response["status"] == "ok"
     assert "generated_at" in response
@@ -102,7 +102,7 @@ async def test_agent_metrics_avg_completion_time(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_agent_metrics()
+    response = gateway_server.dashboard_agent_metrics()
     assert response["status"] == "ok"
     metrics = response["metrics"]
 
@@ -131,7 +131,7 @@ async def test_agent_metrics_success_rate_per_agent(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_agent_metrics()
+    response = gateway_server.dashboard_agent_metrics()
     assert response["status"] == "ok"
     rates = response["metrics"]["success_rate_per_agent"]
 
@@ -161,7 +161,7 @@ async def test_agent_metrics_routing_accuracy(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_agent_metrics()
+    response = gateway_server.dashboard_agent_metrics()
     assert response["status"] == "ok"
     ra = response["metrics"]["routing_accuracy"]
 
@@ -185,7 +185,7 @@ async def test_agent_metrics_total_completed_7d(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_agent_metrics()
+    response = gateway_server.dashboard_agent_metrics()
     assert response["status"] == "ok"
     assert response["metrics"]["total_tasks_completed_7d"] == 3
 
@@ -215,7 +215,7 @@ async def test_agent_metrics_excludes_stale_assignments(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_agent_metrics()
+    response = gateway_server.dashboard_agent_metrics()
     assert response["status"] == "ok"
     metrics = response["metrics"]
 
@@ -230,7 +230,7 @@ async def test_agent_metrics_response_shape(monkeypatch, tmp_path):
     """Verify the full response shape matches the expected schema."""
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
 
-    response = await gateway_server.dashboard_agent_metrics()
+    response = gateway_server.dashboard_agent_metrics()
 
     assert response["status"] == "ok"
     assert isinstance(response["generated_at"], str)

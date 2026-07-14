@@ -14,7 +14,6 @@ dashboard tile:
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 import sqlite3
 
@@ -246,7 +245,7 @@ def test_get_endpoint_returns_summary(monkeypatch, tmp_path) -> None:
 
     from universal_agent.gateway_server import cody_anthropic_token_tracking_get
 
-    out = asyncio.run(cody_anthropic_token_tracking_get(mode="anthropic"))
+    out = cody_anthropic_token_tracking_get(mode="anthropic")
     assert out["mission_count"] == 1
     assert out["input_tokens"] == 42
     assert out["output_tokens"] == 12
@@ -265,5 +264,5 @@ def test_get_endpoint_invalid_mode(monkeypatch, tmp_path) -> None:
     from universal_agent.gateway_server import cody_anthropic_token_tracking_get
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(cody_anthropic_token_tracking_get(mode="garbage"))
+        cody_anthropic_token_tracking_get(mode="garbage")
     assert exc.value.status_code == 400

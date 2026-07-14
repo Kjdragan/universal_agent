@@ -132,7 +132,7 @@ async def test_claude_code_intel_dashboard_endpoint_returns_latest_packet_and_va
         encoding="utf-8",
     )
 
-    payload = await gateway_server.dashboard_claude_code_intel(request=object(), limit=20)
+    payload = gateway_server.dashboard_claude_code_intel(request=object(), limit=20)
 
     assert payload["status"] == "ok"
     assert payload["state"]["last_seen_post_id"] == "2047086372666921217"
@@ -225,7 +225,7 @@ async def test_dashboard_returns_multi_handle_state(monkeypatch, tmp_path: Path)
     vault = tmp_path / "knowledge-vaults" / "claude-code-intelligence"
     vault.mkdir(parents=True, exist_ok=True)
 
-    payload = await gateway_server.dashboard_claude_code_intel(request=object(), limit=10)
+    payload = gateway_server.dashboard_claude_code_intel(request=object(), limit=10)
 
     state = payload["state"]
     assert state["seen_post_count"] == 3  # 2 from ClaudeDevs + 1 from bcherny

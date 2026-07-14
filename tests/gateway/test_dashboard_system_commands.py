@@ -116,7 +116,7 @@ async def test_todolist_overview_includes_heartbeat_runtime_snapshot(monkeypatch
     monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
     monkeypatch.setenv("UA_HEARTBEAT_INTERVAL", "25m")
 
-    response = await gateway_server.dashboard_todolist_overview()
+    response = gateway_server.dashboard_todolist_overview()
 
     assert response["status"] == "ok"
     heartbeat = response.get("heartbeat") or {}
@@ -135,7 +135,7 @@ async def test_todolist_overview_prefers_interval_over_legacy_every(monkeypatch)
     monkeypatch.setenv("UA_HEARTBEAT_INTERVAL", "10m")
     monkeypatch.setenv("UA_HEARTBEAT_EVERY", "25m")
 
-    response = await gateway_server.dashboard_todolist_overview()
+    response = gateway_server.dashboard_todolist_overview()
 
     assert response["status"] == "ok"
     heartbeat = response.get("heartbeat") or {}
@@ -149,7 +149,7 @@ async def test_todolist_overview_uses_runtime_min_interval_env(monkeypatch):
     monkeypatch.setenv("UA_HEARTBEAT_INTERVAL", "10m")
     monkeypatch.setenv("UA_HEARTBEAT_MIN_INTERVAL_SECONDS", "600")
 
-    response = await gateway_server.dashboard_todolist_overview()
+    response = gateway_server.dashboard_todolist_overview()
 
     assert response["status"] == "ok"
     heartbeat = response.get("heartbeat") or {}
@@ -235,7 +235,7 @@ async def test_todolist_completed_and_history_endpoints_include_links(monkeypatc
         finally:
             conn.close()
 
-    completed = await gateway_server.dashboard_todolist_completed(limit=20)
+    completed = gateway_server.dashboard_todolist_completed(limit=20)
     items = completed.get("items") or []
     row = next((item for item in items if item.get("task_id") == "task:history-endpoint"), None)
     assert row is not None
@@ -243,7 +243,7 @@ async def test_todolist_completed_and_history_endpoints_include_links(monkeypatc
     assert str(links.get("session_href") or "").startswith("/dashboard/sessions")
     assert "run.log" in str(links.get("run_log_path") or "")
 
-    history = await gateway_server.dashboard_todolist_task_history("task:history-endpoint", limit=20)
+    history = gateway_server.dashboard_todolist_task_history("task:history-endpoint", limit=20)
     assignments = history.get("assignments") or []
     assert len(assignments) >= 1
     first_links = assignments[0].get("links") or {}

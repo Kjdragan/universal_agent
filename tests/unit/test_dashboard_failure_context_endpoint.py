@@ -14,7 +14,6 @@ lifespan. This mirrors the B.1 unit-test style in
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 from typing import Any
 
@@ -84,7 +83,7 @@ def _seed_wedged_task(
 
 
 def _call(task_id: str) -> dict:
-    return asyncio.run(dashboard_todolist_get_failure_context(task_id))
+    return dashboard_todolist_get_failure_context(task_id)
 
 
 # ── 1. 404 for non-existent task ────────────────────────────────────────────

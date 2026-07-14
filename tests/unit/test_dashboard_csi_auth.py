@@ -10,9 +10,10 @@ Request (auth is the first line, so no destructive work runs) and asserts 401.
 """
 
 import asyncio
+import inspect
 
-import pytest
 from fastapi import HTTPException
+import pytest
 from starlette.requests import Request
 
 import universal_agent.gateway_server as gs
@@ -37,38 +38,44 @@ def _ops_token_set(monkeypatch):
     monkeypatch.setattr(gs, "OPS_JWT_SECRET", "", raising=False)
 
 
-def _assert_401(coro):
+def _assert_401(call):
+    # Handlers may be sync `def` (blocking work runs in Starlette's threadpool)
+    # or `async def`; invoke inside pytest.raises so a sync handler's immediate
+    # raise is caught, and only drive the event loop when we actually got a
+    # coroutine back.
     with pytest.raises(HTTPException) as ei:
-        asyncio.run(coro)
+        result = call()
+        if inspect.iscoroutine(result):
+            asyncio.run(result)
     assert ei.value.status_code == 401
 
 
 def test_purge_requires_auth():
-    _assert_401(gs.dashboard_csi_purge(_req()))
+    _assert_401(lambda: gs.dashboard_csi_purge(_req()))
 
 
 def test_clear_all_digests_requires_auth():
-    _assert_401(gs.dashboard_csi_clear_all(_req()))
+    _assert_401(lambda: gs.dashboard_csi_clear_all(_req()))
 
 
 def test_delete_digest_requires_auth():
-    _assert_401(gs.dashboard_csi_delete_digest("some-id", _req()))
+    _assert_401(lambda: gs.dashboard_csi_delete_digest("some-id", _req()))
 
 
 def test_send_to_simone_requires_auth():
-    _assert_401(gs.send_csi_digest_to_simone("some-id", _req()))
+    _assert_401(lambda: gs.send_csi_digest_to_simone("some-id", _req()))
 
 
 def test_specialist_loop_action_requires_auth():
     payload = gs.CSISpecialistLoopActionRequest(action="request_followup")
-    _assert_401(gs.dashboard_csi_specialist_loop_action("topic", payload, _req()))
+    _assert_401(lambda: gs.dashboard_csi_specialist_loop_action("topic", payload, _req()))
 
 
 def test_specialist_loop_triage_requires_auth():
     payload = gs.CSISpecialistLoopTriageRequest()
-    _assert_401(gs.dashboard_csi_specialist_loop_triage(payload, _req()))
+    _assert_401(lambda: gs.dashboard_csi_specialist_loop_triage(payload, _req()))
 
 
 def test_specialist_loop_cleanup_requires_auth():
     payload = gs.CSISpecialistLoopCleanupRequest()
-    _assert_401(gs.dashboard_csi_specialist_loop_cleanup(payload, _req()))
+    _assert_401(lambda: gs.dashboard_csi_specialist_loop_cleanup(payload, _req()))
