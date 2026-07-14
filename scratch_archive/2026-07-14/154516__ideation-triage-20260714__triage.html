@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation Backlog Triage — 2026-07-14</title>
+<style>
+  :root{ color-scheme: light; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:#eef1f5; color:#1f2328;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased; line-height:1.5; }
+  .wrap{ max-width:960px; margin:0 auto; padding:26px 18px 90px; }
+  .kicker{ font-size:12px; letter-spacing:.09em; text-transform:uppercase; color:#8250df; font-weight:700; }
+  h1{ font-size:27px; margin:6px 0 6px; letter-spacing:-.01em; }
+  .sub{ color:#57606a; font-size:14px; margin:0 0 22px; }
+  .findings{ display:grid; gap:12px; margin:0 0 26px; }
+  .finding{ background:#fff; border:1px solid #d7dde3; border-left:4px solid #8250df; border-radius:10px; padding:14px 16px; }
+  .finding b{ color:#1f2328; }
+  .finding.warn{ border-left-color:#bf8700; }
+  .finding.good{ border-left-color:#1a7f37; }
+  h2{ font-size:15px; text-transform:uppercase; letter-spacing:.05em; color:#424a53; margin:30px 0 4px;
+     padding-bottom:8px; border-bottom:2px solid #d7dde3; }
+  .tierdesc{ color:#57606a; font-size:13px; margin:0 0 14px; }
+  .card{ background:#fff; border:1px solid #d7dde3; border-radius:11px; padding:15px 17px 15px 15px;
+     margin:0 0 12px; display:flex; gap:13px; align-items:flex-start; transition:border-color .12s, box-shadow .12s; }
+  .card:has(input:checked){ border-color:#1a7f37; box-shadow:0 0 0 1px #1a7f37 inset; background:#f6fbf7; }
+  .card input[type=checkbox]{ width:21px; height:21px; margin-top:2px; flex:0 0 auto; cursor:pointer; accent-color:#1a7f37; }
+  .body{ flex:1; min-width:0; }
+  .titleline{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:5px; }
+  .num{ font-weight:800; color:#8250df; font-size:14px; }
+  .title{ font-weight:680; font-size:15.5px; }
+  .why{ font-size:13.5px; color:#3b4148; margin:3px 0 0; }
+  .meta{ font-size:11.5px; color:#6e7781; margin-top:7px; }
+  .badge{ display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase;
+     padding:2px 7px; border-radius:20px; vertical-align:middle; }
+  .b-live{ background:#dafbe1; color:#116329; }
+  .b-verify{ background:#fff8c5; color:#7a5900; }
+  .b-decide{ background:#ddf4ff; color:#0550ae; }
+  .b-src{ background:#eef1f4; color:#57606a; }
+  .pass .card{ opacity:.72; border-style:dashed; }
+  .pass .card:has(input:checked){ opacity:1; }
+  .strike{ color:#8a929c; }
+  .bar{ position:fixed; left:0; right:0; bottom:0; background:#1f2328; color:#fff;
+     display:flex; align-items:center; justify-content:space-between; gap:14px;
+     padding:11px 18px; box-shadow:0 -2px 14px rgba(0,0,0,.18); z-index:50; }
+  .bar .count{ font-size:14px; }
+  .bar .count b{ color:#7ee2a0; }
+  .bar button{ font:inherit; font-size:13px; font-weight:650; border:0; border-radius:7px;
+     padding:9px 15px; cursor:pointer; }
+  .btn-copy{ background:#2da44e; color:#fff; }
+  .btn-clear{ background:#3a424c; color:#cdd3da; }
+  .note{ font-size:12.5px; color:#57606a; background:#fff; border:1px solid #d7dde3; border-radius:9px;
+     padding:11px 14px; margin:8px 0 0; }
+  @media (max-width:560px){ .bar{ flex-direction:column; align-items:stretch; } .bar .count{ text-align:center; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">UA · Autonomous Ideation — Operator Triage</div>
+  <h1>Ideation Backlog Triage</h1>
+  <p class="sub">137 held reflection proposals (Jun 20 → Jul 14) collapsed into 20 distinct initiatives, ranked for execution.
+     Grounded in live VPS state checked 2026-07-14. Tick what you want done, then hit <b>Copy task list</b> at the bottom and paste it back to me to spin up a long-running task.</p>
+
+  <div class="findings">
+    <div class="finding">
+      <b>Finding 1 — The backlog is mostly duplicates.</b> 137 proposals, but no new ideas after the first ~20.
+      The ideation engine re-emits the same handful every cycle (that's literally proposal #1 below). This triage
+      de-dupes them; the raw count overstates the real work.
+    </div>
+    <div class="finding warn">
+      <b>Finding 2 — ~30% of the backlog is one stalled <em>decision</em>, not tooling.</b> ~40 proposals restate the same
+      fact: the revenue lane produces $0 because it's waiting on your call, not on code. Verified: <b>0 freelance tasks
+      ever dispatched.</b> The freelance-autopilot map has awaited sign-off since Jul 2 (12 days). See <b>Tier A</b>.
+    </div>
+    <div class="finding good">
+      <b>Finding 3 — Several system proposals are already resolved.</b> I checked live state: the runaway
+      <code>task_hub_evaluations</code> table (claimed 4.2M rows / 3.4GB) is now 1,454 rows / 1.1GB, and the vp_coder
+      workspace bloat (claimed 22–24G) is now 87M. Those retention/reaper items are done — don't rebuild them.
+      <b>Re-verify every premise before executing</b>; the claims are 2–3 weeks old.
+    </div>
+  </div>
+
+  <!-- TIER A -->
+  <h2>Tier A · Decide first — unblocks the biggest stalled value (your call, not a coding task)</h2>
+  <p class="tierdesc">This isn't work I can just run — it's a strategy decision that ~40 proposals are all blocked behind.</p>
+
+  <div class="card">
+    <input type="checkbox" data-t="Pick the revenue wedge + make the freelance-autopilot sign-off/kill call">
+    <div class="body">
+      <div class="titleline"><span class="num">A1</span><span class="title">Pick ONE revenue wedge & resolve the freelance-autopilot sign-off</span>
+        <span class="badge b-decide">Decision</span></div>
+      <div class="why">The single highest-value action in this whole list. Choose one wedge — (a) manual Upwork/Fiverr pilot,
+        (b) one service-widget MVP, or (c) warm outbound to your finance network — and either sign off or kill the stalled
+        autopilot build. Everything in Tier 2 flows from this. I can lay out the three wedges with pros/cons if you want to decide here.</div>
+      <div class="meta"><span class="badge b-src">consolidates 18 proposals</span> &nbsp;#004 #005 #014 #015 #020 #022 #025 #031 #053 #069 #072 #073 #080 #085 #123 #127 #136 …</div>
+    </div>
+  </div>
+
+  <!-- TIER 1 -->
+  <h2>Tier 1 · System — high leverage, safe, mostly independent (do regardless of the revenue call)</h2>
+  <p class="tierdesc">These fix the platform itself. #1 and #2 are the highest-leverage things on the page.</p>
+
+  <div class="card">
+    <input type="checkbox" data-t="Fix ideation/convergence over-emission — dedup + verify-against-reality gate">
+    <div class="body">
+      <div class="titleline"><span class="num">1</span><span class="title">Fix ideation/convergence over-emission (dedup + verify-against-reality gate)</span>
+        <span class="badge b-live">Meta-fix</span></div>
+      <div class="why">This is <em>why</em> you have 137 near-duplicate proposals piling up and getting missed. The sweep re-emits
+        near-identical candidates each cycle and ships on cross-cycle repetition rather than truth, burning Atlas/Cody missions on
+        near-certain skips. Fixing it directly improves the pipeline you're complaining about. Highest leverage on signal quality.</div>
+      <div class="meta"><span class="badge b-src">consolidates 7</span> &nbsp;#000 #035 #082 #124 #131 #132 #133</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="ZAI single-provider inference failover / health-gated circuit breaker">
+    <div class="body">
+      <div class="titleline"><span class="num">2</span><span class="title">ZAI single-provider failover / health-gated circuit breaker</span>
+        <span class="badge b-verify">Verify facts</span></div>
+      <div class="why">The entire autonomous coding + inference lane resolves to one backend. Recurring 529 overloads cascade — every VP
+        mission spawned during a degradation fails. This is the biggest reliability gap. Add health-gated dispatch hold + a real fallback lane.
+        <b>Caveat:</b> the "which fallback" premise (Anthropic Max vs GPT-5.6) has stale/contradictory facts across proposals — confirm current
+        routing before designing.</div>
+      <div class="meta"><span class="badge b-src">consolidates 9</span> &nbsp;#003 #021 #023 #030 #033 #093 #116 #118 #121</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="tutorial_build backlog gate — producer-side feasibility/vault-match pre-filter + approval-decay">
+    <div class="body">
+      <div class="titleline"><span class="num">3</span><span class="title">tutorial_build backlog gate + feasibility pre-filter</span>
+        <span class="badge b-live">Live &amp; worsening</span></div>
+      <div class="why">Verified live: <b>541 open tutorial_build items</b> (up from 519 on 7/13) against a cap-1 builder — the demo factory
+        outproduces the builder ~172/wk, and hundreds are 14–30d zombies. Add a producer-side feasibility/vault-match gate + approval-decay
+        so junk stops accumulating, and decide throttle-vs-raise-concurrency. Cuts noise, disk, and queue rot at once.</div>
+      <div class="meta"><span class="badge b-src">consolidates 12</span> &nbsp;#007 #029 #050 #055 #066 #087 #088 #103 #110 #115 #117 #129</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="Consolidated disk reclaim + retention for the still-growing lanes (lrepos demo graveyard, .worktrees, docker)">
+    <div class="body">
+      <div class="titleline"><span class="num">4</span><span class="title">Consolidated disk reclaim + retention (the lanes that are still growing)</span>
+        <span class="badge b-live">Live · 80%</span></div>
+      <div class="why">Verified: disk still at 80% (WARN). But the DB and vp_coder-workspace culprits are already fixed. The remaining levers
+        are the <code>/home/ua/lrepos</code> demo graveyard (~14G — TabFM 5G, DeepSeek 5G), <code>.worktrees</code> (7.9G), reclaimable Docker
+        (~6G), and the workspace archive (4.7G). One initiative: reclaim now + add retention to the two lanes with no policy.</div>
+      <div class="meta"><span class="badge b-src">consolidates ~14 (still-live subset)</span> &nbsp;#032 #048 #059 #084(worktrees) #092 #099 #104</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="paper-to-podcast durable reliability fix (retire the brittle skill-invocation cron pattern)">
+    <div class="body">
+      <div class="titleline"><span class="num">5</span><span class="title">paper-to-podcast durable reliability fix</span>
+        <span class="badge b-decide">Operator-facing</span></div>
+      <div class="why">You miss your daily podcast when it silently fails — the NotebookLM notebook+audio never generate while the run still
+        exits "clean." 5+ prior fix commits treated symptoms. Proposal #114 names the structural fix: retire the flaky skill-invocation cron
+        pattern. Worth doing right once.</div>
+      <div class="meta"><span class="badge b-src">consolidates 4</span> &nbsp;#064 #065 #097 #114</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="Proactive-health watchdog false-positive cleanup (batch thresholds + make it reachable in-process)">
+    <div class="body">
+      <div class="titleline"><span class="num">6</span><span class="title">Proactive-health watchdog false-positive cleanup (batch)</span>
+        <span class="badge b-verify">Some may be shipped</span></div>
+      <div class="why">Several invariants fire false CRITICALs every cycle — CSI staleness threshold (300min) is shorter than the 9h overnight
+        cron pause; youtube_transcript_coverage counts intentionally-skipped items; the disk narrative points at dead paths — each burning a
+        heartbeat investigation. Batch-fix thresholds + let the heartbeat read proactive_health in-process. Verify each first; a few already shipped.</div>
+      <div class="meta"><span class="badge b-src">consolidates 7</span> &nbsp;#010 #045 #081 #086 #096 #106 #113</div>
+    </div>
+  </div>
+
+  <!-- TIER 2 -->
+  <h2>Tier 2 · Revenue enablers — buildable now, low risk, feed whatever wedge you pick in A1</h2>
+  <p class="tierdesc">#7 is independent of the decision and is the right first deliverable. #10/#11 depend on the A1 wedge.</p>
+
+  <div class="card">
+    <input type="checkbox" data-t="Demos to a client-facing capabilities / portfolio page (social proof)">
+    <div class="body">
+      <div class="titleline"><span class="num">7</span><span class="title">Demos → client-facing capabilities / portfolio page</span>
+        <span class="badge b-live">Best first build</span></div>
+      <div class="why">The most-repeated revenue idea (8 variants) and the right first deliverable — you have 150–368 runnable demos on disk
+        with no social-proof surface. Every revenue path (bids, consulting, widget sales) needs this proof. Buildable in one shot, independent of
+        the wedge decision.</div>
+      <div class="meta"><span class="badge b-src">consolidates 8</span> &nbsp;#016 #026 #038 #042 #051 #104 #107 #112</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="Inbound-payment capability (so widgets/freelance can actually collect cash)">
+    <div class="body">
+      <div class="titleline"><span class="num">8</span><span class="title">Inbound-payment capability</span></div>
+      <div class="why">Neither freelance jobs nor service widgets can collect money without a payment path — it's the literal loop-closer for
+        the $10k/mo goal and a prerequisite for any widget going live. Do it once, reuse everywhere.</div>
+      <div class="meta"><span class="badge b-src">consolidates 2</span> &nbsp;#077 #079</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="Unit-economics layer — per-widget / per-client cost-to-produce and cost-to-run">
+    <div class="body">
+      <div class="titleline"><span class="num">9</span><span class="title">Unit-economics layer (pricing input)</span></div>
+      <div class="why">You can't price retainers profitably without knowing what each widget costs to build and to run per client. The raw
+        signal already exists (<code>cody_token_usage</code>) — this just rolls it up. Enables every pricing decision downstream.</div>
+      <div class="meta"><span class="badge b-src">consolidates 2</span> &nbsp;#047 #078</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="Ship ONE service-widget MVP (pick per A1) end-to-end incl. demand validation">
+    <div class="body">
+      <div class="titleline"><span class="num">10</span><span class="title">Ship ONE service-widget MVP (which one = A1's answer)</span>
+        <span class="badge b-decide">Depends on A1</span></div>
+      <div class="why">~22 proposals name the same few widgets. Do <b>not</b> build all — pick one and ship it end-to-end (with a demand-validation
+        pass first). Front-runners: <b>Email Screener</b> (only one already running in prod daily), <b>ad-generation</b> (HyperFrames, proven build),
+        <b>voicemail/missed-call for solo trades</b> (clearest pain + willingness-to-pay).</div>
+      <div class="meta"><span class="badge b-src">consolidates ~22</span> &nbsp;#001 #008 #009 #013 #017 #019 #034 #039 #041 #049 #067 #068 #070 #071 #095 #102 #125 #128 #130 …</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="Freelance proposal-drafter sub-agent (human-in-loop, no scraper dependency)">
+    <div class="body">
+      <div class="titleline"><span class="num">11</span><span class="title">Freelance proposal-drafter sub-agent (human-in-loop)</span>
+        <span class="badge b-decide">If wedge = freelance</span></div>
+      <div class="why">If A1's wedge is freelance, the real bottleneck to first cash is writing tailored, proof-backed proposals at volume —
+        not scraping. Buildable now, doesn't need the stalled autopilot sign-off, pairs with the portfolio page (#7).</div>
+      <div class="meta"><span class="badge b-src">consolidates 2</span> &nbsp;#052 #072</div>
+    </div>
+  </div>
+
+  <!-- TIER 3 -->
+  <h2>Tier 3 · Smaller hygiene wins — worth doing, batch when convenient</h2>
+  <p class="tierdesc">Each removes a recurring papercut. Low effort, low risk.</p>
+
+  <div class="card">
+    <input type="checkbox" data-t="Follow-up-reply step so 'I'll follow up in-thread' research acks actually ship">
+    <div class="body">
+      <div class="titleline"><span class="num">12</span><span class="title">Follow-up-reply step for research acks</span>
+        <span class="badge b-decide">Operator-facing</span></div>
+      <div class="why">When a mission promises "I'll follow up in this thread," the reply never actually ships — you've hit this. Small,
+        high-trust fix to close the delivery loop.</div>
+      <div class="meta"><span class="badge b-src">#043</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="Drain the codie/* PR backlog + fix the recurring auto-merge exclusion">
+    <div class="body">
+      <div class="titleline"><span class="num">13</span><span class="title">Drain the codie/* PR backlog + fix auto-merge exclusion</span></div>
+      <div class="why">12 CI-green <code>codie/*</code> PRs stuck 13+ days because they're auto-merge-excluded and nothing merges them. Clear
+        the queue and decide the policy so it stops recurring.</div>
+      <div class="meta"><span class="badge b-src">#084</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="Queue/inbox noise auto-disposition (retire blocked, auto-disposition self-sent reports, park evergreen cron links)">
+    <div class="body">
+      <div class="titleline"><span class="num">14</span><span class="title">Queue/inbox noise auto-disposition</span></div>
+      <div class="why">Auto-retire blocked items the stale-reaper can't see, auto-disposition benign self-sent status reports (e.g. nightly
+        "all speakers nominal"), park paused-cron evergreen links. Each kills a recurring manual sign-off every morning.</div>
+      <div class="meta"><span class="badge b-src">consolidates 4</span> &nbsp;#050 #090 #120 #135</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="VP/Cody failure observability — enrich 'Unknown error', phase-budget guard, completion-token-sync, phantom-mission reconcile">
+    <div class="body">
+      <div class="titleline"><span class="num">15</span><span class="title">VP/Cody failure observability</span></div>
+      <div class="why">Enrich opaque 'Unknown error' failures (8/9 recent log only that string), phase-budget guard (self-brief eating the whole
+        mission budget), completion-token-sync, reconcile phantom "active" missions. Makes autonomous failures debuggable instead of noise.</div>
+      <div class="meta"><span class="badge b-src">consolidates 5</span> &nbsp;#018 #024 #094 #115 #116</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="checkbox" data-t="Pre-commit secret-scanning gate for Cody's autonomous code-gen">
+    <div class="body">
+      <div class="titleline"><span class="num">16</span><span class="title">Pre-commit secret-scanning gate for Cody</span></div>
+      <div class="why">AI-assisted commits leak secrets at ~2x the human rate and Cody ships without human review. A deterministic pre-commit
+        scan is cheap insurance against the one bad day.</div>
+      <div class="meta"><span class="badge b-src">#074</span></div>
+    </div>
+  </div>
+
+  <!-- PASS -->
+  <h2>Cleared out — passing (with reasons)</h2>
+  <p class="tierdesc">Not worth a task. Left here so you can see I looked and why I dropped them — tick one only if you disagree.</p>
+  <div class="pass">
+    <div class="card">
+      <input type="checkbox" data-t="[OVERRIDE] DB retention for activity_state.db / task_hub_evaluations">
+      <div class="body">
+        <div class="titleline"><span class="title strike">DB retention for activity_state.db / task_hub_evaluations</span>
+          <span class="badge b-live">Already fixed</span></div>
+        <div class="why">Verified: DB shrank 3.4GB→1.1GB; evals table is 1,454 rows / 1-week span (was 4.2M). A retention policy is clearly
+          already in place. #054 #058 #060 #076 #089 #126.</div>
+      </div>
+    </div>
+    <div class="card">
+      <input type="checkbox" data-t="[OVERRIDE] vp_coder workspace retention reaper">
+      <div class="body">
+        <div class="titleline"><span class="title strike">vp_coder workspace retention reaper</span>
+          <span class="badge b-live">Already fixed</span></div>
+        <div class="why">Verified: <code>vp_coder_primary_external</code> is now 87M (was 22–24G) — the pruner works. #006 #061 #108 #111 #119 #122.</div>
+      </div>
+    </div>
+    <div class="card">
+      <input type="checkbox" data-t="[OVERRIDE] Cody-mode fallback reconcile (code vs CLAUDE.md)">
+      <div class="body">
+        <div class="titleline"><span class="title strike">Cody-mode fallback reconcile (code vs CLAUDE.md)</span>
+          <span class="badge b-verify">Likely resolved</span></div>
+        <div class="why">CLAUDE.md now documents the anthropic/zai routing in detail; the contradiction it flagged is likely already reconciled. Low value. #134.</div>
+      </div>
+    </div>
+    <div class="card">
+      <input type="checkbox" data-t="[OVERRIDE] Force-rank the productize proposals into a revenue sprint">
+      <div class="body">
+        <div class="titleline"><span class="title strike">Force-rank the productize proposals into a revenue sprint</span></div>
+        <div class="why">Superseded by <em>this</em> exercise. #069 #085.</div>
+      </div>
+    </div>
+    <div class="card">
+      <input type="checkbox" data-t="Houston party-planning directory — validate-or-kill (personal, non-UA)">
+      <div class="body">
+        <div class="titleline"><span class="title strike">Houston party-planning directory — validate-or-kill</span>
+          <span class="badge b-decide">Personal, separate</span></div>
+        <div class="why">A personal side project with Marie — a market-research / go-no-go decision for you, not a UA coding task. Worth a
+          separate call, not a slot in this queue. #062.</div>
+      </div>
+    </div>
+    <div class="note"><b>Also folded, not passed:</b> the dozens of redundant revenue restatements (→ A1 + #7–11) and single-shot
+      disk-prune variants (→ #4) aren't separate work — they're the same idea re-emitted. They live inside the initiatives above.</div>
+  </div>
+
+  <div class="note" style="margin-top:22px;">
+    <b>Suggested execution order</b> (my read on sequencing): <b>A1</b> (you decide) → then Tier 1 in order <b>1 → 2 → 3 → 4</b>
+    (mostly independent; could partly parallelize, but they touch shared infra so sequential is safer) → <b>5, 6</b> → then the
+    revenue enablers <b>7 → 8 → 9 → 10/11</b> once A1 is settled → Tier 3 as fill-in. Re-verify each proposal's premise against live
+    state before building — the underlying facts are 2–3 weeks old and some are already fixed.
+  </div>
+</div>
+
+<div class="bar">
+  <div class="count"><b id="n">0</b> selected — tick the initiatives you want, then copy the list back to me</div>
+  <div style="display:flex; gap:9px;">
+    <button class="btn-clear" onclick="clearAll()">Clear</button>
+    <button class="btn-copy" id="copyBtn" onclick="copyList()">Copy task list</button>
+  </div>
+</div>
+
+<script>
+  var KEY = 'ua-ideation-triage-20260714';
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('input[type=checkbox]'));
+  function save(){ localStorage.setItem(KEY, JSON.stringify(boxes.map(function(b){return b.checked;}))); }
+  function restore(){ try{ var s=JSON.parse(localStorage.getItem(KEY)||'[]'); boxes.forEach(function(b,i){ b.checked=!!s[i]; }); }catch(e){} }
+  function count(){ document.getElementById('n').textContent = boxes.filter(function(b){return b.checked;}).length; }
+  boxes.forEach(function(b){ b.addEventListener('change', function(){ save(); count(); }); });
+  function clearAll(){ boxes.forEach(function(b){ b.checked=false; }); save(); count(); }
+  function copyList(){
+    var picked = boxes.filter(function(b){return b.checked;}).map(function(b,i){ return b.getAttribute('data-t'); });
+    if(!picked.length){ flash('Nothing selected'); return; }
+    var txt = "Work through these ideation-triage initiatives (from https://uaonvps.taildcc090.ts.net/scratch/ideation-triage-20260714/triage.html):\n\n"
+      + picked.map(function(t,i){ return (i+1)+'. '+t; }).join('\n');
+    navigator.clipboard.writeText(txt).then(function(){ flash('Copied '+picked.length+' — paste to me'); },
+      function(){ window.prompt('Copy this task list:', txt); });
+  }
+  function flash(msg){ var b=document.getElementById('copyBtn'); var o=b.textContent; b.textContent=msg;
+    setTimeout(function(){ b.textContent=o; }, 1900); }
+  restore(); count();
+</script>
+</body>
+</html>
