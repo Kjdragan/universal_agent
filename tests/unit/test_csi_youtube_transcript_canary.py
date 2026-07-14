@@ -1,11 +1,13 @@
 """Unit tests for the YouTube transcript pipeline freshness canary.
 
-Covers the two regression classes the canary is supposed to catch:
-  1. STALE — enrichment timer is dead (no recent analysis rows)
-  2. AUTH BROKEN — fresh rows exist but transcript_status='ok' rate is
-     suppressed and the http_error rate is elevated.
-
-Plus the quiet-window and happy-path branches.
+The canary is backlog-aware: it goes RED on a *real* stall (aging unprocessed
+work) and stays GREEN on stale-freshness-with-no-work (a quiet-for-domain
+window). Covered:
+  1. EMIT-stall — events pile up un-emitted (delivered=0) — the 2026-07-14 wedge.
+  2. ENRICH-stall — emitted, eligible events aging without analysis.
+  3. STALE-BUT-QUIET — old last_analyzed but no aging backlog -> GREEN (no false alarm).
+  4. AUTH-broken — fresh rows exist but ok-rate suppressed / http-errors high.
+  5. quiet-window + happy-path branches.
 """
 
 from __future__ import annotations
@@ -56,6 +58,7 @@ def _open_db(path: Path) -> sqlite3.Connection:
             subject_json TEXT,
             routing_json TEXT,
             metadata_json TEXT,
+            emitted_at TEXT,
             delivered INTEGER DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now'))
         );
@@ -71,13 +74,30 @@ def _open_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _insert_event(conn, *, hours_ago: float = 0) -> str:
+def _insert_event(
+    conn,
+    *,
+    hours_ago: float = 0,
+    delivered: int = 0,
+    emitted_hours_ago: float | None = None,
+) -> str:
+    """Insert a youtube event. When delivered=1 it also gets an ``emitted_at``
+    (defaults to ``hours_ago``) — that is the timestamp the enrich-stall age is
+    measured from."""
     eid = f"evt_{uuid.uuid4().hex[:10]}"
-    conn.execute(
-        "INSERT INTO events (event_id, source, created_at) "
-        "VALUES (?, 'youtube_channel_rss', datetime('now', ?))",
-        (eid, f"-{hours_ago} hours"),
-    )
+    if delivered:
+        emit = hours_ago if emitted_hours_ago is None else emitted_hours_ago
+        conn.execute(
+            "INSERT INTO events (event_id, source, delivered, created_at, emitted_at) "
+            "VALUES (?, 'youtube_channel_rss', 1, datetime('now', ?), datetime('now', ?))",
+            (eid, f"-{hours_ago} hours", f"-{emit} hours"),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO events (event_id, source, delivered, created_at) "
+            "VALUES (?, 'youtube_channel_rss', 0, datetime('now', ?))",
+            (eid, f"-{hours_ago} hours"),
+        )
     conn.commit()
     return eid
 
@@ -104,74 +124,86 @@ def _insert_analysis(
     conn.commit()
 
 
+def _metrics_and_verdict(canary, db, *, window_hours=24, stale_after_hours=2, **kw):
+    conn = sqlite3.connect(str(db))
+    metrics = canary.compute_metrics(
+        conn, window_hours=window_hours, stale_after_hours=stale_after_hours
+    )
+    conn.close()
+    verdict = canary.evaluate(
+        metrics,
+        min_ok_rate=kw.get("min_ok_rate", 0.25),
+        max_http_error_rate=kw.get("max_http_error_rate", 0.50),
+        require_min_events=kw.get("require_min_events", 5),
+        emit_stale_hours=kw.get("emit_stale_hours", 6.0),
+    )
+    return metrics, verdict
+
+
 def test_quiet_window_returns_green(canary, tmp_path):
-    """Below `require_min_events`, canary stays green even with no analysis."""
     db = tmp_path / "csi.db"
     conn = _open_db(db)
     for _ in range(2):
         _insert_event(conn, hours_ago=1)
     conn.close()
-
-    conn = sqlite3.connect(str(db))
-    metrics = canary.compute_metrics(conn, window_hours=24, stale_after_hours=2)
-    conn.close()
-    verdict = canary.evaluate(
-        metrics,
-        min_ok_rate=0.25,
-        max_http_error_rate=0.50,
-        require_min_events=5,
-    )
+    _, verdict = _metrics_and_verdict(canary, db)
     assert verdict["status"] == "green"
     assert any("quiet_window" in r for r in verdict["reasons"])
 
 
-def test_stale_table_with_events_is_red(canary, tmp_path):
-    """The exact 2026-03/05 regression: events arriving, analysis frozen."""
+def test_emit_stalled_backlog_is_red(canary, tmp_path):
+    """Events pile up un-emitted (delivered=0) past the emit threshold — the
+    exact 2026-07-14 batch_brief wedge. Must be RED with an emit_stalled reason."""
     db = tmp_path / "csi.db"
     conn = _open_db(db)
     for _ in range(10):
-        _insert_event(conn, hours_ago=1)
-    # One analysis row from 53 days ago — simulates the production state.
-    _insert_analysis(conn, status="ok", ref="desktop_worker_x", hours_ago=24 * 53)
+        _insert_event(conn, hours_ago=8, delivered=0)  # 8h > 6h emit threshold
     conn.close()
-
-    conn = sqlite3.connect(str(db))
-    metrics = canary.compute_metrics(conn, window_hours=24, stale_after_hours=2)
-    conn.close()
-    verdict = canary.evaluate(
-        metrics,
-        min_ok_rate=0.25,
-        max_http_error_rate=0.50,
-        require_min_events=5,
-    )
+    _, verdict = _metrics_and_verdict(canary, db)
     assert verdict["status"] == "red"
-    assert any("stale" in r for r in verdict["reasons"])
+    assert any("emit_stalled" in r for r in verdict["reasons"])
+
+
+def test_enrich_stalled_eligible_backlog_is_red(canary, tmp_path):
+    """Emitted (delivered=1), eligible events aging without analysis -> RED."""
+    db = tmp_path / "csi.db"
+    conn = _open_db(db)
+    for _ in range(10):
+        _insert_event(conn, hours_ago=12, delivered=1)  # emitted, never analyzed
+    conn.close()
+    _, verdict = _metrics_and_verdict(canary, db, stale_after_hours=2)
+    assert verdict["status"] == "red"
+    assert any("enrich_stalled" in r for r in verdict["reasons"])
+
+
+def test_stale_freshness_but_no_backlog_is_green(canary, tmp_path):
+    """THE anti-false-alarm case: last_analyzed is old (past the stale
+    threshold) but there is NO aging backlog — everything emitted was analyzed
+    and nothing is stuck. The old canary screamed here; the new one stays GREEN.
+    """
+    db = tmp_path / "csi.db"
+    conn = _open_db(db)
+    # 10 events, all emitted AND analyzed 20h ago; nothing un-emitted or eligible.
+    for _ in range(10):
+        eid = _insert_event(conn, hours_ago=20, delivered=1)
+        _insert_analysis(conn, event_id=eid, status="ok", hours_ago=20)
+    conn.close()
+    metrics, verdict = _metrics_and_verdict(canary, db, stale_after_hours=10)
+    # Freshness IS stale (would have been RED under the old age-only rule)...
+    assert metrics["last_analyzed_age_hours"] > 10
+    # ...but there is no aging work, so the smart canary stays GREEN.
+    assert verdict["status"] == "green", f"false alarm: {verdict}"
 
 
 def test_auth_broken_pattern_is_red(canary, tmp_path):
-    """All analyzed rows are http_error 401s — ok_rate=0, http_error_rate=1."""
     db = tmp_path / "csi.db"
     conn = _open_db(db)
     for _ in range(10):
         _insert_event(conn, hours_ago=0.5)
     for _ in range(10):
-        _insert_analysis(
-            conn,
-            status="failed",
-            ref="http_error@127.0.0.1:8002",
-            hours_ago=0.5,
-        )
+        _insert_analysis(conn, status="failed", ref="http_error@127.0.0.1:8002", hours_ago=0.5)
     conn.close()
-
-    conn = sqlite3.connect(str(db))
-    metrics = canary.compute_metrics(conn, window_hours=24, stale_after_hours=2)
-    conn.close()
-    verdict = canary.evaluate(
-        metrics,
-        min_ok_rate=0.25,
-        max_http_error_rate=0.50,
-        require_min_events=5,
-    )
+    _, verdict = _metrics_and_verdict(canary, db)
     assert verdict["status"] == "red"
     rates = verdict["rates"]
     assert rates["ok_rate"] == 0.0
@@ -181,183 +213,63 @@ def test_auth_broken_pattern_is_red(canary, tmp_path):
 
 
 def test_healthy_pipeline_is_green(canary, tmp_path):
-    """Mix of ok + captions_disabled + 1 http_error stays under thresholds."""
     db = tmp_path / "csi.db"
     conn = _open_db(db)
     for _ in range(10):
-        _insert_event(conn, hours_ago=0.5)
+        _insert_event(conn, hours_ago=0.5, delivered=1)
     for _ in range(7):
         _insert_analysis(conn, status="ok", ref="youtube_transcript_api", hours_ago=0.5)
     for _ in range(2):
         _insert_analysis(conn, status="captions_disabled", hours_ago=0.5)
     _insert_analysis(conn, status="failed", ref="http_error@127.0.0.1:8002", hours_ago=0.5)
     conn.close()
-
-    conn = sqlite3.connect(str(db))
-    metrics = canary.compute_metrics(conn, window_hours=24, stale_after_hours=2)
-    conn.close()
-    verdict = canary.evaluate(
-        metrics,
-        min_ok_rate=0.25,
-        max_http_error_rate=0.50,
-        require_min_events=5,
-    )
+    _, verdict = _metrics_and_verdict(canary, db)
     assert verdict["status"] == "green"
     assert verdict["rates"]["ok_rate"] == pytest.approx(7 / 10)
     assert verdict["rates"]["http_error_rate"] == pytest.approx(1 / 10)
 
 
-def test_zero_analyzed_with_events_is_red(canary, tmp_path):
-    """Even if last_analyzed_at is recent, zero rows in the live window is red."""
-    db = tmp_path / "csi.db"
-    conn = _open_db(db)
-    for _ in range(10):
-        _insert_event(conn, hours_ago=0.5)
-    # Recent enough to defeat the stale check, but window=24h slides past it.
-    _insert_analysis(conn, status="ok", hours_ago=1.0)
-    conn.close()
-
-    conn = sqlite3.connect(str(db))
-    # Tighter window than the lone row's age — looks like nothing was processed.
-    metrics = canary.compute_metrics(conn, window_hours=0, stale_after_hours=2)
-    conn.close()
-    verdict = canary.evaluate(
-        metrics,
-        min_ok_rate=0.25,
-        max_http_error_rate=0.50,
-        require_min_events=5,
-    )
-    # events_recent is 0 with window_hours=0, so we expect quiet_window branch.
-    # The real "no analyzed despite events" is exercised in test_stale_table_*.
-    assert verdict["status"] == "green"
-
-
 def test_recovery_backlog_ok_recent_ok_passes(canary, tmp_path):
-    """Backlog of failures + recent oks -> canary PASSES (fast recovery).
-
-    Simulates post-outage: the 24h window still holds many failed analyses
-    that drag the window ok_rate below the threshold, but the most-recent
-    analyses are all ok. The recent-N fallback should flip GREEN so the
-    canary signals recovery without waiting a full window cycle.
-    """
+    """Post-outage: window ok_rate is dragged down by an old failure backlog,
+    but the most-recent analyses are all ok -> canary PASSES (fast recovery)."""
     db = tmp_path / "csi.db"
     conn = _open_db(db)
-
-    # 10+ events in window to clear the quiet-window guard.
     for _ in range(10):
-        _insert_event(conn, hours_ago=0.5)
-
-    # Old in-window backlog of plain failures (no http_error ref, so the
-    # http_error check stays green and we isolate the ok_rate recovery path).
-    # 40 failures + 10 oks -> window ok_rate = 10/50 = 0.20 < 0.25.
+        _insert_event(conn, hours_ago=0.5, delivered=1)
     for _ in range(40):
         _insert_analysis(conn, status="failed", ref="", hours_ago=22)
-
-    # Recent recovery: 10 ok rows, freshest in the table.
     for _ in range(10):
-        _insert_analysis(
-            conn, status="ok", ref="youtube_transcript_api", hours_ago=0.1
-        )
-
+        _insert_analysis(conn, status="ok", ref="youtube_transcript_api", hours_ago=0.1)
     conn.close()
-
-    conn = sqlite3.connect(str(db))
-    metrics = canary.compute_metrics(conn, window_hours=24, stale_after_hours=2)
-    conn.close()
-
-    verdict = canary.evaluate(
-        metrics,
-        min_ok_rate=0.25,
-        max_http_error_rate=0.50,
-        require_min_events=5,
-    )
-
-    # Window ok_rate is below threshold, but recent_ok_rate = 10/10 = 1.0,
-    # so the recovery fallback should keep the canary GREEN.
+    _, verdict = _metrics_and_verdict(canary, db)
     assert verdict["rates"]["ok_rate"] < 0.25
     assert verdict["status"] == "green", f"expected GREEN, got {verdict}"
     assert not any("ok_rate" in r for r in verdict["reasons"])
 
 
 def test_genuinely_failing_recent_window_still_red(canary, tmp_path):
-    """Recent window is all failures -> canary still RED.
-
-    Ensures the recent-N recovery fallback does not manufacture a
-    false-pass when the genuinely-recent data is bad.
-    """
+    """Recent window is all failures -> still RED (recovery fallback can't rescue)."""
     db = tmp_path / "csi.db"
     conn = _open_db(db)
-
     for _ in range(10):
-        _insert_event(conn, hours_ago=0.5)
-
-    # Even the most-recent analyses are all http_error failures.
+        _insert_event(conn, hours_ago=0.5, delivered=1)
     for _ in range(10):
-        _insert_analysis(
-            conn,
-            status="failed",
-            ref="http_error@127.0.0.1:8002",
-            hours_ago=0.1,
-        )
-
+        _insert_analysis(conn, status="failed", ref="http_error@127.0.0.1:8002", hours_ago=0.1)
     conn.close()
-
-    conn = sqlite3.connect(str(db))
-    metrics = canary.compute_metrics(conn, window_hours=24, stale_after_hours=2)
-    conn.close()
-
-    verdict = canary.evaluate(
-        metrics,
-        min_ok_rate=0.25,
-        max_http_error_rate=0.50,
-        require_min_events=5,
-    )
-
-    # recent_ok_rate = 0/10 = 0 < 0.25 -> no rescue, still RED.
+    _, verdict = _metrics_and_verdict(canary, db)
     assert verdict["status"] == "red"
     assert any("ok_rate" in r for r in verdict["reasons"])
 
 
 def test_quiet_window_guard_still_holds(canary, tmp_path):
-    """Quiet window stays GREEN via the guard, not via recent recovery.
-
-    With events below `require_min_events`, the quiet-window guard must
-    still short-circuit to GREEN before any ok_rate / recent-N logic runs,
-    so the new fallback cannot weaken or bypass that guard.
-    """
+    """Below require_min_events, the quiet-window guard short-circuits to GREEN."""
     db = tmp_path / "csi.db"
     conn = _open_db(db)
-
-    # Only 2 events -- below require_min_events=5.
     for _ in range(2):
         _insert_event(conn, hours_ago=1)
-
-    # Old failed backlog in the DB.
     for _ in range(5):
-        _insert_analysis(
-            conn,
-            status="failed",
-            ref="http_error@127.0.0.1:8002",
-            hours_ago=20,
-        )
-
-    # A few recent oks (would be a rescue, but the guard fires first).
-    for _ in range(3):
-        _insert_analysis(conn, status="ok", hours_ago=0.1)
-
+        _insert_analysis(conn, status="failed", ref="http_error@127.0.0.1:8002", hours_ago=20)
     conn.close()
-
-    conn = sqlite3.connect(str(db))
-    metrics = canary.compute_metrics(conn, window_hours=24, stale_after_hours=2)
-    conn.close()
-
-    verdict = canary.evaluate(
-        metrics,
-        min_ok_rate=0.25,
-        max_http_error_rate=0.50,
-        require_min_events=5,
-    )
-
-    # GREEN because of the quiet_window guard, not the recovery fallback.
+    _, verdict = _metrics_and_verdict(canary, db)
     assert verdict["status"] == "green"
     assert any("quiet_window" in r for r in verdict["reasons"])

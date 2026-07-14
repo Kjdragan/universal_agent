@@ -518,6 +518,33 @@ drained the backlog**, so the real worst-case inter-write gap is ~8h once a day.
 2-consecutive-run miss. The fix is live in the unit file and in the
 deployed-source systemd template + script default.
 
+**Backlog-aware rework (2026-07-14).** Raising the threshold only papered over
+the real weakness: the canary judged *freshness alone* (`MAX(analyzed_at)` age),
+so it screamed during genuinely quiet-for-domain windows AND still missed the
+actual failure mode. On 2026-07-14 the **emit step wedged** (see B.2.1) — events
+piled up `delivered=0` for 14h, the enrich correctly found nothing, and the
+freshness-only canary fired RED with no idea *why*. `evaluate` now goes RED only
+on **aging unprocessed work**: an aging `delivered=0` backlog (`emit_stalled`,
+`--emit-stale-after-hours`, default 6h) or an aging eligible-but-unanalyzed
+backlog measured from `emitted_at` (`enrich_stalled`, reuses `--stale-after-hours`
+and the enricher's skip-set so quiet-for-domain windows stay GREEN). Pure stale
+freshness with no backlog is GREEN. The canary's `_DOMAIN_CATS` / `_DEFAULT_ALWAYS_KEEP`
+mirror the enricher (CI drift-guard: `test_youtube_transcript_coverage_invariant.py::
+test_canary_domain_cats_in_sync_with_enricher`).
+
+#### B.2.1 Emit step (`csi_ingester.batch_brief`) + scheduler resilience
+
+The enrich only sees an event once the ingester has **emitted** it — a
+`batch_brief` run (LLM digest + `UPDATE events SET delivered=1, emitted_at=...`,
+every `batch_interval_seconds`=7200s). On 2026-07-14 the `batch_brief` job loop
+**silently died** (~08:00) while the process stayed alive and *other* jobs (RSS
+polling) kept running — a classic single-job wedge with no supervision. Emit
+stopped for 14h; the gateway-fix deploy restart at 22:30 flushed the 138-event
+backlog. `csi_ingester/scheduler.py::PollingScheduler` is now wedge-resistant:
+per-iteration `asyncio.wait_for` timeout (`CSI_SCHEDULER_JOB_TIMEOUT_SECONDS`),
+a job loop that never dies on a job error, and a **supervisor** that respawns any
+loop that dies for any reason. Guard: `tests/unit/test_csi_polling_scheduler.py`.
+
 ### B.4 Health invariants
 
 The original incident: 100% of YouTube cards showed `transcript_status='missing'`

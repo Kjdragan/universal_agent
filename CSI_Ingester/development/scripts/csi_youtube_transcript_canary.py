@@ -41,6 +41,51 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from _csi_secret_resolver import resolve_token_from_infisical  # noqa: E402
 
+# Domain categories mirror csi_rss_semantic_enrich._DOMAIN_CATS. Channels whose
+# analysis history is majority NON-domain are deliberately skipped by the enrich
+# (political/news content is intentionally dropped — operator decision), so they
+# must NOT count as "eligible-but-unanalyzed" backlog or the canary would RED on
+# a backlog the enrich will never process by design.
+_DOMAIN_CATS = {
+    "ai_coding",
+    "ai_models",
+    "ai_news_and_business",
+    "ai_business",
+    "ai_applications",
+    "software_engineering",
+    "technology",
+}
+_DEFAULT_ALWAYS_KEEP = "Pyotr Kurzin | Geopolitics,Jake Broe"
+
+
+def _always_keep_names() -> set[str]:
+    raw = os.environ.get("CSI_RSS_SELECTION_ALWAYS_KEEP", _DEFAULT_ALWAYS_KEEP)
+    return {n.strip() for n in raw.split(",") if n.strip()}
+
+
+def _skipped_channels(conn: sqlite3.Connection) -> set[str]:
+    """Channels the enrich skips (>=2 analyses, majority non-domain history).
+
+    Mirrors ``csi_rss_semantic_enrich._nondomain_skip_names`` so the canary's
+    "eligible backlog" reflects what the enrich would actually process. Returns
+    an empty set on a partial schema (older/test DBs without the columns).
+    """
+    try:
+        rows = conn.execute(
+            "SELECT channel_name, category FROM rss_event_analysis "
+            "WHERE source='youtube_channel_rss' AND category IS NOT NULL AND category!=''"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    agg: dict[str, list[int]] = {}
+    for channel_name, category in rows:
+        bucket = agg.setdefault(channel_name, [0, 0])
+        bucket[1] += 1
+        if category not in _DOMAIN_CATS:
+            bucket[0] += 1
+    skip = {n for n, (nd, tot) in agg.items() if tot >= 2 and nd > (tot - nd)}
+    return skip - _always_keep_names()
+
 
 def compute_metrics(
     conn: sqlite3.Connection,
@@ -112,6 +157,50 @@ def compute_metrics(
         "FROM rss_event_analysis"
     ).fetchone()[0]
 
+    # Emit-stall signal: youtube events created but never emitted (delivered=0).
+    # The emit step (csi_ingester batch_brief) marks events delivered=1 so the
+    # enrich can see them; if it wedges (2026-07-14) events pile up here,
+    # invisible to the enrich, while last_analyzed_at simply ages.
+    unemitted = cur.execute(
+        "SELECT COUNT(*), (julianday('now') - julianday(MIN(created_at))) * 24.0 "
+        "FROM events WHERE source='youtube_channel_rss' AND delivered=0"
+    ).fetchone()
+    unemitted_backlog = int(unemitted[0] or 0)
+    unemitted_oldest_age_hours = (
+        float(unemitted[1]) if unemitted and unemitted[1] is not None else None
+    )
+
+    # Enrich-stall signal: emitted (delivered=1), enrich-eligible (non-skipped)
+    # events that still have no analysis row. Skipped channels are excluded so a
+    # quiet-for-domain window does not masquerade as a stall.
+    skip = _skipped_channels(conn)
+    if skip:
+        placeholders = ",".join("?" for _ in skip)
+        skip_clause = (
+            " AND COALESCE(json_extract(e.subject_json,'$.channel_name'),'') "
+            f"NOT IN ({placeholders})"
+        )
+        skip_params = list(skip)
+    else:
+        skip_clause = ""
+        skip_params = []
+    # Age is measured from ``emitted_at`` (when the event became enrich-eligible),
+    # NOT ``created_at`` — otherwise a backlog that piled up during an emit stall
+    # and was just flushed would look like an enrich stall the instant it became
+    # eligible. Falls back to created_at when emitted_at is absent.
+    elig = cur.execute(
+        "SELECT COUNT(*), (julianday('now') - "
+        "julianday(MIN(COALESCE(e.emitted_at, e.created_at)))) * 24.0 "
+        "FROM events e LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id "
+        "WHERE e.source='youtube_channel_rss' AND e.delivered=1 "
+        "AND a.event_id IS NULL" + skip_clause,
+        skip_params,
+    ).fetchone()
+    eligible_unanalyzed_backlog = int(elig[0] or 0)
+    eligible_oldest_age_hours = (
+        float(elig[1]) if elig and elig[1] is not None else None
+    )
+
     return {
         "window_hours": window_hours,
         "stale_after_hours": stale_after_hours,
@@ -127,6 +216,10 @@ def compute_metrics(
             if last_analyzed_age_hours is not None
             else None
         ),
+        "unemitted_backlog": unemitted_backlog,
+        "unemitted_oldest_age_hours": unemitted_oldest_age_hours,
+        "eligible_unanalyzed_backlog": eligible_unanalyzed_backlog,
+        "eligible_oldest_age_hours": eligible_oldest_age_hours,
     }
 
 
@@ -136,13 +229,17 @@ def evaluate(
     min_ok_rate: float,
     max_http_error_rate: float,
     require_min_events: int,
+    emit_stale_hours: float = 6.0,
 ) -> dict[str, object]:
-    """Return {'status': 'green'|'yellow'|'red', 'reasons': [...], 'rates': {...}}."""
+    """Return {'status': 'green'|'yellow'|'red', 'reasons': [...], 'rates': {...}}.
+
+    RED only on a *real* stall — aging unprocessed work — not on stale freshness
+    alone. A quiet-for-domain window (nothing eligible to analyze) stays GREEN.
+    """
     events = int(metrics["events_recent"])
     analyzed = int(metrics["analyzed_recent"])
     ok = int(metrics["ok_recent"])
     http_err = int(metrics["http_error_recent"])
-    age = metrics["last_analyzed_age_hours"]
     stale_threshold = int(metrics["stale_after_hours"])
 
     reasons: list[str] = []
@@ -160,19 +257,41 @@ def evaluate(
             "rates": rates,
         }
 
-    if age is None or age > stale_threshold:
+    # ── Emit-stall: events created but stuck un-emitted (batch_brief wedged) ──
+    # This is the failure that actually happened on 2026-07-14 — the emit loop
+    # died and events piled up delivered=0 for 14h, invisible to the enrich.
+    unemitted = int(metrics.get("unemitted_backlog") or 0)
+    unemitted_age = metrics.get("unemitted_oldest_age_hours")
+    if (
+        unemitted >= require_min_events
+        and unemitted_age is not None
+        and unemitted_age > emit_stale_hours
+    ):
         reasons.append(
-            "stale rss_event_analysis"
-            f" last_analyzed={metrics['last_analyzed_at']!r}"
-            f" age_hours={age}"
-            f" threshold={stale_threshold}h"
+            f"emit_stalled unemitted={unemitted}"
+            f" oldest_age_hours={unemitted_age:.1f} threshold={emit_stale_hours}h"
+            " (csi_ingester batch_brief not emitting events)"
         )
 
-    if analyzed == 0:
+    # ── Enrich-stall: eligible emitted work aging without analysis ──
+    # Skipped (majority-non-domain) channels are already excluded upstream, so
+    # this only fires when work the enrich SHOULD process is being ignored — not
+    # during a legitimately quiet-for-domain window.
+    eligible = int(metrics.get("eligible_unanalyzed_backlog") or 0)
+    eligible_age = metrics.get("eligible_oldest_age_hours")
+    if (
+        eligible >= 1
+        and eligible_age is not None
+        and eligible_age > stale_threshold
+    ):
         reasons.append(
-            f"no analyzed rows in window despite events_recent={events}"
+            f"enrich_stalled eligible_unanalyzed={eligible}"
+            f" oldest_age_hours={eligible_age:.1f} threshold={stale_threshold}h"
+            " (semantic-enrich not processing eligible events)"
         )
-    else:
+
+    # ── Auth-broken: fresh analyses exist but ok-rate suppressed / http errors ──
+    if analyzed > 0:
         # Recovery fallback: pass the ok_rate check when EITHER the full
         # window is healthy OR the most-recent N analyses are healthy. This
         # lets the canary clear quickly after an outage without waiting a
@@ -370,6 +489,14 @@ def main() -> int:
     parser.add_argument("--max-http-error-rate", type=float, default=0.50)
     parser.add_argument("--require-min-events", type=int, default=5)
     parser.add_argument(
+        "--emit-stale-after-hours",
+        type=float,
+        default=6.0,
+        help="RED if un-emitted (delivered=0) events are older than this. The "
+        "emit step (csi_ingester batch_brief) runs ~every 2h, so 6h ~= 3 missed "
+        "cycles.",
+    )
+    parser.add_argument(
         "--no-alert",
         action="store_true",
         help="Suppress Telegram posting (still exits non-zero on RED).",
@@ -406,6 +533,7 @@ def main() -> int:
         min_ok_rate=args.min_ok_rate,
         max_http_error_rate=args.max_http_error_rate,
         require_min_events=args.require_min_events,
+        emit_stale_hours=args.emit_stale_after_hours,
     )
 
     for key, value in metrics.items():
