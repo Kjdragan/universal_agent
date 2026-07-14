@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/vp/worker_loop.py
   - deployment/systemd/
   - deploy/nginx/universal-agent-app
-last_verified: 2026-06-22
+last_verified: 2026-07-14
 ---
 
 # ADR: Deploy-Restart Resilience for the Gateway
