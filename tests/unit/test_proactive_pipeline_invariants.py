@@ -238,7 +238,7 @@ def _insert_candidate(conn, candidate_id: str, minutes_ago: int) -> None:
 
 def test_csi_convergence_fresh_emits_nothing(monkeypatch) -> None:
     # Reads the LIVE convergence_candidates table (not the decommissioned
-    # proactive_convergence_events). 20 min old < 300 min threshold → quiet.
+    # proactive_convergence_events). 20 min old < 1560 min (26h) threshold → quiet.
     _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
     conn = _seeded_proactive_artifacts_conn()
     _insert_candidate(conn, "c1", minutes_ago=20)
@@ -246,11 +246,22 @@ def test_csi_convergence_fresh_emits_nothing(monkeypatch) -> None:
     assert _only(findings, "csi_convergence_sync_freshness") == []
 
 
-def test_csi_convergence_stale_emits_warn(monkeypatch) -> None:
-    # 360 min old > 300 min threshold, during active hours → warn.
+def test_csi_convergence_daytime_dry_spell_stays_quiet(monkeypatch) -> None:
+    # A multi-hour daytime silence (360 min) is HEALTHY under the signal-gated
+    # burst model — it would have tripped the old 300-min (5h) threshold but must
+    # now stay quiet under the 1560-min (26h) reframe.
     _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
     conn = _seeded_proactive_artifacts_conn()
     _insert_candidate(conn, "c1", minutes_ago=360)
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "csi_convergence_sync_freshness") == []
+
+
+def test_csi_convergence_stale_emits_warn(monkeypatch) -> None:
+    # Genuinely dead pipeline: no candidate for >26h during active hours → warn.
+    _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
+    conn = _seeded_proactive_artifacts_conn()
+    _insert_candidate(conn, "c1", minutes_ago=1600)  # > 1560 min (26h)
     findings = run_invariants({"activity_conn": conn})
     matches = _only(findings, "csi_convergence_sync_freshness")
     assert len(matches) == 1
@@ -265,11 +276,11 @@ def test_csi_convergence_empty_table_stays_quiet(monkeypatch) -> None:
 
 
 def test_csi_convergence_stale_but_outside_active_hours_stays_quiet(monkeypatch) -> None:
-    # Same stale candidate, but at 02:00 CT (no cron overnight) → must stay quiet
-    # so the overnight no-cron gap doesn't fire a false-RED.
+    # A >26h-dead pipeline at 02:00 CT must stay quiet: the finding is only
+    # surfaced during active hours (so the warning lands when it can be actioned).
     _set_now(monkeypatch, datetime(2026, 5, 19, 2, 0, tzinfo=HOUSTON))
     conn = _seeded_proactive_artifacts_conn()
-    _insert_candidate(conn, "c1", minutes_ago=360)
+    _insert_candidate(conn, "c1", minutes_ago=1600)  # > 1560 min (26h)
     findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "csi_convergence_sync_freshness") == []
 

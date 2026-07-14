@@ -936,7 +936,7 @@ than screaming). Probes (all consume `activity_conn` and/or `artifacts_dir`):
 |---|---|---|
 | `morning_briefing_freshness` | today's `DAILY_BRIEFING.md` exists after 6:30 AM | warn |
 | `proactive_artifact_digest_delivery` | digest emailed in last ~30h | warn |
-| `csi_convergence_sync_freshness` | `convergence_candidates` max(created_at) < 3h **during active hours (8–21 CT)** | warn |
+| `csi_convergence_sync_freshness` | no `convergence_candidates` row for **26h** (surfaced during active hours 8–21 CT) — candidates are signal-gated bursts, so only a full-day-plus silence flags a dead producer | warn |
 | `nightly_wiki_persistent_silence` | a wiki appeared in last 7 days | warn |
 | `proactive_reports_daily_trio` | ≥2 of 3 daily reports by 5 PM | warn |
 | `claude_code_intel_packet_freshness` | packet in last 9h (active hours) | warn |
@@ -960,6 +960,20 @@ the triage verdict + dispatch path (candidate→task), not this artifact→task 
 > `convergence_candidates` table with an active-hours gate matching the real
 > `0 6-21` cron. The `proactive_brief_task_funnel` source_kinds were likewise
 > repointed off the dead `convergence_detection`/`insight_detection` kinds.
+
+> **Probe correction (2026-07-14).** `csi_convergence_sync_freshness` was
+> false-`warn`-ing on normal quiet-signal afternoons. `convergence_candidates`
+> are written in irregular **signal-gated bursts** by the 24/7-hourly
+> `universal-agent-csi-convergence-sync.timer`
+> (`OnCalendar=*-*-* 00..23:00:00 America/Chicago`; the in-app `csi_convergence_sync`
+> cron entry is migrated/`enabled=False`) — only when YouTube RSS topic signatures
+> actually converge — so a multi-hour daytime dry spell is healthy, not a failure.
+> `CSI_CONVERGENCE_MAX_AGE_MINUTES` was raised from 5h (300 min) to **26h
+> (1560 min)** so the probe fires only when NO candidate has landed for a full
+> active-day-plus window (a genuinely dead producer). Mirrors
+> `nightly_wiki_persistent_silence`'s quiet-is-legitimate design. Still `warn`;
+> still gated to only surface during active hours (8–21 CT), where the warning
+> is actionable.
 
 > **Probe correction (2026-06-10).** `paper_to_podcast_email_delivery` previously
 > matched `subject LIKE '%Papers%'` — any email whose LLM-varied title happened to
