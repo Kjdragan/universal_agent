@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo Factory — why it's not working (2026-07-14)</title>
+<style>
+  :root{ color-scheme:light; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:#eef1f5; color:#1f2328; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; line-height:1.5; }
+  .wrap{ max-width:1000px; margin:0 auto; padding:26px 18px 70px; }
+  .kicker{ font-size:12px; letter-spacing:.09em; text-transform:uppercase; color:#8250df; font-weight:700; }
+  h1{ font-size:25px; margin:6px 0 4px; }
+  .sub{ color:#57606a; font-size:14px; margin:0 0 22px; }
+  h2{ font-size:14px; text-transform:uppercase; letter-spacing:.05em; color:#424a53; margin:28px 0 12px; padding-bottom:7px; border-bottom:2px solid #d7dde3; }
+  .flow{ background:#fff; border:1px solid #d7dde3; border-radius:12px; padding:18px; margin:0 0 8px; }
+  .lane{ border:1px solid #d7dde3; border-radius:9px; padding:12px 14px; margin:10px 0; }
+  .lane h3{ margin:0 0 6px; font-size:14px; }
+  .lane.dark{ background:#f6f8fa; border-left:4px solid #8a929c; }
+  .lane.broken{ background:#fff5f5; border-left:4px solid #cf222e; }
+  .lane.ok{ background:#f6fbf7; border-left:4px solid #1a7f37; }
+  .step{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; color:#3b4148; margin:3px 0; }
+  .step .x{ color:#cf222e; font-weight:700; }
+  .pill{ display:inline-block; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; padding:2px 8px; border-radius:20px; margin-left:6px; vertical-align:middle; }
+  .p-on{ background:#dafbe1; color:#116329; } .p-dark{ background:#eef1f4; color:#57606a; } .p-broke{ background:#ffebe9; color:#a40e26; }
+  table{ border-collapse:collapse; width:100%; font-size:13px; background:#fff; border:1px solid #d7dde3; border-radius:10px; overflow:hidden; }
+  th,td{ text-align:left; padding:9px 12px; border-bottom:1px solid #eaeef2; vertical-align:top; }
+  th{ background:#f6f8fa; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#57606a; }
+  td.y{ color:#116329; font-weight:600; } td.n{ color:#a40e26; font-weight:600; }
+  code{ background:#f0f2f5; padding:1px 5px; border-radius:4px; font-size:12px; }
+  .fix{ background:#fff; border:1px solid #b7e4c7; border-left:4px solid #1a7f37; border-radius:10px; padding:14px 16px; margin:10px 0; font-size:13.5px; }
+  .decide{ background:#fff; border:1px solid #a9d3f5; border-left:4px solid #0969da; border-radius:10px; padding:12px 15px 12px; margin:10px 0; font-size:13.5px; }
+  .decide b{ color:#0550ae; }
+  .n1{ font-weight:800; color:#0969da; }
+  .note{ font-size:12.5px; color:#57606a; }
+  ul{ margin:5px 0 0; padding-left:20px; } li{ margin:2px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">UA · Proactive Demo Factory — Root Cause</div>
+  <h1>Why the demo factory isn't working (and what it actually is)</h1>
+  <p class="sub">Deep-dive: 5 investigators → 2 adversarial verifiers, code + live VPS + reproduced failure. 2026-07-14.</p>
+
+  <h2>The corrected architecture — two lanes, one shared candidate pool</h2>
+  <div class="flow">
+    <div class="step" style="font-size:13px;color:#1f2328;"><b>Candidate pool:</b> CSI channel-watch + YouTube digest mint <code>tutorial_build</code> rows all day → <b>546 open</b> (oldest 2026-06-11, growing).</div>
+    <div class="step" style="font-size:12.5px;color:#57606a;">Rated twice daily by <code>csi-demo-triage-rank</code> (10:05 &amp; 15:05 CT).</div>
+
+    <div class="lane dark">
+      <h3>Lane 1 — daytime dispatch <span class="pill p-dark">Dark</span></h3>
+      <div class="step">sweep 08:30 / 13:30 / 18:30 CT → agentic (Simone → VP-mission → Cody)</div>
+      <div class="step"><span class="x">✗ blocked:</span> <code>UA_DEMO_BUILD_DAILY_CEILING</code> unset → 0 → no candidate ever becomes <code>agent_ready</code> → dispatches nothing. <span class="note">(The daytime lane is the one you thought was "off." It is — but by accident, via this one unset inflow knob.)</span></div>
+    </div>
+
+    <div class="lane broken">
+      <h3>Lane 2 — end-of-day "nuggets" (your "nuke batch") <span class="pill p-on">Enabled</span> <span class="pill p-broke">Failing 100%</span></h3>
+      <div class="step">23:50 CT → re-judges the day's leftover candidates → builds 0–2 "golden nuggets" <b>directly via <code>build_demo.py</code>, like your <code>/demo</code></b> (Anthropic Max Opus, NOT GLM)</div>
+      <div class="step"><span class="x">✗ rc=3 every night:</span> systemd unit sets <b>no <code>PATH</code></b> → can't find <code>claude</code> (lives in <code>/home/ua/.local/bin</code>) → auth probe throws <code>FileNotFoundError</code> → silently DRYRUNs → <code>/goal</code> never runs → builds a template stub → verify fails → <b>exit 3 in ~20s</b>.</div>
+    </div>
+    <div class="note">Both lanes share one candidate pool, the America/Chicago day boundary, and a 5/day hard ceiling. Only 1 coder slot (serialized). The nuggets lane builds <em>directly</em>, bypassing the dispatcher — that's why it runs even though the daytime lane is dark.</div>
+  </div>
+
+  <h2>Your design intent vs. what's actually built</h2>
+  <table>
+    <tr><th>Your intended piece</th><th>Built?</th><th>Reality</th></tr>
+    <tr><td>Gather candidates through the day</td><td class="y">Yes</td><td>CSI + YouTube mint <code>tutorial_build</code> continuously.</td></tr>
+    <tr><td>Twice-daily rate step</td><td class="y">Yes</td><td><code>csi-demo-triage-rank</code> at 10:05 &amp; 15:05 CT.</td></tr>
+    <tr><td>End-of-day "nuke batch" re-judge</td><td class="y">Yes</td><td>The nuggets lane (Component D), builds 0–2 extra. Enabled — but broken.</td></tr>
+    <tr><td>Daily build cap (don't over-run)</td><td class="y">Yes</td><td><code>proactive_demo_daily_cap=3</code> live; 5/day hard ceiling; 1 coder slot.</td></tr>
+    <tr><td><b>"Run 2-of-4 slots per run" spreading</b></td><td class="n">No</td><td>Not an explicit primitive — pacing is emergent (cap + timer slots + 1 coder slot). A high cap <em>could</em> still drain fast. Currently moot (daytime lane dark).</td></tr>
+    <tr><td><b>Daily swipe → zero backlog</b></td><td class="n">No — never built</td><td>The nuggets judge's "reject the rest" is <b>log-only</b> (zero state change). Nothing purges un-selected candidates → 546-row pile grows forever. This is the piece you remember that doesn't exist.</td></tr>
+  </table>
+
+  <h2>Three things that correct your mental model</h2>
+  <ul style="font-size:13.5px;">
+    <li><b>It's Anthropic, not GLM.</b> Proactive builds run <code>--cody-mode hybrid</code> → the code-writing <code>/goal</code> session is Anthropic Max Opus (same as <code>/demo</code>). GLM is only the demo's own runtime inference. <b>So proactive builds spend Anthropic Max, not ZAI</b> — and the failure has nothing to do with GLM translation.</li>
+    <li><b>It's not "off pending validation."</b> Infisical has the flags ON (cap=3, nuggets=1, engine=1). Only the daytime inflow ceiling is unset. The nuggets lane has been running (and failing) nightly.</li>
+    <li><b>The zero-backlog swipe was never built.</b> Your memory of "anything not selected is swiped away daily" was a design intent that didn't ship.</li>
+  </ul>
+
+  <h2>The fix + the decisions</h2>
+  <div class="fix">▶ <b>The bug fix (clear, low-risk):</b> give the nuggets systemd unit a <code>PATH</code> that includes <code>/home/ua/.local/bin</code> — and, more durably, make <code>demo_factory</code> resolve <code>claude</code> via <code>shutil.which</code> with a fallback (so no lane depends on the caller's PATH), plus harden <code>goal_build</code> to <b>fail loud</b> (exit 2) when the binary is missing instead of silently DRYRUNning. <b>Effect:</b> the already-enabled nuggets lane starts producing ~2 real demos/night on Anthropic Max Opus.</div>
+
+  <div class="decide"><span class="n1">1.</span> <b>Land the PATH fix?</b> (Rec: yes.) It's a pure bug fix, but note it flips nuggets from "failing/free" to "building ~2/night, spending Anthropic Max Opus." Conservative because it's end-of-day, capped at 2, no daytime burst.</div>
+  <div class="decide"><span class="n1">2.</span> <b>Turn the daytime lane on too?</b> Set <code>UA_DEMO_BUILD_DAILY_CEILING</code> to a small N (e.g. 2) so daytime candidates build too. Rec: <b>not yet</b> — fix nuggets first, watch a few nights, then decide. (And if we do, add a real per-window sub-cap so it can't drain in 30 min.)</div>
+  <div class="decide"><span class="n1">3.</span> <b>Build the zero-backlog swipe?</b> A daily dismiss of un-built pending-approval candidates older than ~1–2 CT days (low-score first) — the mechanism you thought existed. Rec: <b>yes</b>, it's the durable fix for the 546-row pile and matches your intent.</div>
+  <div class="decide"><span class="n1">4.</span> <b>Reconcile the docs.</b> <code>00_PLATFORM_STATUS_REGISTRY.md</code> says flags live; the 2026-07-05 ADR says fully-gated. Runtime matches the registry. I'll fix whichever you confirm is intended.</div>
+
+  <p class="note" style="margin-top:22px;">Root cause reproduced (bare <code>claude</code> under the stripped systemd PATH → <code>FileNotFoundError</code>) + corroborated by workspace forensics (no <code>build_transcript.jsonl</code>, <code>build_method=none</code>, stub output). rc=3 verdict: <b>confirmed</b>. Architecture: <b>confirmed</b> after correcting a false-negative <code>.env</code> read. No production changes made yet.</p>
+</div>
+</body>
+</html>
