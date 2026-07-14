@@ -35,16 +35,19 @@ HOUSTON_TZ = ZoneInfo("America/Chicago")
 # Thresholds — tunable but conservative defaults. Each is named so future
 # operators can grep and adjust without reading the body.
 MORNING_BRIEFING_MAX_AGE_HOURS = 4.0
-# csi_convergence_sync writes `convergence_candidates` sporadically (only when a
-# real convergence/ideation is detected) on an hourly active-hours cron — NOT the
-# decommissioned `proactive_convergence_events` table on a 30-min 24/7 cadence the
-# old probe assumed. Candidates land in bursts of ~7-10 every 2-4h (cadence
-# ~11/13/17/21 UTC); a 3h window flapped across the observed 4h max intra-day burst
-# gap. 5h ≈ p75 burst-gap (4h) + margin: absorbs the bursty cadence during active
-# hours while still flagging a genuine multi-hour signal drought. The active-hours
-# gate below absorbs the overnight no-cron window (the ~10h gaps).
-CSI_CONVERGENCE_MAX_AGE_MINUTES = 300.0
-CSI_CONVERGENCE_ACTIVE_HOUR_MIN = 8  # cron is `0 6-21`; allow 2 post-6AM cycles to produce
+# convergence_candidates are written in irregular SIGNAL-GATED BURSTS — only when
+# YouTube RSS topic signatures actually converge (or an ideation insight is
+# synthesized) — by the 24/7-hourly `universal-agent-csi-convergence-sync.timer`.
+# The timer fires every hour regardless; whether it emits a candidate depends on
+# real upstream signal, so multi-hour daytime silence is entirely normal (the last
+# burst can be in the morning with nothing more until evening). The old 5h window
+# ("p75 burst-gap + margin") still false-`warn`ed on quiet-signal afternoons. This
+# mirrors `nightly_wiki_persistent_silence`: quiet periods with no signal are
+# legitimate, so the probe must only fire when the producer is genuinely dead.
+# 1560 min (26h) is a full active-day-plus window — zero candidates for over a day
+# means the timer itself is stuck, not just a quiet-signal afternoon.
+CSI_CONVERGENCE_MAX_AGE_MINUTES = 1560.0  # 26h — a genuinely dead pipeline, not a quiet day
+CSI_CONVERGENCE_ACTIVE_HOUR_MIN = 8  # only surface the finding during active hours
 CSI_CONVERGENCE_ACTIVE_HOUR_MAX = 21
 PROACTIVE_DIGEST_MAX_AGE_HOURS = 30.0  # 24h + 6h grace
 NIGHTLY_WIKI_WINDOW_END_HOUR = 5
@@ -324,17 +327,21 @@ def proactive_artifact_digest_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str
 
 @invariant(
     id="csi_convergence_sync_freshness",
-    title="CSI convergence candidate created within last 5h (active hours)",
+    title="CSI convergence candidate created within last 26h",
     description=(
-        "Cron `csi_convergence_sync` runs hourly 06:00–21:00 America/Chicago "
-        "(`UA_CSI_CONVERGENCE_CRON_EXPR`, default `0 6-21 * * *`) and writes "
-        "`convergence_candidates` rows when YouTube RSS topic signatures converge "
-        "or an ideation insight is synthesized. Reads the LIVE "
-        "`convergence_candidates` table — the legacy `proactive_convergence_events` "
-        "table was DECOMMISSIONED 2026-05-28 (frozen), so the old probe that read it "
-        "fired a permanent false-RED while the pipeline was healthy. If no candidate "
-        "has been created in 5h during active hours, the sync is failing or upstream "
-        "CSI signal has dried up. Quiet outside active hours (no overnight cron)."
+        "The 24/7-hourly `universal-agent-csi-convergence-sync.timer` writes "
+        "`convergence_candidates` rows in irregular SIGNAL-GATED BURSTS — only when "
+        "YouTube RSS topic signatures converge or an ideation insight is synthesized. "
+        "The timer fires every hour, but whether it emits a candidate depends on real "
+        "upstream signal, so multi-hour (even all-afternoon) daytime silence is normal. "
+        "(The in-app `csi_convergence_sync` cron entry is migrated/`enabled=False`; the "
+        "systemd timer is the live producer.) Reads the LIVE `convergence_candidates` "
+        "table — the legacy `proactive_convergence_events` table was DECOMMISSIONED "
+        "2026-05-28 (frozen), so the old probe that read it fired a permanent false-RED "
+        "while the pipeline was healthy. Mirrors `nightly_wiki_persistent_silence`: "
+        "quiet-signal periods are legitimate, so we only fire when NO candidate has "
+        "landed for 26h — a full active-day-plus window that means the timer itself is "
+        "stuck, not just a quiet afternoon. Only surfaced during active hours."
     ),
     severity="warn",
     runbook_command=(
@@ -343,27 +350,29 @@ def proactive_artifact_digest_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str
     ),
     metadata={
         "pipeline": "csi_convergence_sync",
-        "cron_expr": "0 6-21 * * *",
+        "producer": "universal-agent-csi-convergence-sync.timer",
+        "cadence": "hourly 24/7 (signal-gated bursts)",
         "tz": "America/Chicago",
         "tables": ["convergence_candidates"],
     },
 )
 def csi_convergence_sync_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Fire when no ``convergence_candidates`` row has appeared in ~5h (active hours).
+    """Fire only when no ``convergence_candidates`` row has appeared in ~26h.
 
     Reads the newest ``created_at`` from the LIVE ``convergence_candidates``
     table (not the decommissioned ``proactive_convergence_events``) and flags
-    ages over ``CSI_CONVERGENCE_MAX_AGE_MINUTES``. Probes only well into the
-    06:00-21:00 active window so the overnight no-cron gap can't false-fire.
-    Returns None on an empty table or when fresh.
+    ages over ``CSI_CONVERGENCE_MAX_AGE_MINUTES`` (26h). Candidates land in
+    signal-gated bursts, so a multi-hour daytime dry spell is healthy; only a
+    full-day-plus silence indicates the producer timer is stuck. Only surfaces
+    the finding during active hours. Returns None on an empty table or when fresh.
     """
     conn = ctx.get("activity_conn")
     if conn is None:
         return None
     now = _now_houston()
-    # The cron only runs 06:00–21:00 CT and detection is sporadic, so the
-    # overnight no-cron window (22:00–05:00) plus a couple of post-6AM cycles
-    # would otherwise false-fire. Only probe once we're well into active hours.
+    # Only surface the finding during active hours so a genuinely-dead-pipeline
+    # warning lands when an operator can act on it (the producer timer itself runs
+    # 24/7-hourly; the 26h threshold already spans the overnight window).
     if not (CSI_CONVERGENCE_ACTIVE_HOUR_MIN <= now.hour <= CSI_CONVERGENCE_ACTIVE_HOUR_MAX):
         return None
     try:
@@ -397,10 +406,12 @@ def csi_convergence_sync_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, An
                 "total_rows": total,
             },
             "message": (
-                f"Latest convergence_candidate is {age_minutes:.1f} min old "
-                f"(threshold {CSI_CONVERGENCE_MAX_AGE_MINUTES:.0f} min). The hourly "
-                "csi_convergence_sync cron may be failing or the upstream CSI signal "
-                "(YouTube RSS topic signatures) has dried up."
+                f"No convergence_candidate has landed for {age_minutes:.1f} min "
+                f"(> {CSI_CONVERGENCE_MAX_AGE_MINUTES:.0f} min / 26h threshold). "
+                "Candidates are written in signal-gated bursts by the 24/7-hourly "
+                "universal-agent-csi-convergence-sync.timer, so daytime lulls are "
+                "normal — a full-day-plus silence means the producer timer is stuck "
+                "(check the timer/service), not merely a quiet CSI-signal day."
             ),
             "threshold_text": f"age <= {CSI_CONVERGENCE_MAX_AGE_MINUTES:.0f} min during active hours",
         }
