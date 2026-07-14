@@ -671,6 +671,25 @@ defensive against the recurring `additional_headers`/`extra_headers` API churn.
 
 ## Gotchas (verified)
 
+- **Never do blocking work in an `async def` route handler — it freezes the
+  whole gateway.** A FastAPI `async def` endpoint runs *on* the single asyncio
+  event loop; a synchronous blocking call inside it (a locked SQLite read/write,
+  a `subprocess`, disk I/O) blocks the entire loop — `accept()` stops, every
+  endpoint hangs, health checks time out, yet the process stays alive so
+  `systemctl` reports `active`. A polled dashboard widget
+  (`dashboard_human_actions_highlight`) doing a synchronous `list_personal_queue`
+  read under `_activity_store_lock` against the shared ~1 GB `activity_state.db`
+  wedged all of prod this way on 2026-07-14 (diagnosed via a `py-spy` dump of the
+  blocked loop; the read was lock-blocked by the `autonomous-runtime` process's
+  VACUUM/checkpoint on the same DB). **Rule:** a handler whose body is purely
+  synchronous blocking DB/IO must be a plain `def` (Starlette runs it in its
+  threadpool, so a stall degrades one request, not the loop); a handler that
+  genuinely `await`s must wrap its blocking DB block in
+  `starlette.concurrency.run_in_threadpool`. The process-global
+  `_activity_store_lock` (`threading.Lock`) is correct across threadpool workers.
+  107 handlers were converted `async def`→`def` in the fix; the shared
+  `activity_state.db` VACUUM (`heartbeat_service` → `task_hub.vacuum_activity_db`)
+  is the main long-lock trigger and should stay in an off-hours window.
 - **`close_session` is a single, lockless definition** (consolidated 2026-06-16;
   see the Close section). It was previously defined twice — the dead variant
   called a non-existent `adapter.teardown()` and leaked `_session_exec_locks`.
