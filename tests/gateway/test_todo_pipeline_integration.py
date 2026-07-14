@@ -238,9 +238,9 @@ async def test_todo_pipeline_completed_without_explicit_disposition_flows_to_rev
         assert item["status"] == task_hub.TASK_STATUS_REVIEW
         assert item["metadata"]["dispatch"]["completion_unverified"] is True
 
-    overview = await gateway_server.dashboard_todolist_overview()
-    queue = await gateway_server.dashboard_todolist_agent_queue(offset=0, limit=20, status="pending")
-    history_response = await gateway_server.dashboard_todolist_task_history("email:review-flow", limit=20)
+    overview = gateway_server.dashboard_todolist_overview()
+    queue = gateway_server.dashboard_todolist_agent_queue(offset=0, limit=20, status="pending")
+    history_response = gateway_server.dashboard_todolist_task_history("email:review-flow", limit=20)
 
     queue_item = next(item for item in queue["items"] if item["task_id"] == "email:review-flow")
     assert overview["todo_dispatch"]["registered_session_count"] == 1
@@ -310,8 +310,8 @@ async def test_todo_pipeline_explicit_completion_stays_completed_and_visible(mon
         assert item is not None
         assert item["status"] == task_hub.TASK_STATUS_COMPLETED
 
-    completed = await gateway_server.dashboard_todolist_agent_queue(offset=0, limit=20, status="completed")
-    history_response = await gateway_server.dashboard_todolist_task_history("email:completed-flow", limit=20)
+    completed = gateway_server.dashboard_todolist_agent_queue(offset=0, limit=20, status="completed")
+    history_response = gateway_server.dashboard_todolist_task_history("email:completed-flow", limit=20)
 
     completed_item = next(item for item in completed["items"] if item["task_id"] == "email:completed-flow")
     assert completed_item["board_lane"] == "completed"
@@ -341,7 +341,7 @@ async def test_todolist_overview_flags_sleeping_dispatch_targets(monkeypatch):
         }
     )
 
-    response = await gateway_server.dashboard_todolist_overview()
+    response = gateway_server.dashboard_todolist_overview()
 
     assert response["status"] == "ok"
     assert response["todo_dispatch"]["last_wake_requested_session_id"] == "vp.general.primary"
@@ -790,7 +790,7 @@ async def test_todo_queue_shows_self_reviewed_delivery_as_completed(monkeypatch,
     assert item["status"] == task_hub.TASK_STATUS_COMPLETED
     assert item["metadata"]["dispatch"]["last_disposition_reason"] == "todo_self_reviewed_after_delivery"
 
-    completed = await gateway_server.dashboard_todolist_agent_queue(offset=0, limit=20, status="completed")
+    completed = gateway_server.dashboard_todolist_agent_queue(offset=0, limit=20, status="completed")
     completed_item = next(item for item in completed["items"] if item["task_id"] == "chat:session_chat_self_review:turn_001")
     assert completed_item["board_lane"] == "completed"
     assert completed_item["requires_simone_review"] is False

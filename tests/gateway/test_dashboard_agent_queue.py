@@ -71,7 +71,7 @@ async def test_agent_queue_empty_database(monkeypatch, tmp_path):
     """Endpoint returns empty items list when database has no tasks."""
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0,
         limit=10,
         status="pending",
@@ -110,7 +110,7 @@ async def test_agent_queue_serializes_explicit_run_lineage(monkeypatch, tmp_path
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0,
         limit=10,
         status="in_progress",
@@ -140,7 +140,7 @@ async def test_agent_queue_status_filter_returns_seeded_tasks(monkeypatch, tmp_p
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0, limit=10, status="pending",
     )
 
@@ -167,7 +167,7 @@ async def test_agent_queue_filter_by_status_completed(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0, limit=10, status="completed",
     )
 
@@ -190,7 +190,7 @@ async def test_agent_queue_filter_by_single_status(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0, limit=10, status="in_progress",
     )
 
@@ -224,7 +224,7 @@ async def test_agent_queue_reconciles_orphaned_in_progress_tasks(monkeypatch, tm
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0,
         limit=10,
         status="all",
@@ -251,7 +251,7 @@ async def test_agent_queue_pagination(monkeypatch, tmp_path):
             conn.close()
 
     # Page 1: offset=0, limit=2
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0, limit=2, status="open",
     )
     assert response["pagination"]["total"] == 5
@@ -261,14 +261,14 @@ async def test_agent_queue_pagination(monkeypatch, tmp_path):
     assert response["pagination"]["limit"] == 2
 
     # Page 2: offset=2, limit=2
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=2, limit=2, status="open",
     )
     assert response["pagination"]["count"] == 2
     assert response["pagination"]["has_more"] is True
 
     # Page 3: offset=4, limit=2
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=4, limit=2, status="open",
     )
     assert response["pagination"]["count"] == 1
@@ -299,7 +299,7 @@ async def test_agent_queue_item_shape(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0, limit=10, status="open",
     )
 
@@ -346,7 +346,7 @@ async def test_agent_queue_derives_in_progress_and_review_lanes(monkeypatch, tmp
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0, limit=10, status="pending",
     )
 
@@ -447,7 +447,7 @@ async def test_task_history_includes_forensics(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_task_history("email:history", limit=20)
+    response = gateway_server.dashboard_todolist_task_history("email:history", limit=20)
 
     assert response["status"] == "ok"
     assert response["task"]["board_lane"] == "needs_review"
@@ -517,7 +517,7 @@ async def test_task_history_tolerates_email_mapping_schema_without_email_sent_at
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_task_history("email:old-schema", limit=20)
+    response = gateway_server.dashboard_todolist_task_history("email:old-schema", limit=20)
 
     assert response["status"] == "ok"
     assert response["email_mapping"]["thread_id"] == "thread-old"
@@ -529,7 +529,7 @@ async def test_agent_queue_limit_clamped(monkeypatch, tmp_path):
     """Limit is clamped to max 100."""
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0, limit=500, status="pending",
     )
 
@@ -541,7 +541,7 @@ async def test_agent_queue_offset_clamped(monkeypatch, tmp_path):
     """Negative offset is clamped to 0."""
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=-5, limit=10, status="pending",
     )
 
@@ -554,7 +554,7 @@ async def test_agent_queue_backward_compat_default_all(monkeypatch, tmp_path):
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
 
     # This should use the default path (list_agent_queue) and not error
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0, limit=10,
     )
 
@@ -574,7 +574,7 @@ async def test_agent_queue_default_all_does_not_rebuild_dispatch_queue(monkeypat
 
     monkeypatch.setattr(task_hub, "rebuild_dispatch_queue", _unexpected_rebuild)
 
-    response = await gateway_server.dashboard_todolist_agent_queue(offset=0, limit=10, status="all")
+    response = gateway_server.dashboard_todolist_agent_queue(offset=0, limit=10, status="all")
 
     assert response["status"] == "ok"
 
@@ -597,7 +597,7 @@ async def test_agent_queue_incident_key_present(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0, limit=10, status="open",
     )
 
@@ -617,7 +617,7 @@ async def test_agent_queue_description_null_when_empty(monkeypatch, tmp_path):
         finally:
             conn.close()
 
-    response = await gateway_server.dashboard_todolist_agent_queue(
+    response = gateway_server.dashboard_todolist_agent_queue(
         offset=0, limit=10, status="open",
     )
 
@@ -633,7 +633,7 @@ async def test_todolist_overview_includes_todo_dispatch_snapshot(monkeypatch):
     monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
     monkeypatch.setenv("UA_HEARTBEAT_INTERVAL", "15m")
 
-    response = await gateway_server.dashboard_todolist_overview()
+    response = gateway_server.dashboard_todolist_overview()
 
     assert response["status"] == "ok"
     todo_dispatch = response.get("todo_dispatch") or {}
@@ -655,7 +655,7 @@ async def test_todolist_overview_does_not_rebuild_dispatch_queue(monkeypatch, tm
 
     monkeypatch.setattr(task_hub, "rebuild_dispatch_queue", _unexpected_rebuild)
 
-    response = await gateway_server.dashboard_todolist_overview()
+    response = gateway_server.dashboard_todolist_overview()
 
     assert response["status"] == "ok"
 
@@ -671,7 +671,7 @@ async def test_todolist_agent_activity_does_not_rebuild_dispatch_queue(monkeypat
 
     monkeypatch.setattr(task_hub, "rebuild_dispatch_queue", _unexpected_rebuild)
 
-    response = await gateway_server.dashboard_todolist_agent_activity()
+    response = gateway_server.dashboard_todolist_agent_activity()
 
     assert response["status"] == "ok"
 
@@ -695,7 +695,7 @@ async def test_todolist_dispatch_queue_rebuild_endpoint_still_rebuilds(monkeypat
 
     monkeypatch.setattr(task_hub, "rebuild_dispatch_queue", _counted_rebuild)
 
-    response = await gateway_server.dashboard_todolist_dispatch_queue_rebuild()
+    response = gateway_server.dashboard_todolist_dispatch_queue_rebuild()
 
     assert calls == ["rebuild"]
     assert response["status"] == "ok"
@@ -732,7 +732,7 @@ async def test_todolist_overview_normalizes_todo_dispatch_timestamps_and_tracks_
         }
     )
 
-    response = await gateway_server.dashboard_todolist_overview()
+    response = gateway_server.dashboard_todolist_overview()
 
     assert response["status"] == "ok"
     todo_dispatch = response["todo_dispatch"]
