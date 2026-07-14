@@ -16447,7 +16447,7 @@ async def dashboard_csi_clear_all(request: Request):
 
 
 @app.post("/api/v1/dashboard/csi/purge")
-async def dashboard_csi_purge(request: Request):
+def dashboard_csi_purge(request: Request):
     """Wipe all stale CSI data from the database and in-memory stores.
 
     Clears:
@@ -16985,7 +16985,7 @@ async def csi_transcript_incident_endpoint(request: Request, payload: Transcript
 
 
 @app.get("/api/v1/health")
-async def health(response: Response):
+def health(response: Response):
     """
     Deep health check associated with DB connectivity.
     """
@@ -17078,7 +17078,7 @@ def _capture_version_info() -> dict[str, Any]:
 
 
 @app.get("/api/v1/version")
-async def version_info():
+def version_info():
     """Public — no auth — so external verifiers can confirm which commit
     is live on this host. Browser agents MUST hit this and confirm the
     target SHA before declaring any end-to-end UI verification valid.
@@ -17340,7 +17340,7 @@ async def delete_factory_registration(request: Request, factory_id: str):
 
 
 @app.get("/api/v1/ops/delegation/history")
-async def delegation_history(request: Request, limit: int = 20):
+def delegation_history(request: Request, limit: int = 20):
     """Return recent VP missions sourced from the Redis bridge (delegation history)."""
     _require_ops_auth(request)
     _require_headquarters_role_for_fleet()
@@ -17363,7 +17363,7 @@ async def delegation_history(request: Request, limit: int = 20):
 
 
 @app.get("/api/v1/ops/proactive_health")
-async def ops_proactive_health(request: Request):
+def ops_proactive_health(request: Request):
     """Layer-1 + Layer-2 watchdog snapshot for proactive activities.
 
     Layer 1: cron registry, stale in-progress tasks, parked-task counts.
@@ -17552,7 +17552,7 @@ class ZaiControlRequest(BaseModel):
 
 
 @app.post("/api/v1/ops/zai/control")
-async def ops_zai_control(request: Request, payload: ZaiControlRequest):
+def ops_zai_control(request: Request, payload: ZaiControlRequest):
     """Apply an emergency ZAI lever — the dashboard's write side.
 
     Actions:
@@ -18924,7 +18924,7 @@ def _discord_row(row: sqlite3.Row | None) -> dict[str, Any]:
 
 
 @app.get("/api/v1/dashboard/discord/overview")
-async def dashboard_discord_overview(request: Request):
+def dashboard_discord_overview(request: Request):
     _require_ops_auth(request)
     db_path = _discord_intelligence_db_path()
     if not db_path.exists():
@@ -18990,7 +18990,7 @@ async def dashboard_discord_overview(request: Request):
 
 
 @app.get("/api/v1/dashboard/discord/events")
-async def dashboard_discord_events(
+def dashboard_discord_events(
     request: Request,
     limit: int = 10,
     include_text_candidates: bool = False,
@@ -19062,7 +19062,7 @@ async def dashboard_discord_update_channel(
 
 
 @app.delete("/api/v1/dashboard/discord/events/{event_id}")
-async def dashboard_discord_delete_event(request: Request, event_id: str):
+def dashboard_discord_delete_event(request: Request, event_id: str):
     """Delete a single structured event from the Discord intelligence DB."""
     _require_ops_auth(request)
     conn = _discord_connect()
@@ -19082,7 +19082,7 @@ async def dashboard_discord_delete_event(request: Request, event_id: str):
 
 
 @app.delete("/api/v1/dashboard/discord/events")
-async def dashboard_discord_delete_all_events(request: Request):
+def dashboard_discord_delete_all_events(request: Request):
     """Delete all structured events from the Discord intelligence DB."""
     _require_ops_auth(request)
     conn = _discord_connect()
@@ -19099,7 +19099,7 @@ async def dashboard_discord_delete_all_events(request: Request):
 
 
 @app.get("/api/v1/dashboard/discord/channels/{channel_id}/messages")
-async def dashboard_discord_channel_messages(
+def dashboard_discord_channel_messages(
     request: Request,
     channel_id: str,
     limit: int = 100,
@@ -19149,7 +19149,7 @@ async def dashboard_discord_channel_messages(
 
 
 @app.get("/api/v1/dashboard/discord/servers/{server_id}/messages")
-async def dashboard_discord_server_messages(
+def dashboard_discord_server_messages(
     request: Request,
     server_id: str,
     limit: int = 150,
@@ -19222,7 +19222,7 @@ async def dashboard_discord_server_messages(
 
 
 @app.get("/api/v1/dashboard/discord/recent-messages")
-async def dashboard_discord_recent_messages(
+def dashboard_discord_recent_messages(
     request: Request,
     limit: int = 50,
     category: Optional[str] = None
@@ -19302,7 +19302,7 @@ async def dashboard_discord_recent_messages(
 
 
 @app.delete("/api/v1/dashboard/discord/servers/{server_id}/messages")
-async def dashboard_discord_clear_server_messages(request: Request, server_id: str):
+def dashboard_discord_clear_server_messages(request: Request, server_id: str):
     """Delete all stored messages for a server so you can start fresh."""
     _require_ops_auth(request)
     conn = _discord_connect()
@@ -19319,7 +19319,7 @@ async def dashboard_discord_clear_server_messages(request: Request, server_id: s
 
 
 @app.delete("/api/v1/dashboard/discord/messages")
-async def dashboard_discord_clear_all_messages(request: Request):
+def dashboard_discord_clear_all_messages(request: Request):
     """Delete ALL stored Discord messages across all servers."""
     _require_ops_auth(request)
     conn = _discord_connect()
@@ -19336,7 +19336,7 @@ async def dashboard_discord_clear_all_messages(request: Request):
 
 
 @app.delete("/api/v1/dashboard/discord/signals")
-async def dashboard_discord_clear_all_signals(request: Request):
+def dashboard_discord_clear_all_signals(request: Request):
     """Delete ALL stored Discord signals across all servers."""
     _require_ops_auth(request)
     conn = _discord_connect()
@@ -19430,7 +19430,7 @@ async def dashboard_discord_promote_channels(request: Request):
 
 
 @app.get("/api/v1/dashboard/proactive-signals")
-async def dashboard_proactive_signals(
+def dashboard_proactive_signals(
     request: Request,
     background_tasks: BackgroundTasks,
     source: str = "all",
@@ -19460,7 +19460,7 @@ async def dashboard_proactive_signals(
 
 
 @app.patch("/api/v1/dashboard/proactive-signals/{card_id}/feedback")
-async def dashboard_proactive_signal_feedback(
+def dashboard_proactive_signal_feedback(
     request: Request,
     card_id: str,
     payload: ProactiveSignalFeedbackRequest,
@@ -19495,7 +19495,7 @@ async def dashboard_proactive_signal_feedback(
 
 
 @app.post("/api/v1/dashboard/proactive-signals/{card_id}/action")
-async def dashboard_proactive_signal_action(
+def dashboard_proactive_signal_action(
     request: Request,
     card_id: str,
     payload: ProactiveSignalActionRequest,
@@ -19530,7 +19530,7 @@ async def dashboard_proactive_signal_action(
 
 
 @app.post("/api/v1/directed-demo")
-async def directed_demo_intake(request: Request, payload: DirectedDemoRequest):
+def directed_demo_intake(request: Request, payload: DirectedDemoRequest):
     """Operator-DIRECTED demo build intake (S5) — "Kevin says: build X" from
     anywhere.
 
@@ -19578,7 +19578,7 @@ async def directed_demo_intake(request: Request, payload: DirectedDemoRequest):
 
 
 @app.get("/api/v1/dashboard/proactive-task-history")
-async def dashboard_proactive_task_history(
+def dashboard_proactive_task_history(
     request: Request,
     limit: int = 80,
 ):
@@ -19605,7 +19605,7 @@ async def dashboard_proactive_task_history(
 
 
 @app.patch("/api/v1/dashboard/proactive-task-history/{task_id}/feedback")
-async def dashboard_proactive_task_feedback(
+def dashboard_proactive_task_feedback(
     request: Request,
     task_id: str,
     payload: ProactiveSignalFeedbackRequest,
@@ -19931,7 +19931,7 @@ def _proactive_task_history_health(tasks: list[dict[str, Any]]) -> dict[str, Any
 
 
 @app.delete("/api/v1/dashboard/proactive-signals/{card_id}")
-async def dashboard_proactive_signal_delete(
+def dashboard_proactive_signal_delete(
     request: Request,
     card_id: str,
 ):
@@ -22068,7 +22068,7 @@ def _claude_code_intel_rolling_payload() -> dict[str, Any]:
 
 
 @app.get("/api/v1/dashboard/claude-code-intel")
-async def dashboard_claude_code_intel(
+def dashboard_claude_code_intel(
     request: Request,
     limit: int = 40,
 ):
@@ -22313,7 +22313,7 @@ async def dashboard_csi_triage_rerank(request: Request):
 
 
 @app.get("/api/v1/dashboard/proactive-artifacts")
-async def dashboard_proactive_artifacts(
+def dashboard_proactive_artifacts(
     request: Request,
     status: str = "",
     delivery_state: str = "",
@@ -22342,7 +22342,7 @@ async def dashboard_proactive_artifacts(
 
 
 @app.get("/api/v1/dashboard/proactive-artifacts/digest/preview")
-async def dashboard_proactive_artifact_digest_preview(
+def dashboard_proactive_artifact_digest_preview(
     request: Request,
     recipient: str = "",
     limit: int = 12,
@@ -22397,7 +22397,7 @@ async def dashboard_proactive_artifact_digest_send(
 
 
 @app.get("/api/v1/dashboard/proactive-artifacts/preferences/weekly/preview")
-async def dashboard_proactive_preference_weekly_preview(
+def dashboard_proactive_preference_weekly_preview(
     request: Request,
     recipient: str = "",
 ):
@@ -22443,7 +22443,7 @@ async def dashboard_proactive_preference_weekly_send(
 
 
 @app.post("/api/v1/dashboard/proactive-artifacts/{artifact_id}/feedback")
-async def dashboard_proactive_artifact_feedback(
+def dashboard_proactive_artifact_feedback(
     request: Request,
     artifact_id: str,
     payload: ProactiveArtifactFeedbackRequest,
@@ -22501,7 +22501,7 @@ def _ack_artifact(conn: sqlite3.Connection, artifact_id: str) -> Optional[dict[s
 
 
 @app.get("/api/v1/artifacts/{artifact_id}/ack")
-async def artifacts_ack_get(artifact_id: str, t: str = ""):
+def artifacts_ack_get(artifact_id: str, t: str = ""):
     """Signed-URL acknowledge endpoint for email "Acknowledge" links.
 
     Silent by design: the operator clicks the link in their mail client,
@@ -22546,7 +22546,7 @@ async def artifacts_ack_get(artifact_id: str, t: str = ""):
 
 
 @app.get("/api/v1/proactive_health/ack")
-async def proactive_health_ack_get(f: str = "", t: str = ""):
+def proactive_health_ack_get(f: str = "", t: str = ""):
     """Signed-URL acknowledge endpoint for proactive_health digest emails.
 
     Mirrors ``artifacts_ack_get``: the HMAC token IS the auth (no
@@ -22662,7 +22662,7 @@ def _brief_chrome(title: str, body_html: str, *, status_color: str = "#0969da") 
 
 
 @app.get("/api/v1/briefs/{artifact_id}/feedback")
-async def briefs_feedback_get(artifact_id: str, v: str = "", t: str = ""):
+def briefs_feedback_get(artifact_id: str, v: str = "", t: str = ""):
     """Operator thumbs-up/down endpoint for digest brief links.
 
     Accepts ``v`` in {"up", "down"} and ``t`` an HMAC-SHA256(secret,
@@ -22772,7 +22772,7 @@ async def briefs_feedback_get(artifact_id: str, v: str = "", t: str = ""):
 
 
 @app.get("/api/v1/ideation/{task_id}/action")
-async def ideation_action_get(task_id: str, a: str = "", t: str = ""):
+def ideation_action_get(task_id: str, a: str = "", t: str = ""):
     """One-click promote/dismiss for a held ideation proposal (morning report).
 
     ``a`` in {"promote","dismiss"}, ``t`` an HMAC over ``f"ideation:{task_id}:{a}"``.
@@ -22851,7 +22851,7 @@ async def ideation_action_get(task_id: str, a: str = "", t: str = ""):
 
 
 @app.get("/api/v1/gpu_demo/{task_id}/approve")
-async def gpu_demo_approve_get(task_id: str, a: str = "", t: str = ""):
+def gpu_demo_approve_get(task_id: str, a: str = "", t: str = ""):
     """One-click approve/reject for a GPU-bound demo build held for desktop execution.
 
     a in {"approve","reject"}, t an HMAC over f"gpu_demo:{task_id}:{a}".
@@ -22986,7 +22986,7 @@ async def gpu_demo_approve_get(task_id: str, a: str = "", t: str = ""):
 
 
 @app.get("/briefs/{artifact_id}")
-async def briefs_viewer_get(artifact_id: str):
+def briefs_viewer_get(artifact_id: str):
     """Dashboard viewer for the durable HTML brief.
 
     Serves the file at ``proactive_artifacts.artifact_path`` if present;
@@ -23240,7 +23240,7 @@ async def youtube_oauth_callback(code: str = "", state: str = "", error: str = "
 
 
 @app.get("/api/v1/digest/pause")
-async def digest_pause_get(hours: int = 24, t: str = ""):
+def digest_pause_get(hours: int = 24, t: str = ""):
     """Operator pause endpoint for the hourly intel digest.
 
     Validates an HMAC token over ``f"digest_pause:{hours}"`` and upserts
@@ -23298,7 +23298,7 @@ async def digest_pause_get(hours: int = 24, t: str = ""):
 
 
 @app.post("/api/v1/dashboard/proactive-artifacts/{artifact_id}/ack")
-async def dashboard_proactive_artifact_ack(request: Request, artifact_id: str):
+def dashboard_proactive_artifact_ack(request: Request, artifact_id: str):
     """Ops-authed acknowledge endpoint for the dashboard button."""
     _require_ops_auth(request)
     with _activity_store_lock:
@@ -23339,7 +23339,7 @@ async def dashboard_proactive_artifact_send_review(
 
 
 @app.post("/api/v1/dashboard/proactive-artifacts/codie/cleanup-task")
-async def dashboard_proactive_codie_cleanup_task(
+def dashboard_proactive_codie_cleanup_task(
     request: Request,
     payload: ProactiveCodieCleanupQueueRequest,
 ):
@@ -23361,7 +23361,7 @@ async def dashboard_proactive_codie_cleanup_task(
 
 
 @app.post("/api/v1/dashboard/proactive-artifacts/codie/pr")
-async def dashboard_proactive_codie_pr_register(
+def dashboard_proactive_codie_pr_register(
     request: Request,
     payload: ProactiveCodiePrRegisterRequest,
 ):
@@ -23390,7 +23390,7 @@ async def dashboard_proactive_codie_pr_register(
 
 
 @app.post("/api/v1/dashboard/proactive-artifacts/tutorial/build-task")
-async def dashboard_proactive_tutorial_build_task(
+def dashboard_proactive_tutorial_build_task(
     request: Request,
     payload: ProactiveTutorialBuildQueueRequest,
 ):
@@ -23421,7 +23421,7 @@ async def dashboard_proactive_tutorial_build_task(
 
 
 @app.post("/api/v1/dashboard/proactive-artifacts/tutorial/build-artifact")
-async def dashboard_proactive_tutorial_build_artifact(
+def dashboard_proactive_tutorial_build_artifact(
     request: Request,
     payload: ProactiveTutorialBuildRegisterRequest,
 ):
@@ -25243,7 +25243,7 @@ async def dashboard_csi_specialist_loop_triage(payload: CSISpecialistLoopTriageR
 
 
 @app.post("/api/v1/dashboard/csi/specialist-loops/cleanup")
-async def dashboard_csi_specialist_loop_cleanup(payload: CSISpecialistLoopCleanupRequest, request: Request):
+def dashboard_csi_specialist_loop_cleanup(payload: CSISpecialistLoopCleanupRequest, request: Request):
     _require_ops_auth(request)
     apply_changes = bool(payload.apply)
     max_items = max(1, min(int(payload.max_items or 200), 1000))
@@ -26060,7 +26060,7 @@ def _compact_task_memory_indexes(*, dry_run: bool) -> dict[str, Any]:
 
 
 @app.get("/api/v1/dashboard/todolist/overview")
-async def dashboard_todolist_overview():
+def dashboard_todolist_overview():
     approvals_pending = list_approvals(status="pending")
     pending_count = len(approvals_pending if isinstance(approvals_pending, list) else [])
     with _activity_store_lock:
@@ -26090,7 +26090,7 @@ async def dashboard_capacity():
 
 
 @app.get("/api/v1/dashboard/pipeline-stats")
-async def dashboard_pipeline_stats():
+def dashboard_pipeline_stats():
     """Return higher-level task pipeline statistical aggregations."""
     approvals_pending = list_approvals(status="pending")
     pending_count = len(approvals_pending if isinstance(approvals_pending, list) else [])
@@ -26113,7 +26113,7 @@ async def dashboard_pipeline_stats():
 
 
 @app.get("/api/v1/dashboard/proactive-pipeline")
-async def dashboard_proactive_pipeline():
+def dashboard_proactive_pipeline():
     """Return detailed item lists for each proactive pipeline stage.
 
     Three sections:
@@ -26211,7 +26211,7 @@ async def dashboard_proactive_pipeline():
 
 
 @app.get("/api/v1/dashboard/agent-assignments")
-async def dashboard_agent_assignments():
+def dashboard_agent_assignments():
     """Return current agent task assignments."""
     with _activity_store_lock:
         conn = _task_hub_open_conn()
@@ -26223,7 +26223,7 @@ async def dashboard_agent_assignments():
 
 
 @app.get("/api/v1/dashboard/todolist/agent-queue")
-async def dashboard_todolist_agent_queue(
+def dashboard_todolist_agent_queue(
     offset: int = 0,
     limit: int = 60,
     include_csi: bool = True,
@@ -26369,7 +26369,7 @@ async def dashboard_todolist_agent_queue(
 
 
 @app.get("/api/v1/dashboard/todolist/personal-queue")
-async def dashboard_todolist_personal_queue(limit: int = 120):
+def dashboard_todolist_personal_queue(limit: int = 120):
     pending = list_approvals(status="pending")
     pending_rows = pending if isinstance(pending, list) else []
     with _activity_store_lock:
@@ -26435,7 +26435,19 @@ def _is_human_personal_queue_item(item: Any) -> bool:
 
 
 @app.get("/api/v1/dashboard/human-actions/highlight")
-async def dashboard_human_actions_highlight(task_limit: int = 120, notification_limit: int = 60):
+def dashboard_human_actions_highlight(task_limit: int = 120, notification_limit: int = 60):
+    # NOTE: intentionally a *sync* path operation. The body does only
+    # synchronous, blocking SQLite work against the ~1GB activity_state.db
+    # (``_activity_store_lock`` + ``_task_hub_open_conn`` + ``list_personal_queue``
+    # + ``_query_activity_events``) with no ``await``. Declaring it ``async``
+    # ran that blocking work directly on the event loop, so a cross-process DB
+    # lock stall (e.g. the autonomous-runtime process VACUUM/checkpoint on the
+    # shared activity_state.db) froze the ENTIRE gateway — accept() stopped,
+    # every endpoint hung (prod incident 2026-07-14). As a plain ``def``,
+    # Starlette runs it in its threadpool, so a DB stall degrades this one
+    # polled widget request instead of the whole loop. The ``threading.Lock``
+    # is correct across threadpool workers. See the batch conversion below —
+    # this endpoint was one of ~107 route handlers with the same on-loop shape.
     _apply_notification_snooze_expiry()
     _apply_activity_snooze_expiry()
     with _activity_store_lock:
@@ -26531,7 +26543,7 @@ async def dashboard_human_actions_highlight(task_limit: int = 120, notification_
 
 
 @app.post("/api/v1/dashboard/todolist/tasks/{task_id}/action")
-async def dashboard_todolist_task_action(task_id: str, payload: ToDoTaskActionRequest):
+def dashboard_todolist_task_action(task_id: str, payload: ToDoTaskActionRequest):
     action = str(payload.action or "").strip().lower()
     if not action:
         raise HTTPException(status_code=400, detail="action is required")
@@ -26581,7 +26593,7 @@ _BULK_PARK_LANE_QUERIES: dict[str, str] = {
 
 
 @app.post("/api/v1/dashboard/todolist/bulk-park")
-async def dashboard_todolist_bulk_park(payload: BulkParkRequest):
+def dashboard_todolist_bulk_park(payload: BulkParkRequest):
     """Park every task in the given board lane in one request.
 
     Resolves all candidate ``task_id``s via a single SELECT and parks them
@@ -26630,7 +26642,7 @@ async def dashboard_todolist_bulk_park(payload: BulkParkRequest):
 
 
 @app.post("/api/v1/dashboard/todolist/tasks/{task_id}/dispatch")
-async def dashboard_todolist_dispatch(task_id: str):
+def dashboard_todolist_dispatch(task_id: str):
     """Immediately dispatch a task (dashboard 'Start Now')."""
     tid = str(task_id or "").strip()
     if not tid:
@@ -26647,7 +26659,7 @@ async def dashboard_todolist_dispatch(task_id: str):
 
 
 @app.post("/api/v1/dashboard/todolist/tasks/{task_id}/approve")
-async def dashboard_todolist_approve(task_id: str):
+def dashboard_todolist_approve(task_id: str):
     """Approve and dispatch a review task (dashboard 'Approve')."""
     tid = str(task_id or "").strip()
     if not tid:
@@ -26700,7 +26712,7 @@ async def dashboard_todolist_decompose(task_id: str):
 
 
 @app.post("/api/v1/dashboard/todolist/tasks/{task_id}/complete-subtask")
-async def dashboard_todolist_complete_subtask(task_id: str):
+def dashboard_todolist_complete_subtask(task_id: str):
     """Mark a subtask complete and auto-complete parent if all siblings done."""
     tid = str(task_id or "").strip()
     if not tid:
@@ -26717,7 +26729,7 @@ async def dashboard_todolist_complete_subtask(task_id: str):
 
 
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}")
-async def dashboard_todolist_get_task(task_id: str):
+def dashboard_todolist_get_task(task_id: str):
     """Return a single task_hub row by `task_id`.
 
     Companion to the list endpoints (`/agent-queue`, `/completed`,
@@ -26752,7 +26764,7 @@ async def dashboard_todolist_get_task(task_id: str):
 
 
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/goal-artifacts")
-async def dashboard_todolist_get_goal_artifacts(task_id: str):
+def dashboard_todolist_get_goal_artifacts(task_id: str):
     """Return the /goal-flow artifact contents for a task.
 
     The Task Hub dashboard card surfaces a `/goal active` badge and an
@@ -26941,7 +26953,7 @@ async def dashboard_todolist_get_goal_artifacts(task_id: str):
 
 
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/subtasks")
-async def dashboard_todolist_get_subtasks(task_id: str):
+def dashboard_todolist_get_subtasks(task_id: str):
     """Return decomposition tree for a task."""
     tid = str(task_id or "").strip()
     if not tid:
@@ -26956,7 +26968,7 @@ async def dashboard_todolist_get_subtasks(task_id: str):
 
 
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/failure-context")
-async def dashboard_todolist_get_failure_context(task_id: str):
+def dashboard_todolist_get_failure_context(task_id: str):
     """Return operator-facing failure context for a wedged task (Hermes Phase B.2).
 
     Surfaces the data an operator needs to decide between rehydrate /
@@ -27022,7 +27034,7 @@ async def dashboard_todolist_get_failure_context(task_id: str):
 
 
 @app.get("/api/v1/cody/mode-setting")
-async def cody_mode_setting_get(vp_id: Optional[str] = None):
+def cody_mode_setting_get(vp_id: Optional[str] = None):
     """Return operator-configured VP execution mode(s).
 
     Query params:
@@ -27065,7 +27077,7 @@ async def cody_mode_setting_get(vp_id: Optional[str] = None):
 
 
 @app.post("/api/v1/cody/mode-setting")
-async def cody_mode_setting_post(payload: dict):
+def cody_mode_setting_post(payload: dict):
     """Persist a VP execution-mode override (global or per-VP).
 
     Body:
@@ -27116,7 +27128,7 @@ async def cody_mode_setting_post(payload: dict):
 
 
 @app.get("/api/v1/cody/anthropic-token-tracking")
-async def cody_anthropic_token_tracking_get(mode: str = "anthropic"):
+def cody_anthropic_token_tracking_get(mode: str = "anthropic"):
     """Return cumulative Cody token usage since the last operator refresh.
 
     Query params:
@@ -27161,7 +27173,7 @@ async def cody_anthropic_token_tracking_get(mode: str = "anthropic"):
 
 
 @app.post("/api/v1/cody/anthropic-token-tracking/reset")
-async def cody_anthropic_token_tracking_reset(payload: dict = None):
+def cody_anthropic_token_tracking_reset(payload: dict = None):
     """Bump the tracking window cursor to now.
 
     History rows are preserved; the dashboard tile will show zero
@@ -27253,7 +27265,7 @@ async def dashboard_todolist_refine(task_id: str):
 
 
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/refinement-state")
-async def dashboard_todolist_refinement_state(task_id: str):
+def dashboard_todolist_refinement_state(task_id: str):
     """Get current refinement stage and history."""
     tid = str(task_id or "").strip()
     if not tid:
@@ -27268,7 +27280,7 @@ async def dashboard_todolist_refinement_state(task_id: str):
 
 
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/questions")
-async def dashboard_todolist_questions(task_id: str):
+def dashboard_todolist_questions(task_id: str):
     """List pending questions for a task."""
     tid = str(task_id or "").strip()
     if not tid:
@@ -27310,7 +27322,7 @@ async def dashboard_todolist_answer_question(task_id: str, request: Request):
 
 
 @app.post("/api/v1/dashboard/todolist/tasks")
-async def dashboard_todolist_quick_add(payload: QuickAddTaskRequest):
+def dashboard_todolist_quick_add(payload: QuickAddTaskRequest):
     """Quick-add a new task from the dashboard."""
     import hashlib
     title = str(payload.title or "").strip()
@@ -28022,7 +28034,7 @@ def _serialize_task_hub_queue_item(
 
 
 @app.get("/api/v1/dashboard/todolist/completed")
-async def dashboard_todolist_completed(limit: int = 60):
+def dashboard_todolist_completed(limit: int = 60):
     bounded_limit = max(1, min(int(limit), 500))
     with _activity_store_lock:
         conn = _task_hub_open_conn()
@@ -28165,7 +28177,7 @@ async def dashboard_todolist_completed(limit: int = 60):
 
 
 @app.delete("/api/v1/dashboard/todolist/completed/{task_id}")
-async def dashboard_todolist_delete_completed(task_id: str):
+def dashboard_todolist_delete_completed(task_id: str):
     """Hide a completed task from the dashboard.
 
     The task stays ``status=completed`` (terminal SUCCESS) and is flagged
@@ -28202,7 +28214,7 @@ async def dashboard_todolist_delete_completed(task_id: str):
 
 
 @app.delete("/api/v1/dashboard/todolist/completed")
-async def dashboard_todolist_delete_all_completed():
+def dashboard_todolist_delete_all_completed():
     """Hide all completed tasks from the dashboard.
 
     Tasks stay ``status=completed`` (terminal SUCCESS) and are flagged
@@ -28406,7 +28418,7 @@ async def dashboard_todolist_archive_task(task_id: str):
 
 
 @app.post("/api/v1/dashboard/simone_chat/{task_id}/complete")
-async def dashboard_simone_chat_complete(task_id: str):
+def dashboard_simone_chat_complete(task_id: str):
     """Manually promote a simone_chat task to `completed`.
 
     Used by the Kanban "Mark complete" affordance when an operator wants to
@@ -28433,7 +28445,7 @@ async def dashboard_simone_chat_complete(task_id: str):
 
 
 @app.post("/api/v1/dashboard/simone_chat/{task_id}/reopen")
-async def dashboard_simone_chat_reopen(task_id: str):
+def dashboard_simone_chat_reopen(task_id: str):
     """Operator override — flip a `completed` simone_chat row back to `in_progress`.
 
     Used when auto-complete fired prematurely and the operator wants to
@@ -28460,7 +28472,7 @@ async def dashboard_simone_chat_reopen(task_id: str):
 
 
 @app.get("/api/v1/dashboard/todolist/email-tasks")
-async def dashboard_todolist_email_tasks(limit: int = 50):
+def dashboard_todolist_email_tasks(limit: int = 50):
     """Return all email-originated tasks with their thread context."""
     try:
         from universal_agent.services.email_task_bridge import (
@@ -28522,7 +28534,7 @@ async def dashboard_todolist_email_tasks(limit: int = 50):
 
 
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/history")
-async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
+def dashboard_todolist_task_history(task_id: str, limit: int = 120):
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
@@ -28644,7 +28656,7 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
 
 
 @app.get("/api/v1/dashboard/todolist/agent-activity")
-async def dashboard_todolist_agent_activity():
+def dashboard_todolist_agent_activity():
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
@@ -28655,7 +28667,7 @@ async def dashboard_todolist_agent_activity():
 
 
 @app.get("/api/v1/dashboard/agent-metrics")
-async def dashboard_agent_metrics():
+def dashboard_agent_metrics():
     """Aggregated agent performance metrics: completion times, success rates, routing accuracy."""
     with _activity_store_lock:
         conn = _task_hub_open_conn()
@@ -28674,7 +28686,7 @@ async def dashboard_agent_metrics():
 
 
 @app.get("/api/v1/dashboard/todolist/dispatch-queue")
-async def dashboard_todolist_dispatch_queue(limit: int = 120):
+def dashboard_todolist_dispatch_queue(limit: int = 120):
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
@@ -28686,7 +28698,7 @@ async def dashboard_todolist_dispatch_queue(limit: int = 120):
 
 
 @app.post("/api/v1/dashboard/todolist/dispatch-queue/rebuild")
-async def dashboard_todolist_dispatch_queue_rebuild():
+def dashboard_todolist_dispatch_queue_rebuild():
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
@@ -28712,7 +28724,7 @@ async def dashboard_approvals_highlight():
 
 
 @app.get("/api/v1/dashboard/notifications")
-async def dashboard_notifications(
+def dashboard_notifications(
     limit: int = 100,
     status: Optional[str] = None,
     session_id: Optional[str] = None,
@@ -28813,7 +28825,7 @@ async def dashboard_notifications(
 
 
 @app.get("/api/v1/dashboard/events")
-async def dashboard_events(
+def dashboard_events(
     limit: int = 200,
     source_domain: Optional[str] = None,
     kind: Optional[str] = None,
@@ -29040,7 +29052,7 @@ async def dashboard_chief_of_staff(include_evidence: bool = False, journal_limit
 
 
 @app.get("/api/v1/dashboard/mission-control/tiles")
-async def dashboard_mission_control_tiles():
+def dashboard_mission_control_tiles():
     """Return all tier-0 tile states for the Mission Control strip.
 
     Phase 1B endpoint. Reads from `mission_control_tile_states` (written
@@ -29266,7 +29278,7 @@ async def dashboard_mission_control_ledger(
 
 
 @app.get("/api/v1/dashboard/mission-control/diagnostics")
-async def dashboard_mission_control_diagnostics():
+def dashboard_mission_control_diagnostics():
     """Operator-visible diagnostics for the Mission Control sweeper.
 
     Exposes per-phase enable state (so operators can verify env reached
@@ -29513,7 +29525,7 @@ async def dashboard_mission_control_card_dismiss(card_id: str):
 
 
 @app.post("/api/v1/dashboard/mission-control/cards/{card_id}/complete")
-async def dashboard_mission_control_card_complete(card_id: str):
+def dashboard_mission_control_card_complete(card_id: str):
     """Operator-mark-complete on a card whose subject is a task or mission.
 
     Backstop for cases where automatic reconciliation (e.g. the
@@ -29711,7 +29723,7 @@ class _MCDispatchToCodieBody(BaseModel):
 
 
 @app.post("/api/v1/dashboard/mission-control/cards/{card_id}/dispatch-to-codie")
-async def dashboard_mission_control_dispatch_to_codie(
+def dashboard_mission_control_dispatch_to_codie(
     card_id: str, body: _MCDispatchToCodieBody
 ):
     """Dispatch a card's investigation prompt to Codie via Task Hub.
@@ -30507,7 +30519,7 @@ async def dashboard_activity_action(activity_id: str, payload: ActivityEventActi
 
 
 @app.delete("/api/v1/dashboard/activity/{activity_id}")
-async def dashboard_activity_delete(activity_id: str, request: Request):
+def dashboard_activity_delete(activity_id: str, request: Request):
     event_id = str(activity_id or "").strip()
     if not event_id:
         raise HTTPException(status_code=400, detail="activity_id is required")
@@ -30664,7 +30676,7 @@ async def dashboard_notification_purge(payload: NotificationPurgeRequest):
 
 # --- System Resources endpoint ---
 @app.get("/api/v1/dashboard/system-resources")
-async def handle_dashboard_system_resources(request: Request):
+def handle_dashboard_system_resources(request: Request):
     """Return latest VPS system resource metrics from heartbeat findings."""
     import glob as glob_mod
 
@@ -30756,7 +30768,7 @@ async def dashboard_tutorial_runs(limit: int = 100):
 
 
 @app.get("/api/v1/dashboard/tutorials/active-runs")
-async def dashboard_tutorial_active_runs(limit: int = 20):
+def dashboard_tutorial_active_runs(limit: int = 20):
     clamped = max(1, min(int(limit), 100))
     try:
         rows = _query_activity_events(
@@ -30825,7 +30837,7 @@ _TUTORIAL_NOTIFICATION_KINDS = frozenset({
 
 
 @app.get("/api/v1/dashboard/tutorials/notifications")
-async def dashboard_tutorial_notifications(limit: int = 50, include_dismissed: bool = False):
+def dashboard_tutorial_notifications(limit: int = 50, include_dismissed: bool = False):
     """Return recent notifications relevant to the YouTube tutorial pipeline."""
     clamped = max(1, min(int(limit), 200))
     try:
@@ -30910,7 +30922,7 @@ async def dashboard_tutorial_bootstrap_jobs(limit: int = 100, run_path: str = ""
 
 
 @app.get("/api/v1/dashboard/tutorials/pending-builds")
-async def dashboard_tutorial_pending_builds(limit: int = 50):
+def dashboard_tutorial_pending_builds(limit: int = 50):
     """List pending-approval tutorial_build Task Hub rows (P2a ceiling overflow)."""
     from universal_agent.services.proactive_tutorial_builds import (
         list_pending_approval_builds,
@@ -30927,7 +30939,7 @@ async def dashboard_tutorial_pending_builds(limit: int = 50):
 
 
 @app.post("/api/v1/dashboard/tutorials/pending-builds/{task_id}/approve")
-async def dashboard_tutorial_pending_build_approve(task_id: str):
+def dashboard_tutorial_pending_build_approve(task_id: str):
     """Approve + dispatch a pending-approval tutorial build (operator button).
 
     Manual approvals are UNCAPPED — this path never consults the daily
@@ -31282,7 +31294,7 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
 
 
 @app.get("/api/v1/ops/system-health")
-async def ops_system_health():
+def ops_system_health():
     """Consolidated system health snapshot for the heartbeat dashboard.
 
     Returns subsystem status, heartbeat summaries, cron schedule, task hub
@@ -31708,7 +31720,7 @@ async def ops_telemetry_briefing_get(request: Request):
 
 
 @app.get("/api/v1/ops/proactive/reports")
-async def ops_proactive_reports_get(request: Request, limit: int = 10):
+def ops_proactive_reports_get(request: Request, limit: int = 10):
     """Retrieve recent proactive intelligence reports for dashboard display."""
     _require_ops_auth(request)
     try:
@@ -31728,7 +31740,7 @@ async def ops_proactive_reports_get(request: Request, limit: int = 10):
 
 
 @app.get("/api/v1/ops/proactive/utilization")
-async def ops_proactive_utilization_get(request: Request, window_hours: int = 24):
+def ops_proactive_utilization_get(request: Request, window_hours: int = 24):
     """Retrieve system utilization statistics from heartbeat sampling."""
     _require_ops_auth(request)
     try:
@@ -31748,7 +31760,7 @@ async def ops_proactive_utilization_get(request: Request, window_hours: int = 24
 
 
 @app.get("/api/v1/ops/proactive/outcomes")
-async def ops_proactive_outcomes_get(request: Request, window_hours: int = 168, limit: int = 20):
+def ops_proactive_outcomes_get(request: Request, window_hours: int = 168, limit: int = 20):
     """Retrieve proactive task outcome statistics and recent outcomes."""
     _require_ops_auth(request)
     try:
@@ -35166,7 +35178,7 @@ async def ops_calendar_event_change_confirm(
 
 
 @app.post("/api/v1/ops/calendar/nudge-overdue")
-async def ops_calendar_nudge_overdue(request: Request):
+def ops_calendar_nudge_overdue(request: Request):
     """Prod all active heartbeat sessions for every overdue, agent-ready task."""
     _require_ops_auth(request)
     _scheduling_counter_inc("calendar_nudge_overdue_requests")
@@ -35362,7 +35374,7 @@ async def ops_vp_missions(
 
 
 @app.post("/api/v1/ops/vp/missions/dispatch")
-async def ops_vp_dispatch_mission(
+def ops_vp_dispatch_mission(
     request: Request,
     body: VpMissionDispatchRequest,
 ):
@@ -35878,7 +35890,7 @@ async def ops_logs_tail(
 
 
 @app.get("/api/v1/ops/skills")
-async def ops_skills_status(request: Request):
+def ops_skills_status(request: Request):
     _require_ops_auth(request)
     try:
         return {"skills": _load_skill_catalog()}
@@ -35888,7 +35900,7 @@ async def ops_skills_status(request: Request):
 
 
 @app.patch("/api/v1/ops/skills/{skill_key}")
-async def ops_skill_update(request: Request, skill_key: str, payload: OpsSkillUpdateRequest):
+def ops_skill_update(request: Request, skill_key: str, payload: OpsSkillUpdateRequest):
     _require_ops_auth(request)
     config = load_ops_config()
     skills_cfg = config.get("skills", {})
@@ -35909,7 +35921,7 @@ async def ops_skill_update(request: Request, skill_key: str, payload: OpsSkillUp
 
 
 @app.get("/api/v1/ops/skills/{skill_key}/doc")
-async def ops_skill_doc(request: Request, skill_key: str):
+def ops_skill_doc(request: Request, skill_key: str):
     _require_ops_auth(request)
     catalog = _load_skill_catalog()
     normalized = skill_key.strip().lower()
@@ -35933,7 +35945,7 @@ async def ops_skill_doc(request: Request, skill_key: str):
 
 
 @app.get("/api/v1/ops/channels")
-async def ops_channels_status(request: Request):
+def ops_channels_status(request: Request):
     _require_ops_auth(request)
     return {"channels": _load_channel_status()}
 
@@ -35947,7 +35959,7 @@ async def ops_channels_probe(request: Request, channel_id: str, timeout: float =
 
 
 @app.post("/api/v1/ops/channels/{channel_id}/logout")
-async def ops_channels_logout(request: Request, channel_id: str):
+def ops_channels_logout(request: Request, channel_id: str):
     _require_ops_auth(request)
     config = load_ops_config()
     channels_cfg = config.get("channels", {})
@@ -35967,7 +35979,7 @@ async def ops_channels_logout(request: Request, channel_id: str):
 
 
 @app.get("/api/v1/ops/preferences")
-async def ops_preferences_get(request: Request):
+def ops_preferences_get(request: Request):
     _require_ops_auth(request)
     conn = _runtime_db_connect()
     try:
@@ -35979,7 +35991,7 @@ async def ops_preferences_get(request: Request):
 
 
 @app.patch("/api/v1/ops/preferences")
-async def ops_preferences_patch(request: Request, payload: OpsPreferencesUpdateRequest):
+def ops_preferences_patch(request: Request, payload: OpsPreferencesUpdateRequest):
     _require_ops_auth(request)
     conn = _runtime_db_connect()
     try:
@@ -35998,7 +36010,7 @@ async def ops_preferences_patch(request: Request, payload: OpsPreferencesUpdateR
 
 
 @app.get("/api/v1/ops/config")
-async def ops_config_get(request: Request):
+def ops_config_get(request: Request):
     _require_ops_auth(request)
     config = load_ops_config()
     return {"config": config, "base_hash": ops_config_hash(config)}
@@ -36024,7 +36036,7 @@ async def ops_deployment_profile_get(request: Request):
 
 
 @app.post("/api/v1/ops/config")
-async def ops_config_set(request: Request, payload: OpsConfigRequest):
+def ops_config_set(request: Request, payload: OpsConfigRequest):
     _require_ops_auth(request)
     current = load_ops_config()
     if payload.base_hash and payload.base_hash != ops_config_hash(current):
@@ -36035,7 +36047,7 @@ async def ops_config_set(request: Request, payload: OpsConfigRequest):
 
 
 @app.patch("/api/v1/ops/config")
-async def ops_config_patch(request: Request, payload: OpsConfigPatchRequest):
+def ops_config_patch(request: Request, payload: OpsConfigPatchRequest):
     _require_ops_auth(request)
     current = load_ops_config()
     if payload.base_hash and payload.base_hash != ops_config_hash(current):
@@ -36046,7 +36058,7 @@ async def ops_config_patch(request: Request, payload: OpsConfigPatchRequest):
 
 
 @app.get("/api/v1/ops/remote-sync")
-async def ops_remote_sync_get(request: Request):
+def ops_remote_sync_get(request: Request):
     _require_ops_auth(request)
     config = load_ops_config()
     return {
@@ -36058,7 +36070,7 @@ async def ops_remote_sync_get(request: Request):
 
 
 @app.post("/api/v1/ops/remote-sync")
-async def ops_remote_sync_set(request: Request, payload: OpsRemoteSyncUpdateRequest):
+def ops_remote_sync_set(request: Request, payload: OpsRemoteSyncUpdateRequest):
     _require_ops_auth(request)
     config = load_ops_config()
     section = config.get("remote_debug", {})
@@ -36154,7 +36166,7 @@ async def ops_approvals_create(request: Request, payload: OpsApprovalCreateReque
 
 
 @app.patch("/api/v1/ops/approvals/{approval_id}")
-async def ops_approvals_update(
+def ops_approvals_update(
     request: Request, approval_id: str, payload: OpsApprovalUpdateRequest
 ):
     _require_ops_auth(request)
@@ -36220,7 +36232,7 @@ async def ops_approvals_update(
 
 
 @app.delete("/api/v1/ops/approvals")
-async def ops_approvals_clear(request: Request, status: Optional[str] = None):
+def ops_approvals_clear(request: Request, status: Optional[str] = None):
     """Bulk-clear approvals.  ?status=approved,rejected  or omit to clear all."""
     _require_ops_auth(request)
     if status:
