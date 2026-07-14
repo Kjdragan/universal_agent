@@ -157,9 +157,8 @@ def test_completed_enrichment_prefers_cody_workspace_over_assignment(tmp_path: P
             with patch.object(gs, "_activity_store_lock") as lock:
                 lock.__enter__ = lambda self: None
                 lock.__exit__ = lambda self, *_a: None
-                import asyncio
 
-                payload = asyncio.run(gs.dashboard_todolist_completed(limit=10))
+                payload = gs.dashboard_todolist_completed(limit=10)
 
     assert payload["status"] == "ok"
     item = payload["items"][0]
@@ -214,9 +213,8 @@ def test_completed_enrichment_falls_through_for_non_delegated_tasks(tmp_path: Pa
             with patch.object(gs, "_activity_store_lock") as lock:
                 lock.__enter__ = lambda self: None
                 lock.__exit__ = lambda self, *_a: None
-                import asyncio
 
-                payload = asyncio.run(gs.dashboard_todolist_completed(limit=10))
+                payload = gs.dashboard_todolist_completed(limit=10)
 
     item = payload["items"][0]
     assert item["links"]["session_id"] == "daemon_simone_todo"
@@ -273,9 +271,8 @@ def test_completed_enrichment_stamps_vp_mission_id_for_direct_missions(tmp_path:
             with patch.object(gs, "_activity_store_lock") as lock:
                 lock.__enter__ = lambda self: None
                 lock.__exit__ = lambda self, *_a: None
-                import asyncio
 
-                payload = asyncio.run(gs.dashboard_todolist_completed(limit=10))
+                payload = gs.dashboard_todolist_completed(limit=10)
 
     item = payload["items"][0]
     expected_rel = f"vp_general_primary_external/{mission_id}/{mission_id}"

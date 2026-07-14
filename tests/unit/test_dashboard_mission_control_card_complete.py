@@ -18,7 +18,6 @@ Coverage:
 """
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -108,7 +107,7 @@ def _seed_card(conn: sqlite3.Connection, *, subject_kind: str, subject_id: str) 
 
 
 def _call(card_id: str) -> dict:
-    return asyncio.run(dashboard_mission_control_card_complete(card_id))
+    return dashboard_mission_control_card_complete(card_id)
 
 
 # ── Happy path ───────────────────────────────────────────────────────
