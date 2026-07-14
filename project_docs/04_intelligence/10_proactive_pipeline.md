@@ -204,6 +204,17 @@ wiring differs — some run continuously, some ship scaffolding only.
 > to reflection — `normalize_reflection_dedup_key` returns `""` for every other `source_kind`, so
 > the CSI/cron incident-key paths are untouched.
 >
+> **Backlog-aware context (shipped 2026-07-14).** The insert-time key is a *lexical* exact-match,
+> so it cannot catch the paraphrases the LLM produces each cycle (verified live: 137 open proposals
+> → 130 distinct dedup keys — it collapsed essentially nothing). Root cause: the ideator was never
+> shown its own open backlog, so it re-worded the same idea repeatedly (~41% of the backlog was one
+> monetization theme reworded). `build_reflection_context` now also fetches the held proposals via
+> `reflection_engine.py::_get_open_reflection_proposals` (`source_kind='reflection'`, `open`,
+> `agent_ready=0`; most-recent 50 + total count), and `_format_reflection_prompt` renders a **"Your
+> Current Open Proposals — do NOT duplicate"** section instructing the model to create nothing when
+> the idea is already covered, or to explicitly name the proposal it is superseding. This prevents
+> the near-duplicate at the source instead of catching it after insert.
+>
 > **Phase 2b (shipped):** the **morning ideation report** — `services/ideation_report.py`
 > (queries held proposals → renders HTML cards with one-click action links → publishes to the
 > scratchpad + emails via `AgentMailService`), driven by the `morning_ideation_report` cron
