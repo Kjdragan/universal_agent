@@ -640,3 +640,43 @@ def test_always_keep_default_in_sync_with_enricher() -> None:
     scopes the same operator-pinned channels."""
     enricher_default = _parse_enricher_constant("_DEFAULT_ALWAYS_KEEP")
     assert enricher_default == youtube_invariants._DEFAULT_ALWAYS_KEEP
+
+
+def _parse_file_constant(path: Path, name: str):
+    """Statically extract a module-level constant's literal value via ``ast``."""
+    if not path.exists():
+        pytest.skip(f"source not present in this checkout: {path}")
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == name:
+                    return ast.literal_eval(node.value)
+    pytest.fail(f"{name} not found in {path}")
+
+
+_CANARY_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "CSI_Ingester"
+    / "development"
+    / "scripts"
+    / "csi_youtube_transcript_canary.py"
+)
+
+
+def test_canary_domain_cats_in_sync_with_enricher() -> None:
+    """The canary's eligible-backlog check replicates the enricher's skip logic,
+    so its _DOMAIN_CATS must not drift from the enricher's — else the canary
+    would mis-classify eligible work and false-RED / false-GREEN."""
+    enricher_cats = set(_parse_enricher_constant("_DOMAIN_CATS"))
+    canary_cats = set(_parse_file_constant(_CANARY_PATH, "_DOMAIN_CATS"))
+    assert canary_cats == enricher_cats, (
+        "csi_youtube_transcript_canary._DOMAIN_CATS drifted from the enricher. "
+        "Edit both together so the canary's eligible-backlog matches enricher eligibility."
+    )
+
+
+def test_canary_always_keep_default_in_sync_with_enricher() -> None:
+    enricher_default = _parse_enricher_constant("_DEFAULT_ALWAYS_KEEP")
+    canary_default = _parse_file_constant(_CANARY_PATH, "_DEFAULT_ALWAYS_KEEP")
+    assert canary_default == enricher_default
