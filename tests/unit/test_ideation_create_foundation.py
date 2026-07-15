@@ -14,9 +14,12 @@ import asyncio
 import sqlite3
 
 from universal_agent import task_hub
+from universal_agent.services.reflection_engine import (
+    _format_reflection_prompt,
+    _get_open_reflection_proposals,
+)
 from universal_agent.tools import task_hub_bridge
 from universal_agent.tools.internal_registry import get_core_internal_tools
-from universal_agent.services.reflection_engine import _format_reflection_prompt
 
 
 def test_create_tool_is_registered():
@@ -67,3 +70,51 @@ def test_non_reflection_item_is_dispatchable(tmp_path, monkeypatch):
     row = conn.execute("SELECT agent_ready FROM task_hub_items").fetchone()
     conn.close()
     assert int(row[0]) == 1, "non-reflection creates keep prior behaviour (agent_ready=True)"
+
+
+def test_prompt_shows_open_proposals_so_ideator_self_dedups():
+    # The anti-over-emission fix: the ideator MUST see its own open backlog, else
+    # it re-words the same idea every cycle and lexical dedup can't catch it.
+    prompt = _format_reflection_prompt(
+        recent_completions=[],
+        stalled_brainstorms=[],
+        open_task_count=3,
+        memory_context=[],
+        budget_remaining=5,
+        open_proposals=[
+            {"title": "Productize the email-triage widget", "description": "**Rationale:** sell it"},
+            {"title": "Harden the ZAI backbone", "description": "add a fallback"},
+        ],
+        open_proposal_total=42,
+    )
+    assert "do NOT duplicate" in prompt
+    assert "Productize the email-triage widget" in prompt  # the model can now see it
+    assert "42 proposals" in prompt  # total surfaced so it grasps the backlog scale
+    assert "supersede" in prompt  # the only sanctioned way to touch an existing theme
+
+
+def test_prompt_omits_proposals_section_when_backlog_empty():
+    prompt = _format_reflection_prompt(
+        recent_completions=[],
+        stalled_brainstorms=[],
+        open_task_count=0,
+        memory_context=[],
+        budget_remaining=5,
+    )
+    assert "do NOT duplicate" not in prompt  # backward compatible: no section when none
+
+
+def test_get_open_reflection_proposals_reads_only_held(tmp_path, monkeypatch):
+    db = str(tmp_path / "props.db")
+    monkeypatch.setattr(task_hub_bridge, "get_activity_db_path", lambda: db)
+    _create(db, {"title": "Held idea", "description": "d1", "source_kind": "reflection"})
+    _create(db, {"title": "Manual task", "source_kind": "manual_test"})  # agent_ready=1
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    task_hub.ensure_schema(conn)
+    proposals, total = _get_open_reflection_proposals(conn)
+    conn.close()
+    titles = [p["title"] for p in proposals]
+    assert "Held idea" in titles
+    assert "Manual task" not in titles  # only held reflection rows count
+    assert total == 1

@@ -107,6 +107,40 @@ def _get_open_task_count(conn: sqlite3.Connection) -> int:
     return int(row["cnt"]) if row else 0
 
 
+def _get_open_reflection_proposals(
+    conn: sqlite3.Connection, limit: int = 50
+) -> tuple[list[dict[str, Any]], int]:
+    """The ideator's OWN currently-held proposals, so it can self-dedup.
+
+    Held reflection proposals (source_kind='reflection', open, not agent-ready)
+    are exactly what the morning ideation report surfaces. Feeding them back into
+    the ideation prompt is the highest-leverage fix for near-duplicate
+    over-emission: without this the model never sees its own backlog, so it
+    re-words the same idea every cycle and the insert-time lexical dedup
+    (task_hub.normalize_reflection_dedup_key) — an exact-title match — cannot
+    catch the paraphrases. Returns (most-recent proposals up to ``limit``, total open count).
+    """
+    task_hub.ensure_schema(conn)
+    total_row = conn.execute(
+        "SELECT COUNT(*) AS c FROM task_hub_items "
+        "WHERE source_kind = 'reflection' AND status = 'open' AND agent_ready = 0"
+    ).fetchone()
+    total = int(total_row["c"]) if total_row else 0
+    rows = conn.execute(
+        """
+        SELECT title, description
+        FROM task_hub_items
+        WHERE source_kind = 'reflection'
+          AND status = 'open'
+          AND agent_ready = 0
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows], total
+
+
 def _get_memory_context(workspace_dir: str, limit: int = 5) -> list[dict[str, Any]]:
     """Search memory for goals, missions, and project context."""
     try:
@@ -159,6 +193,7 @@ def build_reflection_context(
     recent = _get_recent_completions(conn, limit=8)
     stalled = _get_stalled_brainstorms(conn)
     open_count = _get_open_task_count(conn)
+    open_proposals, open_proposal_total = _get_open_reflection_proposals(conn)
     memory_hits = _get_memory_context(workspace_dir) if workspace_dir else []
     daily_count = get_daily_proactive_count(conn)
     remaining = get_budget_remaining(conn)
@@ -167,6 +202,8 @@ def build_reflection_context(
         recent_completions=recent,
         stalled_brainstorms=stalled,
         open_task_count=open_count,
+        open_proposals=open_proposals,
+        open_proposal_total=open_proposal_total,
         memory_context=memory_hits,
         budget_remaining=remaining,
     )
@@ -175,6 +212,8 @@ def build_reflection_context(
         "recent_completions": recent,
         "stalled_brainstorms": stalled,
         "open_task_count": open_count,
+        "open_proposals": open_proposals,
+        "open_proposal_total": open_proposal_total,
         "memory_context": memory_hits,
         "nightly_task_count": daily_count,  # legacy key for heartbeat compat
         "nightly_budget_remaining": remaining,  # legacy key for heartbeat compat
@@ -189,8 +228,11 @@ def _format_reflection_prompt(
     open_task_count: int,
     memory_context: list[dict[str, Any]],
     budget_remaining: int,
+    open_proposals: list[dict[str, Any]] | None = None,
+    open_proposal_total: int = 0,
 ) -> str:
     """Format the ideation context into a prompt section for the agent."""
+    open_proposals = open_proposals or []
     lines: list[str] = [
         "## 🧠 Autonomous Ideation Mode — one proposal this cycle",
         "",
@@ -201,7 +243,8 @@ def _format_reflection_prompt(
         "",
         "Quality bar: one specific, non-obvious, well-reasoned proposal grounded in the",
         "context below beats five generic ones. **If nothing genuinely worthwhile comes",
-        "to mind this cycle, create nothing** — silence is better than noise.",
+        "to mind, or your idea is already covered by an open proposal below, create",
+        "nothing** — silence is better than a near-duplicate.",
         "",
         f"**Budget:** {budget_remaining} proposal(s) remaining today (paced ~1 per cycle).",
         f"**Currently queued:** {open_task_count} task(s) already in the Task Hub.",
@@ -236,6 +279,39 @@ def _format_reflection_prompt(
         for hit in memory_context:
             snippet = str(hit.get("snippet") or hit.get("summary") or "")[:300]
             lines.append(f"- {snippet}")
+        lines.append("")
+
+    # The ideator's OWN open proposals — so it self-dedups instead of re-wording.
+    # This is the load-bearing anti-over-emission section: the model cannot avoid
+    # proposing a near-duplicate of something it can't see.
+    if open_proposals:
+        lines.append("### 📋 Your Current Open Proposals — do NOT duplicate these")
+        lines.append("")
+        shown = len(open_proposals)
+        if open_proposal_total > shown:
+            lines.append(
+                f"You already have **{open_proposal_total} proposals** awaiting Kevin's "
+                f"review (the {shown} most recent are shown). The backlog is large — the bar "
+                "for a genuinely new idea is high, and most themes are already covered."
+            )
+        else:
+            lines.append(
+                f"You already have **{open_proposal_total} proposal(s)** awaiting Kevin's review:"
+            )
+        lines.append("")
+        for p in open_proposals:
+            thesis = " ".join(str(p.get("description") or "").split())[:140]
+            title = p.get("title") or "Untitled"
+            lines.append(f"- **{title}** — {thesis}")
+        lines.append("")
+        lines.append(
+            "**Before proposing, check this list AND the recent completions above.** "
+            "If your idea — even reworded — is already an open proposal or was recently "
+            "done, do NOT create a near-duplicate. Your options this cycle: (a) propose "
+            "nothing (best when it's already covered), or (b) ONLY if you can materially "
+            "advance or supersede a specific proposal above with new evidence or a sharper "
+            "plan, name which one you are superseding and why it is better.",
+        )
         lines.append("")
 
     # Action instructions — IDEATION ONLY
