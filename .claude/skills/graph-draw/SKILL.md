@@ -1,5 +1,5 @@
 ---
-name: excalidraw-free
+name: graph-draw
 description: Create Excalidraw diagrams. USE WHEN user specifically asks for Excalidraw. WORKFLOWS - mind-maps, swimlane, process-flow.
 ---
 

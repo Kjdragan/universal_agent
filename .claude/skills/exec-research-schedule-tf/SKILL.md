@@ -1,5 +1,5 @@
 ---
-name: exec-research-schedule
+name: exec-research-schedule-tf
 description: >
   Research executives at target companies using web search and X/Twitter intelligence,
   then schedule meetings with them on Google Calendar. Supports TWO modes: (1) Discovery
