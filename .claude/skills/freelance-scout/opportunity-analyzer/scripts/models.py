@@ -1,1 +1,0 @@
-../../../job-marketplace-scanner/scripts/models.py
