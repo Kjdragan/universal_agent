@@ -66,7 +66,11 @@ Reject anything promotional, speculative, a pure news/reaction/opinion piece, to
 For EACH candidate below, output ONE line of JSON and NOTHING else:
 {"index": <int>, "score": <0-10, one decimal>, "build": <true|false>, "reason": "<1-2 sentences; the deciding factor>"}
 
-Scoring: reserve 8+ for a clearly buildable, specific, novel capability; the default should be 2-5. Set "build": true ONLY for a candidate you would stake a full build on. Output ONLY the JSON lines, one per candidate, no preamble, no wrapping array.
+Scoring: reserve 8+ for a clearly buildable, specific, novel capability; the default should be 2-5. Set "build": true ONLY for a candidate you would stake a full build on.
+
+RANKING: among the candidates you mark "build": true, give each a DISTINCT score (one decimal) that reflects a strict preference order — never give two build:true candidates the same score, so the strongest few can be selected unambiguously with no ties.
+
+Output ONLY the JSON lines, one per candidate, no preamble, no wrapping array.
 """
 
 
@@ -274,13 +278,35 @@ def _default_call_llm(system: str, user: str) -> str:
     return _call_llm(system=system, user=user)
 
 
+def _judge_chunk_size() -> int:
+    """Max candidates scored per judge LLM call.
+
+    The judge runs on the cheap triage-tier model; asking it to emit one JSON
+    verdict line for 200 candidates in a single call reliably truncates/fails,
+    and every unparsed candidate then keeps its fail-closed score=0 (observed:
+    ~600 spurious 0.0 verdicts). Chunking bounds each call so a big pool (e.g.
+    the first night before the daily swipe has run) still gets real verdicts, and
+    a single failed chunk zeros only that chunk instead of the whole night.
+    """
+    raw = os.getenv("UA_PROACTIVE_DEMO_NUGGETS_JUDGE_CHUNK", "").strip()
+    try:
+        return max(1, int(raw)) if raw else 25
+    except ValueError:
+        return 25
+
+
 def _judge_candidates(
     candidates: list[dict[str, Any]],
     *,
     call_llm: Optional[Callable[[str, str], str]] = None,
 ) -> list[dict[str, Any]]:
     """Return per-candidate verdicts aligned 1:1 with ``candidates``. A candidate
-    with no returned verdict fails closed (score 0, build False)."""
+    with no returned verdict fails closed (score 0, build False).
+
+    The pool is scored in bounded chunks (:func:`_judge_chunk_size`) so the weak
+    triage-tier judge is never handed a giant single call it will truncate; a
+    failed chunk fails closed for ONLY its own candidates, never the whole run.
+    """
     n = len(candidates)
     verdicts: list[dict[str, Any]] = [
         {"score": 0.0, "build": False, "reason": "no verdict returned"} for _ in range(n)
@@ -294,15 +320,22 @@ def _judge_candidates(
     from universal_agent.services.demo_shelf_context import capability_shelf_block
 
     system = _JUDGE_SYSTEM_PROMPT + capability_shelf_block()
-    try:
-        raw = call(system, _build_judge_user_message(candidates))
-    except Exception as exc:  # noqa: BLE001 — a judge failure drops everything, never builds
-        logger.warning("nuggets judge: LLM call failed: %s", exc)
-        for v in verdicts:
-            v["reason"] = f"judge_error: {type(exc).__name__}"
-        return verdicts
-    for idx, parsed in _parse_judge_lines(raw, n).items():
-        verdicts[idx] = parsed
+    chunk = _judge_chunk_size()
+    for start in range(0, n, chunk):
+        batch = candidates[start : start + chunk]
+        try:
+            raw = call(system, _build_judge_user_message(batch))
+        except Exception as exc:  # noqa: BLE001 — a chunk failure drops only its own candidates
+            logger.warning(
+                "nuggets judge: LLM call failed for chunk %d-%d (%d total): %s",
+                start, start + len(batch), n, exc,
+            )
+            for i in range(len(batch)):
+                verdicts[start + i]["reason"] = f"judge_error: {type(exc).__name__}"
+            continue
+        # _parse_judge_lines emits chunk-local indices (0..len(batch)-1); map back.
+        for local_idx, parsed in _parse_judge_lines(raw, len(batch)).items():
+            verdicts[start + local_idx] = parsed
     return verdicts
 
 
@@ -540,7 +573,10 @@ def select_and_build_nuggets(
                 "reason": v["reason"],
             }
             scored.append(entry)
-        scored.sort(key=lambda e: e["score"], reverse=True)
+        # Rank by score desc; the judge is told to give build:true candidates
+        # DISTINCT scores, but break any residual tie deterministically by task_id
+        # so selection is never nondeterministic (e.g. across judge chunks).
+        scored.sort(key=lambda e: (-float(e["score"]), str(e["task_id"])))
 
         selected: list[dict[str, Any]] = []
         for entry in scored:
@@ -646,6 +682,56 @@ def select_and_build_nuggets(
         return summary
     finally:
         if own_conn:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _swipe_disabled() -> bool:
+    return os.getenv("UA_DISABLE_PROACTIVE_DEMO_SWIPE", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def run_zero_backlog_swipe(
+    *,
+    built_summary: dict[str, Any],
+    dry_run: bool,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Dismiss the day's un-built pending candidates — the operator's daily-reset.
+
+    Runs AFTER :func:`select_and_build_nuggets`, UNCONDITIONALLY at end of day
+    (even when the build early-returned on budget=0 / no candidates), so the
+    pending pool always returns to ~zero. Preserves the just-built rows
+    (``built_summary['built']``). No-op on ``dry_run`` or when
+    ``UA_DISABLE_PROACTIVE_DEMO_SWIPE`` is set. Opens its own activity-DB conn
+    unless one is injected (tests).
+    """
+    if dry_run or _swipe_disabled():
+        return {"skipped": "disabled_or_dry_run", "swept": 0}
+    from universal_agent.services.proactive_tutorial_builds import (
+        sweep_unbuilt_pending_builds,
+    )
+
+    own = conn is None
+    if conn is None:
+        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+
+        conn = connect_runtime_db(get_activity_db_path())
+    try:
+        built_ids = {
+            str(b.get("task_id")).strip()
+            for b in (built_summary.get("built") or [])
+            if b.get("task_id")
+        }
+        return sweep_unbuilt_pending_builds(conn, keep_task_ids=built_ids)
+    except Exception as exc:  # noqa: BLE001 — a swipe failure must not fail the cron
+        logger.warning("nuggets: zero-backlog swipe failed: %s", exc)
+        return {"error": f"{type(exc).__name__}: {exc}", "swept": 0}
+    finally:
+        if own:
             try:
                 conn.close()
             except Exception:  # noqa: BLE001

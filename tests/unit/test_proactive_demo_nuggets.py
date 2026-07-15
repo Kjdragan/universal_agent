@@ -324,3 +324,103 @@ def test_existing_demo_dir_excludes_candidate(conn, tmp_path):
     )
     assert result["candidates_considered"] == 0
     assert calls == []
+
+
+# ── new: judge chunking, zero-backlog swipe, tiebreak, default max ─────────────
+def test_judge_chunks_large_pool_and_isolates_chunk_failures(monkeypatch):
+    """The judge scores in bounded chunks (fix for the weak model choking on a
+    huge single call -> ~600 fail-closed 0.0s); a failed chunk zeros ONLY its own
+    candidates, not the whole night."""
+    monkeypatch.setenv("UA_PROACTIVE_DEMO_NUGGETS_JUDGE_CHUNK", "3")
+    candidates = [
+        {"task_id": f"t{i}", "video_title": f"vid {i}", "channel_name": "c", "summary": ""}
+        for i in range(7)
+    ]
+    calls = []
+
+    def call_llm(system, user):
+        n = user.count("### Candidate index=")
+        calls.append(n)
+        if len(calls) == 2:  # fail the middle chunk to prove isolation
+            raise RuntimeError("boom")
+        return "\n".join(
+            json.dumps({"index": j, "score": 5.0, "build": False, "reason": "ok"})
+            for j in range(n)
+        )
+
+    verdicts = nuggets._judge_candidates(candidates, call_llm=call_llm)
+    assert len(verdicts) == 7
+    assert calls == [3, 3, 1]  # 7 candidates chunked 3+3+1
+    assert verdicts[0]["score"] == 5.0 and verdicts[2]["score"] == 5.0  # chunk 1 scored
+    assert verdicts[3]["score"] == 0.0 and "judge_error" in verdicts[3]["reason"]  # chunk 2 isolated
+    assert verdicts[6]["score"] == 5.0  # chunk 3 scored despite chunk 2 failing
+
+
+def test_zero_backlog_swipe_cancels_unbuilt_keeps_built_and_gpu_approved(conn):
+    from universal_agent.services.proactive_tutorial_builds import (
+        sweep_unbuilt_pending_builds,
+    )
+
+    _seed_pending_candidate(conn, "tb-keep", video_title="the built one")
+    _seed_pending_candidate(conn, "tb-drop1", video_title="unbuilt A")
+    _seed_pending_candidate(conn, "tb-drop2", video_title="unbuilt B")
+    task_hub.upsert_item(
+        conn,
+        {
+            "task_id": "tb-gpu", "source_kind": "tutorial_build", "title": "gpu approved",
+            "status": task_hub.TASK_STATUS_OPEN, "agent_ready": False,
+            "labels": ["pending-approval", "tutorial-build"],
+            "metadata": {"gpu_approval": {"state": "approved"}},
+        },
+    )
+    result = sweep_unbuilt_pending_builds(conn, keep_task_ids={"tb-keep"})
+    assert result["swept"] == 2 and result["preserved_approved"] == 1
+
+    def status(tid):
+        return task_hub.get_item(conn, tid).get("status")
+
+    assert status("tb-keep") == task_hub.TASK_STATUS_OPEN          # just-built row untouched
+    assert status("tb-drop1") == task_hub.TASK_STATUS_CANCELLED    # un-built swept
+    assert status("tb-drop2") == task_hub.TASK_STATUS_CANCELLED
+    assert status("tb-gpu") == task_hub.TASK_STATUS_OPEN           # operator-approved preserved
+    swept_labels = [str(x).lower() for x in task_hub.get_item(conn, "tb-drop1").get("labels") or []]
+    assert "swept-eod" in swept_labels
+
+
+def test_run_zero_backlog_swipe_noop_on_dry_run(conn):
+    _seed_pending_candidate(conn, "tb-x", video_title="x")
+    res = nuggets.run_zero_backlog_swipe(built_summary={"built": []}, dry_run=True, conn=conn)
+    assert res.get("swept") == 0 and "skipped" in res
+    assert task_hub.get_item(conn, "tb-x").get("status") == task_hub.TASK_STATUS_OPEN
+
+
+def test_run_zero_backlog_swipe_sweeps_and_keeps_built(conn, monkeypatch):
+    monkeypatch.delenv("UA_DISABLE_PROACTIVE_DEMO_SWIPE", raising=False)
+    _seed_pending_candidate(conn, "tb-a", video_title="a")
+    _seed_pending_candidate(conn, "tb-b", video_title="b")
+    res = nuggets.run_zero_backlog_swipe(
+        built_summary={"built": [{"task_id": "tb-a"}]}, dry_run=False, conn=conn
+    )
+    assert res["swept"] == 1 and res["kept"] == 1
+    assert task_hub.get_item(conn, "tb-a").get("status") == task_hub.TASK_STATUS_OPEN
+    assert task_hub.get_item(conn, "tb-b").get("status") == task_hub.TASK_STATUS_CANCELLED
+
+
+def test_selection_tiebreak_is_deterministic(conn, monkeypatch):
+    """Two build:true candidates with an identical score must resolve to a
+    deterministic pick (by task_id), never a coin-flip."""
+    monkeypatch.setenv("UA_PROACTIVE_DEMO_NUGGETS_MAX", "1")
+    _seed_pending_candidate(conn, "tb-zzz", video_title="Z capability")
+    _seed_pending_candidate(conn, "tb-aaa", video_title="A capability")
+    result = nuggets.select_and_build_nuggets(
+        dry_run=True, conn=conn,
+        call_llm=_verdict_llm({0: (8.0, True, "tie"), 1: (8.0, True, "tie")}),
+    )
+    assert [s["task_id"] for s in result["selected"]] == ["tb-aaa"]  # lower task_id wins the tie
+
+
+def test_nuggets_max_default_is_three(monkeypatch):
+    from universal_agent import feature_flags
+
+    monkeypatch.delenv("UA_PROACTIVE_DEMO_NUGGETS_MAX", raising=False)
+    assert feature_flags.proactive_demo_nuggets_max() == 3

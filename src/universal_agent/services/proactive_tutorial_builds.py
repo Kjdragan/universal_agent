@@ -14,7 +14,6 @@ import sqlite3
 from typing import Any
 
 from universal_agent import task_hub
-from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 from universal_agent.feature_flags import (
     proactive_demo_factory_run_cmd,
     proactive_demo_factory_script,
@@ -28,6 +27,7 @@ from universal_agent.services.proactive_artifacts import (
 from universal_agent.services.proactive_task_builder import queue_proactive_task
 from universal_agent.services.tutorial_demo_finalize import proactive_demo_slug
 from universal_agent.utils.day_boundary import chicago_day_start_iso
+from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 
 logger = logging.getLogger(__name__)
 
@@ -515,6 +515,73 @@ def list_pending_approval_builds(
             }
         )
     return builds
+
+
+def sweep_unbuilt_pending_builds(
+    conn: sqlite3.Connection,
+    *,
+    keep_task_ids: set[str] | None = None,
+    reason: str = "end_of_day_zero_backlog_swipe",
+) -> dict[str, Any]:
+    """Daily zero-backlog swipe: cancel every un-built pending-approval
+    tutorial_build candidate so the pool returns to ~zero each night.
+
+    Called by the end-of-day golden-nuggets cron AFTER it has built the day's
+    best few. Everything the judge did NOT build (``keep_task_ids``) is dismissed
+    (``status='cancelled'`` + a ``swept-eod`` label), which:
+      - stops the backlog growing unbounded (was 540+ and climbing with no TTL), and
+      - keeps tomorrow's judge pool to a single fresh day of candidates instead of
+        a 200-deep pile it would truncate on.
+    Rows an operator explicitly approved for a local-GPU build
+    (``gpu_approval.state == 'approved'``) are preserved. Terminal rows are already
+    excluded by the status filter. Reversible — rows are retained as ``cancelled``.
+    """
+    task_hub.ensure_schema(conn)
+    keep = {str(t).strip() for t in (keep_task_ids or set()) if str(t).strip()}
+    rows = conn.execute(
+        """
+        SELECT * FROM task_hub_items
+        WHERE source_kind = 'tutorial_build'
+          AND status = ?
+          AND agent_ready = 0
+        """,
+        (task_hub.TASK_STATUS_OPEN,),
+    ).fetchall()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    swept = 0
+    preserved_approved = 0
+    for raw in rows:
+        item = task_hub.hydrate_item(dict(raw))
+        task_id = str(item.get("task_id") or "").strip()
+        if not task_id or task_id in keep:
+            continue
+        label_set = {str(v).lower() for v in item.get("labels") or []}
+        if "pending-approval" not in label_set:
+            continue
+        meta = dict(item.get("metadata")) if isinstance(item.get("metadata"), dict) else {}
+        gpu = meta.get("gpu_approval") if isinstance(meta.get("gpu_approval"), dict) else {}
+        if str(gpu.get("state") or "").lower() == "approved":
+            preserved_approved += 1
+            continue
+        new_labels = [v for v in (item.get("labels") or []) if str(v).lower() != "pending-approval"]
+        new_labels.append("swept-eod")
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": task_id,
+                "status": task_hub.TASK_STATUS_CANCELLED,
+                "labels": new_labels,
+                "metadata": {**meta, "swept": {"at": now, "reason": reason}},
+            },
+        )
+        swept += 1
+    conn.commit()
+    logger.info(
+        "nuggets swipe: cancelled %d un-built pending candidate(s) "
+        "(kept %d built, preserved %d gpu-approved)",
+        swept, len(keep), preserved_approved,
+    )
+    return {"swept": swept, "kept": len(keep), "preserved_approved": preserved_approved}
 
 
 def approve_pending_tutorial_build(
@@ -1265,7 +1332,6 @@ _GPU_BOUND_KEYWORDS = (
     "llama.cpp",
     "llama-server",
     "gguf",
-    "vllm",
     "lm studio",
     "lmstudio",
     "localhost:11434",

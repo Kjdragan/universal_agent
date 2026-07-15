@@ -21,7 +21,10 @@ from typing import Any
 
 from universal_agent.feature_flags import proactive_demo_nuggets_enabled
 from universal_agent.infisical_loader import initialize_runtime_secrets
-from universal_agent.services.proactive_demo_nuggets import select_and_build_nuggets
+from universal_agent.services.proactive_demo_nuggets import (
+    run_zero_backlog_swipe,
+    select_and_build_nuggets,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -45,6 +48,9 @@ def main() -> int:
         return _emit({"ok": True, "skipped": "disabled_by_env"})
 
     result = select_and_build_nuggets(dry_run=bool(args.dry_run))
+    # Zero-backlog swipe (operator daily-reset): dismiss every un-built pending
+    # candidate so the pool returns to ~zero and tomorrow's judge sees a fresh day.
+    result["swipe"] = run_zero_backlog_swipe(built_summary=result, dry_run=bool(args.dry_run))
     return _emit({"ok": result.get("error") is None, **result}, code=0 if result.get("error") is None else 1)
 
 
