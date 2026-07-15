@@ -1,5 +1,5 @@
 ---
-name: run-profiler
+name: run-profiler-tf
 description: >
   Profile recent Universal Agent runs — extract tool call counts, execution times, slowest
   tools, failure patterns, and context pressure from run_checkpoint.json and trace.json files
