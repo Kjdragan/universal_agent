@@ -4998,6 +4998,21 @@
       "last_publication_seen_at": null,
       "last_promoted_to_gold_at": null,
       "duration_max_seconds_override": null
+    },
+    {
+      "channel_id": "UCiax-xbEI0P6Y8C8VwZGMgQ",
+      "channel_name": "Hyperautomation Labs",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCiax-xbEI0P6Y8C8VwZGMgQ",
+      "youtube_url": "https://www.youtube.com/channel/UCiax-xbEI0P6Y8C8VwZGMgQ",
+      "domain": "ai_news_and_business",
+      "_categorization_method": "manual",
+      "tier": "gold",
+      "manual_add_count_30d": 0,
+      "sidecar_approval_count_30d": 0,
+      "last_publication_seen_at": null,
+      "last_promoted_to_gold_at": null,
+      "duration_max_seconds_override": null
     }
   ]
 }
