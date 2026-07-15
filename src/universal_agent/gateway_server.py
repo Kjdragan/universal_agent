@@ -32,6 +32,7 @@ from typing import Any, Awaitable, Callable, Optional
 import urllib.parse
 import uuid
 from zoneinfo import ZoneInfo
+
 from universal_agent.utils.time_utils import now_iso as _now_iso
 
 try:
@@ -20404,7 +20405,33 @@ def _paper_to_podcast_command() -> str:
     from datetime import datetime as _dt
     day_index = _dt.now().timetuple().tm_yday % len(PAPER_TO_PODCAST_TOPICS)
     topic = PAPER_TO_PODCAST_TOPICS[day_index]
-    return "\n".join(
+    # ABSOLUTE output directory. The in-process cron LLM session spawns the
+    # claude subprocess with the DAEMON CWD (/opt/universal_agent), NOT
+    # job.workspace_dir (ClaudeAgentOptions in main.py::setup_session sets
+    # CURRENT_RUN_WORKSPACE env but not the SDK `cwd` field). So relative
+    # "work_products/paper_to_podcast/" paths resolve to the daemon root and
+    # decouple from the dir the post-run guard inspects
+    # (job.workspace_dir/work_products/paper_to_podcast/). Rewrite every
+    # relative output reference to this absolute path so writes land in the
+    # exact dir the guard checks regardless of CWD. RCA: 2026-07-15
+    # paper_to_podcast false-positive (real 40 MB podcast at the daemon root,
+    # guard saw an empty workspace).
+    _output_dir = str(
+        (WORKSPACES_DIR / "cron_paper_to_podcast" / "work_products" / "paper_to_podcast")
+        .expanduser()
+        .resolve()
+    )
+    _relative = "work_products/paper_to_podcast"
+    _directive = (
+        f"OUTPUT DIRECTORY (ABSOLUTE — use this EXACT path for ALL artifact "
+        f"writes; do NOT rely on the process CWD, which is the daemon root "
+        f"(/opt/universal_agent) and NOT this workspace): {_output_dir}. "
+        f"Treat every 'work_products/paper_to_podcast' path below and in the "
+        f"paper-to-podcast-tf skill as this absolute directory — write every "
+        f"file with the absolute path so the post-run guard (which inspects "
+        f"this exact dir) sees it."
+    )
+    _raw = "\n".join(
         [
             (
                 "DEPLOY-RESTART RESUME CHECK FIRST: before anything else, run "
@@ -20441,6 +20468,7 @@ def _paper_to_podcast_command() -> str:
             f'  \"{topic}: Top 5 Papers + Podcast + Quiz + Synthesis Report\"',
         ]
     )
+    return _directive + "\n" + _raw.replace(_relative, _output_dir)
 
 
 def _ensure_paper_to_podcast_cron_job() -> Optional[dict[str, Any]]:
