@@ -21,7 +21,7 @@ code_paths:
   - src/universal_agent/infisical_loader.py
   - src/universal_agent/services/batched_judge.py
   - web-ui/app/dashboard/zai-control/page.tsx
-last_verified: 2026-06-22
+last_verified: 2026-07-15
 ---
 
 # ZAI Rate Limiter & Inference Governance
