@@ -100,7 +100,8 @@ Because GPU-bound demos can't be verified on the VPS, they take a human-in-the-l
 branch instead of failing on the VPS watchdog. When the demo-build sweep
 classifies a candidate as GPU-bound
 (`proactive_tutorial_builds.py::gpu_bound_from_candidate` — a keyword pre-filter
-for `ollama`, `gguf`, `llama.cpp`, `localhost:11434`, etc.),
+for `ollama`, `gguf`, `llama.cpp`, `localhost:11434`, etc.; `vllm` was removed
+2026-07-14),
 `proactive_tutorial_builds.py::classify_and_gate_gpu_demo` parks the task
 (`agent_ready=False` so CODIE never auto-claims it), stamps
 `metadata.gpu_approval.state="pending"`, and emails Kevin an HMAC-signed approve
@@ -113,7 +114,17 @@ terminal state (`approved`/`rejected`/`built`) is recorded, a replayed link show
 the standing decision instead of flipping it. Kevin runs that **interactively** on the
 desktop; it provisions via the skill, builds the demo locally, and finalizes the
 task. Gated by `feature_flags.py::gpu_demo_desktop_approval_enabled`
-(`UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED`, enabled in prod 2026-06-22).
+(`UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED`).
+
+> **Status 2026-07-14 — the proactive GPU-demo approval flow is OFF.**
+> `UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED` was set to `0` in Infisical (operator
+> decision): the CSI/YouTube intel feed is saturated with local-AI content, so the
+> keyword net was queuing a flood of approval emails (50 pending + 12 rejected).
+> With the flag off, `classify_and_gate_gpu_demo` returns early — no
+> classification, no emails — and GPU-bound candidates flow through the normal
+> (gated) path. The local GPU stays fully available **on demand**: Kevin runs
+> `/demo` and tells it to use the GPU when a genuinely interesting GPU demo appears.
+> Re-enable by flipping the Infisical flag back to `1`.
 
 The full lifecycle, states, and contract-safety analysis live in the demo
 pipeline ADR — see
