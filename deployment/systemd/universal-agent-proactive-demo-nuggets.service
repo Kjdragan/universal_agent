@@ -36,9 +36,12 @@ EnvironmentFile=-/opt/universal_agent/.env
 ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.proactive_demo_nuggets_cron
 MemoryMax=1G
 # One SQL scan + one bounded LLM judge call + up to nuggets_max (default 3) full
-# demo_factory land builds (Opus /goal, slow). Cap sized to exceed
-# 2 * UA_PROACTIVE_DEMO_NUGGETS_BUILD_TIMEOUT_SECONDS (default 3600) + slack.
-TimeoutStartSec=8100
+# demo_factory land builds (Opus /goal, slow) + the end-of-day zero-backlog
+# swipe that runs AFTER the builds. Cap MUST exceed
+# 3 * UA_PROACTIVE_DEMO_NUGGETS_BUILD_TIMEOUT_SECONDS (default 3600) + slack, or a
+# 3-build night gets killed mid-build and the swipe (which runs last) never fires,
+# leaving the backlog un-reset. 3*3600 + 1200 slack = 12000.
+TimeoutStartSec=12000
 
 [Install]
 WantedBy=multi-user.target
