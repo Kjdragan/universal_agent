@@ -1,3 +1,8 @@
+---
+name: opportunity-analyzer
+description: Score and analyze scanned freelance job opportunities against Kevin's skills/rates to surface the ones worth bidding on. Part of the freelance pipeline; pairs with job-marketplace-scanner (shared models live in its scripts/).
+---
+
 # Opportunity Analyzer
 
 ## Metadata

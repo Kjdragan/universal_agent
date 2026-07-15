@@ -1,3 +1,8 @@
+---
+name: job-marketplace-scanner
+description: Scan freelance marketplaces (Upwork, Freelancer.com, ...) via their APIs for new job postings matching configured filters. Part of the freelance pipeline; config.template.json documents the credentials setup.
+---
+
 # Job Marketplace Scanner
 
 ## Metadata
