@@ -85,7 +85,7 @@ def get_pending_gaps() -> List[Dict[str, Any]]:
     gaps = _load_json_file(GAPS_FILE)
     return [g for g in gaps if g.get("status") == "pending"]
 
-def mark_gaps_resolved(gap_ids: List[str]):
+def mark_gaps_resolved(gap_ids: List[str]) -> None:
     """
     Mark specific gaps as resolved.
     """
@@ -96,7 +96,7 @@ def mark_gaps_resolved(gap_ids: List[str]):
             gap["resolved_at"] = time.time()
     _save_json_file(GAPS_FILE, gaps)
 
-def log_offline_task(task_description: str, source_interview_id: str):
+def log_offline_task(task_description: str, source_interview_id: str) -> None:
     """
     Log a task for the Heartbeat System to execute offline.
     """
