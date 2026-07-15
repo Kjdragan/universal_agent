@@ -552,7 +552,7 @@ async def refine_corpus(
     return metrics
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description="Refine a research corpus into a token-efficient summary document.",
@@ -594,7 +594,7 @@ Examples:
     return parser.parse_args()
 
 
-async def main():
+async def main() -> dict:
     """Run corpus refiner with CLI arguments."""
     global DETAIL_LEVEL, EXTRACTION_PROMPT
     
