@@ -768,6 +768,34 @@ def parse_run_at(
     # Try natural language forms
     return _parse_natural_run_at(value, now_dt)
 
+
+def _cron_spawn_cwd(job: "CronJob") -> str:
+    """Resolve the CWD for a cron subprocess spawn.
+
+    The spawn CWD MUST agree with the directory ``prepare_run_workspace``
+    clears before the run AND the post-run artifact guard inspects — both are
+    keyed on ``job.workspace_dir``. When ``workspace_dir_resolved`` is
+    populated (only on specific re-dispatch paths; it is not a declared
+    ``CronJob`` field) we honour it, otherwise we fall back to
+    ``job.workspace_dir``.
+
+    We NEVER fall back to the daemon root
+    (``Path(__file__).resolve().parents[2]`` == ``/opt/universal_agent``).
+    That decouples the agent's relative ``work_products/`` writes from the
+    workspace the guard checks: a real deliverable lands at the daemon root
+    while the guard inspects an empty ``job.workspace_dir/work_products/...``
+    and fires a false-positive failure. This was the 2026-07-15
+    paper_to_podcast run — a real 40 MB podcast at the daemon root, guard saw
+    an empty workspace. (The in-process LLM-session path has the same
+    daemon-CWD behaviour via the SDK subprocess; that is pinned via absolute
+    paths in ``_paper_to_podcast_command``.)
+    """
+    resolved = getattr(job, "workspace_dir_resolved", None)
+    if resolved:
+        return str(resolved)
+    return str(job.workspace_dir)
+
+
 @dataclass
 class CronJob:
     """Scheduled job definition supporting interval, cron-expression, and one-shot scheduling."""
@@ -1984,11 +2012,7 @@ class CronService:
                     import sys as _lw_sys
 
                     _lw_env = os.environ.copy()
-                    _lw_cwd = (
-                        str(job.workspace_dir_resolved)
-                        if hasattr(job, "workspace_dir_resolved")
-                        else str(Path(__file__).resolve().parents[2])
-                    )
+                    _lw_cwd = _cron_spawn_cwd(job)
                     _lw_project_src = str(Path(__file__).resolve().parents[1])
                     _lw_env["PYTHONPATH"] = (
                         f"{_lw_project_src}:{_lw_env.get('PYTHONPATH', '')}"
@@ -2251,7 +2275,7 @@ class CronService:
                                 import sys
 
                                 env = os.environ.copy()
-                                cwd_str = str(job.workspace_dir_resolved) if hasattr(job, "workspace_dir_resolved") else str(Path(__file__).resolve().parents[2])
+                                cwd_str = _cron_spawn_cwd(job)
                                 project_src = str(Path(__file__).resolve().parents[1])
                                 env["PYTHONPATH"] = f"{project_src}:{env.get('PYTHONPATH', '')}"
 
