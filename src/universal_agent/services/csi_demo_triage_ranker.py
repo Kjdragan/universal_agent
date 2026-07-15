@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MODEL = "glm-4.6"
 
 
-_RANK_SYSTEM_PROMPT = """You are scoring potential Claude Code demos and intelligence opportunities for an internal triage queue. Each candidate is a tweet from an Anthropic-adjacent account that an upstream classifier has flagged as worthy of further investment.
+_RANK_SYSTEM_PROMPT = """You are scoring potential Claude Code AND Claude Agent SDK demos and intelligence opportunities for an internal triage queue. Each candidate is a tweet from an Anthropic-adjacent account that an upstream classifier has flagged as worthy of further investment.
 
 For EACH candidate below, output a single line of JSON: {"post_id": "...", "score": 0.0, "rationale": "..."}
 
@@ -51,6 +51,8 @@ Score 0-10 (one decimal place) based on:
 3. BUILDABILITY - Can a coding agent (Cody) actually exercise this feature TODAY against the live API/CLI? Speculative roadmap items score low; shipped capabilities score high.
 
 4. NOVELTY - Does this teach us something we don't already have a demo for? Repeated feature mentions score lower than first-time announcements.
+
+PRIORITY SIGNAL - Claude Agent SDK: content that genuinely demonstrates or dissects **Claude Agent SDK** functionality (building agents programmatically with the SDK - the agent-building toolkit, DISTINCT from Claude Code, the interactive CLI/coding tool) is especially high-value to us. When a candidate really covers Agent-SDK capabilities, patterns, subagents/hooks/tools wiring, or a new SDK feature - not just a passing mention - weight it toward the TOP of the range. Generic Claude Code tips remain relevant but do not get this lift.
 
 For TIER 4 candidates (intel/analysis tasks for Atlas, not demos), score on the same axes but weighted toward AUTHORITY and NOVELTY (the agent reads + summarizes, doesn't build).
 

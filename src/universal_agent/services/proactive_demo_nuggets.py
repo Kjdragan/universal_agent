@@ -63,6 +63,8 @@ Be highly critical and skeptical. MOST candidates should NOT clear the bar. A ca
 
 Reject anything promotional, speculative, a pure news/reaction/opinion piece, too broad to scope into one demo, or trivially derivative.
 
+PRIORITY: a candidate that demonstrates **Claude Agent SDK** functionality (building agents programmatically with the SDK — subagents, hooks, tools, sessions; distinct from Claude Code, the interactive CLI) is especially high-value — favor it strongly when it clears the bar.
+
 For EACH candidate below, output ONE line of JSON and NOTHING else:
 {"index": <int>, "score": <0-10, one decimal>, "build": <true|false>, "reason": "<1-2 sentences; the deciding factor>"}
 
