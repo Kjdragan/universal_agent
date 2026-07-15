@@ -159,16 +159,25 @@ demo. A non-ok finalize stays on the unchanged default close path.
 
 ### End-of-day golden-nuggets judge (Component D — SHIPPED, default OFF)
 
+> **UPDATE 2026-07-14 — operator-tuned "gather all day, judge & build the best few at night, reset to zero" loop (LIVE).** Five changes shipped together:
+> 1. **PATH fix (was silently failing every night).** The nuggets systemd unit set no `PATH`, so it couldn't find the `claude` binary (`/home/ua/.local/bin`); the auth probe raised `FileNotFoundError` → `auth_label="invalid"` → `goal_build` silently DRYRAN → `build_demo.py` landed a template stub → verify FAIL → **exit 3 every night**. Fixed by `Environment=PATH=/home/ua/.local/bin:…` on the unit. (Root cause was env/PATH, **not** GLM vs Anthropic — nuggets builds run `--cody-mode hybrid` = Anthropic-Max Opus.)
+> 2. **`proactive_demo_nuggets_max` default `2 → 3`** — the end-of-day judge now builds the best **0–3** leftovers.
+> 3. **Zero-backlog swipe** — `proactive_tutorial_builds.py::sweep_unbuilt_pending_builds`, run unconditionally by the cron (`proactive_demo_nuggets.py::run_zero_backlog_swipe`) AFTER the build: every un-built pending-approval `tutorial_build` row is `cancelled` (+ `swept-eod` label), so the pool returns to ~zero daily (was 540+ and climbing with no TTL). Operator-approved GPU rows preserved; override-off `UA_DISABLE_PROACTIVE_DEMO_SWIPE=1`. This is the daily-reset the operator's design assumed but that was never built.
+> 4. **Judge chunking** — `_judge_candidates` now scores in bounded chunks (`_judge_chunk_size`, default 25) instead of one giant call; the weak triage-tier judge was truncating on 200-candidate calls and fail-closing ~600 candidates to `0.0`. A failed chunk zeros only its own candidates.
+> 5. **Ranking / no ties** — the judge is instructed to give `build:true` candidates DISTINCT scores, and selection breaks any residual tie deterministically by `task_id`.
+>
+> Separately, the proactive **local-GPU demo-approval email flow** was turned OFF (`UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED=0` in Infisical; `vllm` removed from `proactive_tutorial_builds.py::_GPU_BOUND_KEYWORDS`) — it had queued 50 pending + 12 rejected approval emails. The local GPU stays available on-demand via operator `/demo`.
+
 New `services/proactive_demo_nuggets.py::select_and_build_nuggets`, driven by
 `scripts/proactive_demo_nuggets_cron.py` and the systemd pair
 `deployment/systemd/universal-agent-proactive-demo-nuggets.{service,timer}` (fires **23:50
 America/Chicago**, `Persistent=true`, after the normal build lane). Gated by
 `feature_flags.py::proactive_demo_nuggets_enabled` (`UA_PROACTIVE_DEMO_NUGGETS_ENABLED`, default
 **OFF** — the cron runs but no-ops until enabled). When on, a critical-eye LLM judge re-scores the
-day's REMAINING un-built `tutorial_build` candidates and builds **0–2** EXTRA "golden nugget" demos
+day's REMAINING un-built `tutorial_build` candidates and builds **0–3** EXTRA "golden nugget" demos
 **directly** via the same `build_demo.py` engine path as Component A (not the agentic dispatch path,
 so it never fights the 3/day cap). Dark-factory: it builds none if nothing clears the bar. The
-run-time budget is `min(proactive_demo_nuggets_max (default 2), max(0, daily_max − built_today))`, so
+run-time budget is `min(proactive_demo_nuggets_max (default 3), max(0, daily_max − built_today))`, so
 the hard ceiling `feature_flags.py::proactive_demo_daily_max` (`UA_PROACTIVE_DEMO_DAILY_MAX`, default
 **5**) always wins. The installer is wired into `scripts/deploy/remote_deploy.sh`
 (`install_proactive_demo_nuggets_timer.sh`).
@@ -216,8 +225,13 @@ Set live in prod on the migration:
 | `UA_PROACTIVE_DEMO_ENGINE` | `1` | route `tutorial_build` onto the demo_factory engine |
 | `UA_PROACTIVE_DEMO_DAILY_CAP` | `3` | OUTFLOW 3 builds/day cap |
 | `UA_PROACTIVE_DEMO_NUGGETS_ENABLED` | `1` | end-of-day golden-nuggets judge armed |
+| `UA_PROACTIVE_DEMO_NUGGETS_MAX` | *(unset → 3)* | up to **3** golden nuggets/night (was 2; default bumped 2026-07-14) |
+| `UA_DEMO_BUILD_DAILY_CEILING` | *(unset → 0)* | INFLOW gate: **the daytime sweep is dark** — no candidate becomes agent_ready, so only the end-of-day nuggets lane builds. This (not the OUTFLOW cap) is what makes the pipeline "gather all day, build the best few at night." |
+| `UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED` | `0` *(2026-07-14)* | proactive local-GPU demo-approval **emails OFF** (was `1`; flooded 50 pending + 12 rejected). GPU stays available on-demand via operator `/demo`. |
 | `UA_PROACTIVE_TUTORIAL_AUTO_ROUTE` | `1` | the auto-route lane is producing candidates |
 | `UA_PRIORITY_DISPATCHER_ENABLED` | `1` | VP-direct dispatch (where the 3/day cap lives) is on |
+
+> **Note on the "fully-gated" language above (Component C).** The 2026-07-05 "fully-gated" decision moved only the *code defaults* to `0`; the live Infisical overrides (`UA_PROACTIVE_DEMO_DAILY_CAP=3`, `UA_PROACTIVE_DEMO_NUGGETS_ENABLED=1`, `UA_PROACTIVE_DEMO_ENGINE=1`) were left ON. So the runtime is **not** "nothing builds" — the end-of-day nuggets lane is live (≤3/night). The daytime dispatch lane is the only part that's dark, gated by the unset INFLOW ceiling above.
 
 ### Pause / re-enable runbook
 

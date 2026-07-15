@@ -11,8 +11,7 @@ from pathlib import Path
 import shutil
 from typing import Iterable
 
-from universal_agent.utils.env_utils import FALSY as _FALSY
-from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
+from universal_agent.utils.env_utils import FALSY as _FALSY, TRUTHY as _TRUTHY
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -834,10 +833,10 @@ def proactive_demo_nuggets_enabled(default: bool = False) -> bool:
     return default
 
 
-def proactive_demo_nuggets_max(default: int = 2) -> int:
+def proactive_demo_nuggets_max(default: int = 3) -> int:
     """Max EXTRA "golden nugget" demos the end-of-day cron may build in one run.
 
-    Reads ``UA_PROACTIVE_DEMO_NUGGETS_MAX`` (default 2), clamped to >= 0. The
+    Reads ``UA_PROACTIVE_DEMO_NUGGETS_MAX`` (default 3), clamped to >= 0. The
     run-time budget is ``min(this, max(0, daily_max - built_today))`` so the
     5/day hard ceiling always wins (see
     :mod:`universal_agent.services.proactive_demo_nuggets`).

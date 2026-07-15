@@ -11,6 +11,15 @@ WorkingDirectory=/opt/universal_agent
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/universal_agent/src
 Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# LOAD BEARING: the build path shells out to the `claude` CLI by bare name
+# (demo_factory _launch.probe_live / goal_argv). The claude binary lives ONLY at
+# /home/ua/.local/bin/claude, which is NOT on systemd's default PATH
+# (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin). Without this the
+# auth probe raises FileNotFoundError -> auth_label="invalid" -> goal_build
+# silently DRYRUNs -> build_demo lands a template stub -> verify FAIL -> exit 3
+# (every nightly build failed this way). Interactive /demo works because it runs
+# in a login shell where ~/.local/bin is on PATH.
+Environment=PATH=/home/ua/.local/bin:/usr/local/bin:/usr/bin:/bin
 # Secrets-bootstrap backstop (mirrors universal-agent-proactive-demo-build-sweep).
 # LOAD BEARING: proactive_demo_nuggets_cron.main() calls
 # initialize_runtime_secrets() and both the critical-eye LLM judge
@@ -26,7 +35,7 @@ Environment=INFISICAL_ENVIRONMENT=production
 EnvironmentFile=-/opt/universal_agent/.env
 ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.proactive_demo_nuggets_cron
 MemoryMax=1G
-# One SQL scan + one bounded LLM judge call + up to nuggets_max (default 2) full
+# One SQL scan + one bounded LLM judge call + up to nuggets_max (default 3) full
 # demo_factory land builds (Opus /goal, slow). Cap sized to exceed
 # 2 * UA_PROACTIVE_DEMO_NUGGETS_BUILD_TIMEOUT_SECONDS (default 3600) + slack.
 TimeoutStartSec=8100
