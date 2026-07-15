@@ -24,7 +24,7 @@ human-readable notification messages for Simone's investigation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import sqlite3
 
@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_TODO_TTL_MINUTES = 30
 DEFAULT_CRON_TTL_MINUTES = 60
 DEFAULT_FALLBACK_TTL_MINUTES = 60
+# Grace period for orphaned youtube_tutorial_hook runs (active run + active
+# latest attempt with no progress). Mirrors the generic fallback so an
+# in-flight youtube run gets at least as much grace as any other run_kind.
+DEFAULT_YOUTUBE_ORPHAN_TTL_MINUTES = DEFAULT_FALLBACK_TTL_MINUTES
 
 
 # ── Data Model ───────────────────────────────────────────────────────────────
@@ -363,5 +367,175 @@ def finalize_orphaned_run_attempts(
             "left non-terminal by a run failure path: %s",
             len(finalized),
             ", ".join(f.attempt_id for f in finalized),
+        )
+    return finalized
+
+
+
+# ── YouTube orphan-run reaper ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ReapedYouTubeOrphanInfo:
+    """Structured result for each orphaned youtube run finalized by the sweep.
+
+    A manual-webhook idle/absolute timeout can leave a ``youtube_tutorial_hook``
+    run stuck in an active status with its latest attempt also active. This
+    captures the before-state for health-loop notification. Mirrors the shape of
+    :class:`OrphanedAttemptInfo`.
+    """
+
+    run_id: str
+    attempt_id: str
+    run_status_before: str
+    attempt_status_before: str
+    terminal_reason: str
+
+    def to_dict(self) -> dict:
+        """Return a JSON-serializable summary of the finalized youtube orphan."""
+        return {
+            "run_id": self.run_id,
+            "attempt_id": self.attempt_id,
+            "run_status_before": self.run_status_before,
+            "attempt_status_before": self.attempt_status_before,
+            "terminal_reason": self.terminal_reason,
+        }
+
+
+def finalize_stale_youtube_hook_runs(
+    conn: sqlite3.Connection,
+    *,
+    ttl_minutes: int = DEFAULT_YOUTUBE_ORPHAN_TTL_MINUTES,
+    max_rows: int = 500,
+) -> list[ReapedYouTubeOrphanInfo]:
+    """Finalize ``youtube_tutorial_hook`` runs orphaned in an active state.
+
+    A manual-webhook hook idle/absolute timeout can enqueue an automatic retry
+    via ``hooks_service._queue_or_finalize_youtube_attempt`` ->
+    ``_schedule_youtube_retry_attempt`` (a fire-and-forget
+    ``asyncio.create_task``). If that retry dispatch never leases the new
+    attempt — there is no live session to resume — the run sits forever with
+    ``runs.status`` in the active set AND its latest ``run_attempts.status`` in
+    the active set.
+
+    That state is invisible to both:
+
+      * :func:`finalize_orphaned_run_attempts` — it requires the parent run to
+        already be terminal (``r.status NOT IN active``); and
+      * :func:`reap_stale_runs` — it scopes to ``runs.status = 'running'``.
+
+    and is exactly what holds the ``check_stale_runs`` "stuck in
+    running/queued >2.0h" alert open until a Simone heartbeat clears it by hand.
+
+    This pass reconciles precisely that orphan: a ``youtube_tutorial_hook`` run
+    whose latest attempt is still active AND whose last-progress timestamp is
+    older than ``ttl_minutes``. It finalizes BOTH the run and the latest attempt
+    to ``failed`` / ``session_crashed`` and clears the run's lease. It
+    deliberately does **not** surface a vp_failure card — the run never reached a
+    meaningful outcome, and re-surfacing would duplicate the failure path
+    (mirrors :func:`finalize_orphaned_run_attempts`' no-surface contract).
+
+    Args:
+        conn: ``runtime_state.db`` connection (``runs`` + ``run_attempts``).
+        ttl_minutes: Grace period before an active/active youtube run is
+            considered orphaned. Defaults to the generic fallback reaper TTL.
+        max_rows: Cap on runs finalized per pass (bounded work per heartbeat).
+
+    Returns:
+        One :class:`ReapedYouTubeOrphanInfo` per run finalized this pass.
+
+    Idempotent: the ``WHERE ... status IN (active)`` guard makes a repeat call a
+    no-op for already-finalized runs. A legitimately in-flight retry still inside
+    the TTL is never touched.
+    """
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    cutoff = (now - timedelta(minutes=int(ttl_minutes))).isoformat()
+
+    rows = conn.execute(
+        """
+        SELECT r.run_id,
+               r.latest_attempt_id,
+               r.status        AS run_status,
+               a.attempt_id,
+               a.status        AS attempt_status,
+               COALESCE(r.last_heartbeat_at, r.updated_at, r.created_at) AS last_progress_at
+        FROM runs r
+        LEFT JOIN run_attempts a ON a.attempt_id = r.latest_attempt_id
+        WHERE r.run_kind = 'youtube_tutorial_hook'
+          AND r.status IN ('running', 'queued', 'blocked')
+          AND a.status IN ('running', 'queued', 'blocked')
+          AND COALESCE(r.last_heartbeat_at, r.updated_at, r.created_at) < ?
+        ORDER BY r.created_at ASC
+        LIMIT ?
+        """,
+        (cutoff, max(1, int(max_rows))),
+    ).fetchall()
+
+    finalized: list[ReapedYouTubeOrphanInfo] = []
+    for row in rows:
+        is_row = isinstance(row, sqlite3.Row)
+        run_id = row["run_id"] if is_row else row[0]
+        latest_attempt_id = (row["latest_attempt_id"] if is_row else row[1]) or ""
+        attempt_id = (row["attempt_id"] if is_row else row[3]) or latest_attempt_id or ""
+        run_status_before = (row["run_status"] if is_row else row[2]) or ""
+        attempt_status_before = (row["attempt_status"] if is_row else row[4]) or ""
+
+        run_terminal_reason = (
+            f"youtube_orphan_stale:no_progress>={int(ttl_minutes)}m"
+        )
+        attempt_failure_reason = (
+            f"stale_youtube_orphan:active_no_progress>={int(ttl_minutes)}m"
+        )
+
+        # Finalize the RUN -> failed.
+        conn.execute(
+            """
+            UPDATE runs
+            SET status = 'failed',
+                terminal_reason = ?,
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                updated_at = ?
+            WHERE run_id = ? AND status IN ('running', 'queued', 'blocked')
+            """,
+            (run_terminal_reason, now_iso, run_id),
+        )
+
+        # Finalize the latest ATTEMPT -> failed / session_crashed.
+        if attempt_id:
+            conn.execute(
+                """
+                UPDATE run_attempts
+                SET status = 'failed',
+                    ended_at = COALESCE(ended_at, ?),
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    failure_class = COALESCE(failure_class, 'session_crashed'),
+                    failure_reason = COALESCE(failure_reason, ?),
+                    updated_at = ?
+                WHERE attempt_id = ? AND status IN ('running', 'queued', 'blocked')
+                """,
+                (now_iso, attempt_failure_reason, now_iso, attempt_id),
+            )
+
+        finalized.append(
+            ReapedYouTubeOrphanInfo(
+                run_id=run_id,
+                attempt_id=attempt_id,
+                run_status_before=run_status_before,
+                attempt_status_before=attempt_status_before,
+                terminal_reason=run_terminal_reason,
+            )
+        )
+
+    if finalized:
+        conn.commit()
+        logger.warning(
+            "📺 YouTube-orphan sweep: finalized %d stale youtube_tutorial_hook "
+            "run(s) left active/active past %dm: %s",
+            len(finalized),
+            int(ttl_minutes),
+            ", ".join(f.run_id for f in finalized),
         )
     return finalized

@@ -1215,11 +1215,19 @@ class HooksService:
             "hook_dispatch_interrupted",
             "hook_dispatch_failed",
             "hook_timeout",
-            "hook_idle_timeout",
             "proxy_connect_failed",
         }:
             return True
-        return normalized.startswith("hook_timeout_") or normalized.startswith("hook_idle_timeout_")
+        # hook_idle_timeout(_{N}s) is deliberately NOT retryable: it means the
+        # agent session went silent, so there is no live session for a retry to
+        # resume. Treating it as retryable enqueued a fire-and-forget retry
+        # (_schedule_youtube_retry_attempt -> asyncio.create_task) that could
+        # fail to lease the new attempt, orphaning the run queued/queued
+        # forever (reaped by stuck_run_reaper.finalize_stale_youtube_hook_runs).
+        # Routing it to needs_review surfaces the lost tutorial instead.
+        # Hard total timeout (hook_timeout_*), dispatch, and proxy failures
+        # remain retryable.
+        return normalized.startswith("hook_timeout_")
 
     @staticmethod
     def _hook_workflow_workspace_dir(session_key: str) -> str:

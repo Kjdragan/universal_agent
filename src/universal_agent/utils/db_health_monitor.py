@@ -196,6 +196,59 @@ def check_stale_runs() -> list[HeartbeatFinding]:
                 runbook_command="sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/runtime_state.db \"SELECT a.attempt_id, a.status, a.failure_reason FROM run_attempts a JOIN runs r ON r.run_id=a.run_id WHERE a.failure_class='orphaned_attempt_cleanup' ORDER BY a.updated_at DESC LIMIT 10;\"",
             ))
 
+        # ── Self-heal orphaned youtube_tutorial_hook runs ──────────────
+        # A manual-webhook idle/absolute timeout can leave a youtube run
+        # active with a queued/running latest attempt (fire-and-forget retry
+        # that never leased). Invisible to finalize_orphaned_run_attempts
+        # (parent run not terminal) and to reap_stale_runs (scopes to
+        # running), it held the >2.0h alert open until a Simone heartbeat
+        # cleared it by hand. Finalized BEFORE the count query below so the
+        # alert self-clears. See
+        # services.stuck_run_reaper.finalize_stale_youtube_hook_runs.
+        youtube_orphans_finalized: list[Any] = []
+        _yt_ttl_minutes = 60
+        try:
+            from universal_agent.services.stuck_run_reaper import (
+                DEFAULT_YOUTUBE_ORPHAN_TTL_MINUTES as _yt_ttl_minutes,
+                finalize_stale_youtube_hook_runs,
+            )
+
+            youtube_orphans_finalized = finalize_stale_youtube_hook_runs(conn)
+        except Exception as yt_err:
+            logger.debug(
+                "finalize_stale_youtube_hook_runs failed (non-fatal): %s",
+                yt_err,
+            )
+        if youtube_orphans_finalized:
+            _yt_summary = ", ".join(
+                f"{o.run_id}({o.attempt_status_before}->failed)"
+                for o in youtube_orphans_finalized[:5]
+            )
+            if len(youtube_orphans_finalized) > 5:
+                _yt_summary += f" ... and {len(youtube_orphans_finalized) - 5} more"
+            findings.append(HeartbeatFinding(
+                finding_id="stale_youtube_orphans_finalized",
+                category="gateway",
+                severity="info",
+                metric_key="runtime.stale_youtube_orphans_finalized",
+                observed_value=len(youtube_orphans_finalized),
+                threshold_text=f"active/active youtube hook run >{_yt_ttl_minutes}m, self-finalized",
+                known_rule_match=True,
+                confidence="high",
+                title=(
+                    f"📺 Reconciled {len(youtube_orphans_finalized)} orphaned "
+                    f"youtube_tutorial_hook run(s) left active past their TTL: {_yt_summary}"
+                ),
+                recommendation=(
+                    "The hook's fire-and-forget retry never leased, leaving the "
+                    "run active/active. Finalized to failed/session_crashed "
+                    "without re-surfacing a failure card. If this recurs, the "
+                    "originating idle-timeout is still being treated as "
+                    "retryable — see hooks_service._is_retryable_youtube_dispatch_failure."
+                ),
+                runbook_command="sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/runtime_state.db \"SELECT run_id, terminal_reason FROM runs WHERE terminal_reason LIKE 'youtube_orphan_stale%' ORDER BY updated_at DESC LIMIT 10;\"",
+            ))
+
         cutoff = (_utc_now() - timedelta(hours=STALE_RUN_HOURS)).isoformat()
         rows = conn.execute(
             """
