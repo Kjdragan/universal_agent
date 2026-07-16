@@ -15,7 +15,7 @@ code_paths:
   - deployment/systemd/
   - scripts/install_vps_phase_a_batch1_timers.sh
   - scripts/install_vps_phase_a_batch2_timers.sh
-last_verified: 2026-07-09
+last_verified: 2026-07-15
 ---
 
 # Cron & Scheduling
@@ -376,7 +376,13 @@ The mechanical fix lives in ``cron_service.py`` in the Phase F.1 close block
 ``metadata.system_job == "paper_to_podcast_daily"`` and whose rc_equiv is 0,
 ``services/paper_to_podcast_guard.py::evaluate_paper_to_podcast_run`` inspects
 the run's ``work_products/paper_to_podcast/`` artifacts for evidence that the
-run really produced its deliverable. Success evidence, in priority order:
+run really produced its deliverable. It searches BOTH the daemon-root
+``work_products/paper_to_podcast/`` dir AND every per-attempt
+``attempts/<NNN>/work_products/paper_to_podcast/`` dir (the LLM cron run
+executes with CWD = the per-attempt subdir, so the skill's relative
+deliverable writes land there), resolving each evidence file to its freshest
+instance (greatest mtime). The ``_is_fresh(run_started_at)`` gate still
+excludes stale files from prior runs. Success evidence, in priority order:
 
 1. **The headline deliverable itself** — a fresh, real ``podcast_audio.m4a``
    (mtime at/after ``run_started_at``, size >= ``_MIN_PODCAST_AUDIO_BYTES`` =
@@ -406,6 +412,15 @@ only runs on the rc=0 path (``cron_artifact_notifier``), suppressed the podcast
 email and sent an ``[ERROR]`` instead. Accepting the fresh ``.m4a`` as
 first-class evidence fixes both the false failure and delivery, without
 reopening the 2026-06-22 no-op class (a genuine no-op leaves no fresh podcast).
+
+Why both layouts are searched (2026-07-15): the guard previously inspected
+only the daemon-root ``work_products/paper_to_podcast/`` dir. But the LLM cron
+run writes its deliverables under ``attempts/<NNN>/work_products/paper_to_podcast/``
+(its per-attempt CWD), leaving the daemon-root dir empty — so for two nights a
+real ~40 MB ``podcast_audio.m4a`` was discarded as a "zero usable papers" no-op
+and the podcast email suppressed. Searching the per-attempt dirs (freshest
+instance, still freshness-gated) fixes the false failure without reopening the
+2026-06-22 class.
 
 The cache-path half of the same RCA was fixed in
 ``arxiv_runtime.py::canonical_arxiv_storage_path`` /

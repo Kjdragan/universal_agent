@@ -48,6 +48,22 @@ still fails, so the 2026-06-22 silent-no-op class cannot recur.
 The guard is pure (no DB / no sockets) so it can run inline in the cron\'s
 Phase F.1 close path without risk of masking the original error.
 
+Where it looks
+--------------
+The LLM cron framework runs each attempt of an LLM session with its CWD set
+to a per-attempt subdir (``attempts/<NNN>/``) under the cron workspace root.
+The paper_to_podcast skill writes deliverables with relative paths, so they
+land under ``attempts/<NNN>/work_products/paper_to_podcast/`` and NOT under
+the daemon-root ``work_products/paper_to_podcast/``. The guard therefore
+searches BOTH the daemon-root dir AND every
+``attempts/*/work_products/paper_to_podcast/`` dir, resolving each evidence
+file to its FRESHEST instance (greatest mtime). (2026-07-15: the guard
+previously inspected only the daemon-root dir — which the per-attempt writes
+leave empty — so a real ~40 MB podcast was discarded as a "zero usable
+papers" no-op every night for two nights.) The ``_is_fresh(run_started_at)``
+gate still excludes stale files from prior runs, so only THIS run's output
+counts.
+
 Success evidence accepted (ANY one of):
   * A fresh, real ``work_products/paper_to_podcast/podcast_audio.m4a``
     (mtime at/after the run start, size >= ``_MIN_PODCAST_AUDIO_BYTES``) —
@@ -81,6 +97,15 @@ _MANIFEST_FILENAME = "manifest.json"
 _PAPERS_METADATA_FILENAME = "papers_metadata.json"
 _FAILURE_SENTINEL_FILENAME = "FAILURE.txt"
 _PODCAST_AUDIO_FILENAME = "podcast_audio.m4a"
+
+# The LLM cron framework runs each attempt of an LLM session with its CWD
+# set to a per-attempt subdirectory under the cron workspace root (e.g.
+# ``<workspace>/attempts/001/``). The paper_to_podcast skill writes its
+# deliverables with relative paths (``-o work_products/paper_to_podcast/...``),
+# so they land under ``attempts/<NNN>/work_products/paper_to_podcast/`` rather
+# than under the daemon-root ``<workspace>/work_products/paper_to_podcast/``.
+# The guard therefore searches BOTH layouts (see ``_candidate_work_products_dirs``).
+_ATTEMPTS_DIRNAME = "attempts"
 
 # A real NotebookLM audio overview is multiple MB; the SKILL (Phase C step 1)
 # verifies the download is "> 100 KB (a real .m4a)". We use the same floor so a
@@ -169,6 +194,54 @@ def _fresh_podcast_audio_bytes(
     return st.st_size
 
 
+def _candidate_work_products_dirs(workspace_root: Path) -> list[Path]:
+    """Return the dirs to search for paper_to_podcast work products.
+
+    The daemon-root ``work_products/paper_to_podcast/`` is searched first
+    (preserving the original single-dir behaviour), followed by every
+    ``attempts/<NNN>/work_products/paper_to_podcast/`` dir — the per-attempt
+    CWD the LLM cron run actually writes to. Missing dirs are harmless: callers
+    stat individual files, so a missing dir simply contributes no candidates.
+    """
+    root = Path(workspace_root)
+    dirs = [root / _WORK_PRODUCTS_SUBPATH]
+    attempts_root = root / _ATTEMPTS_DIRNAME
+    if attempts_root.is_dir():
+        dirs.extend(
+            child / _WORK_PRODUCTS_SUBPATH
+            for child in sorted(attempts_root.iterdir(), key=lambda p: p.name)
+            if child.is_dir()
+        )
+    return dirs
+
+
+def _freshest_instance(filename: str, candidate_dirs: list[Path]) -> Path:
+    """Return the freshest existing instance of ``filename`` across candidate dirs.
+
+    "Freshest" = greatest mtime. If no instance exists in any candidate dir,
+    returns ``candidate_dirs[0] / filename`` (the daemon-root path) so the
+    existing ``.is_file()`` / ``_is_fresh()`` / ``_count_papers_in_json()``
+    call sites in ``evaluate_paper_to_podcast_run`` report "absent" exactly as
+    they did pre-multi-dir — no call-site change is needed for the
+    nothing-on-disk case. ``candidate_dirs`` is never empty (it always includes
+    the daemon-root entry).
+    """
+    best: Optional[Path] = None
+    best_mtime = -1.0
+    for directory in candidate_dirs:
+        path = directory / filename
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > best_mtime:
+            best_mtime = mtime
+            best = path
+    if best is not None:
+        return best
+    return candidate_dirs[0] / filename
+
+
 def evaluate_paper_to_podcast_run(
     workspace_dir: str | Path,
     run_started_at: Optional[float] = None,
@@ -180,7 +253,9 @@ def evaluate_paper_to_podcast_run(
 
     Args:
         workspace_dir: The cron run\'s workspace root (the directory that
-            contains ``work_products/``).
+            contains ``work_products/`` AND, for per-attempt LLM runs, the
+            ``attempts/<NNN>/work_products/`` trees the deliverables actually
+            land under).
         run_started_at: Epoch seconds of this run\'s start. When given, only
             artifacts written at/after it count — a reused cron workspace
             accumulates prior runs\' deliverables, which must not vouch for a
@@ -190,11 +265,24 @@ def evaluate_paper_to_podcast_run(
         A ``PaperToPodcastRunResult``. ``is_failure=True`` when no fresh
         deliverable is evidenced AND no explicit FAILURE sentinel exists.
     """
-    work_products = Path(workspace_dir).expanduser().resolve() / _WORK_PRODUCTS_SUBPATH
-    manifest_path = work_products / _MANIFEST_FILENAME
-    papers_meta_path = work_products / _PAPERS_METADATA_FILENAME
-    failure_sentinel_path = work_products / _FAILURE_SENTINEL_FILENAME
-    podcast_audio_path = work_products / _PODCAST_AUDIO_FILENAME
+    root = Path(workspace_dir).expanduser().resolve()
+    candidate_dirs = _candidate_work_products_dirs(root)
+    # Each evidence file is resolved to its FRESHEST instance across the
+    # daemon-root work_products/paper_to_podcast/ AND every per-attempt
+    # attempts/<NNN>/work_products/paper_to_podcast/ dir. The LLM cron run
+    # executes with CWD = the per-attempt subdir, so its relative deliverable
+    # writes (e.g. ``nlm download audio ... -o work_products/paper_to_podcast/``)
+    # land there, NOT under the daemon root (2026-07-15: a real ~40 MB podcast
+    # was discarded every night because the guard only inspected the empty
+    # daemon-root dir). When no instance exists anywhere, the daemon-root path
+    # is returned so the existing .is_file()/_is_fresh() call sites report
+    # "absent" exactly as before. The _is_fresh(run_started_at) gate still
+    # excludes stale files from prior runs/attempts, so only THIS run's output
+    # counts.
+    manifest_path = _freshest_instance(_MANIFEST_FILENAME, candidate_dirs)
+    papers_meta_path = _freshest_instance(_PAPERS_METADATA_FILENAME, candidate_dirs)
+    failure_sentinel_path = _freshest_instance(_FAILURE_SENTINEL_FILENAME, candidate_dirs)
+    podcast_audio_path = _freshest_instance(_PODCAST_AUDIO_FILENAME, candidate_dirs)
 
     # Explicit failure signal from the skill — the agent wrote FAILURE.txt
     # declaring zero papers downloaded. Honour it ONLY if it is from THIS run:
