@@ -131,3 +131,15 @@ src/universal_agent/scripts/nightly_wiki_agent.py
 # so the worker-exit/PID protocol does not apply. Mirrors the zai_activity_control.py
 # `systemctl show` read pattern. (proactive activity report, 2026-06-21)
 src/universal_agent/services/proactive_activity_report.py
+
+# disk_usage_health.py [rationale (a) — not a task unit]: the watchdog invariant that
+# reports which directories are filling the disk. Its ONLY subprocess use is an ephemeral
+# read-only `du -x --max-depth=1` to measure directory sizes — argv-only, no shell, no
+# input, minimal env (PATH/LC_ALL only, so Infisical secrets are never handed to it). It
+# measures the filesystem; it does not execute a unit of work: there is no task_hub_items
+# row to own and no long-running worker PID to classify (the call is bounded and its
+# result is a number). Same shape as the proactive_activity_report.py `systemctl
+# list-timers` read directly above. It replaced a hand-rolled Python byte-walk that
+# silently truncated and reported partial sums as real sizes — `du` is the correct
+# primitive, not a worker spawn. (disk watchdog accuracy fix, 2026-07-15)
+src/universal_agent/services/invariants/disk_usage_health.py

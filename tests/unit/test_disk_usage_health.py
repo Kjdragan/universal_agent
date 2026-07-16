@@ -294,12 +294,43 @@ def test_pressured_finding_embeds_live_top_consumers(tmp_path, monkeypatch):
     }):
         from universal_agent.services.invariants import disk_usage_health
         importlib.reload(disk_usage_health)
+        # Scans run on a background thread; measure synchronously so the
+        # assertion is deterministic rather than racing the refresh.
+        disk_usage_health._refresh_top_consumers()
         result = disk_usage_health.disk_usage_health({})
     assert result is not None
     obs = result.get("observed_value") or {}
     top = obs.get("top_consumers") or []
     assert any("vp_coder_primary_external" in c["path"] for c in top)
     assert "vp_coder_primary_external" in (result.get("message") or "")
+
+
+def test_probe_never_scans_inline(tmp_path, monkeypatch):
+    """The probe is awaited on the gateway event loop by ops_proactive_health
+    (`async def`), so it must never run the scan inline — it serves the cached
+    result and kicks the refresh onto a background thread. Regression for the
+    pre-2026-07-15 probe, which called _top_consumers() synchronously and could
+    block the loop for the whole scan budget."""
+    monkeypatch.setenv("UA_DISK_HEALTH_ROOTS", str(tmp_path))
+    from universal_agent.services.invariants import disk_usage_health
+    importlib.reload(disk_usage_health)
+
+    scanned: list[str] = []
+    monkeypatch.setattr(
+        disk_usage_health, "_top_consumers", lambda *a, **k: scanned.append("scan") or []
+    )
+    monkeypatch.setattr(disk_usage_health.threading, "Thread", lambda **k: _NoopThread())
+
+    with _mock_disk_usage({"/": DiskUsage(_gb(100), _gb(91), _gb(9))}):
+        result = disk_usage_health.disk_usage_health({})
+
+    assert result is not None  # finding still emitted
+    assert scanned == [], "probe must not scan on the caller's thread"
+
+
+class _NoopThread:
+    def start(self) -> None:
+        return None
 
 
 def test_finding_message_handles_absent_roots_gracefully(tmp_path, monkeypatch):
@@ -311,7 +342,44 @@ def test_finding_message_handles_absent_roots_gracefully(tmp_path, monkeypatch):
     }):
         from universal_agent.services.invariants import disk_usage_health
         importlib.reload(disk_usage_health)
+        disk_usage_health._refresh_top_consumers()  # scan runs, finds nothing
         result = disk_usage_health.disk_usage_health({})
     assert result is not None
     assert (result.get("observed_value") or {}).get("top_consumers") == []
     assert "Live top-consumer scan found nothing" in (result.get("message") or "")
+
+
+def test_default_roots_cover_the_parents_not_a_leaf_allowlist(monkeypatch):
+    """Regression for 2026-07-15: the default roots were four hand-picked leaf
+    dirs (~17G of a 170G-used disk), so the alert reported a 0.04G dir as the
+    top consumer while 18G sat in /home/ua/.cache and 16G in .worktrees —
+    neither reachable from any configured root. The defaults must be the
+    PARENTS those live under, so a consumer nobody enumerated still gets found.
+    """
+    monkeypatch.delenv("UA_DISK_HEALTH_ROOTS", raising=False)
+    from universal_agent.services.invariants import disk_usage_health
+    importlib.reload(disk_usage_health)
+
+    roots = disk_usage_health._consumer_roots()
+
+    # The dirs that actually held the space in the incident must be reachable.
+    for missed in ("/home/ua/.cache", "/opt/universal_agent/.worktrees"):
+        assert any(
+            missed.startswith(r.rstrip("/") + "/") for r in roots
+        ), f"{missed} is unreachable from default roots {roots}"
+
+
+def test_scan_reports_children_not_the_root_aggregate(tmp_path, monkeypatch):
+    """`du --max-depth=1` also prints the root's own total. Reporting it would
+    double-count the root against its own children in the largest-first list."""
+    (tmp_path / "child").mkdir()
+    (tmp_path / "child" / "big.bin").write_bytes(b"\0" * (4 * 1024 * 1024))
+    monkeypatch.setenv("UA_DISK_HEALTH_ROOTS", str(tmp_path))
+
+    from universal_agent.services.invariants import disk_usage_health
+    importlib.reload(disk_usage_health)
+    consumers = disk_usage_health._top_consumers()
+
+    paths = [c["path"] for c in consumers]
+    assert any("child" in p for p in paths)
+    assert str(tmp_path) not in paths, "root aggregate must not be reported"

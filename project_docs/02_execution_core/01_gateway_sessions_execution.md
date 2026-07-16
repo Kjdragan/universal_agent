@@ -404,6 +404,27 @@ and is shared by all three lanes so the convention can't drift:
 2. **Absolute backstop** exceeded (`process_turn_absolute_backstop_seconds()`,
    env `UA_PROCESS_TURN_ABSOLUTE_BACKSTOP_SECONDS`, default 7200 s = 2 h) — a
    last resort for a fully-wedged process where even tool timeouts fail.
+
+   > **The default is not what production runs — check Infisical (2026-07-15).**
+   > This var is a **production Infisical secret**, injected into `os.environ` at
+   > service start by `infisical_loader.py::initialize_runtime_secrets`. It is
+   > therefore invisible in `.env`, in the systemd unit, **and in
+   > `/proc/<pid>/environ`** — reading any of those tells you nothing. Production
+   > held **1800** (30 min), silently overriding this 7200 default and re-creating
+   > the exact wall-clock guillotine PR #1019 existed to remove. It quietly
+   > truncated `paper_to_podcast` (a legitimately >30-min NotebookLM job) on
+   > 3 of 11 runs — killed mid-flight at close-out, so the podcast built but the
+   > email never sent. Worse, the value was **half the job's own
+   > `timeout_seconds` (3600)**, so the backstop always fired first and the job's
+   > real budget could never apply. Raised to 7200 on 2026-07-15. **The idle
+   > watchdog (600 s) is the primary control and already catches genuine hangs —
+   > so this ceiling buys no safety it doesn't already have; it only truncates
+   > real work.** Read the effective value the way the service does:
+   > `PYTHONPATH=/opt/universal_agent/src .venv/bin/python -c "from
+   > universal_agent.infisical_loader import initialize_runtime_secrets as i;
+   > i(); from universal_agent import timeout_policy as t;
+   > print(t.process_turn_absolute_backstop_seconds())"`. Any backstop below a
+   > job's `timeout_seconds` is a bug.
 3. An **explicit caller hard cap** is exceeded: per-request
    `metadata["turn_timeout_seconds"]` (a cron's per-job budget, plumbed by
    `cron_service`), else legacy `UA_PROCESS_TURN_TIMEOUT_SECONDS`
