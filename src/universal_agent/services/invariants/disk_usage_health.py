@@ -15,26 +15,30 @@ partition):
 - `/opt` — where AGENT_RUN_WORKSPACES + the repo's .uv-cache live
 - `/var/lib` — where csi.db + activity_state.db + runtime_state.db live
 
-PRIMARY DISK DRIVERS (corrected 2026-06-25 after the disk-critical
-incident where / hit 92% under sustained VP-coder load):
+WHERE THE SPACE IS: **measured, never guessed.** This module deliberately
+holds no narrative about which directory is "the driver" — every such claim
+written here has gone stale and then actively misled an operator. The
+2026-07-15 incident: the probe reported a 0.04G dir as the top consumer
+while 7.2G sat in the very root it was scanning and ~60G sat in roots it
+never looked at (``/home/ua/.cache``, ``/opt/universal_agent/.worktrees``,
+``/home/ua/.claude-science``, ``/var/lib/containerd``). Two causes, both
+fixed here:
 
-1. **VP-coder mission ``.venv`` bloat** under
-   ``AGENT_RUN_WORKSPACES/vp_coder_primary_external``. Observed 30G
-   across 221 mission dirs, 19.6G of it regenerable per-mission ``.venv``
-   (+ ``__pycache__`` 0.8G, ``node_modules`` 0.4G). This IS a primary
-   driver under sustained VP load — see
-   ``scripts/vp_coder_regenerable_reaper.py`` (daily) +
-   ``scripts/vp_coder_workspace_pruner.py`` (weekly) for the durable fix.
+1. ``_consumer_roots`` was a hand-maintained allowlist of four leaf dirs,
+   structurally blind to most of the disk. It now names the *parents*
+   everything lives under, so new consumers (including dot-dirs) are
+   discovered rather than enumerated.
+2. The scan was a Python byte-walk under a shared 2s / 50k-entry budget.
+   It blew the budget, then reported the partial sums **as if they were
+   real sizes**. It now shells to ``du -x --max-depth=1`` (accurate, and
+   ~30s for the whole box) behind a TTL cache refreshed on a background
+   thread — so the probe itself never walks the filesystem.
 
-2. uv cache (``~/.cache/uv``, ``/root/.cache/uv``, ``/tmp/uv_cache``,
-   ``<repo>/.uv-cache``). Was the dominant driver on 2026-06-04 but is
-   now pruned every deploy by ``scripts/deploy/remote_deploy.sh`` and is
-   regularly <1G — so the older "uv cache is THE driver" framing is
-   stale. ``uv cache prune`` often finds nothing unused.
-
-Secondary one-time reclaimable: stale containerd build cache
-(``docker builder prune``). This probe surfaces real top consumers via
-runbook_command. See ``scripts/deploy/remote_deploy.sh`` and
+The probe stays a pure ``shutil.disk_usage`` syscall on the hot path. This
+matters: ``gateway_server.py::ops_proactive_health`` is ``async def`` and
+awaits this probe directly on the event loop, so any in-probe filesystem
+walk blocks the gateway (see the 2026-05-26 event-loop starvation incident).
+Reclaim *categories* + live measurements live in the finding itself; see
 ``project_docs/06_platform/04_deployment_and_cicd.md``.
 
 Severity (strict per operator pattern set in P4):
@@ -47,8 +51,9 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 import shutil
+import subprocess
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -73,107 +78,152 @@ def _gb(num_bytes: int) -> float:
 
 
 def _consumer_roots() -> list[str]:
-    """The heavy directory roots whose immediate subdirs the live scan measures.
+    """The roots whose immediate subdirs the scan measures.
 
-    Overridable via UA_DISK_HEALTH_ROOTS (comma-separated). Defaults to the
-    known-heavy trees on the production VPS. Missing paths degrade gracefully.
-    Naming these live at evaluation time is what keeps the finding honest — the
-    design_note's own lesson is "name CATEGORIES, not point-in-time GB, because
-    those go stale"; this probe supplies the real GB at the moment it fires.
+    Overridable via UA_DISK_HEALTH_ROOTS (comma-separated). Missing paths
+    degrade gracefully.
+
+    These are deliberately the *parent* dirs everything lives under, not a
+    curated list of known-heavy leaves. A leaf allowlist only finds what
+    someone already thought to add: the pre-2026-07-15 list named four leaves
+    totalling ~17G of a 170G-used disk and never saw ``/home/ua/.cache`` (18G)
+    or ``.worktrees`` (16G). Scanning parents means a consumer that did not
+    exist when this list was written still gets found.
     """
     raw = (os.getenv("UA_DISK_HEALTH_ROOTS") or "").strip()
     if raw:
         return [p.strip() for p in raw.split(",") if p.strip()]
     return [
-        os.getenv(
-            "UA_REMOTE_WORKSPACES_DIR",
-            "/opt/universal_agent/AGENT_RUN_WORKSPACES",
-        ),
-        "/opt/universal_agent/AGENT_RUN_WORKSPACES_ARCHIVE",
-        "/opt/ua_demos",
-        "/home/ua/ua_scratch_archive",
+        "/opt/universal_agent",
+        "/opt",
+        "/home/ua",
+        "/var/lib",
+        "/tmp",
+        "/root",
     ]
 
 
-# Bounds for the live scan — keep it cheap so a pressured heartbeat never blocks.
-_SCAN_DEADLINE_S = float(os.getenv("UA_DISK_HEALTH_SCAN_DEADLINE_S", "2.0"))
-_SCAN_MAX_ENTRIES = int(os.getenv("UA_DISK_HEALTH_SCAN_MAX_ENTRIES", "50000"))
-_SCAN_TOP_N = int(os.getenv("UA_DISK_HEALTH_SCAN_TOP_N", "5"))
+# Scan bounds. The scan runs on a background thread (never the probe/event
+# loop), so it is bounded by a generous wall clock rather than a tiny budget
+# that silently truncates. A full-box `du` measures ~30s on the production VPS.
+_SCAN_TIMEOUT_S = float(os.getenv("UA_DISK_HEALTH_SCAN_TIMEOUT_S", "180"))
+_SCAN_TOP_N = int(os.getenv("UA_DISK_HEALTH_SCAN_TOP_N", "8"))
+# How long a measurement stays servable before a refresh is kicked off.
+_SCAN_TTL_S = float(os.getenv("UA_DISK_HEALTH_SCAN_TTL_S", "21600"))  # 6h
+
+_scan_lock = threading.Lock()
+_scan_state: Dict[str, Any] = {"as_of": 0.0, "consumers": [], "refreshing": False}
 
 
-def _dir_size_bounded(path: str, budget: Dict[str, Any]) -> int:
-    """Best-effort recursive byte size of ``path``, sharing a global budget.
+def _du_children(root: str) -> List[Dict[str, Any]]:
+    """Measure the immediate subdirs of ``root`` with ``du``. Never raises.
 
-    Stops early (returning the partial sum measured so far) when the shared
-    wall-clock deadline passes or the entry-visit cap is hit, so one huge tree
-    can't blow the scan's time bound. Symlinks are not followed; unreadable
-    entries are skipped. Never raises.
+    Shells to `du -x --max-depth=1 -B1` rather than walking in Python: it is
+    accurate (the Python walk it replaces silently reported truncated partial
+    sums as real sizes), it stays on one filesystem (-x), and it does not
+    follow symlinks. Returns [] for a missing/unreadable root.
     """
-    total = 0
-    stack = [path]
-    while stack:
-        if time.monotonic() > budget["deadline"] or budget["entries"] >= _SCAN_MAX_ENTRIES:
-            break
-        current = stack.pop()
-        try:
-            with os.scandir(current) as it:
-                for entry in it:
-                    budget["entries"] += 1
-                    if budget["entries"] >= _SCAN_MAX_ENTRIES or time.monotonic() > budget["deadline"]:
-                        break
-                    try:
-                        if entry.is_symlink():
-                            continue
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append(entry.path)
-                        elif entry.is_file(follow_symlinks=False):
-                            total += entry.stat(follow_symlinks=False).st_size
-                    except (OSError, ValueError):
-                        continue
-        except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
+    try:
+        proc = subprocess.run(
+            ["du", "-x", "--max-depth=1", "-B1", root],
+            capture_output=True,
+            text=True,
+            timeout=_SCAN_TIMEOUT_S,
+            # Minimal env: `du` is an installed system tool, not first-party
+            # code — do not hand it the process environment (Infisical secrets
+            # live there). See the least-privilege rule in CLAUDE.md.
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("disk_usage_health: du failed for %s", root, exc_info=True)
+        return []
+
+    root_real = os.path.realpath(root)
+    out: List[Dict[str, Any]] = []
+    # `du` exits non-zero on partial permission errors but still prints what it
+    # could read, so parse stdout regardless of returncode.
+    for line in (proc.stdout or "").splitlines():
+        raw_size, _, path = line.partition("\t")
+        path = path.strip()
+        if not path:
             continue
-    return total
+        try:
+            size = int(raw_size)
+        except ValueError:
+            continue
+        # --max-depth=1 also prints the root's own total; keep children only.
+        if os.path.realpath(path) == root_real:
+            continue
+        out.append({"path": path, "size_bytes": size, "size_gb": _gb(size)})
+    return out
 
 
 def _top_consumers(roots: Optional[list[str]] = None) -> List[Dict[str, Any]]:
-    """Live, time-bounded scan naming the largest immediate subdirs of ``roots``.
+    """Measure the largest immediate subdirs across ``roots``, largest first.
 
-    Returns up to ``_SCAN_TOP_N`` ``{"path", "size_bytes", "size_gb"}`` entries
-    sorted largest first (by raw bytes; ``size_gb`` is a rounded display value),
-    aggregated across all roots. Runs only on the (rare) pressured path.
-    Missing roots are skipped; the whole scan shares one wall-clock deadline and
-    entry-visit budget and returns whatever it measured if it runs out — it never
-    raises.
+    Synchronous and accurate — this is the real measurement. Callers on a
+    latency-sensitive path must use ``_cached_top_consumers`` instead. Roots may
+    nest (``/opt`` and ``/opt/universal_agent``); results are de-duplicated by
+    real path so a dir measured under two roots is reported once.
     """
     roots = roots if roots is not None else _consumer_roots()
-    budget: Dict[str, Any] = {
-        "deadline": time.monotonic() + _SCAN_DEADLINE_S,
-        "entries": 0,
-    }
-    consumers: List[Dict[str, Any]] = []
+    root_reals = {os.path.realpath(r) for r in roots}
+    seen: Dict[str, Dict[str, Any]] = {}
     for root in roots:
-        if time.monotonic() > budget["deadline"] or budget["entries"] >= _SCAN_MAX_ENTRIES:
-            break
-        try:
-            children = list(os.scandir(root))
-        except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
-            continue
-        for entry in children:
-            if time.monotonic() > budget["deadline"] or budget["entries"] >= _SCAN_MAX_ENTRIES:
-                break
-            budget["entries"] += 1
-            try:
-                if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
-                    continue
-            except (OSError, ValueError):
+        for child in _du_children(root):
+            key = os.path.realpath(child["path"])
+            # A child that is itself a root (/opt/universal_agent under /opt) is
+            # scanned separately at finer granularity — reporting its aggregate
+            # too would double-count it against its own children in the list.
+            if key in root_reals:
                 continue
-            size = _dir_size_bounded(entry.path, budget)
-            # Keep raw bytes for ordering; size_gb (rounded to 2 decimals) is for
-            # display only — sorting on it makes sub-10MB dirs tie and fall back to
-            # nondeterministic filesystem order.
-            consumers.append({"path": entry.path, "size_bytes": size, "size_gb": _gb(size)})
-    consumers.sort(key=lambda c: c["size_bytes"], reverse=True)
+            # Keep the larger reading if a path shows up under two roots.
+            if key not in seen or child["size_bytes"] > seen[key]["size_bytes"]:
+                seen[key] = child
+    consumers = sorted(seen.values(), key=lambda c: c["size_bytes"], reverse=True)
     return consumers[:_SCAN_TOP_N]
+
+
+def _refresh_top_consumers() -> None:
+    """Re-measure in the background and publish the result. Never raises."""
+    try:
+        consumers = _top_consumers()
+        with _scan_lock:
+            _scan_state["consumers"] = consumers
+            _scan_state["as_of"] = time.time()
+    except Exception:  # noqa: BLE001 — a background scan must never crash the process
+        logger.debug("disk_usage_health: background scan failed", exc_info=True)
+    finally:
+        with _scan_lock:
+            _scan_state["refreshing"] = False
+
+
+def _cached_top_consumers() -> tuple[List[Dict[str, Any]], Optional[float]]:
+    """Return (consumers, age_seconds) without ever touching the filesystem.
+
+    Serves the last measurement and kicks off a background refresh when it is
+    older than the TTL. Returns ([], None) until the first scan lands. This is
+    what keeps the probe ~1ms: `ops_proactive_health` is `async def` and awaits
+    the probe on the gateway's event loop, so the probe must not walk 193G.
+    """
+    now = time.time()
+    with _scan_lock:
+        as_of = float(_scan_state["as_of"] or 0.0)
+        consumers = list(_scan_state["consumers"])
+        stale = (now - as_of) > _SCAN_TTL_S if as_of else True
+        if stale and not _scan_state["refreshing"]:
+            _scan_state["refreshing"] = True
+            kick = True
+        else:
+            kick = False
+    if kick:
+        threading.Thread(
+            target=_refresh_top_consumers,
+            name="disk-health-scan",
+            daemon=True,
+        ).start()
+    return consumers, (now - as_of if as_of else None)
 
 
 def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
@@ -218,25 +268,29 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
     ),
     runbook_command=(
         "df -h; "
-        "echo '--- Docker/containerd (often the biggest consumer; only the "
-        "dangling/build-cache part is reclaimable, ~few GB) ---'; "
+        "echo '--- TRUE top consumers across the whole box (this is the one that "
+        "matters: -x stays on one fs, and it SEES dot-dirs that `du -sh /home/ua/*` "
+        "silently skips — that blindness hid 18G in ~/.cache on 2026-07-15) ---'; "
+        "sudo du -x --max-depth=1 -h /opt/universal_agent /opt /home/ua /var/lib "
+        "/tmp /root 2>/dev/null | sort -rh | head -20; "
+        "echo '--- before deleting ANY of the above: does a live service back it? ---'; "
+        "echo 'sudo grep -rl <path> /etc/systemd/system/*.service "
+        "/home/ua/.config/systemd/user/*.service'; "
+        "echo '--- regenerable .venv trees (rebuild: uv sync; NEVER delete the repo dir, "
+        "some have no git remote) ---'; "
+        "sudo du -sh $(find /home/ua/lrepos /opt/universal_agent/.worktrees -maxdepth 2 "
+        "-name .venv -type d 2>/dev/null) 2>/dev/null | sort -rh | head -8; "
+        "echo '--- model/tool caches (regenerable; re-download on demand) ---'; "
+        "sudo du -sh /home/ua/.cache/huggingface/hub/* /home/ua/.npm 2>/dev/null "
+        "| sort -rh | head -5; "
+        "echo '--- docker: only the RECLAIMABLE column is free space ---'; "
         "sudo docker system df 2>/dev/null; "
-        "sudo du -sh /var/lib/docker /var/lib/containerd 2>/dev/null; "
-        "echo '--- AGENT_RUN_WORKSPACES + ARCHIVE (regenerable; daily pruner) ---'; "
-        "sudo du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES "
-        "/opt/universal_agent/AGENT_RUN_WORKSPACES_ARCHIVE 2>/dev/null; "
-        "sudo du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES/*/ 2>/dev/null | sort -rh | head -10; "
-        "echo '--- /home/ua (stale dev worktrees — operator judgment) ---'; "
-        "sudo du -sh /home/ua/* 2>/dev/null | sort -rh | head -10; "
-        "echo '--- largest DB files ---'; "
-        "sudo ls -laSh /opt/universal_agent/*.db /opt/universal_agent/AGENT_RUN_WORKSPACES/*.db "
-        "/var/lib/universal-agent/csi/*.db 2>/dev/null | head -10; "
-        "echo '--- uv caches (tiny now; auto-pruned each deploy) ---'; "
-        "sudo du -sh /home/ua/.cache/uv /root/.cache/uv /tmp/uv_cache "
-        "/opt/universal_agent/.uv-cache 2>/dev/null; "
+        "echo '--- largest DB files (LIVE state — never blanket-delete) ---'; "
+        "sudo ls -laSh /opt/universal_agent/*.db "
+        "/opt/universal_agent/AGENT_RUN_WORKSPACES/*.db "
+        "/var/lib/universal-agent/csi/*.db 2>/dev/null | head -6; "
         "echo '--- SAFE one-time reclaim (keeps running services) ---'; "
-        "echo '# regenerable .venv/__pycache__/node_modules reap (the big lever; "
-        "runs daily, but force now):'; "
+        "echo '# regenerable .venv/__pycache__/node_modules reap (runs daily; force now):'; "
         "echo 'cd /opt/universal_agent && sudo -u ua env "
         "PYTHONPATH=/opt/universal_agent/src .venv/bin/python -m "
         "universal_agent.scripts.vp_coder_regenerable_reaper'; "
@@ -244,9 +298,8 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
         "echo 'cd /opt/universal_agent && sudo -u ua env "
         "PYTHONPATH=/opt/universal_agent/src .venv/bin/python -m "
         "universal_agent.scripts.vp_coder_workspace_pruner'; "
-        "echo '# docker dangling (note: on this containerd-snapshotter host "
-        "system/buildx prune often reclaim ~0B — most images are LIVE):'; "
-        "echo 'sudo docker system prune -f'"
+        "echo '# docker dangling build cache only (system prune -a would remove LIVE images):'; "
+        "echo 'sudo docker builder prune -f'"
     ),
     metadata={
         "design_note": (
@@ -318,27 +371,39 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     mount_names = sorted(m["mount"] for m in pressured)
     worst_free_gb = min((m["free_gb"] for m in pressured), default=0.0)
 
-    # Live, bounded scan of the heavy roots — runs ONLY here, on the (rare)
-    # pressured path, so the healthy heartbeat stays a pure syscall. This names
-    # the REAL current top consumers at evaluation time instead of a static
-    # point-in-time claim (the design_note's own lesson). Never raises.
+    # Cached measurement + background refresh. Never touches the filesystem
+    # here: this probe is awaited on the gateway event loop by
+    # ops_proactive_health, so it must stay a pure syscall. Never raises.
     try:
-        top_consumers = _top_consumers()
+        top_consumers, scan_age_s = _cached_top_consumers()
     except Exception:  # noqa: BLE001 — fail-open: a scan hiccup must not drop the finding
-        logger.debug("disk_usage_health: top-consumer scan failed", exc_info=True)
-        top_consumers = []
+        logger.debug("disk_usage_health: top-consumer lookup failed", exc_info=True)
+        top_consumers, scan_age_s = [], None
 
     if top_consumers:
+        age_text = (
+            f"measured {int((scan_age_s or 0) // 60)}m ago"
+            if scan_age_s is not None
+            else "just measured"
+        )
         live_consumer_text = (
-            "Live scan of the heavy roots right now: "
+            f"Largest directories ({age_text}): "
             + ", ".join(f"{c['path']} ({c['size_gb']}G)" for c in top_consumers)
             + ". "
         )
-    else:
+    elif scan_age_s is None:
         live_consumer_text = (
-            "Live top-consumer scan found nothing under the known roots (paths "
-            "absent on this host or the scan budget was hit) — run the runbook "
-            "for `du -sh`. "
+            "Directory sizes are still being measured in the background (the "
+            "first scan takes ~30s and lands on the next evaluation) — run the "
+            "runbook for `du` now. "
+        )
+    else:
+        # A scan ran and came back empty — say so plainly rather than implying a
+        # measurement is still pending. Usually means the roots are absent here.
+        live_consumer_text = (
+            "Live top-consumer scan found nothing under the configured roots "
+            "(absent on this host, or UA_DISK_HEALTH_ROOTS is misset) — run the "
+            "runbook for `du`. "
         )
 
     return {
@@ -353,33 +418,48 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"(critical above {CRITICAL_THRESHOLD_PCT}%)"
         ),
         # Plain-English lead with LIVE numbers (the email leads with this).
+        # Plain-English lead, built ONLY from what was measured. It deliberately
+        # does not claim where the space went: the previous hardcoded version
+        # asserted "most of the space is Docker images + running containers",
+        # which was false (Docker was ~4G of 170G) and sent the operator to the
+        # wrong place on 2026-07-15.
         "operator_summary": (
             f"The production server's disk is {worst_pct:.0f}% full "
             f"(about {worst_free_gb:.0f} GB free) and slowly filling up. Nothing "
             "is broken yet, but if it reaches ~100% the agent services start "
-            "failing. Most of the space is in active use (Docker images + running "
-            "containers); the safely reclaimable part is build caches, old "
-            "per-mission workspaces, and dangling Docker layers."
+            "failing. "
+            + (
+                "The biggest directories right now are "
+                + ", ".join(
+                    f"{c['path']} ({c['size_gb']:.0f} GB)" for c in top_consumers[:3]
+                )
+                + " — most reclaimable space is caches and rebuildable .venv "
+                "trees, but check each one backs no live service before deleting."
+                if top_consumers
+                else "Directory sizes are being measured now; the technical "
+                "detail below has the runbook."
+            )
         ),
-        # Technical recommendation (for Claude / handoff). Names reclaim
-        # CATEGORIES + commands, plus a LIVE largest-first scan measured at
-        # evaluation time (live_consumer_text) — not the hardcoded point-in-time
-        # GB figures that go stale (see the 2026-06-25 design_note).
+        # Technical recommendation (for Claude / handoff). Leads with the
+        # MEASURED largest dirs, then names reclaim CATEGORIES to check against
+        # them. Deliberately asserts no "X is the driver" narrative: every such
+        # claim previously hardcoded here went stale and misled the operator
+        # (2026-07-15 — the alert blamed vp_coder while 18G sat in ~/.cache).
         "message": (
             f"Disk pressure on {len(pressured)} mount(s): {', '.join(mount_names)}. "
             f"Worst {worst_pct}%. {live_consumer_text}"
-            "Top reclaimable consumers under sustained "
-            "VP-coder load are the per-mission .venv / __pycache__ / "
-            "node_modules trees under "
-            "AGENT_RUN_WORKSPACES/vp_coder_primary_external (the daily "
-            "regenerable-artifact reaper scripts/vp_coder_regenerable_reaper.py "
-            "+ the weekly whole-dir pruner "
-            "scripts/vp_coder_workspace_pruner.py own the durable fix), "
-            "followed by the uv cache (~/.cache/uv + /root/.cache/uv + "
-            "/tmp/uv_cache + <repo>/.uv-cache — auto-pruned each deploy via "
-            "scripts/deploy/remote_deploy.sh, regularly <1G so 'uv cache "
-            "prune' often finds nothing unused). Run the runbook for live "
-            "`du -sh` of actual top consumers."
+            "Judge reclaim from the measured list above, not from habit. "
+            "Usually-regenerable categories: per-mission .venv / __pycache__ / "
+            "node_modules under AGENT_RUN_WORKSPACES (daily "
+            "scripts/vp_coder_regenerable_reaper.py + weekly "
+            "scripts/vp_coder_workspace_pruner.py own the durable fix); "
+            "model/tool caches (~/.cache/huggingface, ~/.npm, ~/.cache/uv); "
+            "worktree and demo-repo .venv trees (rebuild via `uv sync`); "
+            "dangling Docker layers (`docker builder prune`). "
+            "Verify before deleting: a big dir may back a LIVE service — check "
+            "`grep -rl <path> /etc/systemd/system/*.service "
+            "~/.config/systemd/user/*.service` and prefer deleting a "
+            "regenerable .venv over its parent. Run the runbook for live `du`."
         ),
         "severity_override": severity,
     }
