@@ -699,6 +699,33 @@ class VpWorkerLoop:
                 logger.debug("Failed to emit vp.dispatch.held event: %s", exc)
         return True
 
+    def _maybe_hold_for_capacity_governor(self) -> bool:
+        """Return True when this tick should be held because the
+        :class:`CapacityGovernor` denies dispatch — most notably the ZAI
+        1310 weekly/monthly quota-exhaustion global pause
+        (``services/zai_control``), but also its own 429-backoff / api-down
+        / slot-full checks. VP mission dispatch spawns the ``claude`` CLI as
+        a subprocess invisible to the httpx observability hook, so this
+        pre-tick check (before ``claim_next_vp_mission``) is the only gate
+        that can stand VP dispatch down during a global pause. Guarded: any
+        failure here must not block a tick — fails OPEN (returns False,
+        dispatch proceeds)."""
+        try:
+            from universal_agent.services.capacity_governor import CapacityGovernor
+
+            allowed, reason = CapacityGovernor.get_instance().can_dispatch()
+        except Exception as exc:  # noqa: BLE001 — governor check must fail open
+            logger.debug(
+                "VP worker capacity governor check failed (failing open): %s", exc
+            )
+            return False
+        if not allowed:
+            logger.info(
+                "VP worker tick held (capacity governor): vp_id=%s reason=%s",
+                self.vp_id, reason,
+            )
+        return not allowed
+
     async def _tick(self) -> None:
         # Code-currency self-restart (between missions only). If a deploy
         # advanced the code while we were idle or running the previous mission,
@@ -736,6 +763,13 @@ class VpWorkerLoop:
         # once the hold window clears. Exactly one alert is emitted per episode.
         # Fully env-gated (UA_INFERENCE_DEGRADE_ENABLED); disabled → no hold.
         if self._maybe_hold_for_degraded_inference():
+            await asyncio.sleep(self.poll_interval_seconds)
+            return
+
+        # ── Capacity governor gate (2026-07-18) ───────────────────────
+        # Covers, in particular, the ZAI 1310 weekly/monthly quota-exhaustion
+        # auto-pause — see _maybe_hold_for_capacity_governor's docstring.
+        if self._maybe_hold_for_capacity_governor():
             await asyncio.sleep(self.poll_interval_seconds)
             return
 

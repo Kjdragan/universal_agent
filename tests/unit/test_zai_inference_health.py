@@ -570,3 +570,142 @@ def test_old_cross_loop_conflict_does_not_rewarn(isolated_state):
         findings = run_invariants({})
     matches = [f for f in findings if f.metric_key == "zai_inference_health"]
     assert matches == []
+
+
+# ── R1: weekly_limit_exhausted (1310 auto-pause) triggered condition ───────
+
+@pytest.fixture
+def isolated_zai_control(tmp_path, monkeypatch):
+    from universal_agent.services import zai_control
+
+    monkeypatch.setenv("UA_ZAI_CONTROL_PATH", str(tmp_path / "zai_control.json"))
+    zai_control._invalidate_cache()
+    yield
+    zai_control._invalidate_cache()
+
+
+def test_fresh_weekly_exhaustion_stamp_fires_critical(isolated_state, isolated_zai_control):
+    from universal_agent.services import zai_control
+
+    reset_epoch = time.time() + 3600  # 1h from now — still in the future
+    zai_control.apply_level(
+        4, ttl_seconds=3600, reason="zai_1310_weekly_limit_exhausted (reset test)",
+        by="auto_1310_detector",
+    )
+    data = zai_control.read_control()
+    data["weekly_exhaustion"] = {
+        "last_seen_at": time.time(),
+        "reset_at_epoch": reset_epoch,
+        "source": "test",
+    }
+    zai_control.write_control(data)
+    zai_control._invalidate_cache()
+
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    obs = matches[0].observed_value or {}
+    assert "weekly_limit_exhausted" in (obs.get("triggered_conditions") or [])
+    assert obs.get("weekly_limit_exhausted") is True
+    assert obs.get("weekly_limit_reset_at_utc")
+    assert obs.get("weekly_limit_reset_at_america_chicago")
+    assert "WEEKLY/MONTHLY QUOTA EXHAUSTED" in (matches[0].recommendation or "")
+
+
+def test_stale_weekly_exhaustion_stamp_does_not_fire(isolated_state, isolated_zai_control):
+    """Reset time already in the past → the wall has cleared; not fresh
+    pressure, must not fire."""
+    from universal_agent.services import zai_control
+
+    data = zai_control.read_control()
+    data["weekly_exhaustion"] = {
+        "last_seen_at": time.time() - 60,
+        "reset_at_epoch": time.time() - 3600,  # reset already passed
+        "source": "test",
+    }
+    zai_control.write_control(data)
+    zai_control._invalidate_cache()
+
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    if matches:
+        triggered = (matches[0].observed_value or {}).get("triggered_conditions") or []
+        assert "weekly_limit_exhausted" not in triggered
+    else:
+        assert matches == []
+
+
+def test_old_weekly_exhaustion_stamp_outside_48h_does_not_fire(isolated_state, isolated_zai_control):
+    """last_seen_at older than the 48h freshness window → stale, even with a
+    reset time nominally in the future (a stuck/never-cleared stamp)."""
+    from universal_agent.services import zai_control
+
+    data = zai_control.read_control()
+    data["weekly_exhaustion"] = {
+        "last_seen_at": time.time() - (49 * 3600),  # >48h ago
+        "reset_at_epoch": time.time() + 3600,
+        "source": "test",
+    }
+    zai_control.write_control(data)
+    zai_control._invalidate_cache()
+
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    if matches:
+        triggered = (matches[0].observed_value or {}).get("triggered_conditions") or []
+        assert "weekly_limit_exhausted" not in triggered
+    else:
+        assert matches == []
+
+
+def test_unparseable_1310_trip_still_fires_critical_via_fallback_stamp(
+    isolated_state, isolated_zai_control
+):
+    """SERIOUS fix, end-to-end: an unparseable-body 1310 trip stamps
+    `reset_at_epoch = now + fallback_ttl` (not None), so the invariant must
+    still fire critical for it — proving the alert-silent-fallback bug is
+    closed all the way through to the alerting condition."""
+    from universal_agent.services import zai_control
+
+    zai_control.handle_weekly_exhaustion("no timestamp in here at all", source="test")
+
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    obs = matches[0].observed_value or {}
+    assert "weekly_limit_exhausted" in (obs.get("triggered_conditions") or [])
+    assert obs.get("weekly_limit_exhausted") is True
+
+
+def test_none_reset_at_epoch_stamp_does_not_crash_invariant(
+    isolated_state, isolated_zai_control
+):
+    """Defensive guard (SERIOUS fix): a `weekly_exhaustion` stamp with a
+    literal `reset_at_epoch: None` (e.g. written by an older/other code
+    path) must be treated as not-fresh — never raise a TypeError out of
+    `_scan_weekly_exhaustion` / the invariant."""
+    from universal_agent.services import zai_control
+
+    data = zai_control.read_control()
+    data["weekly_exhaustion"] = {
+        "last_seen_at": time.time(),
+        "reset_at_epoch": None,
+        "source": "test",
+    }
+    zai_control.write_control(data)
+    zai_control._invalidate_cache()
+
+    with _mock_process_count(10):
+        findings = run_invariants({})  # must not raise
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    if matches:
+        triggered = (matches[0].observed_value or {}).get("triggered_conditions") or []
+        assert "weekly_limit_exhausted" not in triggered
+    else:
+        assert matches == []
