@@ -94,7 +94,7 @@ Full rationale for each item lives in the exhibit. Status values: `todo`, `in-pr
 | ID | Recommendation | Status (2026-07-18) |
 |---|---|---|
 | R1 | Recognize error code 1310 as *weekly exhaustion* (not FUP, not gradient-429): stop retry ladders, auto-set the existing L4 global pause with TTL parsed from the reset timestamp in the error body, alert once | **in-progress** |
-| R2 | Mission-Control intelligence: delta-gate (stable evidence signature) + ~60-min readout floor | **in-progress** |
+| R2 | Mission-Control intelligence: delta-gate (stable evidence signature) + ~60-min readout floor | **shipped (branch `claude/zai-r2-mc-delta-gate`, PR pending)** |
 | R3 | Self-calibrating weekly budget meter over the four lanes: week-to-date rollup, observed-cap learned from each 1310 sighting (no fixed cap number needed), dashboard tile, auto-escalate `zai_control` levels at % thresholds | **in-progress** |
 | R4 | Context diet for principals (conservative): slim `memory/HEARTBEAT.md` via lazy-loaded section references, conditional `force_complex` on triage-only ticks, VP prompt boilerplate audit | **in-progress** |
 | R5 | Thinking hygiene on glm-5.2 call sites (stale "5.1 has no thinking" comments; `/goal` evaluator per-turn thinking; cap or disable + measure) | todo |

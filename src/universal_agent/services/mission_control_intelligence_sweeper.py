@@ -119,9 +119,22 @@ class SweeperConfig:
     # demand). Paired with the new dormancy gate (UA_MISSION_CONTROL_24_7) which
     # skips the LLM passes 10pm-6am Houston. Code defaults, NOT .env (deploys
     # wipe the VPS .env).
+    #
+    # 2026-07-18: `tier2_floor_seconds` raised 600 -> 3600 (10 min -> 60 min).
+    # Root cause was `mission_control_tier1.py::evidence_signature` including
+    # `updated_at` in its task/event identity components, so the signature
+    # churned on nearly every sweep and tier-1 cascaded tier-2 via the
+    # `tier1_synthesized` trigger far more often than intended (measured
+    # ~620 tier-2 fires/wk, ~76M tokens/wk). With that signature bug fixed in
+    # the same change, tier-1 now genuinely gates on state transitions, but
+    # the tier-2 floor is raised too as an independent hard backstop so
+    # readout cadence cannot exceed hourly regardless of cascade noise.
+    # Floor == ceiling collapses tier-2 to "at most, and at least, once per
+    # hour" — operator-approved 60-min staleness; the Refresh button still
+    # bypasses cadence entirely on demand.
     tier1_floor_seconds: float = 600.0
     tier1_ceiling_seconds: float = 3600.0
-    tier2_floor_seconds: float = 600.0
+    tier2_floor_seconds: float = 3600.0
     tier2_ceiling_seconds: float = 3600.0
     lane_concurrency: int = 1
     auto_remediation_enabled: bool = False
@@ -133,7 +146,7 @@ class SweeperConfig:
             interval_seconds=_get_float_env("UA_MISSION_CONTROL_SWEEPER_INTERVAL_S", 60.0),
             tier1_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_FLOOR_S", 600.0),
             tier1_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_CEILING_S", 3600.0),
-            tier2_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_FLOOR_S", 600.0),
+            tier2_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_FLOOR_S", 3600.0),
             tier2_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_CEILING_S", 3600.0),
             lane_concurrency=max(1, _get_int_env("UA_MISSION_CONTROL_LANE_CONCURRENCY", 1)),
             auto_remediation_enabled=(os.getenv("UA_MISSION_CONTROL_AUTO_REMEDIATION") or "0").strip().lower()

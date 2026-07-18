@@ -166,6 +166,46 @@ def test_evidence_signature_changes_on_task_state_change(tmp_path):
     assert evidence_signature(e1) != evidence_signature(e2)
 
 
+def test_evidence_signature_stable_on_updated_at_only_touch(tmp_path):
+    """Regression for the 2026-07-18 delta-gate fix: a metadata-only write
+    that bumps `updated_at` on a task row or event row (status/severity
+    unchanged) must NOT change the signature — this is the false-positive
+    drift that previously defeated tier-1's floor/ceiling gate."""
+    e1 = {
+        "active_or_attention_tasks": [
+            {"task_id": "t1", "status": "in_progress", "updated_at": "2026-07-18T00:00:00"}
+        ],
+        "recent_completed_tasks": [
+            {"task_id": "t2", "status": "completed", "updated_at": "2026-07-17T00:00:00"}
+        ],
+        "recent_events": [{"id": 42, "severity": "warning", "updated_at": "2026-07-18T00:00:00"}],
+        "tier0_tiles": [],
+        "prior_live_cards": [],
+    }
+    e2 = {
+        "active_or_attention_tasks": [
+            {"task_id": "t1", "status": "in_progress", "updated_at": "2026-07-18T00:05:00"}
+        ],
+        "recent_completed_tasks": [
+            {"task_id": "t2", "status": "completed", "updated_at": "2026-07-17T00:05:00"}
+        ],
+        "recent_events": [{"id": 42, "severity": "warning", "updated_at": "2026-07-18T00:05:00"}],
+        "tier0_tiles": [],
+        "prior_live_cards": [],
+    }
+    # Only updated_at moved on every component -> same signature.
+    assert evidence_signature(e1) == evidence_signature(e2)
+
+    # A genuine status change on the same task still changes the signature.
+    e3 = {
+        **e2,
+        "active_or_attention_tasks": [
+            {"task_id": "t1", "status": "blocked", "updated_at": "2026-07-18T00:05:00"}
+        ],
+    }
+    assert evidence_signature(e1) != evidence_signature(e3)
+
+
 # ── LLM payload parsing ────────────────────────────────────────────────
 
 

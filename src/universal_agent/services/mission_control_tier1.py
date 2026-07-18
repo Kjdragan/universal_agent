@@ -254,19 +254,31 @@ def evidence_signature(evidence: dict[str, Any]) -> str:
     the bundle (task_id, event id, tile_id+state, subject_id+severity).
     Two evidence bundles with the same identifying set hash equal even
     if one was collected a second later than the other.
+
+    2026-07-18 fix: the active/completed-task and event components
+    previously included `updated_at`, which contradicted this exact
+    docstring — `task_hub_items.updated_at` bumps on ANY row write
+    (metadata touches, seizure bookkeeping), not only meaningful status
+    changes, so the signature churned on nearly every sweep and defeated
+    delta-gating (tier-1 fired ~every eligible tick instead of only on
+    genuine state transitions). `updated_at` is now dropped from those
+    three components; task/completed identity is `task_id:status`, event
+    identity is `id:severity` (events are append-only, so `id` alone is a
+    stable, sufficient identity key). Implementation now matches the
+    contract stated above.
     """
     components = []
 
     for task in evidence.get("active_or_attention_tasks", []):
-        components.append(f"task:{task.get('task_id')}:{task.get('status')}:{task.get('updated_at')}")
+        components.append(f"task:{task.get('task_id')}:{task.get('status')}")
     for task in evidence.get("recent_completed_tasks", []):
-        components.append(f"completed:{task.get('task_id')}:{task.get('status')}:{task.get('updated_at')}")
+        components.append(f"completed:{task.get('task_id')}:{task.get('status')}")
     for mission in evidence.get("mission_summaries", []):
         components.append(
             f"mission:{mission.get('workstream_id')}:{mission.get('mission_status')}:{mission.get('current_child_task_id')}"
         )
     for event in evidence.get("recent_events", []):
-        components.append(f"event:{event.get('id')}:{event.get('severity')}:{event.get('updated_at')}")
+        components.append(f"event:{event.get('id')}:{event.get('severity')}")
     for tile in evidence.get("tier0_tiles", []):
         components.append(f"tile:{tile.get('tile_id')}:{tile.get('current_state')}:{tile.get('last_signature')}")
     for card in evidence.get("prior_live_cards", []):
