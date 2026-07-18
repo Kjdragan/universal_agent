@@ -208,6 +208,47 @@ def test_unknown_level_is_noop(isolated_control):
     assert after.get("intervention_level") == before.get("intervention_level") == 2
 
 
+def test_apply_level_preserves_weekly_exhaustion_stamp(isolated_control):
+    """apply_level wholesale-replaces tier_overrides/tier_pause/global_pause,
+    but must carry over the weekly_exhaustion stamp (R1) — otherwise any
+    level change after a real 1310 silently erases the operator/invariant's
+    visibility into it."""
+    data = zai_control.read_control()
+    data["weekly_exhaustion"] = {
+        "last_seen_at": 111.0,
+        "reset_at_epoch": 222.0,
+        "source": "test",
+    }
+    zai_control.write_control(data)
+    zai_control._invalidate_cache()
+
+    state = zai_control.apply_level(2, reason="unrelated level change")
+    assert state["intervention_level"] == 2
+    assert state["weekly_exhaustion"] == {
+        "last_seen_at": 111.0,
+        "reset_at_epoch": 222.0,
+        "source": "test",
+    }
+
+
+def test_apply_level_preserves_auto_escalation_stamp(isolated_control):
+    """Same allowlist carry-over, for the R3 auto_escalation stamp."""
+    data = zai_control.read_control()
+    data["auto_escalation"] = {
+        "level": 2,
+        "baseline_level": 0,
+        "baseline_updated_by": None,
+        "set_at": 333.0,
+    }
+    zai_control.write_control(data)
+    zai_control._invalidate_cache()
+
+    state = zai_control.apply_level(1, reason="unrelated level change")
+    assert state["intervention_level"] == 1
+    assert state["auto_escalation"]["level"] == 2
+    assert state["auto_escalation"]["baseline_level"] == 0
+
+
 def test_clear_all_returns_to_normal(isolated_control):
     zai_control.apply_level(4)
     zai_control._invalidate_cache()
@@ -398,6 +439,18 @@ def test_handle_weekly_exhaustion_stamps_weekly_exhaustion_marker(isolated_contr
     assert weekly["source"] == "test:stamp-source"
     assert isinstance(weekly["last_seen_at"], float)
     assert isinstance(weekly["reset_at_epoch"], float)
+
+
+def test_handle_weekly_exhaustion_fallback_stamps_integer_valued_epoch(isolated_control):
+    """An unparseable 1310 body falls back to `now + fallback_ttl` for
+    reset_at_epoch — must be int()-truncated (still a float type) so week
+    rows keyed on it never drift across runs from a fractional-second
+    artifact of `now`."""
+    zai_control.handle_weekly_exhaustion("no timestamp in here at all", source="test")
+    data = zai_control.read_control()
+    reset_at_epoch = data["weekly_exhaustion"]["reset_at_epoch"]
+    assert isinstance(reset_at_epoch, float)
+    assert reset_at_epoch == float(int(reset_at_epoch))
 
 
 def test_handle_weekly_exhaustion_fails_open_never_raises(isolated_control, monkeypatch):

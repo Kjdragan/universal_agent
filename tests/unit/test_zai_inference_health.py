@@ -709,3 +709,104 @@ def test_none_reset_at_epoch_stamp_does_not_crash_invariant(
         assert "weekly_limit_exhausted" not in triggered
     else:
         assert matches == []
+
+
+# ── R3 fix 6: weekly-budget snapshot staleness guard ────────────────────────
+# weekly_budget_high/critical must additionally require the snapshot be
+# CURRENT: last_computed_at fresh (< 3x meter cadence) AND week_anchor_epoch
+# covers the wall-clock-current week. A frozen or stale-rollover snapshot
+# must stay quiet rather than alarming on a number the meter isn't updating.
+
+
+def _mock_weekly_budget(**fields):
+    """Patch `_scan_weekly_budget` (the invariant's own thin wrapper) to
+    return a fixed snapshot, isolating these tests from the real DB/meter."""
+    base = {
+        "available": True,
+        "pct": 0.0,
+        "observed_cap": 400_000_000,
+        "week_to_date_tokens": 0,
+        "calibrated_from": "seed_estimate",
+        "last_escalation_level": 0,
+        "last_computed_at": time.time(),
+        "week_anchor_epoch": time.time() - 100,
+        "reset_at_epoch": time.time() + 100,
+    }
+    base.update(fields)
+    return patch(
+        "universal_agent.services.invariants.zai_inference_health._scan_weekly_budget",
+        return_value=base,
+    )
+
+
+def test_weekly_budget_critical_fires_when_snapshot_is_current(isolated_state):
+    with _mock_process_count(10), _mock_weekly_budget(pct=0.97):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    obs = matches[0].observed_value or {}
+    assert "weekly_budget_critical" in (obs.get("triggered_conditions") or [])
+    assert obs.get("weekly_budget_current") is True
+
+
+def test_weekly_budget_high_fires_when_snapshot_is_current(isolated_state):
+    with _mock_process_count(10), _mock_weekly_budget(pct=0.90):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "warn"
+    obs = matches[0].observed_value or {}
+    assert "weekly_budget_high" in (obs.get("triggered_conditions") or [])
+
+
+def test_weekly_budget_stale_last_computed_at_suppressed(isolated_state):
+    """The meter stopped running (last_computed_at frozen well past 3x its
+    ~10 min cadence = 1800s) — even a hot pct must stay quiet."""
+    now = time.time()
+    with _mock_process_count(10), _mock_weekly_budget(
+        pct=0.99, last_computed_at=now - 3601, week_anchor_epoch=now - 100
+    ):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    if matches:
+        triggered = (matches[0].observed_value or {}).get("triggered_conditions") or []
+        assert "weekly_budget_critical" not in triggered
+        assert "weekly_budget_high" not in triggered
+    else:
+        assert matches == []
+
+
+def test_weekly_budget_wrong_week_anchor_suppressed(isolated_state):
+    """A snapshot from a MISSED rollover — last_computed_at is fresh, but
+    week_anchor_epoch is not the current wall-clock week — must stay quiet
+    even with a hot pct."""
+    from universal_agent.services import zai_weekly_budget as zwb
+
+    now = time.time()
+    stale_anchor = now - zwb.WEEK_SECONDS - 3600  # a fully elapsed prior week
+    with _mock_process_count(10), _mock_weekly_budget(
+        pct=0.99, last_computed_at=now, week_anchor_epoch=stale_anchor
+    ):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    if matches:
+        triggered = (matches[0].observed_value or {}).get("triggered_conditions") or []
+        assert "weekly_budget_critical" not in triggered
+        assert "weekly_budget_high" not in triggered
+    else:
+        assert matches == []
+
+
+def test_weekly_budget_just_inside_staleness_window_still_fires(isolated_state):
+    """Boundary sanity: a snapshot computed just under the 1800s staleness
+    window, in the current week, still fires normally."""
+    now = time.time()
+    with _mock_process_count(10), _mock_weekly_budget(
+        pct=0.97, last_computed_at=now - 1500, week_anchor_epoch=now - 100
+    ):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    obs = matches[0].observed_value or {}
+    assert "weekly_budget_critical" in (obs.get("triggered_conditions") or [])

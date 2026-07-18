@@ -27,6 +27,17 @@ throughput or — worse — the subscription itself:
    ``WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS`` (48h) AND the reset time is
    still in the future. Includes the reset time in both UTC and
    America/Chicago so the operator knows exactly when it self-clears.
+7. Weekly-budget LEADING signal (``services/zai_weekly_budget.py``,
+   R3, 2026-07-19): week-to-date ZAI spend vs a self-calibrating learned
+   observed_cap → ``weekly_budget_high`` WARN at ≥85%, ``weekly_budget_critical``
+   CRITICAL at ≥95%, no grace period. Composes with condition 6 rather than
+   duplicating it: condition 6 fires on an ACTUAL 1310 wall already hit;
+   condition 7 fires BEFORE the account gets there, so the operator (and the
+   auto-escalation ladder in ``zai_control.py``) get advance warning. Gated
+   on ``_weekly_budget_is_current`` — a snapshot whose meter stopped running
+   (``last_computed_at`` stale by 3x the ~10 min cadence) or whose
+   ``week_anchor_epoch`` isn't the CURRENT week (a missed-rollover leftover)
+   stays quiet rather than alarming on a frozen/stale pct.
 
 One invariant emits one finding listing every triggered condition in
 `observed_value.triggered_conditions` so the operator gets the full picture
@@ -91,6 +102,24 @@ WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS = int(
 # Cap on how many events we'll read at the tail. JSONL file is line-trimmed by
 # zai_observability so this is a soft belt-and-suspenders bound.
 EVENTS_MAX_READ = int(os.getenv("UA_ZAI_EVENTS_MAX_READ", "5000"))
+
+# R3 — self-calibrating weekly budget meter (services/zai_weekly_budget.py).
+# Composes with (never duplicates/clobbers) condition 6 above: that condition
+# fires on an ACTUAL 1310 wall already hit; these fire on the LEADING signal
+# (week-to-date vs the learned observed_cap) before the account gets there.
+WEEKLY_BUDGET_WARN_PCT = float(os.getenv("UA_ZAI_WEEKLY_BUDGET_WARN_PCT", "0.85"))
+WEEKLY_BUDGET_CRITICAL_PCT = float(os.getenv("UA_ZAI_WEEKLY_BUDGET_CRITICAL_PCT", "0.95"))
+# The weekly-budget meter (`zai_weekly_budget.py::run_meter`) runs every ~10
+# min from `proactive_health_timer_main.py`. A snapshot whose
+# `last_computed_at` is older than 3x that cadence means the meter itself has
+# stopped running — alarming on a frozen pct is worse than staying quiet
+# about it (the meter's own health is a separate concern from the budget it
+# reports). Module constant so the cadence assumption is visible and
+# overridable in one place.
+WEEKLY_BUDGET_METER_CADENCE_SECONDS = int(
+    os.getenv("UA_ZAI_WEEKLY_BUDGET_METER_CADENCE_SECONDS", "600")
+)
+WEEKLY_BUDGET_STALENESS_WINDOW_SECONDS = WEEKLY_BUDGET_METER_CADENCE_SECONDS * 3
 
 
 def _events_path() -> Path:
@@ -247,6 +276,55 @@ def _scan_weekly_exhaustion(now: float) -> tuple[bool, Optional[float]]:
         return False, None
 
 
+def _weekly_budget_is_current(weekly_budget: Dict[str, Any], now: float) -> bool:
+    """Guard against alerting on a stale/frozen weekly-budget snapshot.
+
+    Requires BOTH:
+    - ``last_computed_at`` within ``WEEKLY_BUDGET_STALENESS_WINDOW_SECONDS``
+      (3x the meter's ~10 min cadence) of `now` — an older snapshot means the
+      meter itself stopped running, so the pct it reports is not live.
+    - ``week_anchor_epoch`` covers the CURRENT wall-clock week (``anchor <=
+      now < anchor + WEEK_SECONDS``) — a stale row surviving from a missed
+      week rollover must stay quiet even if its pct happens to still read
+      high.
+
+    Fails CLOSED (returns False) on any missing/unparseable field or
+    internal error — never raises; mirrors every other read in this module.
+    """
+    try:
+        last_computed_at = weekly_budget.get("last_computed_at")
+        if last_computed_at is None:
+            return False
+        if (now - float(last_computed_at)) >= WEEKLY_BUDGET_STALENESS_WINDOW_SECONDS:
+            return False
+
+        week_anchor_epoch = weekly_budget.get("week_anchor_epoch")
+        if week_anchor_epoch is None:
+            return False
+        week_anchor_epoch = float(week_anchor_epoch)
+
+        from universal_agent.services import zai_weekly_budget
+
+        if not (week_anchor_epoch <= now < week_anchor_epoch + zai_weekly_budget.WEEK_SECONDS):
+            return False
+        return True
+    except Exception:  # noqa: BLE001 — fail closed: an unreadable snapshot is not "current"
+        return False
+
+
+def _scan_weekly_budget() -> Dict[str, Any]:
+    """Read-only snapshot from `services/zai_weekly_budget.get_status_snapshot`
+    (fail-open — a missing DB / table / any error yields ``{"available":
+    False}``, never raises). Kept as a thin wrapper (rather than inlining the
+    import) so tests can patch it directly."""
+    try:
+        from universal_agent.services import zai_weekly_budget
+
+        return zai_weekly_budget.get_status_snapshot()
+    except Exception:  # noqa: BLE001 — fail open
+        return {"available": False}
+
+
 def _count_ua_processes() -> int:
     """Count UA-related Python processes via pgrep.
 
@@ -311,6 +389,9 @@ def _count_ua_processes() -> int:
             "events_429_critical_count": EVENTS_429_CRITICAL_COUNT,
             "events_fup_window_seconds": EVENTS_FUP_WINDOW_SECONDS,
             "weekly_exhaustion_fresh_window_seconds": WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS,
+            "weekly_budget_warn_pct": WEEKLY_BUDGET_WARN_PCT,
+            "weekly_budget_critical_pct": WEEKLY_BUDGET_CRITICAL_PCT,
+            "weekly_budget_staleness_window_seconds": WEEKLY_BUDGET_STALENESS_WINDOW_SECONDS,
         },
     },
 )
@@ -330,15 +411,36 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     events_scan = _scan_recent_events(now)
     weekly_exhaustion_active, weekly_exhaustion_reset_epoch = _scan_weekly_exhaustion(now)
 
+    weekly_budget = _scan_weekly_budget()
+    weekly_budget_available = bool(weekly_budget.get("available"))
+    weekly_budget_current = weekly_budget_available and _weekly_budget_is_current(
+        weekly_budget, now
+    )
+    weekly_budget_pct = float(weekly_budget.get("pct") or 0.0) if weekly_budget_current else None
+    weekly_budget_critical_active = (
+        weekly_budget_current
+        and weekly_budget_pct is not None
+        and weekly_budget_pct >= WEEKLY_BUDGET_CRITICAL_PCT
+    )
+    weekly_budget_high_active = (
+        weekly_budget_current
+        and not weekly_budget_critical_active
+        and weekly_budget_pct is not None
+        and weekly_budget_pct >= WEEKLY_BUDGET_WARN_PCT
+    )
+
     # If nothing upstream has any data AND process count is fine, stay quiet.
-    # A fresh weekly_exhaustion stamp overrides this — a 1310 hit on a cold
-    # process (empty snapshot, empty events) must still alert.
+    # A fresh weekly_exhaustion stamp OR a hot weekly-budget pct overrides this
+    # — a 1310 hit (or a budget breach) on a cold process (empty snapshot,
+    # empty events) must still alert.
     if (
         snapshot is None
         and events_scan["events_429_count"] == 0
         and events_scan["events_fup_count"] == 0
         and process_count <= PROCESS_COUNT_SOFT_LIMIT
         and not weekly_exhaustion_active
+        and not weekly_budget_critical_active
+        and not weekly_budget_high_active
     ):
         return None
 
@@ -500,6 +602,18 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             triggered.append("weekly_limit_exhausted")
         severity = "critical"
 
+    # Condition 7: the LEADING weekly-budget signal (services/zai_weekly_budget.py)
+    # — week-to-date spend vs the learned observed_cap, computed above alongside
+    # the early-quiet gate. Composes with condition 6: that fires on an ACTUAL
+    # 1310 wall already hit; this fires BEFORE the account gets there. CRITICAL
+    # at ≥95% (about to hit the wall), WARN at ≥85% (early warning) — mutually
+    # exclusive (critical wins) so exactly one of the two ever appears.
+    if weekly_budget_critical_active:
+        triggered.append("weekly_budget_critical")
+        severity = "critical"
+    elif weekly_budget_high_active:
+        triggered.append("weekly_budget_high")
+
     if not triggered:
         return None
 
@@ -512,6 +626,25 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         weekly_limit_reset_at_america_chicago = datetime.fromtimestamp(
             weekly_exhaustion_reset_epoch, tz=ZoneInfo("America/Chicago")
         ).isoformat()
+
+    weekly_budget_reset_at_utc = None
+    weekly_budget_reset_at_america_chicago = None
+    weekly_budget_days_to_reset = None
+    weekly_budget_reset_epoch = weekly_budget.get("reset_at_epoch")
+    if weekly_budget_reset_epoch is not None:
+        try:
+            weekly_budget_reset_epoch = float(weekly_budget_reset_epoch)
+            weekly_budget_reset_at_utc = datetime.fromtimestamp(
+                weekly_budget_reset_epoch, tz=timezone.utc
+            ).isoformat()
+            weekly_budget_reset_at_america_chicago = datetime.fromtimestamp(
+                weekly_budget_reset_epoch, tz=ZoneInfo("America/Chicago")
+            ).isoformat()
+            weekly_budget_days_to_reset = round(
+                max(0.0, weekly_budget_reset_epoch - now) / 86400.0, 1
+            )
+        except (TypeError, ValueError, OSError, OverflowError):
+            pass
 
     observed_value = {
         "triggered_conditions": triggered,
@@ -556,6 +689,17 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "events_last_429_caller": events_scan["events_last_429_caller"],
         "events_last_fup_caller": events_scan["events_last_fup_caller"],
         "events_last_fup_snippet": events_scan["events_last_fup_snippet"],
+        # R3 — leading weekly-budget signal (services/zai_weekly_budget.py).
+        "weekly_budget_available": weekly_budget_available,
+        "weekly_budget_current": weekly_budget_current,
+        "weekly_budget_pct": weekly_budget_pct,
+        "weekly_budget_observed_cap": weekly_budget.get("observed_cap"),
+        "weekly_budget_week_to_date_tokens": weekly_budget.get("week_to_date_tokens"),
+        "weekly_budget_calibrated_from": weekly_budget.get("calibrated_from"),
+        "weekly_budget_last_escalation_level": weekly_budget.get("last_escalation_level"),
+        "weekly_budget_reset_at_utc": weekly_budget_reset_at_utc,
+        "weekly_budget_reset_at_america_chicago": weekly_budget_reset_at_america_chicago,
+        "weekly_budget_days_to_reset": weekly_budget_days_to_reset,
     }
 
     # Build a human-readable message that names the worst-cause first.
@@ -605,6 +749,29 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"succeeded_after_retry={observed_value['total_succeeded_after_retry']}). "
             "The limiter is retrying but real work is failing — pressure exceeds "
             "what the per-tier caps can absorb."
+        )
+    elif weekly_budget_critical_active:
+        headline = (
+            f"ZAI WEEKLY BUDGET CRITICAL — {(weekly_budget_pct or 0.0) * 100:.0f}% of the "
+            f"learned observed_cap ({observed_value['weekly_budget_observed_cap']} tokens, "
+            f"calibrated_from={observed_value['weekly_budget_calibrated_from']}) consumed "
+            f"week-to-date ({observed_value['weekly_budget_week_to_date_tokens']} tokens). "
+            "About to hit the ZAI weekly/monthly quota wall (error 1310). Auto-escalation "
+            f"(services/zai_control.py, by=\"auto:weekly-budget\") is at level "
+            f"{observed_value['weekly_budget_last_escalation_level']}; resets "
+            f"{weekly_budget_reset_at_america_chicago or 'unknown'} America/Chicago "
+            f"({weekly_budget_days_to_reset if weekly_budget_days_to_reset is not None else '?'} "
+            "days out)."
+        )
+    elif weekly_budget_high_active:
+        headline = (
+            f"ZAI weekly budget high (WARN) — {(weekly_budget_pct or 0.0) * 100:.0f}% of the "
+            f"learned observed_cap ({observed_value['weekly_budget_observed_cap']} tokens, "
+            f"calibrated_from={observed_value['weekly_budget_calibrated_from']}) consumed "
+            f"week-to-date. Auto-escalation is at level "
+            f"{observed_value['weekly_budget_last_escalation_level']}; resets "
+            f"{weekly_budget_reset_at_america_chicago or 'unknown'} America/Chicago. No action "
+            "needed unless this climbs toward 95%."
         )
     elif events_429_burst and not limiter_managing:
         # Neutral reporting: name the top caller(s) by 429 count WITHOUT
@@ -703,7 +870,8 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"UA python proc count ≤ {PROCESS_COUNT_SOFT_LIMIT} AND "
             f"events-file 429s < {EVENTS_429_CRITICAL_COUNT} in last "
             f"{EVENTS_429_WINDOW_SECONDS // 60} min AND "
-            f"events-file FUP count = 0 in last {EVENTS_FUP_WINDOW_SECONDS // 60} min"
+            f"events-file FUP count = 0 in last {EVENTS_FUP_WINDOW_SECONDS // 60} min AND "
+            f"weekly_budget pct < {WEEKLY_BUDGET_WARN_PCT * 100:.0f}% of observed_cap"
         ),
         "message": headline,
         "severity_override": severity,

@@ -262,13 +262,33 @@ def current_state() -> dict[str, Any]:
 
 # ── Writers (used by the gateway control endpoint) ──────────────────────────
 
+# apply_level replaces the FULL control dict with the level preset
+# (tier_overrides / tier_pause / global_pause) — that's what makes moving
+# between levels deterministic. But it means any OTHER stamp living
+# alongside those keys (written by a merge-writer elsewhere in this module)
+# is silently dropped unless explicitly carried over. This is the allowlist
+# of such stamps that must survive an apply_level call: `weekly_exhaustion`
+# (R1, `handle_weekly_exhaustion`) and `auto_escalation` (R3,
+# `services/zai_weekly_budget.py`'s stateless-release marker). Keep this
+# list explicit and small — anything not named here is intentionally NOT
+# preserved across a level change.
+_APPLY_LEVEL_STAMP_KEYS = ("weekly_exhaustion", "auto_escalation")
+
+
 def apply_level(level: int, *, ttl_seconds: Optional[float] = None,
                 reason: str = "", by: str = "dashboard") -> dict[str, Any]:
     """Write the full preset for an intervention level (0..4). Returns the
-    written control dict. Unknown level → no-op, returns current state."""
+    written control dict. Unknown level → no-op, returns current state.
+
+    Carries over any existing stamp keys in ``_APPLY_LEVEL_STAMP_KEYS``
+    (currently ``weekly_exhaustion`` and ``auto_escalation``) from the
+    control file onto the new preset before writing — otherwise this
+    wholesale replace would silently erase them on every level change.
+    """
     if level not in LEVELS:
         logger.warning("zai_control: unknown intervention level %r — ignored", level)
         return read_control()
+    existing = read_control()
     preset = json.loads(json.dumps(LEVELS[level]))  # deep copy
     gp = preset.get("global_pause") or {"active": False}
     if gp.get("active"):
@@ -279,6 +299,9 @@ def apply_level(level: int, *, ttl_seconds: Optional[float] = None,
     preset["global_pause"] = gp
     preset["intervention_level"] = level
     preset["updated_by"] = by
+    for key in _APPLY_LEVEL_STAMP_KEYS:
+        if key in existing:
+            preset[key] = existing[key]
     write_control(preset)
     return read_control(use_cache=False)
 
@@ -375,8 +398,10 @@ def handle_weekly_exhaustion(error_text: str, *, source: str) -> Optional[dict[s
             # Stamp a future reset so the fresh-AND-future-reset alerting
             # condition in zai_inference_health can still fire — a bare
             # `None` would leave the invariant permanently unable to detect
-            # this trip (see docstring above).
-            reset_epoch = now + ttl
+            # this trip (see docstring above). int()-truncated (still a
+            # float) so week rows keyed on this value never drift from a
+            # fractional-second artifact of `now`.
+            reset_epoch = float(int(now + ttl))
         else:
             reset_display = datetime.fromtimestamp(
                 reset_epoch, tz=ZoneInfo("UTC")

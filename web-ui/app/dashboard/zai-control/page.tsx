@@ -47,6 +47,20 @@ type StatusPayload = {
     last_24h?: number | null;
     total_since_start?: number | null;
   };
+  // R3 — self-calibrating weekly ZAI budget meter (services/zai_weekly_budget.py).
+  weekly_budget?: {
+    available?: boolean;
+    week_anchor_epoch?: number | null;
+    reset_at_epoch?: number | null;
+    observed_cap?: number | null;
+    week_to_date_tokens?: number | null;
+    pct?: number | null;
+    calibrated_from?: string | null;
+    last_escalation_level?: number | null;
+    last_escalated_at?: number | null;
+    last_computed_at?: number | null;
+    updated_at?: string | null;
+  };
   error?: string;
 };
 
@@ -130,6 +144,28 @@ function pctColor(pct: number): string {
   if (pct >= 20) return "text-amber-500";
   if (pct > 0) return "text-yellow-400";
   return "text-emerald-500";
+}
+
+// Weekly-budget bar color — thresholds mirror the auto-escalation ladder
+// (services/zai_weekly_budget.py: L2 85% / L3 95%).
+function budgetBarColor(pct: number): string {
+  if (pct >= 95) return "bg-red-500";
+  if (pct >= 85) return "bg-amber-500";
+  if (pct >= 70) return "bg-yellow-400";
+  return "bg-emerald-500";
+}
+
+function fmtChicago(epochSeconds?: number | null): string {
+  if (!epochSeconds) return "—";
+  try {
+    return `${new Date(epochSeconds * 1000).toLocaleString("en-US", {
+      timeZone: "America/Chicago",
+      dateStyle: "medium",
+      timeStyle: "short",
+    })} CT`;
+  } catch {
+    return "—";
+  }
 }
 
 // Per-process HEALTH badge. GREEN ("ok") means a real last-run success AND a deep
@@ -898,6 +934,48 @@ export default function ZaiControlPage() {
             </div>
           </div>
         ) : null}
+      </section>
+
+      {/* Weekly budget meter (R3 — services/zai_weekly_budget.py) */}
+      <section className="rounded-md border border-border bg-card p-4">
+        <h2 className="mb-3 text-lg font-medium">Weekly budget</h2>
+        {status?.weekly_budget?.available ? (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <div>
+                <span className="text-2xl font-semibold">{fmtTok(status.weekly_budget.week_to_date_tokens)}</span>
+                <span className="text-muted-foreground"> / {fmtTok(status.weekly_budget.observed_cap)} tokens</span>
+                {status.weekly_budget.calibrated_from === "seed_estimate" ? (
+                  <span
+                    className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500"
+                    title="observed_cap is a seeded estimate — will be replaced automatically at the next real 1310 sighting"
+                  >
+                    estimate
+                  </span>
+                ) : null}
+              </div>
+              <div className="text-right text-xs text-muted-foreground">
+                auto-escalation level {status.weekly_budget.last_escalation_level ?? 0}
+                <br />
+                resets {fmtChicago(status.weekly_budget.reset_at_epoch)}
+              </div>
+            </div>
+            <div className="mt-2 h-2 w-full overflow-hidden rounded bg-muted">
+              <div
+                className={`h-full ${budgetBarColor(Math.round((status.weekly_budget.pct ?? 0) * 100))}`}
+                style={{ width: `${Math.min(100, Math.round((status.weekly_budget.pct ?? 0) * 100))}%` }}
+              />
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {Math.round((status.weekly_budget.pct ?? 0) * 100)}% of observed cap · calibrated from{" "}
+              {status.weekly_budget.calibrated_from ?? "—"}
+            </div>
+          </>
+        ) : (
+          <div className="text-sm text-muted-foreground">
+            Weekly budget meter unavailable (activity DB not reachable yet, or the meter hasn&apos;t run).
+          </div>
+        )}
       </section>
 
       {/* Proactive activity controls (per-process on/off) */}
