@@ -1043,6 +1043,24 @@
       ],
       "legacy_refs": [],
       "scope": "Fan-out/volume/rescue-storm anomaly invariants that catch a proactive lane going LOUD (the 2026-06-14 nightly-wiki runaway), plus the deferred universal-dispatch-guardrail design."
+    },
+    {
+      "id": "ops-zai-token-usage-management",
+      "tier": 2,
+      "category": "08_operations",
+      "filename": "08_operations/08_zai_token_usage_management.md",
+      "title": "ZAI Token Usage Management",
+      "code_paths": [
+        "src/universal_agent/services/zai_observability.py",
+        "src/universal_agent/services/principal_token_tracking.py",
+        "src/universal_agent/services/cody_token_tracking.py",
+        "src/universal_agent/services/token_consolidation.py",
+        "src/universal_agent/services/zai_status.py",
+        "src/universal_agent/services/zai_control.py",
+        "src/universal_agent/rate_limiter.py",
+        "src/universal_agent/scripts/zai_token_report.py"
+      ],
+      "summary": "The budget view: four measurement lanes, the 2026-07 weekly-limit (error 1310) exhaustion analysis, ranked burners, how to re-run the analysis, and the R1-R6 remediation tracker."
     }
   ]
 }
