@@ -178,7 +178,9 @@ def test_evidence_signature_stable_on_updated_at_only_touch(tmp_path):
         "recent_completed_tasks": [
             {"task_id": "t2", "status": "completed", "updated_at": "2026-07-17T00:00:00"}
         ],
-        "recent_events": [{"id": 42, "severity": "warning", "updated_at": "2026-07-18T00:00:00"}],
+        "recent_events": [
+            {"id": 42, "severity": "warning", "status": "new", "updated_at": "2026-07-18T00:00:00"}
+        ],
         "tier0_tiles": [],
         "prior_live_cards": [],
     }
@@ -189,7 +191,9 @@ def test_evidence_signature_stable_on_updated_at_only_touch(tmp_path):
         "recent_completed_tasks": [
             {"task_id": "t2", "status": "completed", "updated_at": "2026-07-17T00:05:00"}
         ],
-        "recent_events": [{"id": 42, "severity": "warning", "updated_at": "2026-07-18T00:05:00"}],
+        "recent_events": [
+            {"id": 42, "severity": "warning", "status": "new", "updated_at": "2026-07-18T00:05:00"}
+        ],
         "tier0_tiles": [],
         "prior_live_cards": [],
     }
@@ -204,6 +208,31 @@ def test_evidence_signature_stable_on_updated_at_only_touch(tmp_path):
         ],
     }
     assert evidence_signature(e1) != evidence_signature(e3)
+
+
+def test_evidence_signature_changes_on_event_status_change(tmp_path):
+    """2026-07-19 fix: `activity_events` rows are NOT append-only — acking
+    or dismissing an event mutates its `status` column in place. Before this
+    fix, event identity was `id:severity` only, so an ack/dismiss transition
+    (the exact operator action Mission Control should notice) left the
+    signature unchanged. Event identity now includes `status`."""
+    e1 = {
+        "active_or_attention_tasks": [], "recent_completed_tasks": [],
+        "recent_events": [{"id": 7, "severity": "warning", "status": "new"}],
+        "tier0_tiles": [], "prior_live_cards": [],
+    }
+    e2 = {
+        **e1,
+        "recent_events": [{"id": 7, "severity": "warning", "status": "acknowledged"}],
+    }
+    assert evidence_signature(e1) != evidence_signature(e2)
+
+    e3 = {
+        **e1,
+        "recent_events": [{"id": 7, "severity": "warning", "status": "dismissed"}],
+    }
+    assert evidence_signature(e1) != evidence_signature(e3)
+    assert evidence_signature(e2) != evidence_signature(e3)
 
 
 # ── LLM payload parsing ────────────────────────────────────────────────

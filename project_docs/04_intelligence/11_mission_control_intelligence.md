@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/services/mission_control_event_titles.py
   - src/universal_agent/services/mission_control_prompts.py
   - src/universal_agent/gateway_server.py
-last_verified: 2026-07-18
+last_verified: 2026-07-19
 ---
 
 # Mission Control Intelligence
@@ -184,8 +184,21 @@ the last attempt instead of a bare `null`. The sentinel is stored as a row in
 for `_tier1_skip_reason`'s floor/ceiling clock, so only the real-fire path passes
 `advance_fire_ts=True` to `_write_tier1_meta`; skip/error writes pass `advance_fire_ts=False`
 and preserve the prior `state_since` while still refreshing the diagnostic columns.
-`last_signature` is still updated on every write — signature tracking is independent of
-fire-time.
+
+> **Deferred-transition masking fix (2026-07-19).** Until this date every skip/error write
+> also passed `signature=sig` — the freshly-observed (possibly changed) signature — to
+> `_write_tier1_meta`, so `last_signature` was updated even when the pass didn't fire. A
+> genuine change that landed during a floor-skip (`signature_changed_but_rate_limited`) got
+> recorded as `last_signature=<new sig>`; the very next sweep then read that new signature back
+> as `prior_sig`, saw `prior_sig == new_sig`, and fell into the `signature_unchanged` branch —
+> which is gated by the much longer `tier1_ceiling_seconds` instead of `tier1_floor_seconds`.
+> A real, still-undelivered change was silently promoted from "rate-limited a few minutes" to
+> "invisible for up to an hour." The fix: `_run_tier1_async` now passes the **prior** (last-fire)
+> signature — not the freshly-observed one — to every skip/error write, so `prior_sig != new_sig`
+> keeps holding until the change actually fires. Only the real-fire path still records the
+> newly-observed signature. First-ever run (no meta row, no prior signature to preserve) falls
+> back to recording the observed signature, since nothing is being masked yet. Regression
+> coverage: `tests/unit/test_mission_control_tier_meta_fire_ts.py::test_floor_skipped_genuine_change_fires_at_next_eligible_sweep_not_ceiling`.
 
 **Tier-2** (`_run_tier2_async`): decides via `_tier2_cascade_reason` (tier-0 transitions, or
 tier-1 produced new cards) and `_tier2_skip_reason` (first-run always; floor protection;
@@ -342,9 +355,10 @@ snapshot, and the prior pass's live cards (fed back so the LLM can re-emit them 
 rows (`WHERE substr(tile_id,1,2) != '__'`) — those are sweeper cadence bookkeeping, not real
 tiles, and must not leak into the LLM prompt or the evidence signature. Counts are bounded;
 individual text fields are never shortened.
-`evidence_signature` hashes only the *identity* of bundle items (task_id/status, event id,
-tile_id+state, subject_id+severity) — excluding volatile timestamps — so two bundles with the
-same identifying set hash equal and the sweeper skips the LLM.
+`evidence_signature` hashes only the *identity* of bundle items (task_id+status,
+event id+severity+status, tile_id+state, subject_id+severity) — excluding volatile
+timestamps — so two bundles with the same identifying set hash equal and the sweeper
+skips the LLM.
 
 > **Signature-contract fix (2026-07-18).** Until this date the active-task, completed-task, and
 > event components also interpolated each row's `updated_at`, contradicting the paragraph above
@@ -355,10 +369,20 @@ same identifying set hash equal and the sweeper skips the LLM.
 > `tier1_floor_seconds` regardless of whether anything meaningful had changed (measured ~255
 > fires/wk), which in turn cascaded tier-2 via `tier1_synthesized` (see the tier-2 cascade
 > section above). `updated_at` is now dropped from those three components — task/completed
-> identity is `task_id:status`, event identity is `id:severity` (events are append-only, so `id`
-> alone is a stable, sufficient identity key). The implementation now matches the contract
-> stated in this paragraph and in the function's docstring. Regression coverage:
+> identity is `task_id:status`. The implementation now matches the contract stated in this
+> paragraph and in the function's docstring. Regression coverage:
 > `tests/unit/test_mission_control_phase2.py::test_evidence_signature_stable_on_updated_at_only_touch`.
+
+> **Event-identity fix (2026-07-19).** The original event identity was `id:severity`, on the
+> premise that `activity_events` rows are append-only so `id` alone is a stable, sufficient key.
+> That premise is wrong: a row's `status` column mutates in place (`new` → `acknowledged` /
+> `dismissed` — see `gateway_server.py::_ensure_activity_schema`'s `status` column and the
+> ack/dismiss endpoints), so acking or dismissing an event — exactly the kind of operator action
+> Mission Control should treat as a genuine state change — left the event's identity component
+> unchanged and never moved the signature. Event identity is now `id:severity:status`, so
+> ack/dismiss transitions fire tier-1 while an `updated_at`-only touch (no status/severity
+> change) still hashes identically. Regression coverage:
+> `tests/unit/test_mission_control_phase2.py::test_evidence_signature_changes_on_event_status_change`.
 
 **LLM discovery** (`discover_tier1_cards`): calls the `glm-4.7` lane
 (`resolve_mission_control_model`, default `glm-4.7`; timeout from

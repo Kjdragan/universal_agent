@@ -332,3 +332,137 @@ async def test_idle_skip_does_not_reset_clock_via_run_tier1_async(tmp_path: Path
         assert row["last_signature"] == "SIG"
     finally:
         conn.close()
+
+
+# ── Deferred-transition regression: a floor-skipped genuine change must ──
+# ── fire at the next eligible sweep, not get masked until the ceiling  ──
+
+
+@pytest.mark.asyncio
+async def test_floor_skipped_genuine_change_fires_at_next_eligible_sweep_not_ceiling(
+    tmp_path: Path, monkeypatch
+):
+    """2026-07-19 regression: a genuine signature change observed during a
+    floor-skip must NOT be recorded as `last_signature=<new sig>` — doing so
+    made the very next sweep see `prior_sig == new_sig` and fall into the
+    `signature_unchanged` branch, which is gated by the much longer
+    `ceiling_seconds` instead of `floor_seconds`. A real (not-yet-delivered)
+    change was silently promoted from "rate-limited a few minutes" to
+    "invisible for up to an hour".
+
+    This test drives the REAL `_run_tier1_async` twice:
+      1. A genuine signature change ("SIG_OLD" -> "SIG_NEW") lands while the
+         last fire is still inside the floor window -> must skip via
+         `signature_changed_but_rate_limited` AND must preserve
+         `last_signature == "SIG_OLD"` (not clobber it with "SIG_NEW").
+      2. Once wall-clock age (relative to the still-preserved `state_since`)
+         crosses the floor -- but stays WELL BELOW the ceiling -- the same
+         "SIG_NEW" evidence must now fire (`prior_sig != new_sig` still
+         holds because step 1 preserved "SIG_OLD"), proving the deferred
+         change is delivered at the next eligible sweep rather than being
+         masked until the ceiling.
+    """
+    import sqlite3
+
+    monkeypatch.setenv("UA_MISSION_CONTROL_INTEL_DB_PATH", str(tmp_path / "mc.db"))
+
+    floor_seconds = 500.0
+    ceiling_seconds = 3600.0  # deliberately much larger than the floor
+
+    conn = open_store(tmp_path / "mc.db")
+    try:
+        # Last real fire was 400s ago -- inside the floor (500s), so a
+        # genuine change arriving now must be floor-skipped, not fired.
+        _seed_meta(
+            conn, "__tier1_meta__", state_since=_iso_ago(400), last_signature="SIG_OLD"
+        )
+    finally:
+        conn.close()
+
+    from universal_agent.services import mission_control_tier1 as t1_mod
+
+    monkeypatch.setattr(
+        t1_mod, "collect_tier1_evidence", lambda data_conn, mc_conn, **_kw: {"counts": {}}
+    )
+    monkeypatch.setattr(t1_mod, "evidence_signature", lambda evidence: "SIG_NEW")
+
+    discover_calls = {"n": 0}
+
+    async def _discover(evidence):
+        discover_calls["n"] += 1
+        return ([], "model")
+
+    monkeypatch.setattr(t1_mod, "discover_tier1_cards", _discover)
+    monkeypatch.setattr(
+        t1_mod,
+        "apply_tier1_discovery",
+        lambda conn, upserts: {"created_or_updated": [], "retired": [], "errors": []},
+    )
+    monkeypatch.setattr(
+        MissionControlSweeper, "_open_activity_db", lambda self: sqlite3.connect(":memory:")
+    )
+
+    sweeper = MissionControlSweeper(
+        SweeperConfig(tier1_floor_seconds=floor_seconds, tier1_ceiling_seconds=ceiling_seconds)
+    )
+
+    # ── Sweep 1: genuine change, but inside the floor -> skip ──────────
+    result1 = _result()
+    await sweeper._run_tier1_async(result1)
+
+    assert discover_calls["n"] == 0, "genuine change inside the floor should still be rate-limited"
+    assert result1.tier1_synthesized is False
+
+    conn = open_store(tmp_path / "mc.db")
+    try:
+        row = _read_meta(conn, "__tier1_meta__")
+        assert "signature_changed_but_rate_limited" in row["current_annotation"]
+        # The core assertion: the skip write must NOT clobber last_signature
+        # with the new (undelivered) signature -- it must preserve the prior
+        # (last-fire) one so the change stays visible as "still pending".
+        assert row["last_signature"] == "SIG_OLD", (
+            "floor-skip recorded the new signature as seen, masking the "
+            "deferred transition"
+        )
+        # state_since (the fire clock) is untouched by the skip.
+        age_after_skip = (
+            datetime.now(timezone.utc) - _parse(row["state_since"])
+        ).total_seconds()
+        assert age_after_skip > 300, "floor-skip should not have advanced state_since"
+    finally:
+        conn.close()
+
+    # ── Simulate wall-clock passing the floor (but nowhere near the  ───
+    # ── ceiling) by pushing state_since further into the past. This  ───
+    # ── stands in for "the next eligible sweep", without sleeping.   ───
+    conn = open_store(tmp_path / "mc.db")
+    try:
+        conn.execute(
+            "UPDATE mission_control_tile_states SET state_since = ? WHERE tile_id = ?",
+            (_iso_ago(600), "__tier1_meta__"),
+        )
+    finally:
+        conn.close()
+
+    # ── Sweep 2: same still-undelivered "SIG_NEW" evidence, now past   ──
+    # ── the floor (600s > 500s) but far short of the ceiling (3600s). ──
+    result2 = _result()
+    await sweeper._run_tier1_async(result2)
+
+    assert discover_calls["n"] == 1, (
+        "the deferred genuine change must fire once past the floor -- it "
+        "must not wait for the (much longer) ceiling"
+    )
+    assert result2.tier1_synthesized is True
+
+    conn = open_store(tmp_path / "mc.db")
+    try:
+        row = _read_meta(conn, "__tier1_meta__")
+        assert "tier1 ok" in row["current_annotation"]
+        assert row["last_signature"] == "SIG_NEW"
+        age_after_fire = (
+            datetime.now(timezone.utc) - _parse(row["state_since"])
+        ).total_seconds()
+        assert age_after_fire < 30, "real fire did not advance state_since to ~now"
+    finally:
+        conn.close()

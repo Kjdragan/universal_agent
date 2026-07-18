@@ -251,9 +251,9 @@ def evidence_signature(evidence: dict[str, Any]) -> str:
 
     The hash deliberately excludes volatile fields (timestamps,
     `last_checked_at`) and counts only the IDENTITY of the items in
-    the bundle (task_id, event id, tile_id+state, subject_id+severity).
-    Two evidence bundles with the same identifying set hash equal even
-    if one was collected a second later than the other.
+    the bundle (task_id+status, event id+severity+status, tile_id+state,
+    subject_id+severity). Two evidence bundles with the same identifying
+    set hash equal even if one was collected a second later than the other.
 
     2026-07-18 fix: the active/completed-task and event components
     previously included `updated_at`, which contradicted this exact
@@ -262,10 +262,18 @@ def evidence_signature(evidence: dict[str, Any]) -> str:
     changes, so the signature churned on nearly every sweep and defeated
     delta-gating (tier-1 fired ~every eligible tick instead of only on
     genuine state transitions). `updated_at` is now dropped from those
-    three components; task/completed identity is `task_id:status`, event
-    identity is `id:severity` (events are append-only, so `id` alone is a
-    stable, sufficient identity key). Implementation now matches the
-    contract stated above.
+    three components; task/completed identity is `task_id:status`.
+
+    2026-07-19 fix: `activity_events` rows are NOT append-only — a row's
+    `status` mutates in place (`new` -> `acknowledged`/`dismissed`, see
+    `gateway_server.py::_ensure_activity_schema`'s `status` column and the
+    ack/dismiss endpoints), so an event identity of `id:severity` alone
+    missed exactly the transitions an operator cares about: acking or
+    dismissing an event left its identity component unchanged, so the
+    signature never reflected that genuine state change. Event identity is
+    now `id:severity:status` so ack/dismiss transitions count as a real
+    change, while an `updated_at`-only touch (no status/severity change)
+    still hashes identically.
     """
     components = []
 
@@ -278,7 +286,7 @@ def evidence_signature(evidence: dict[str, Any]) -> str:
             f"mission:{mission.get('workstream_id')}:{mission.get('mission_status')}:{mission.get('current_child_task_id')}"
         )
     for event in evidence.get("recent_events", []):
-        components.append(f"event:{event.get('id')}:{event.get('severity')}")
+        components.append(f"event:{event.get('id')}:{event.get('severity')}:{event.get('status')}")
     for tile in evidence.get("tier0_tiles", []):
         components.append(f"tile:{tile.get('tile_id')}:{tile.get('current_state')}:{tile.get('last_signature')}")
     for card in evidence.get("prior_live_cards", []):
