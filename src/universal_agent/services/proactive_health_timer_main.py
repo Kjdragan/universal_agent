@@ -64,6 +64,7 @@ async def _run() -> int:
     from universal_agent.services import (
         proactive_health_notifier as notifier,
         proactive_health_snapshot as snap,
+        zai_weekly_budget,
     )
     from universal_agent.services.proactive_health import build_proactive_health_payload
 
@@ -102,6 +103,26 @@ async def _run() -> int:
                 "invariants": [],
                 "error": f"payload_build_failed: {type(exc).__name__}: {exc}",
             }
+
+        # R3 — self-calibrating weekly ZAI budget meter (services/
+        # zai_weekly_budget.py::run_meter). Deploy-independent, same 10-min
+        # cadence as this timer. Guarded: a failure here must never break the
+        # proactive_health digest — the meter's own contract is fail-soft
+        # (returns {"available": False, ...} rather than raising), but this
+        # try/except is belt-and-suspenders against anything unexpected.
+        try:
+            budget_result = zai_weekly_budget.run_meter(conn, now=now.timestamp())
+            logger.info(
+                "proactive_health timer: weekly budget meter run "
+                "(available=%s, pct=%s, applied_level=%s)",
+                budget_result.get("available"),
+                budget_result.get("pct"),
+                budget_result.get("applied_level"),
+            )
+        except Exception:  # noqa: BLE001 — never break the digest over the meter
+            logger.warning(
+                "proactive_health timer: weekly budget meter failed", exc_info=True
+            )
 
         invariants = payload.get("invariants") or []
         criticals = [

@@ -597,6 +597,26 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             sent_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_task_hub_evidence_task ON task_hub_delivery_evidence(task_id, sent_at DESC);
+
+        -- R3: self-calibrating weekly ZAI budget meter (services/zai_weekly_budget.py).
+        -- One row per ZAI week (keyed by that week's start/reset-instant epoch),
+        -- written by run_meter() every ~10 min from the proactive_health timer.
+        -- observed_cap is LEARNED (seeded, then replaced by the actual week-to-date
+        -- total the next time zai_control's weekly_exhaustion stamp is fresh),
+        -- never a hardcoded number. calibrated_from is 'seed_estimate' or
+        -- '1310@<iso>'. last_escalation_level/last_escalated_at track our own
+        -- auto-escalation (services/zai_control.py::apply_level, by="auto:weekly-budget")
+        -- so a new week can release it without touching an operator- or 1310-set level.
+        CREATE TABLE IF NOT EXISTS zai_weekly_budget_state (
+            week_anchor_epoch    REAL PRIMARY KEY,
+            observed_cap         INTEGER,
+            week_to_date_tokens  INTEGER NOT NULL DEFAULT 0,
+            last_computed_at     REAL,
+            last_escalation_level INTEGER NOT NULL DEFAULT 0,
+            last_escalated_at    REAL,
+            calibrated_from      TEXT,
+            updated_at           TEXT
+        );
         """
     )
     for ddl in (

@@ -451,6 +451,15 @@ def build_status() -> dict[str, Any]:
         logger.debug("zai_status control read failed: %s", exc)
 
     tiers = snapshot.get("tiers") if isinstance(snapshot.get("tiers"), dict) else {}
+
+    weekly_budget: dict[str, Any] = {"available": False}
+    try:
+        from universal_agent.services import zai_weekly_budget
+
+        weekly_budget = zai_weekly_budget.get_status_snapshot()
+    except Exception as exc:  # noqa: BLE001 — fail-soft, never break the status payload
+        logger.debug("zai_status weekly_budget read failed: %s", exc)
+
     return {
         "generated_at": now,
         "events": _analyze_events(now),
@@ -471,4 +480,5 @@ def build_status() -> dict[str, Any]:
         },
         "control": control,
         "level_presets": levels,
+        "weekly_budget": weekly_budget,
     }
