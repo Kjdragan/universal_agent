@@ -2,6 +2,9 @@
 
 This file controls proactive heartbeat behavior. Keep items concrete and actionable.
 
+> **Reference files.** Situation-specific protocols live in `memory/reference/<topic>.md`, pointed to
+> below as `FIRST Read memory/reference/<file>.md`. Use `Read` the moment the situation matches.
+
 ## Operating Intent
 1. Advance mission work, not generic chatter.
 2. Be quiet when there is no actionable item.
@@ -43,125 +46,29 @@ This is the **default**. You may override when a task is genuinely small enough 
 
 ### How to delegate cleanly
 
-When you decide to delegate a task to Atlas or Cody:
-
-1. Call `vp_dispatch_mission(objective=..., target_vp="vp.general.primary"|"vp.coder.primary", task_id=...)` with a natural-language objective that captures **what done looks like**. Include the source `task_id` so the VP can reference it in its own assignment and so you can correlate later.
-2. **Release your claim on the source task.** Today, the cleanest verb is `task_redirect_to(task_id, target_vp="vp.general.primary"|"vp.coder.primary", reason="delegated via vp_dispatch_mission")`. That clears your retry counters and stamps `metadata.preferred_vp` so the lifecycle audit doesn't fire a "missing lifecycle mutation" guardrail. **Do not** call `complete` on the source task — the work isn't done yet; the VP will close it.
-3. Move on. Don't keep mental state on the delegated task. **When the VP succeeds, the task closes automatically** — you do NOT need to review or sign off on routine successes. The VP emails Kevin directly and CCs you for situational awareness only; that CC is your visibility, not your action item. (Earlier versions of this doc promised a `needs_review` pause for sign-off; that pause was never built and was removed from the architecture by design — per-task review by Simone was rejected to preserve cap-of-1 throughput. See [`project_docs/03_agents/01_vp_workers_and_delegation.md`](../project_docs/03_agents/01_vp_workers_and_delegation.md).)
-4. **When the VP fails, the failure surfaces as a `vp_mission_failure` informational task hub item** in your queue. In that posture you are the rescue-evaluator — you choose one of: retry-with-guidance, redispatch-fresh, escalate-to-operator, or ignore (let the failure stay in your context for next-occurrence escalation). The rescue tools and decision tree are documented in the failure-rescue PR's HEARTBEAT addendum.
-
-If a task is small enough that you'll execute it yourself, the close discipline is the standard one: do the work, then **explicitly call** `task_hub_task_action(action="complete", task_id="...")` — not a `TodoWrite` claim that you completed it. The guardrail reads the live DB, not your internal todo list.
+- Delegating a task to Atlas or Cody this cycle? FIRST Read `memory/reference/delegation-cleanly.md` — dispatch + claim-release sequence.
 
 ### Activating `/goal` for Cody delegations
 
-When delegating to Cody (`vp.coder.primary`) for work with a **verifiable end state** — tests passing, lint clean, a PR opened, a specific file present — request the `/goal` loop. The loop drives Cody across multiple turns until a Haiku evaluator confirms the condition holds, without per-turn operator nudging.
-
-**When `/goal` is activated automatically (no action required from you):**
-
-| Source | Mechanism |
-|---|---|
-| `cody_demo_task`, `cody_scaffold_request`, `tutorial_build` | Always /goal-eligible by source_kind (PRD § 3 decision 1) |
-| **Dashboard "Dispatch Mission" UI targeting Cody** | The endpoint sets `metadata.use_goal_loop=True` on the task hub item; `vp_dispatch_mission` inherits it onto the mission. Verified at `gateway_server.py:dashboard_todolist_quick_add`. |
-
-**When you (Simone) should set it explicitly:**
-
-You may set `use_goal_loop=True` when delegating to Cody for work whose success has a transcript-observable end state. Pass it via the metadata dict:
-
-```text
-vp_dispatch_mission(
-    vp_id="vp.coder.primary",
-    objective="<crisp objective with verifiable success criteria>",
-    mission_type="task",
-    task_id="<source_task_id>",          ← REQUIRED for /goal flow inheritance
-    idempotency_key="task-<task_id>",
-    metadata={"use_goal_loop": True},
-)
-```
-
-> **`task_id` is REQUIRED, not optional**, whenever you're dispatching an
-> operator-dispatched task (i.e., a task hub item where Kevin typed the
-> objective into the dashboard's Dispatch Mission box). The `vp_dispatch_mission`
-> tool uses `task_id` to look up the linked task hub row and propagate
-> `metadata.use_goal_loop=True` onto the spawned VP mission. Without `task_id`,
-> the inheritance never fires and the mission runs WITHOUT the /goal loop —
-> even if you also set `metadata={"use_goal_loop": True}` (which works too,
-> but `task_id` is the single source of truth that all downstream surfaces
-> rely on, including the dashboard's `goal-artifacts` panel that needs to
-> trace the original prompt back from the mission).
->
-> **Passing `idempotency_key="task-<task_id>"` does NOT substitute for `task_id`.**
-> idempotency_key is purely for dispatch dedup; the inheritance code reads
-> `args.get("task_id")` (or `metadata.task_id`), not the idempotency key.
-
-**When NOT to set it:**
-
-- Atlas missions (`vp.general.primary`) — `/goal` is Cody-only and is silently ignored on Atlas
-- `proactive_codie` cleanup — that's a search task ("find SOMETHING worth improving"), not a goal task
-- Exploratory or open-ended Cody work without a clear "done" condition — `/goal`'s evaluator needs an end state to judge
-
-**Operator overrides:**
-
-If Kevin tells you "use /goal for this" or "set up a goal loop" in chat, set `metadata={"use_goal_loop": True}` regardless of source_kind. Operator intent wins.
+- Delegating to Cody with a verifiable end state? FIRST Read `memory/reference/goal-activation-cody.md` — when `/goal` auto-activates vs. when you set it.
 
 ### Close-discipline anti-patterns to avoid
 
-- **Don't claim a task and then forget to close it.** Every claimed assignment must end with either `complete`, `block`, `park`, `review`, `approve`, or `task_redirect_to` (for delegation). If your session ends with a claim still seized + in_progress, the lifecycle guardrail fires and emails the operator with `[ERROR] Execution Missing Lifecycle Mutation`. The 4 firings on 2026-05-24 were all this pattern.
-- **Don't call `complete` on a sibling task and assume that closes the one you were claimed against.** Tool call arguments must match the assignment's `task_id` exactly.
-- **Don't `TodoWrite` "completed" without invoking the `task_hub_task_action` tool.** TodoWrite is your internal scratchpad; it doesn't persist to the DB.
+- Closing out a claim? FIRST Read `memory/reference/close-discipline-anti-patterns.md` for failure modes beyond the disposition-verb list the live `== TASK QUEUE TRIAGE ==` block shows you.
 
 ### Handling `vp_mission_failure` items (rescue-evaluator posture)
 
-When you claim a task with `source_kind="vp_mission_failure"`, you are operating in the **rescue-evaluator** posture (one of your four context-dependent roles — see also "observer" for VP successes, "full executor" for `chat_panel`/`simone_chat`, and "router" for everything else). You are NOT a fallback executor. Your job is to evaluate the failure and pick a rescue verb.
-
-1. Read `metadata.brief_path` (the VP's own BRIEF.md from self-briefing, if produced — may be `None` for older missions), `metadata.transcript_tail` (last 2 KB of subprocess output), `metadata.failure_mode` (one of: `vp_self_reported`, `goal_cap_hit`, `subprocess_crash`, `auth_failure`, `workspace_guard`, `timeout`, `operator_cancel`, `missing_completion_attestation`, `unspecified`), and `metadata.failure_count` (count of failures in this rescue chain; high counts mean prior rescue attempts didn't stick).
-2. Choose **exactly one** of four actions:
-
-   | Verb | When to use |
-   |---|---|
-   | `vp_dispatch_mission_retry(mission_id, additional_guidance, max_additional_turns=None)` | Failure was self-reported or `/goal` cap-hit AND your guidance addresses the gap. Same chain, same brief, additional guidance prepended. |
-   | `vp_dispatch_mission_redispatch_fresh(mission_id, additional_context)` | Failure was a crash, env corruption, workspace contamination — situations where prior state might be the problem. Same chain, fresh workspace. |
-   | `escalate_vp_failure_to_operator(mission_id, summary, why_escalating, recommended_action=None)` | Failure is auth (`auth_failure`) / workspace-guard (`workspace_guard`) / config-shaped (Simone can't fix) OR `failure_count >= 3` OR you choose not to retry. Creates a `chat_panel` task to Kevin. |
-   | `task_hub_task_action(task_id="vp_failure:<mission_id>", action="complete", note="ambient — failure_count=N, no action this cycle")` | You're choosing not to act this cycle. Failure becomes context for next occurrence; `failure_count` will tell future-you whether to escalate. |
-
-3. **Do NOT attempt to fix the VP's underlying work yourself.** You are an evaluator and dispatcher in this posture, not a fallback executor. If the work needs a human (operator), escalate. If it needs a fresh agent attempt, retry/redispatch.
-
-4. **The rescue verbs apply ONLY to the `vp_failure:<mission_id>` item — NEVER `complete` the SOURCE task.** The source task's lifecycle belongs to the VP worker's terminal sync (attestation guard + demo finalize), not to you. Specifically for `failure_mode="missing_completion_attestation"` where the transcript shows the work was actually done: the correct verb is `vp_dispatch_mission_retry(mission_id, additional_guidance="The build is done — write COMPLETION.md per the self-brief-and-attest Phase 5 attestation protocol, nothing else")` — a cheap retry that re-enters the normal completion path and populates the finalize evidence deterministically. Completing the source task directly skips manifest synthesis, mechanical checks, and dashboard registration. (Code now enforces this: a non-operator `complete` on a `tutorial_build`/`cody_demo_task` row without worker-finalize evidence routes to `needs_review` with `completion_requires_demo_finalize` — incident 2026-06-11, task `tutorial-build:f08d721d27eaaea4`.)
+- Claimed a `vp_mission_failure` task? FIRST Read `memory/reference/vp-mission-failure-rescue.md` — you are the rescue-evaluator, not a fallback executor.
 
 ## Mission Focus
 - Build and operate an autonomous AI organization that creates value for Kevin 24/7.
 - Prioritize monetization and project execution over passive analysis.
 - Keep mission momentum by working through scheduled and actionable Task Hub work.
+- Standing background priorities (surface a concrete next action when you spot one; don't let them crowd out real Task Hub work): Mission Control build kickoff, AI-native freelance opportunities, revenue-first quick wins, and Task Hub/calendar/email operational hygiene.
 
-## Service-Widget Portfolio — standing proactive focus (operator directive, 2026-06-11)
+### Service-Widget Portfolio (operator directive, 2026-06-11)
 
-The proactive posture shifts from knowledge gathering toward **purposeful generation of
-service widgets**: individual AI capabilities packaged as offerings for small-business
-customers, composable in any mix per customer, with the goal of winning engagements and
-**monthly retainers**. (Full directive: the 2026-06-11 operator emails "service-widget
-portfolio focus" + stack addendum in your inbox.)
-
-In proactive/spare cycles (you and your VPs, Atlas especially):
-
-1. **Ideate from the customer in**: "What does a small business owner need every week?
-   What can AI automate? How do we package it as repeatable-but-feels-custom?" Named
-   categories: ad/video generation, virtual assistants, email screeners,
-   answering-machine/voicemail managers, calendar/scheduling, meeting transcription.
-2. **Every widget candidate carries a business sketch**, not just a capability idea:
-   - Pricing tier: loss-leader (free, demonstrates value) vs charged.
-   - Ops model: Kevin-managed/gatekept (he runs recurring processes for the client —
-     the retainer justification) vs client-managed (self-serve).
-   - Per-client onboarding shape + the recurring deliverable.
-3. **Stack sketch required**: open-source-first to keep subscription costs near zero;
-   category-leader SaaS only where it clearly wins (note the monthly cost). HARD
-   ANTI-GOAL: never build on or resell big CRM/agency platforms (HubSpot/Salesforce/
-   GoHighLevel class). Target: nimble per-client installation in hours, not weeks.
-4. **CSI tie-in**: when intel signals show a framework/tool with widget potential, flag
-   it explicitly as a widget candidate, not just an intel item. Reference arc: spotting
-   HyperFrames → one-day distillation into the ad-generation widget
-   (`~/lrepos/Cody_Code_Generations/hyperframes_video_generation` — its anatomy is the
-   widget standard).
-5. **Surface through existing gates** (insight briefs → gated Task Hub candidates) —
-   propose, don't spawn uncontrolled builds. Widget *builds* happen only after the gate.
+- In a proactive/spare cycle with no urgent Task Hub work? FIRST Read `memory/reference/service-widget-portfolio.md`.
 
 ## execution windows
 - Afternoon execution window: run at least one mission-progress task.
@@ -184,37 +91,8 @@ In proactive/spare cycles (you and your VPs, Atlas especially):
   - **No invented metrics.** Every row in the System Health table must trace to a tool result above. Do not fabricate ratios like "X/500" or "Y%" to round out a row — if a real ceiling exists, cite the source file and line; otherwise omit the row. The 2026-05-14 digest's "Tasks 453/500 (90.6%) WATCH" entry was invented (no DB has 453 task_hub_items, and the `task_hub_pressure` tile has no 500-cap) and must not recur.
   - If any metric is WARN or CRITICAL, flag it in the heartbeat response for Kevin's attention.
   - Write the full human-readable report to `work_products/system_health_latest.md` (overwrite each cycle).
-    - Also write a machine-readable findings contract to `work_products/heartbeat_findings_latest.json` (overwrite each cycle)
-    - The JSON contract must use this schema:
-    ```json
-    {
-      "version": 1,
-      "overall_status": "ok|warn|critical",
-      "generated_at_utc": "ISO-8601 UTC timestamp",
-      "source": "vps_system_health_check",
-      "summary": "Short one-paragraph summary of the most important finding set.",
-      "findings": [
-        {
-          "finding_id": "stable_snake_case_id",
-          "category": "gateway|system|disk|memory|cpu|dispatch|database|unknown",
-          "severity": "ok|warn|critical",
-          "metric_key": "recent_errors_30m",
-          "observed_value": 67,
-          "threshold_text": ">50",
-          "known_rule_match": true,
-          "confidence": "low|medium|high",
-          "title": "Gateway Errors Elevated",
-          "recommendation": "Inspect gateway logs for root cause.",
-          "runbook_command": "journalctl -u universal-agent-gateway --since '30 min ago' --no-pager",
-          "metadata": {
-            "service": "universal-agent-gateway"
-          }
-        }
-      ]
-    }
-    ```
-  - Include at least one `findings[]` entry whenever `overall_status` is `warn` or `critical`.
-  - Use `known_rule_match=true` only when the issue clearly maps to a stable runbookable condition. Unknown edge cases should still be emitted with `known_rule_match=false`.
+    - Write a machine-readable findings contract to `work_products/heartbeat_findings_latest.json` (overwrite each cycle). Before writing it, FIRST Read `memory/reference/vps-health-findings-json-schema.md` for the exact schema.
+    - If `overall_status` is `warn` or `critical`, `findings[]` MUST contain at least one entry (known_rule_match rules are in the reference file).
 <!-- scope:local -->
 - [ ] Local Desktop Health Check (run every heartbeat cycle) - Monitor the local machine running this agent instance:
     1. **CPU**: `uptime` (load averages vs core count from `nproc`)
@@ -235,50 +113,15 @@ In proactive/spare cycles (you and your VPs, Atlas especially):
     6. If the endpoint returns 5xx, log a `warn` finding with `metric_key='proactive_health_endpoint_down'` and `runbook_command='journalctl -u universal-agent-gateway --since "10 min ago" --no-pager'`. Do not block the rest of the heartbeat on this.
     7. Canonical reference: [`project_docs/04_intelligence/10_proactive_pipeline.md`](../project_docs/04_intelligence/10_proactive_pipeline.md) § "Health / invariants". Authoring a new invariant: add a probe in `services/invariants/proactive_pipeline_invariants.py` (that section documents the probe table, severities, and the fail-open contract).
     8. **`proactive_health:*` findings are NOT Task Hub rows.** The heartbeat pre-flight no longer parks a `needs_review` row per critical finding. Critical invariants now surface through exactly two channels: (a) a critical **email** to the operator on first occurrence (6h per-finding-id cooldown), and (b) the **System Health** panel on the dashboard Mission Control tab, which renders the live `GET /api/v1/ops/proactive_health` endpoint. You do NOT need to sweep Task Hub for `proactive_health:*` rows — there are none. The Task Hub "Needs Review" lane now means ONLY genuinely-stalled real work sessions, not health findings. If a critical invariant points at a real pipeline failure that needs code work, dispatch it like any other investigation (route to Atlas/Cody via `vp_dispatch_mission`); do not re-park it as a health row.
-<!-- scope:all -->
-- [ ] Mission Control build kickoff
-  - Confirm first concrete milestone and produce a short execution checklist.
-- [ ] AI-native freelance system progress
-  - Identify and stage high-probability opportunities.
-  - prepare proposal drafts and next actions for approval.
-- [ ] Revenue-first opportunistic tasks
-  - Surface quick-win side-hustle opportunities with short path to cash.
-- [ ] Operational hygiene
-  - review pending Task Hub/calendar/email execution blockers and propose the next 1-3 actions.
 <!-- scope:hq -->
 - [ ] CSI demo-triage approvals → Phase 2 scaffold (Simone owns)
-  - Each cycle, query Task Hub for `source_kind = 'cody_scaffold_request'` AND `status = 'open'`. Concurrency cap: claim **at most one** row per cycle (oldest `created_at` first) so a flood of operator approvals can't blow the tick budget. The triage flyout at `/dashboard/claude-code-intel` is the producer.
-  - For the claimed row, read `metadata_json` to get `post_url`, `packet_dir`, `links`, `tier`, and `vault_slug`. Tier 3 → demo workspace (this directive). Tier 4 → kb_update (route to Atlas via existing `claude_code_kb_update` flow, do NOT scaffold).
-  - **Entity match**: search `artifacts/knowledge-vaults/claude-code-intelligence/entities/` for an entity page covering the same feature. Use slug-match against feature anchors extracted from `post_text` (slash-commands like `/ultrareview`, long flags like `--agent`) or against linked `code.claude.com/docs/...` paths. Examples already on disk: `custom-subagents.md`, `batch-command.md`, `claude-code-loop-command.md`, `fewer-permission-prompts-skill.md`.
-  - **If entity exists**: invoke the `cody-scaffold-builder` skill with the matched entity slug. Then refine the generated `BRIEF.md` / `ACCEPTANCE.md` / `business_relevance.md` placeholders with real prose synthesis (do NOT just delete `_(Simone: ...)_` markers — substitute substantive content). Then invoke `cody-task-dispatcher` to enqueue the `cody_demo_task`. Finally, mark the original `cody_scaffold_request` row `status=completed` with a Task Hub comment linking to the workspace and the new `cody_demo_task:<id>`.
-  - **If entity is missing**: decide in your first ~2 tool calls — do NOT dither (a delegated Cody scaffold mission burned 54 min on exactly this on 2026-07-03). Preferred: **degrade to the source page** — if `.../sources/` has the matching page (e.g. `claudedevs-post-<post_id>.md`), invoke `cody-scaffold-builder` with `source_hint=<that source path or the post_id>`; the deterministic builder returns a `degraded=True` scaffold from the source (refine its prose more heavily than usual). Only if NEITHER an entity NOR a source page exists: mark the `cody_scaffold_request` row `status=blocked` with reason `vault_entity_missing:<expected_slug>` and surface a one-line heartbeat note. Never speculate/invent a stub; never loop.
-  - **Safety**: only use the deterministic `cody-scaffold-builder` Python entry point. Never bypass it to write workspace files directly. The skill enforces the vanilla-settings safety net (`/opt/ua_demos/<id>/.claude/settings.json` integrity).
-<!-- Hourly intel digest is delivered ONLY by the deterministic systemd timer
-     `universal-agent-hourly-intel-digest` (src/universal_agent/scripts/hourly_intel_digest_cron.py),
-     which runs 06-21 CT and sends inline HTML + per-brief /briefs/{id} links.
-     The heartbeat directive that used to invoke `/hourly-intel-digest` was removed
-     2026-06-09: as an LLM path it was NOT window-gated (it fired overnight — e.g. a
-     00:43 CT send) and hand-composed broken "see attached HTML digest" bodies with
-     no link/attachment. Do NOT re-add a heartbeat invocation — the timer is the
-     sole sender, and a second runner is exactly what caused the duplicate/off-hours
-     sends. See project memory: intel-digest-delivery. -->
+  - Triaging an open `cody_scaffold_request` row? FIRST Read `memory/reference/csi-demo-triage-approvals.md` — concurrency cap, entity-match rule, degrade-to-source fallback.
 <!-- scope:hq -->
 - [ ] Intel-brief surfacing on vault writes (Simone owns)
-  - Trigger: any time you CREATE or materially EXTEND a vault entity in `artifacts/knowledge-vaults/<vault_slug>/entities/` during a `claude_code_kb_update` task (or any other lane that mutates a vault entity). "Material extend" = the `log.md` entry's `reason:` line describes a real fact addition, not a cosmetic re-sync.
-  - Step 1 — email Kevin: from the shared VP mailbox (`vp.agents@agentmail.to`) to `kevinjdragan@gmail.com`, CC `oddcity216@agentmail.to`. Subject prefix `[Intel]` followed by the entity title and tier/action_type, e.g. `[Intel] Workload Identity Federation — Tier 4 strategic_follow_up`. Body must include: one-paragraph summary lifted from entity frontmatter `summary`; a "Why this matters for UA" paragraph synthesized from the relevance assessment you wrote; a vault link (`https://app.clearspringcg.com/api/artifacts/files/knowledge-vaults/<vault_slug>/entities/<entity_slug>.md`); source post(s) and any official-doc links; tier and action_type. Use `mcp__agentmail__send_message` directly — no scripts.
-  - Step 2 — record the brief: call `services.proactive_artifacts.upsert_artifact` with `artifact_type='intel_brief'`, `source_kind=<the task's source_kind>`, `source_ref=<post_id or vault entity slug>`, `status='surfaced'`, `delivery_state='emailed'` (or `'email_failed'` if step 1 raised), `artifact_path=<absolute path to the vault entity file>`, plus `metadata_json={post_id, tier, action_type, vault_slug, entity_slug, packet_dir}`. Then call `record_email_delivery` with the message_id from AgentMail. This is what makes the brief visible at `/dashboard/proactive-task-history`.
-  - Skip both steps ONLY if the vault entity was already current and you made no material change. Park demos remain silent — this lane is for *intelligence learned*, not *demos rejected*.
-  - Why this exists: prior to this directive, Tier 4 strategic_follow_up items wrote durable knowledge to the vault and then never surfaced to Kevin — he'd only see them by browsing the vault index. The kb_update lane's expensive synthesis was effectively wasted. Email + Mission Control row makes the intelligence a first-class deliverable, same shape as a Codie PR notification.
+  - Just CREATED or materially EXTENDED a vault entity? FIRST Read `memory/reference/intel-brief-vault-writes.md` — the `[Intel]` email + artifact-recording steps.
 <!-- scope:hq -->
 - [ ] CSI demo-task review → vault attach (Simone owns)
-  - **This is now surfaced to you in-context.** When any `cody_demo_task` is in `pending_review`, the heartbeat injects a **`== CODY DEMO REVIEW (Phase 4) ==`** block into this prompt (`heartbeat_service._compose_heartbeat_prompt`), listing each demo with its `state`, `manifest_present`, `iteration`, and `workspace`. When you see that block, **do the demo review THIS cycle, before Phase-2 scaffold work** — do not let scaffold approvals crowd it out. (cody_demo_task rows are deliberately excluded from the `== VP COMPLETION REVIEW ==` block, which uses the wrong approve/review protocol for them.)
-  - You may also scan in-flight Cody demo work yourself via `monitor_demo_tasks(conn)` (`src/universal_agent/services/cody_evaluation.py`), read with the `cody-progress-monitor` skill — it now emits an explicit `ready_for_review` boolean and `state` field. A `cody_demo_task` row is **ready for review when its status is `pending_review` AND a `manifest.json` exists** (resolved via `resolve_demo_artifacts_dir`, which handles curated builds whose manifest landed in a `vp-mission-<id>/` subdir). **Do NOT require `manifest.acceptance_passed=True`** — Cody's CLI build does not set that field; `evaluate_demo` reports it as ONE mechanical signal among several (`cody_self_reported_pass`) and YOU make the pass/iterate/defer call from the full EvaluationReport. A missing or false `acceptance_passed` is expected, not a blocker.
-  - Concurrency cap: review **at most one** demo per cycle so an evaluator burst can't blow the tick budget. Pick the oldest `updated_at` first.
-  - For the chosen task, invoke the `cody-work-evaluator` skill verbatim — it documents the EvaluationReport contract, the artifacts to read (BRIEF/ACCEPTANCE/business_relevance/BUILD_NOTES/run_output/manifest), and the three verdicts (pass / iterate / defer).
-  - **On pass:** call `complete_demo_task(conn, task_id=task["task_id"], completion_summary=...)`, then invoke the `vault-demo-attach` skill — it appends a `## Demos` bullet to `artifacts/knowledge-vaults/claude-code-intelligence/entities/<entity_slug>.md` via `attach_demo_to_vault_entity(workspace_dir=Path(task["metadata"]["workspace_dir"]), vault_root=resolve_external_vault_root(), entity_slug=task["metadata"]["entity_slug"], manifest=read_manifest(...))`. Idempotent — safe to re-run.
-  - **On iterate:** follow the `cody-work-evaluator` skill: `write_feedback_file(...)` + `reissue_cody_demo_task_with_feedback(...)`. Bound iteration count at 5 per task (the SKILL says ~3–5 is the reasonable ceiling) — past that, defer instead.
-  - **On defer:** `defer_demo_task(conn, task_id=task["task_id"], reason=...)` and surface a one-line note in the heartbeat response.
-  - **Safety:** only use the `cody_evaluation` Python entry points. Never edit the entity page or the manifest directly — the helpers preserve idempotency and audit metadata. The vault-attach skill is the single shipped path that closes the demo → vault loop; if you skip it, the demo is invisible in the dashboard's vault drawer and `## Demos` will stay empty.
+  - Surfaced live via `== CODY DEMO REVIEW (Phase 4) ==` when a `cody_demo_task` is `pending_review` — do it THIS cycle, before Phase-2 scaffold work. Full protocol: FIRST Read `memory/reference/csi-demo-review-vault-attach.md`.
 <!-- scope:hq -->
 ## Reviewing your team's completed missions (Atlas + Cody)
 
@@ -356,94 +199,16 @@ The decision tree below was originally written for Cody. It applies equally to A
 - If nothing actionable exists, record heartbeat as skipped/no-op.
 - When proactively picking Task Hub work, state what was chosen, why it was eligible, and what changed.
 ## Autonomous Health Repair Memory (2026-04-29)
-- Heartbeat Health Review exists to find system issues early and clear safe issues before they become larger problems.
-- Simone should make an active decision on each non-OK heartbeat: fix autonomously/direct Cody through Task Hub, or refer to Kevin.
-- Simone and Cody are advanced coding agents with significant capability. Start from the assumption that they can likely make required self-healing codebase fixes.
-- Before deciding, search memory for the error signature, classification, file/function names, and prior repairs. Use memory as guidance plus current evidence, not as blind authority.
-- Prefer autonomous remediation for bounded, reversible, testable system fixes such as code regressions, hook failures, prompt/schema mismatches, noisy known-rule cleanup, bounded refactors, and local repairs with tests.
-- Refer to Kevin only as an extreme safety net: destructive changes, public/private data-boundary exposure, secrets/credentials/security policy, unusually complex design decisions, unique unfamiliar failures with weak evidence, or production deployment approval.
-- For autonomous fixes, write `autonomous_remediation_approved=true`, a confidence level, rationale, memory evidence, and concrete proposed changes in `heartbeat_investigation_summary.json` so Task Hub/Cody can apply and verify the repair.
+- A heartbeat health check just came back non-OK? FIRST Read `memory/reference/autonomous-health-repair.md` — the fix-vs-delegate-vs-escalate decision rule.
 <!--
 Checkbox semantics:
 - [ ] active
 - [x] completed/disabled
 -->
 ## Kevin's Working Style Preferences (2025-03-12)
-**Proactive Improvement Suggestions:**
-Kevin explicitly stated: "I love this type of interaction. More for other elements of our project for anything that you you see that needs improvement or suggestions etc. this is a great way to work together."
-**Key Takeaway:**
-- Kevin WANTS agents to proactively identify improvement opportunities
-- He appreciates specific, actionable suggestions with rationale
-- This applies across ALL project elements, not just CSI
-- Agents should not wait for permission to suggest optimizations
-- When you see something that could be better, speak up!
-**Examples of what he likes:**
-- Noise reduction in notifications (quality over quantity)
-- Threshold adjustments based on observed patterns
-- Operational efficiency improvements
-- Any optimization that reduces friction while maintaining effectiveness
-**Action:** When working on any part of the system, actively look for improvement opportunities and present them with clear reasoning.
+- General operator disposition, not tied to a specific tick situation. Read `memory/reference/kevin-working-style.md` periodically — Kevin wants proactive, specific, actionable improvement suggestions across all project elements, not just when asked.
 ## Daily Briefing Email Rendering (2026-05-12)
-
-When composing the daily morning briefing HTML email (sent via AgentMail with subject pattern `UA Daily Briefing — <date>`), follow these rules. They are mandatory — the 2026-05-12 briefing shipped with a hand-rolled GitHub-dark palette (`#0d1117` body bg, `#8b949e` muted text) and was unreadable in Gmail web light mode because Gmail strips `<body>` background-color, leaving near-white text floating on white.
-
-**Critical layout rule.** NEVER rely on `<body>` for background. Always wrap all content in an outer `<div>` (or `<table>`) with the background applied directly to that element — Gmail respects div/table `background-color`, just not `<body>`:
-
-```html
-<div style="background:#ffffff;padding:24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-  <div style="max-width:720px;margin:0 auto;color:#1f2328;line-height:1.6;">
-    <!-- briefing content -->
-  </div>
-</div>
-```
-
-**Palette — light theme (GitHub light, WCAG-AA on white).** Use these exact hex values; do not pick alternates:
-
-- Outer page bg: `#ffffff` · Card bg: `#f6f8fa` · Card border: `#d1d9e0`
-- Body text: `#1f2328` · Muted/subtitle/footer text: `#59636e` · Accent (H1, links, pr-num): `#0969da`
-- Code bg: `#eff1f3` · Code text: `#1f2328`
-- Metric value default `#1f2328`; green `#1a7f37`; amber `#7d4e00`; red `#cf222e`.
-- Badge pairs (bg / text), all AA-compliant:
-  - green `#dafbe1` / `#1a7f37` — amber `#fff8c5` / `#7d4e00` — red `#ffebe9` / `#cf222e`
-  - blue `#ddf4ff` / `#0969da` — purple `#f5e6ff` / `#8250df` — gray `#eff1f3` / `#59636e`
-- Insight boxes: default bg `#ddf4ff` border `#0969da`; success bg `#dafbe1` border `#1a7f37`; warning bg `#fff8c5` border `#7d4e00`. Text always `#1f2328`.
-
-**Rules of thumb.**
-- Never use text color lighter than `#59636e` on white/`#f6f8fa` backgrounds — anything lighter is invisible in Gmail.
-- `#8b949e` is BANNED for text on light backgrounds (the cause of 2026-05-12 invisibility).
-- Card style: `background:#f6f8fa; border:1px solid #d1d9e0; border-radius:8px; padding:16px`.
-- Badge style: `display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600`.
-- Keep the same structural sections used today (Infrastructure Health tiles, Shipping table, VP Worker Activity, Task Hub Status, Insight boxes, Recommended Actions) — only the palette changes.
-
-**Self-check before sending.** Eyeball the HTML before invoking `send_message`: is there ANY text styled with a hex value lighter than `#59636e`? If yes, fix it. Is the body background applied to `<body>` only? If yes, move it to an outer `<div>`. Do all badges have a darker text color than their background? If no, fix it.
+- Composing the daily morning briefing HTML email? FIRST Read `memory/reference/daily-briefing-email-rendering.md` — mandatory light-theme palette/layout rules.
 
 ## Operator reports → tailnet scratchpad link, not pasted markdown or attachments (2026-06-02)
-
-Kevin runs Claude Code **terminal-only** and reads mail in clients that strip hyperlinks and flatten HTML/PDF attachments. So whenever you produce an operator-facing **report, analysis, digest, diff review, architecture diagram, or any artifact with rich content** (styling, diagrams, or — critically — a table of contents whose entries should *jump* to a section), do NOT paste raw markdown into the email or attach a PDF/`.html` file. Those lose the rendering and the in-document navigation.
-
-Instead: render the artifact as **standalone HTML**, publish it to the tailnet HTML scratchpad, and **lead the email with the link**. Invoke the **`publish-to-scratchpad` skill** (it wraps `scripts/publish_scratch.sh`; on the VPS it writes directly and prints the private `https://uaonvps.taildcc090.ts.net/scratch/...` URL). The page then opens fully rendered, with working anchors, on every one of Kevin's tailnet devices.
-
-- The short email body still follows the **light-theme palette rules above** — only the heavy report moves to the scratchpad link.
-- **The scratchpad report itself must render in light mode**, not just the email. Kevin reads on a dark-mode phone; pin the report's `<head>` to light (`<meta name="color-scheme" content="light">` + `:root{color-scheme:light}` + explicit `background:#ffffff; color:#1f2328`) and ship no `prefers-color-scheme: dark` override. The `publish-to-scratchpad` skill has the exact recipe; verify the generated HTML before publishing.
-- The scratchpad is **tailnet-only** (private to Kevin's devices). Never use it for mail to external recipients — attach a file for those.
-- The YouTube daily digest already does this in code (`youtube_daily_digest.py` → `scratch_publish.py::publish_html_to_scratch`, link-first with a PDF fallback). Mirror that pattern for anything you deliver by hand.
-
-## Recent communications log
-### 2026-03-14: NotebookLM Integration Announcement
-**From:** Kevin Dragan <kevinjdragan@gmail.com>
-**subject:** New Capability: NotebookLM Integration — Research & Artifact Engine
-**thread ID:** 0b2eab4c-b779-4645-800e-f0b62f8e8355
-**message ID:** <CAEi7pTm_XBcjnN1AmOUFMVCFGcxkVWGgHUg0+VZKh+pTZXVvsQ@mail.gmail.com>
-**classification:** Capability Announcement / Configuration Update
-**action taken:** acknowledged receipt, reviewed documentation at docs/03_Operations/96_NotebookLM_Integration_And_Research_Pipeline_2026-03-14.md, drafted professional confirmation reply
-**status:** complete
-**Key capabilities added:**
-- web research (fast ~30s, deep ~5min)
-- artifact generation: written, audio, visual, interactive, data, video
-- delegation model: main agent -> nlm-operator sub-agent -> MCP tools
-- latency tradeoffs documented: default to fast research
-- delivery separation: NLM sub-agent produces artifacts, main agent handles delivery via AgentMail
-**operational impact:**
-- can now produce high-quality research deliverables with superior output quality
-- must be mindful of latency (deep research + artifacts = 8-15min total)
-- use for important deliverables where quality matters, not routine tasks
+- Producing an operator-facing report, digest, or diagram? FIRST Read `memory/reference/scratchpad-report-howto.md` — publish via `publish-to-scratchpad`, never paste raw markdown.

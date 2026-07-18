@@ -1058,6 +1058,25 @@ def heartbeat_drain_on_shutdown_enabled() -> bool:
     return _parse_bool(os.getenv("UA_HEARTBEAT_DRAIN_ON_SHUTDOWN_ENABLED"), default=True)
 
 
+def _resolve_task_focused(task_hub_claims: list) -> bool:
+    """Resolve whether this heartbeat tick should use the lean task-focused prompt.
+
+    Task-focused mode switches ``_compose_heartbeat_prompt`` to the leaner
+    ``_build_task_focused_environment_context`` and skips brainstorm/morning-
+    report/recent-topics/DB-health-alerts/proactive-health-snapshot injection,
+    writing a deterministic (zero-LLM-cost) findings JSON instead of an
+    agent-authored one. It activates only when the tick has one or more Task
+    Hub items claimed from the dispatch queue AND the env kill-switch
+    ``UA_HEARTBEAT_TASK_FOCUSED`` is not explicitly disabled (default:
+    enabled). Set ``UA_HEARTBEAT_TASK_FOCUSED=0`` (or ``false``) to force the
+    legacy full prompt on every tick regardless of claims, for an instant
+    rollback without a redeploy.
+    """
+    return bool(task_hub_claims) and _parse_bool(
+        os.getenv("UA_HEARTBEAT_TASK_FOCUSED"), default=True
+    )
+
+
 def _resolve_exec_timeout_seconds() -> int:
     """Outer last-resort wall-clock ceiling for a heartbeat agent run.
 
@@ -2742,9 +2761,18 @@ class HeartbeatService:
             # model can explicitly disposition claimed items before completion.
             #
             # Task-focused mode: when tasks are claimed from the dispatch queue,
-            # switch to a lean prompt that skips all system monitoring.
-            _is_task_focused = False
-            
+            # switch to a lean prompt that skips all system monitoring. Env
+            # kill-switch UA_HEARTBEAT_TASK_FOCUSED (default enabled) allows an
+            # instant rollback without a redeploy — see _resolve_task_focused.
+            # NOTE: dispatch claiming was moved to todo_dispatch_service
+            # (commit ae82c81c, 2026-05-23) and task_hub_claimed is currently
+            # always [] at this call site (see
+            # test_run_heartbeat_completes_without_continuation_when_dispatch_moved),
+            # so this activation is a no-op in production until a future change
+            # threads real claims through — kept faithful to the original design
+            # intent and fully unit-testable via _resolve_task_focused directly.
+            _is_task_focused = _resolve_task_focused(task_hub_claimed)
+
             if has_exec_completion:
                 base_prompt = EXEC_EVENT_PROMPT
                 logger.info("Using EXEC_EVENT_PROMPT for session %s (exec completion detected)", session.session_id)
