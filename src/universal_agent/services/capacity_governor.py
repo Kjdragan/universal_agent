@@ -18,6 +18,15 @@ Integration points:
   - HeartbeatService._run_heartbeat: check before dispatch_sweep
   - auto_refinement_loop: check before refine_with_llm / decompose_with_llm
   - refinement_agent / decomposition_agent: report 429s
+  - vp/worker_loop.py::VpWorkerLoop._tick: check before claiming a VP mission
+
+``can_dispatch`` also honors the operator control plane
+(``services/zai_control``) as its FIRST check — most notably the auto-1310
+weekly/monthly quota-exhaustion global pause (2026-07-18). This is the only
+pre-dispatch gate covering in-process SDK principals (Simone heartbeats, VP
+coder turns): they spawn the ``claude`` CLI as a subprocess invisible to the
+httpx observability hook, so gating dispatch here — before the subprocess is
+ever spawned — is the only way to stand them down during a global pause.
 
 Configuration (environment variables):
     UA_CAPACITY_MAX_CONCURRENT: Max parallel agent executions (default: 2)
@@ -150,6 +159,25 @@ class CapacityGovernor:
         Does NOT acquire a slot — use `acquire_slot()` for that.
         """
         now = time.time()
+
+        # Check -1: has the operator control plane (services/zai_control)
+        # tripped a global pause — most notably the auto-1310 weekly/monthly
+        # quota-exhaustion detector? This is the only pre-dispatch gate that
+        # covers in-process SDK principals (Simone heartbeats, VP coder
+        # turns), which spawn the `claude` CLI as a subprocess invisible to
+        # the httpx observability hook. Lazy-imported and guarded: the
+        # governor must never crash on a control-file read issue (the
+        # control-plane read itself already fails open to unpaused).
+        try:
+            from universal_agent.services import zai_control
+
+            paused, pause_info = zai_control.is_globally_paused()
+            if paused:
+                reason = f"zai_global_pause: {pause_info.get('reason') or 'active'}"
+                self._total_shed += 1
+                return False, reason
+        except Exception:  # noqa: BLE001 — control-plane read must fail open
+            pass
 
         # Check 0: Is the API completely down (inference failure)?
         if now < self._api_down_until:

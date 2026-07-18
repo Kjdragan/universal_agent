@@ -93,7 +93,7 @@ Full rationale for each item lives in the exhibit. Status values: `todo`, `in-pr
 
 | ID | Recommendation | Status (2026-07-18) |
 |---|---|---|
-| R1 | Recognize error code 1310 as *weekly exhaustion* (not FUP, not gradient-429): stop retry ladders, auto-set the existing L4 global pause with TTL parsed from the reset timestamp in the error body, alert once | **in-progress** |
+| R1 | Recognize error code 1310 as *weekly exhaustion* (not FUP, not gradient-429): stop retry ladders, auto-set the existing L4 global pause with TTL parsed from the reset timestamp in the error body, alert once | **shipped** (branch `claude/zai-r1-1310-autopause`; mechanism detail in [`06_platform/10_zai_rate_limiter.md` §9.6](../06_platform/10_zai_rate_limiter.md#96-the-1310-weeklymonthly-quota-exhaustion-auto-pause-r1-2026-07-18)) |
 | R2 | Mission-Control intelligence: delta-gate (stable evidence signature) + ~60-min readout floor | **in-progress** |
 | R3 | Self-calibrating weekly budget meter over the four lanes: week-to-date rollup, observed-cap learned from each 1310 sighting (no fixed cap number needed), dashboard tile, auto-escalate `zai_control` levels at % thresholds | **in-progress** |
 | R4 | Context diet for principals (conservative): slim `memory/HEARTBEAT.md` via lazy-loaded section references, conditional `force_complex` on triage-only ticks, VP prompt boilerplate audit | **in-progress** |
@@ -112,6 +112,8 @@ thinking tokens bill beyond reported output.
   patched httpx client or the SDK adapters, its spend is invisible — wire it through an
   existing lane or extend one in the same PR.
 - **When a 1310 appears**, the week is over — do not retry, do not restart services to "fix"
-  it. Until R1 ships: pause via the ZAI-Control dashboard (L4) or
-  `services/zai_activity_control.py`, and revive after the reset time in the error body
-  (Beijing time, UTC+8).
+  it. R1 now auto-detects this and trips the L4 global pause with a TTL parsed from the reset
+  timestamp (Beijing time, UTC+8), gating both the httpx-hook lane and VP/Simone dispatch (see
+  [`06_platform/10_zai_rate_limiter.md` §9.6](../06_platform/10_zai_rate_limiter.md#96-the-1310-weeklymonthly-quota-exhaustion-auto-pause-r1-2026-07-18)).
+  It self-clears at the reset — no manual dashboard pause needed unless the auto-pause's
+  fallback TTL undershot the real reset.

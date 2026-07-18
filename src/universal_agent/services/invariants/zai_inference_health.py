@@ -19,6 +19,14 @@ throughput or — worse — the subscription itself:
    sustained-throttled.
 5. UA Python process count above soft limit → WARN. Correlates with the
    above; flags the operator that we're self-induced-choking.
+6. ZAI weekly/monthly quota wall (error 1310) tripped the auto-pause →
+   CRITICAL, no grace period. Read from the control file's
+   ``weekly_exhaustion`` stamp (written by
+   ``services/zai_control.handle_weekly_exhaustion`` on detection in
+   ``rate_limiter.py`` / ``zai_observability.py``); fresh = stamped within
+   ``WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS`` (48h) AND the reset time is
+   still in the future. Includes the reset time in both UTC and
+   America/Chicago so the operator knows exactly when it self-clears.
 
 One invariant emits one finding listing every triggered condition in
 `observed_value.triggered_conditions` so the operator gets the full picture
@@ -39,6 +47,7 @@ No DB write. No HTTP.
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -47,6 +56,7 @@ import shutil
 import subprocess
 import time
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
 
 from universal_agent.rate_limiter import _get_state_path
 from universal_agent.services.pipeline_invariants import invariant
@@ -72,6 +82,12 @@ EVENTS_429_CRITICAL_COUNT = int(os.getenv("UA_ZAI_EVENTS_429_CRITICAL_COUNT", "3
 EVENTS_FUP_WINDOW_SECONDS = int(
     os.getenv("UA_ZAI_EVENTS_FUP_WINDOW_SECONDS", "1800")
 )  # 30 min
+# 1310 weekly/monthly quota-exhaustion stamp freshness window — a
+# `weekly_exhaustion` control-file stamp older than this (or whose reset
+# time has already passed) is history, not live pressure.
+WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS = int(
+    os.getenv("UA_ZAI_WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS", str(48 * 3600))
+)  # 48h
 # Cap on how many events we'll read at the tail. JSONL file is line-trimmed by
 # zai_observability so this is a soft belt-and-suspenders bound.
 EVENTS_MAX_READ = int(os.getenv("UA_ZAI_EVENTS_MAX_READ", "5000"))
@@ -184,6 +200,42 @@ def _read_snapshot() -> Optional[Dict[str, Any]]:
         return None
 
 
+def _scan_weekly_exhaustion(now: float) -> tuple[bool, Optional[float]]:
+    """(active, reset_epoch) from the control file's ``weekly_exhaustion``
+    stamp (written by ``services/zai_control.handle_weekly_exhaustion`` on a
+    1310 detection). Fresh = ``last_seen_at`` within
+    ``WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS`` (48h) AND the reset time is
+    still in the future — a stamp whose reset has already passed means the
+    wall has cleared, and one older than the window is stale/stuck. Fails
+    open to ``(False, None)`` — never raises, mirrors every other
+    ``zai_control`` read in this module."""
+    try:
+        from universal_agent.services import zai_control
+
+        weekly = (zai_control.read_control() or {}).get("weekly_exhaustion")
+        if not isinstance(weekly, dict):
+            return False, None
+        try:
+            last_seen_at = weekly.get("last_seen_at")
+            fresh = (
+                last_seen_at is not None
+                and (now - float(last_seen_at)) <= WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS
+            )
+        except (TypeError, ValueError):
+            fresh = False
+        try:
+            reset_epoch = float(weekly.get("reset_at_epoch"))
+            reset_in_future = reset_epoch > now
+        except (TypeError, ValueError):
+            reset_epoch = None
+            reset_in_future = False
+        if fresh and reset_in_future:
+            return True, reset_epoch
+        return False, None
+    except Exception:  # noqa: BLE001 — control read fails open
+        return False, None
+
+
 def _count_ua_processes() -> int:
     """Count UA-related Python processes via pgrep.
 
@@ -247,6 +299,7 @@ def _count_ua_processes() -> int:
             "events_429_window_seconds": EVENTS_429_WINDOW_SECONDS,
             "events_429_critical_count": EVENTS_429_CRITICAL_COUNT,
             "events_fup_window_seconds": EVENTS_FUP_WINDOW_SECONDS,
+            "weekly_exhaustion_fresh_window_seconds": WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS,
         },
     },
 )
@@ -264,13 +317,17 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     process_count = _count_ua_processes()
     now = time.time()
     events_scan = _scan_recent_events(now)
+    weekly_exhaustion_active, weekly_exhaustion_reset_epoch = _scan_weekly_exhaustion(now)
 
     # If nothing upstream has any data AND process count is fine, stay quiet.
+    # A fresh weekly_exhaustion stamp overrides this — a 1310 hit on a cold
+    # process (empty snapshot, empty events) must still alert.
     if (
         snapshot is None
         and events_scan["events_429_count"] == 0
         and events_scan["events_fup_count"] == 0
         and process_count <= PROCESS_COUNT_SOFT_LIMIT
+        and not weekly_exhaustion_active
     ):
         return None
 
@@ -423,14 +480,36 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     except Exception:  # noqa: BLE001 — control read fails open
         pass
 
+    # Condition 6: fresh 1310 weekly/monthly quota-exhaustion stamp (computed
+    # above, alongside snapshot/events_scan, so it also feeds the early-quiet
+    # gate). CRITICAL, no grace period: ALL ZAI dispatch is halted
+    # account-wide until the reset — Kevin needs to know now.
+    if weekly_exhaustion_active:
+        if "weekly_limit_exhausted" not in triggered:
+            triggered.append("weekly_limit_exhausted")
+        severity = "critical"
+
     if not triggered:
         return None
+
+    weekly_limit_reset_at_utc = None
+    weekly_limit_reset_at_america_chicago = None
+    if weekly_exhaustion_reset_epoch is not None:
+        weekly_limit_reset_at_utc = datetime.fromtimestamp(
+            weekly_exhaustion_reset_epoch, tz=timezone.utc
+        ).isoformat()
+        weekly_limit_reset_at_america_chicago = datetime.fromtimestamp(
+            weekly_exhaustion_reset_epoch, tz=ZoneInfo("America/Chicago")
+        ).isoformat()
 
     observed_value = {
         "triggered_conditions": triggered,
         "control_intervention_level": control_level,
         "control_global_pause_active": control_global_pause,
         "control_tier_pauses": control_tier_pauses,
+        "weekly_limit_exhausted": weekly_exhaustion_active,
+        "weekly_limit_reset_at_utc": weekly_limit_reset_at_utc,
+        "weekly_limit_reset_at_america_chicago": weekly_limit_reset_at_america_chicago,
         "fup_active": fup_active,
         "fup_pause_active": pause_active,
         "acquire_pause_until": acquire_pause_until or None,
@@ -469,7 +548,17 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
     # Build a human-readable message that names the worst-cause first.
-    if fup_active:
+    if weekly_exhaustion_active:
+        headline = (
+            "ZAI WEEKLY/MONTHLY QUOTA EXHAUSTED (error 1310) — the auto-1310 "
+            "detector tripped a full L4 global pause. ALL ZAI dispatch (httpx "
+            "callers AND VP/Simone CLI-subprocess principals via the capacity "
+            f"governor gate) is halted until reset at {weekly_limit_reset_at_utc} "
+            f"UTC ({weekly_limit_reset_at_america_chicago} America/Chicago), when "
+            "the pause self-clears automatically. No action needed unless the "
+            "reset time has passed and traffic is still blocked."
+        )
+    elif fup_active:
         # Prefer the events-side caller attribution if we have it.
         if events_fup_active:
             top = events_scan["events_fup_top_callers"]

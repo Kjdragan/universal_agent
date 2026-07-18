@@ -10,8 +10,15 @@ LIVE:
 - ``zai_observability.py::_on_request_*`` — aborts every ``api.z.ai`` request
   while a global pause is active (ALL callers, the 100% chokepoint).
 - ``zai_inference_health.py`` — surfaces the control state (does not alarm on an
-  intentional operator pause).
+  intentional operator pause), and alerts CRITICAL on a fresh
+  ``weekly_exhaustion`` stamp (see ``handle_weekly_exhaustion`` below).
 - the gateway ``/api/v1/ops/zai/*`` endpoints read/write it.
+
+``handle_weekly_exhaustion`` (2026-07-18) is the auto-trip entry point for
+ZAI's weekly/monthly quota wall (error code 1310): callers in
+``rate_limiter.py::with_rate_limit_retry`` and
+``zai_observability.py::_capture`` invoke it on detection, and it applies the
+full L4 preset with a TTL parsed from the reset timestamp in the error body.
 
 **The one rule that makes this safe to deploy without live testing: every read
 FAILS OPEN.** A missing / corrupt / unreadable / permission-denied control file
@@ -27,12 +34,15 @@ within that window (≤2s by default).
 
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import logging
 import os
 from pathlib import Path
+import re
 import time
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +280,114 @@ def apply_level(level: int, *, ttl_seconds: Optional[float] = None,
     preset["updated_by"] = by
     write_control(preset)
     return read_control(use_cache=False)
+
+
+# ── ZAI 1310 weekly/monthly quota-exhaustion auto-pause ────────────────────
+#
+# ZAI's account-level weekly/monthly quota wall (error code 1310) carries a
+# reset timestamp in the body, Beijing-local (Asia/Shanghai, fixed UTC+8, no
+# DST): "...Your limit will reset at 2026-07-19 00:54:25...". This section
+# parses that timestamp and auto-trips the L4 preset with a TTL that expires
+# ~2 minutes after the reset, so the pause self-clears exactly when the wall
+# comes down instead of requiring an operator to notice and clear it by hand.
+
+_RESET_TS_RE = re.compile(r"reset at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+
+# Safety margin added past the parsed reset instant — ZAI's own clock/quota
+# refresh may lag the wall-clock instant by a few seconds.
+_RESET_MARGIN_SECONDS = 120.0
+
+
+def _weekly_exhaustion_fallback_ttl() -> float:
+    """TTL used when the reset timestamp can't be parsed (or already lies in
+    the past). Deliberately NOT the 30-min ``DEFAULT_GLOBAL_PAUSE_TTL_SECONDS``
+    — a weekly wall lasts days, so a short fallback would silently unpause
+    ZAI while the account is still hard-blocked. Default 6h re-arms detection
+    (the next 1310 re-trips the pause) if the fallback undershoots the real
+    reset. Parsed through a guard per the module's "never raise" contract."""
+    try:
+        return max(0.0, float(os.getenv("UA_ZAI_1310_FALLBACK_TTL_SECONDS", "21600")))
+    except (TypeError, ValueError):
+        return 21600.0
+
+
+def _parse_weekly_reset_epoch(error_text: str) -> Optional[float]:
+    """Parse the Beijing-local reset timestamp out of a 1310 error body into
+    epoch seconds. Returns ``None`` on any parse failure — never raises."""
+    try:
+        match = _RESET_TS_RE.search(error_text or "")
+        if not match:
+            return None
+        naive = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+        aware = naive.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+        return aware.timestamp()
+    except Exception:  # noqa: BLE001 — parse failure: caller falls back to the fixed TTL
+        return None
+
+
+def handle_weekly_exhaustion(error_text: str, *, source: str) -> Optional[dict[str, Any]]:
+    """Handle a ZAI weekly/monthly quota-exhaustion signal (error code 1310).
+
+    Auto-trips the full L4 global-pause preset (``apply_level(4, ...)`` — the
+    same preset the dashboard's L4 button writes, NOT a bare
+    ``set_global_pause``) with a TTL parsed from the reset timestamp embedded
+    in ``error_text`` (+ a safety margin), falling back to
+    ``UA_ZAI_1310_FALLBACK_TTL_SECONDS`` (default 21600s / 6h) when the
+    timestamp can't be parsed or already lies in the past.
+
+    Idempotent: if the global pause is already active with a reason
+    containing ``"zai_1310"``, this is a no-op that returns the current
+    state — avoids rewriting/extending the pause when many concurrent
+    callers observe the same 1310 wall.
+
+    Also stamps a ``weekly_exhaustion`` marker (``last_seen_at`` /
+    ``reset_at_epoch`` / ``source``) into the control file so
+    ``zai_inference_health`` (services/invariants/zai_inference_health.py)
+    can alert on it.
+
+    Fail-open per the module-wide invariant: NEVER raises. Returns the
+    resulting control state dict, or ``None`` on any internal failure.
+    """
+    try:
+        already_paused, gp = is_globally_paused()
+        if already_paused and "zai_1310" in str(gp.get("reason") or ""):
+            return current_state()
+
+        now = _now()
+        reset_epoch = _parse_weekly_reset_epoch(error_text)
+        ttl = None
+        if reset_epoch is not None:
+            ttl = (reset_epoch + _RESET_MARGIN_SECONDS) - now
+        if not ttl or ttl <= 0:
+            ttl = _weekly_exhaustion_fallback_ttl()
+            reset_display = "unparsed"
+        else:
+            reset_display = datetime.fromtimestamp(
+                reset_epoch, tz=ZoneInfo("UTC")
+            ).isoformat()
+
+        apply_level(
+            4,
+            ttl_seconds=ttl,
+            reason=f"zai_1310_weekly_limit_exhausted (reset {reset_display})",
+            by="auto_1310_detector",
+        )
+
+        # Merge the weekly_exhaustion stamp on top of the just-written L4
+        # preset (apply_level rewrites the whole control dict, so this must
+        # be a second write) — read/mutate/write, same pattern as the other
+        # merge-writers in this module (set_tier_overrides / set_tier_pause).
+        data = read_control()
+        data["weekly_exhaustion"] = {
+            "last_seen_at": now,
+            "reset_at_epoch": reset_epoch,
+            "source": source,
+        }
+        write_control(data)
+        return read_control(use_cache=False)
+    except Exception:  # noqa: BLE001 — fail-open, never raise (module invariant)
+        logger.warning("zai_control: handle_weekly_exhaustion failed", exc_info=True)
+        return None
 
 
 def set_global_pause(active: bool, *, ttl_seconds: Optional[float] = None,

@@ -35,6 +35,11 @@ Captures per request:
   NON-429 responses (e.g. a 403 suspension).
 - `fup_texted` (bool): true when the body matches the FUP keyword set whatever
   the status — preserves 1313-throttle visibility orthogonal to `category`.
+- `weekly_exhaustion` (bool, 2026-07-18): true on a 429 whose body matches
+  ZAI's weekly/monthly quota-wall text (error code 1310). On a match, this
+  hook invokes `services/zai_control.handle_weekly_exhaustion` (idempotent,
+  fail-open) to auto-trip the L4 global pause — the same call
+  `rate_limiter.py::with_rate_limit_retry` makes for its own lane.
 
 Rolling JSONL buffer at `AGENT_RUN_WORKSPACES/zai_inference_events.jsonl`
 with `UA_ZAI_EVENTS_MAX_LINES` cap (default 10000 — ~3 days at current
@@ -126,6 +131,24 @@ def _is_fup_body(body: str) -> bool:
         return False
     lower = body.lower()
     return any(kw in lower for kw in _fup_keywords())
+
+
+def _is_weekly_exhaustion_body(body: str) -> bool:
+    """True when a response body matches ZAI's weekly/monthly quota-wall
+    text (error code 1310). Lazy-imports the canonical classifier from
+    ``rate_limiter`` (mirrors ``_fup_keywords``'s fallback pattern) so this
+    module has no import-time dependency on it."""
+    try:
+        from universal_agent.rate_limiter import _is_weekly_exhaustion
+
+        return _is_weekly_exhaustion(body)
+    except Exception:  # noqa: BLE001
+        if not body:
+            return False
+        lower = body.lower()
+        return any(
+            kw in lower for kw in ("1310", "limit exhausted", "weekly/monthly limit")
+        )
 
 
 def _classify_response(status: int, body_snippet: str, reason_phrase: str = "") -> str:
@@ -484,6 +507,28 @@ def _capture(request: httpx.Request, response: httpx.Response) -> None:
     # `file::function` `caller_fn` (stage granularity for the token panel).
     caller_frame = _resolve_caller_frame()
 
+    # 1310 weekly/monthly quota-exhaustion detection: the httpx lane sees
+    # calls the SDK-subprocess lane (rate_limiter.py) never does. On match,
+    # invoke the same auto-pause handler `with_rate_limit_retry` calls — it
+    # is idempotent + fail-open, so redundant invocation from both lanes is
+    # safe. `category` stays `rate_limited_429` (this IS a 429); the
+    # orthogonal `weekly_exhaustion` field flags it for later analysis and
+    # for the `zai_inference_health` alert.
+    weekly_exhaustion = (
+        response.status_code == 429 and _is_weekly_exhaustion_body(body_snippet)
+    )
+    if weekly_exhaustion:
+        try:
+            from universal_agent.services import zai_control
+
+            zai_control.handle_weekly_exhaustion(
+                body_snippet, source=f"httpx:{_frame_to_caller(caller_frame)}"
+            )
+        except Exception:  # noqa: BLE001 — never break the observability hook
+            logger.debug(
+                "zai_observability: handle_weekly_exhaustion failed", exc_info=True
+            )
+
     event = {
         "ts": time.time(),
         "method": request.method,
@@ -497,6 +542,7 @@ def _capture(request: httpx.Request, response: httpx.Response) -> None:
         "ratelimit_limit": response.headers.get("x-ratelimit-limit"),
         "category": _classify_response(response.status_code, body_snippet, response.reason_phrase or ""),
         "fup_texted": fup_texted,
+        "weekly_exhaustion": weekly_exhaustion,
         "caller": _frame_to_caller(caller_frame),
         "caller_fn": _identify_caller_fn(caller_frame),
         "input_tokens": usage.get("input_tokens", 0),
