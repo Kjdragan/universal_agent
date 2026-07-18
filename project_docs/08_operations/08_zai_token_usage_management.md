@@ -66,7 +66,7 @@ relevance filter and `llm_classifier` cause most 429s but near-zero spend; the p
 cache reads dominate spend. And the sharpest defect: `rate_limiter.py::FUP_KEYWORDS` matches
 `"weekly limit"` and `"1313"` but the real weekly-exhaustion body says
 `[1310][Weekly/Monthly Limit Exhausted…]` — matched by neither — so the stack retried into a
-dead account for ~2 days until manually paused (the L4 pause lever in
+dead account for ~2 days until manually paused (the global pause lever in
 `services/zai_control.py::set_global_pause` existed the whole time but nothing pulled it).
 
 ## 3. Re-running the analysis (read-only, on the VPS)
@@ -93,7 +93,7 @@ Full rationale for each item lives in the exhibit. Status values: `todo`, `in-pr
 
 | ID | Recommendation | Status (2026-07-18) |
 |---|---|---|
-| R1 | Recognize error code 1310 as *weekly exhaustion* (not FUP, not gradient-429): stop retry ladders, auto-set the existing L4 global pause with TTL parsed from the reset timestamp in the error body, alert once | **in-progress** |
+| R1 | Recognize error code 1310 as *weekly exhaustion* (not FUP, not gradient-429): stop retry ladders, auto-set a pause-only global pause (no tier preset) with TTL parsed from the reset timestamp in the error body, alert once | **shipped** (branch `claude/zai-r1-1310-autopause`; mechanism detail in [`06_platform/10_zai_rate_limiter.md` §9.6](../06_platform/10_zai_rate_limiter.md#96-the-1310-weeklymonthly-quota-exhaustion-auto-pause-r1-2026-07-18)) |
 | R2 | Mission-Control intelligence: delta-gate (stable evidence signature) + ~60-min readout floor | **in-progress** |
 | R3 | Self-calibrating weekly budget meter over the four lanes: week-to-date rollup, observed-cap learned from each 1310 sighting (no fixed cap number needed), dashboard tile, auto-escalate `zai_control` levels at % thresholds | **in-progress** |
 | R4 | Context diet for principals (conservative): slim `memory/HEARTBEAT.md` (45.8KB → 19.4KB core + `memory/reference/*.md` lazy-loaded sections) and activate the existing-but-dead task-focused lean tick behind `UA_HEARTBEAT_TASK_FOCUSED` (default on). **`force_complex` deliberately left untouched** — investigation found `metadata["source"]="heartbeat"` (unconditional) already forces `ROUTE_SYSTEM` via the Tier-1 env-signal heuristic before `force_complex` is ever consulted, so it was near-inert; touching it would have been a wasted-effort risk, not a savings lever. VP prompt boilerplate audit found `_build_cli_prompt` itself is small (~0.5-1.5KB) — the real per-mission constant cost is suspected to be `CLAUDE.md`/`.claude/agents`/skill-catalog reload on each `claude --print` subprocess spawn, unconfirmed and deferred to an R4b follow-up (measure first). | **built (branch `claude/zai-r4-context-diet`, PR pending)** — note: `_is_task_focused` still always resolves `False` in production because `task_hub_claimed` is hardcoded `[]` at the `_run_heartbeat` call site since the 2026-05-23 dispatch move to `todo_dispatch_service`; the activation is correct and unit-tested but a no-op until claims are threaded through again |
@@ -112,6 +112,9 @@ thinking tokens bill beyond reported output.
   patched httpx client or the SDK adapters, its spend is invisible — wire it through an
   existing lane or extend one in the same PR.
 - **When a 1310 appears**, the week is over — do not retry, do not restart services to "fix"
-  it. Until R1 ships: pause via the ZAI-Control dashboard (L4) or
-  `services/zai_activity_control.py`, and revive after the reset time in the error body
-  (Beijing time, UTC+8).
+  it. R1 now auto-detects this and trips a pause-only global pause (no tier preset) with a TTL
+  parsed from the reset timestamp (Beijing time, UTC+8), gating both the httpx-hook lane and
+  VP/Simone dispatch (see
+  [`06_platform/10_zai_rate_limiter.md` §9.6](../06_platform/10_zai_rate_limiter.md#96-the-1310-weeklymonthly-quota-exhaustion-auto-pause-r1-2026-07-18)).
+  It self-clears at the reset — no manual dashboard pause needed unless the auto-pause's
+  fallback TTL undershot the real reset.

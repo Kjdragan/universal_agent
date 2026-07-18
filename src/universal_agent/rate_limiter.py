@@ -79,6 +79,35 @@ def _is_fup_error(error_str: str) -> bool:
     return any(kw in lower for kw in FUP_KEYWORDS)
 
 
+# ZAI's account-level WEEKLY/MONTHLY quota wall (error code 1310). Verified
+# body shape: "[1310][Weekly/Monthly Limit Exhausted. Your limit will reset
+# at 2026-07-19 00:54:25][...]" — the exception string ALSO contains "429"
+# (e.g. "Error code: 429 - [1310][...]"), so this classifier MUST be checked
+# BEFORE `_is_429_error` in `with_rate_limit_retry` or the ordinary 429
+# gradient branch would claim it and burn the full retry budget hammering a
+# hard wall that will not clear until the weekly reset.
+#
+# Keywords are deliberately narrow — the bracketed error-code shape
+# `"[1310]"` plus the distinctive phrase `"weekly/monthly limit"` — NOT a
+# bare `"1310"` or `"limit exhausted"`. A bare "1310" false-positives on
+# ZAI request ids, which embed a timestamp (any id minted at 13:10:xx
+# contains "1310", e.g. "...20260718131015abcdef...") and on context-length
+# errors ("maximum context length is 131072 tokens" contains "1310" too). A
+# bare "limit exhausted" would also swallow other limit-exhaustion messages
+# that are NOT the weekly wall. Matching is case-insensitive.
+WEEKLY_EXHAUSTION_KEYWORDS = frozenset({
+    "[1310]",
+    "weekly/monthly limit",
+})
+
+
+def _is_weekly_exhaustion(error_str: str) -> bool:
+    if not error_str:
+        return False
+    lower = error_str.lower()
+    return any(kw in lower for kw in WEEKLY_EXHAUSTION_KEYWORDS)
+
+
 def _is_429_error(error_str: str) -> bool:
     """Is this error a rate-limit (429) response?
 
@@ -980,8 +1009,10 @@ async def with_rate_limit_retry(
 
     Error dispatch (verified against live ZAI behavior 2026-06-11 — its
     STANDARD throttle is a 429 whose body carries code 1313 + Fair-Usage
-    text):
-        429-shaped (even FUP-texted) → gradient: record_429 + backoff + retry
+    text; 2026-07-18 added the 1310 weekly-exhaustion cliff, checked FIRST
+    because its exception string also contains "429"):
+        1310-shaped (weekly/monthly wall) → auto-pause: handle_weekly_exhaustion + raise, zero retries
+        429-shaped (even FUP-texted)  → gradient: record_429 + backoff + retry
         FUP text on a non-429        → cliff:    record_fup_signal + raise
         ZAIFupPauseError from acquire → propagate (account paused, fail fast)
         anything else                 → raise (not a rate-limit problem)
@@ -1031,7 +1062,28 @@ async def with_rate_limit_retry(
             except Exception as e:
                 error_str = str(e)
 
-                if _is_429_error(error_str):
+                if _is_weekly_exhaustion(error_str):
+                    # Hard account-level weekly/monthly quota wall (error
+                    # 1310) — checked BEFORE `_is_429_error` since a 1310
+                    # exception string also contains "429". Stop immediately:
+                    # zero retries against a wall that only clears at the
+                    # weekly reset. Trip a pause-only global pause (TTL parsed from
+                    # the reset timestamp in the body) so every other caller
+                    # stands down too; the handler is fail-open and never
+                    # raises, so a control-plane hiccup can't block the raise.
+                    try:
+                        from universal_agent.services import zai_control
+
+                        zai_control.handle_weekly_exhaustion(
+                            error_str, source=f"rate_limiter:{context}"
+                        )
+                    except Exception:  # noqa: BLE001 — never let this mask the real error
+                        logger.warning(
+                            "rate_limiter: handle_weekly_exhaustion failed",
+                            exc_info=True,
+                        )
+                    raise
+                elif _is_429_error(error_str):
                     await limiter.record_429(context, model_tier=model_tier)
                     had_429 = True
                     last_error = e

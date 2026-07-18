@@ -354,3 +354,58 @@ def test_default_ttl_parse_never_raises(monkeypatch):
     assert zai_control._default_ttl() == 1800.0
     monkeypatch.setenv("UA_ZAI_GLOBAL_PAUSE_DEFAULT_TTL_SECONDS", "900")
     assert zai_control._default_ttl() == 900.0
+
+
+# ── R1: handle_weekly_exhaustion (1310 auto-pause) writer-level shape ───────
+# Full classifier + retry-loop + parsing/idempotence coverage lives in
+# tests/unit/test_zai_weekly_exhaustion.py; these pin the WRITER's shape.
+
+from datetime import datetime, timedelta  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+
+def _future_1310_body(hours_ahead: float = 48.0) -> str:
+    target = datetime.now(tz=ZoneInfo("Asia/Shanghai")) + timedelta(hours=hours_ahead)
+    ts_str = target.strftime("%Y-%m-%d %H:%M:%S")
+    return (
+        "[1310][Weekly/Monthly Limit Exhausted. Your limit will reset at "
+        f"{ts_str}][20260718191643db4f685336574732]"
+    )
+
+
+def test_handle_weekly_exhaustion_writes_pause_only_shape(isolated_control):
+    """The 1310 auto-trip is pause-ONLY: no tier_overrides/tier_pause preset,
+    because during a global pause tier knobs are redundant and — critically
+    — only `global_pause.until` carries a TTL, so an L4-style tier preset
+    would leave opus/mid permanently hard-stopped after the pause expires."""
+    result = zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test:writer")
+    assert result is not None
+    assert result["global_pause"]["active"] is True
+    assert "zai_1310" in result["global_pause"]["reason"]
+    assert result["updated_by"] == "auto_1310_detector"
+    # Tier state must be left completely untouched by the 1310 auto-trip.
+    assert result.get("tier_overrides") in (None, {})
+    assert result.get("tier_pause") in (None, {})
+
+
+def test_handle_weekly_exhaustion_stamps_weekly_exhaustion_marker(isolated_control):
+    zai_control.handle_weekly_exhaustion(
+        _future_1310_body(), source="test:stamp-source"
+    )
+    data = zai_control.read_control()
+    weekly = data.get("weekly_exhaustion")
+    assert isinstance(weekly, dict)
+    assert weekly["source"] == "test:stamp-source"
+    assert isinstance(weekly["last_seen_at"], float)
+    assert isinstance(weekly["reset_at_epoch"], float)
+
+
+def test_handle_weekly_exhaustion_fails_open_never_raises(isolated_control, monkeypatch):
+    """Even a totally broken control-write path must not raise — the
+    module-wide fail-open invariant applies to this writer too."""
+    def boom(*a, **k):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(zai_control, "set_global_pause", boom)
+    result = zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test")
+    assert result is None
