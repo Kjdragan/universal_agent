@@ -91,7 +91,8 @@ This is the **default**. You may override when a task is genuinely small enough 
   - **No invented metrics.** Every row in the System Health table must trace to a tool result above. Do not fabricate ratios like "X/500" or "Y%" to round out a row — if a real ceiling exists, cite the source file and line; otherwise omit the row. The 2026-05-14 digest's "Tasks 453/500 (90.6%) WATCH" entry was invented (no DB has 453 task_hub_items, and the `task_hub_pressure` tile has no 500-cap) and must not recur.
   - If any metric is WARN or CRITICAL, flag it in the heartbeat response for Kevin's attention.
   - Write the full human-readable report to `work_products/system_health_latest.md` (overwrite each cycle).
-    - Also write a machine-readable findings contract to `work_products/heartbeat_findings_latest.json` (overwrite each cycle). Need the exact JSON schema? FIRST Read `memory/reference/vps-health-findings-json-schema.md`.
+    - Write a machine-readable findings contract to `work_products/heartbeat_findings_latest.json` (overwrite each cycle). Before writing it, FIRST Read `memory/reference/vps-health-findings-json-schema.md` for the exact schema.
+    - If `overall_status` is `warn` or `critical`, `findings[]` MUST contain at least one entry (known_rule_match rules are in the reference file).
 <!-- scope:local -->
 - [ ] Local Desktop Health Check (run every heartbeat cycle) - Monitor the local machine running this agent instance:
     1. **CPU**: `uptime` (load averages vs core count from `nproc`)
