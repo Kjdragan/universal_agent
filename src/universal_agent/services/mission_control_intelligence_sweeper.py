@@ -119,9 +119,22 @@ class SweeperConfig:
     # demand). Paired with the new dormancy gate (UA_MISSION_CONTROL_24_7) which
     # skips the LLM passes 10pm-6am Houston. Code defaults, NOT .env (deploys
     # wipe the VPS .env).
+    #
+    # 2026-07-18: `tier2_floor_seconds` raised 600 -> 3600 (10 min -> 60 min).
+    # Root cause was `mission_control_tier1.py::evidence_signature` including
+    # `updated_at` in its task/event identity components, so the signature
+    # churned on nearly every sweep and tier-1 cascaded tier-2 via the
+    # `tier1_synthesized` trigger far more often than intended (measured
+    # ~620 tier-2 fires/wk, ~76M tokens/wk). With that signature bug fixed in
+    # the same change, tier-1 now genuinely gates on state transitions, but
+    # the tier-2 floor is raised too as an independent hard backstop so
+    # readout cadence cannot exceed hourly regardless of cascade noise.
+    # Floor == ceiling collapses tier-2 to "at most, and at least, once per
+    # hour" — operator-approved 60-min staleness; the Refresh button still
+    # bypasses cadence entirely on demand.
     tier1_floor_seconds: float = 600.0
     tier1_ceiling_seconds: float = 3600.0
-    tier2_floor_seconds: float = 600.0
+    tier2_floor_seconds: float = 3600.0
     tier2_ceiling_seconds: float = 3600.0
     lane_concurrency: int = 1
     auto_remediation_enabled: bool = False
@@ -133,7 +146,7 @@ class SweeperConfig:
             interval_seconds=_get_float_env("UA_MISSION_CONTROL_SWEEPER_INTERVAL_S", 60.0),
             tier1_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_FLOOR_S", 600.0),
             tier1_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_CEILING_S", 3600.0),
-            tier2_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_FLOOR_S", 600.0),
+            tier2_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_FLOOR_S", 3600.0),
             tier2_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_CEILING_S", 3600.0),
             lane_concurrency=max(1, _get_int_env("UA_MISSION_CONTROL_LANE_CONCURRENCY", 1)),
             auto_remediation_enabled=(os.getenv("UA_MISSION_CONTROL_AUTO_REMEDIATION") or "0").strip().lower()
@@ -544,6 +557,21 @@ class MissionControlSweeper:
             ceiling_seconds = self.config.tier1_ceiling_seconds
             floor_seconds = self.config.tier1_floor_seconds
 
+            # On any non-fire write (skip or error) we must NOT record the
+            # freshly-observed `sig` as "seen" — `_tier1_skip_reason` reads
+            # `last_signature` back next sweep as `prior_sig`, and writing
+            # `sig` there would make a genuine, still-undelivered change
+            # look identical to the baseline, silently promoting it from
+            # "rate-limited by the floor" to "unchanged, gated by the much
+            # longer ceiling" on the very next check. Preserving `prior_sig`
+            # instead keeps `prior_sig != new_sig` true until the change
+            # actually fires, so the next eligible sweep past the floor
+            # still fires it rather than waiting for the ceiling. First-ever
+            # run (no meta row, `prior_sig is None`) has no baseline to
+            # preserve — nothing is being masked yet — so it falls back to
+            # recording the freshly-observed `sig`.
+            deferred_sig = prior_sig if prior_sig else sig
+
             skip_reason = (
                 None
                 if force
@@ -553,7 +581,7 @@ class MissionControlSweeper:
             )
             if skip_reason:
                 last_attempt_summary = f"tier1 skipped: {skip_reason}"
-                self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary,
+                self._write_tier1_meta(mc_conn, signature=deferred_sig, annotation=last_attempt_summary,
                                        payload=last_evidence_payload, advance_fire_ts=False)
                 logger.debug("Tier-1 skipped: %s", skip_reason)
                 return
@@ -564,7 +592,7 @@ class MissionControlSweeper:
                 last_attempt_summary = f"tier1 LLM discover_tier1_cards raised: {type(exc).__name__}: {exc}"
                 result.errors.append(last_attempt_summary)
                 logger.exception("Tier-1 discover raised")
-                self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary,
+                self._write_tier1_meta(mc_conn, signature=deferred_sig, annotation=last_attempt_summary,
                                        payload=last_evidence_payload, advance_fire_ts=False)
                 return
 
@@ -574,7 +602,7 @@ class MissionControlSweeper:
                 last_attempt_summary = f"tier1 apply_tier1_discovery raised: {type(exc).__name__}: {exc}"
                 result.errors.append(last_attempt_summary)
                 logger.exception("Tier-1 apply raised")
-                self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary,
+                self._write_tier1_meta(mc_conn, signature=deferred_sig, annotation=last_attempt_summary,
                                        payload={"model": model_used, "upsert_count": len(upserts), **(last_evidence_payload or {})},
                                        advance_fire_ts=False)
                 return
@@ -620,9 +648,17 @@ class MissionControlSweeper:
         Only the real-fire path passes ``advance_fire_ts=True``; skip/error
         paths pass ``advance_fire_ts=False`` so the age clock is not reset on
         every sweep (the same dead-ceiling defect that froze tier-2).
-        `last_signature` is still updated on every write — signature
-        tracking is independent of fire-time, and `_tier1_skip_reason`
-        relies on observing the latest signature each sweep. First write
+
+        This function is a dumb writer: it stores whatever `signature` its
+        caller passes, unconditionally, on every write. The gating
+        discipline lives in the CALLER (`_run_tier1_async`): the real-fire
+        path passes the newly-observed signature, but every skip/error path
+        passes the **prior** (last-fire) signature instead — writing the
+        newly-observed one there would make `_tier1_skip_reason` see
+        `prior_sig == new_sig` on the very next sweep and mistake a
+        still-undelivered genuine change for "unchanged, gated by the
+        ceiling" instead of "changed, only rate-limited by the floor",
+        deferring it far longer than intended (2026-07-19 fix). First write
         seeds `state_since` via the INSERT path; the flag only gates the
         ``DO UPDATE`` branch.
         """

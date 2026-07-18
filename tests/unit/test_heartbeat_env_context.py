@@ -111,3 +111,61 @@ def test_compose_heartbeat_prompt_default_workspace_dir_param():
 
     assert "Check HEARTBEAT.md" in prompt
     assert "Heartbeat Environment Context" not in prompt
+
+
+def test_compose_heartbeat_prompt_task_focused_uses_lean_context_and_skips_blocks(monkeypatch):
+    """R4: task_focused=True uses the lean env context and omits brainstorm/morning-
+    report/recent-topics/DB-health/proactive-health blocks."""
+    monkeypatch.setenv("UA_MACHINE_SLUG", "vps-test")
+    monkeypatch.setenv("FACTORY_ROLE", "HEADQUARTERS")
+
+    from universal_agent.heartbeat_service import _compose_heartbeat_prompt
+
+    prompt = _compose_heartbeat_prompt(
+        "Check HEARTBEAT.md",
+        investigation_only=False,
+        task_hub_claims=[],
+        workspace_dir="/opt/ua/ws/session_test",
+        brainstorm_context_text="BRAINSTORM_MARKER_TEXT",
+        morning_report_text="MORNING_REPORT_MARKER_TEXT",
+        recent_topics_text="RECENT_TOPICS_MARKER_TEXT",
+        task_focused=True,
+    )
+
+    # Lean env context in, verbose one out.
+    assert "## Task Execution Environment" in prompt
+    assert "## Heartbeat Environment Context" not in prompt
+    assert "No System Monitoring" in prompt
+
+    # Gated blocks absent.
+    assert "BRAINSTORM_MARKER_TEXT" not in prompt
+    assert "MORNING_REPORT_MARKER_TEXT" not in prompt
+    assert "RECENT_TOPICS_MARKER_TEXT" not in prompt
+    assert "== DATABASE HEALTH ALERTS ==" not in prompt
+    assert "== PROACTIVE HEALTH" not in prompt
+
+
+def test_compose_heartbeat_prompt_not_task_focused_keeps_blocks_regression(monkeypatch):
+    """Regression: task_focused=False (the historical default) still injects the
+    verbose env context and the gated advisor blocks when text is supplied."""
+    monkeypatch.setenv("UA_MACHINE_SLUG", "vps-test")
+    monkeypatch.setenv("FACTORY_ROLE", "HEADQUARTERS")
+
+    from universal_agent.heartbeat_service import _compose_heartbeat_prompt
+
+    prompt = _compose_heartbeat_prompt(
+        "Check HEARTBEAT.md",
+        investigation_only=False,
+        task_hub_claims=[],
+        workspace_dir="/opt/ua/ws/session_test",
+        brainstorm_context_text="BRAINSTORM_MARKER_TEXT",
+        morning_report_text="MORNING_REPORT_MARKER_TEXT",
+        recent_topics_text="RECENT_TOPICS_MARKER_TEXT",
+        task_focused=False,
+    )
+
+    assert "## Heartbeat Environment Context" in prompt
+    assert "## Task Execution Environment" not in prompt
+    assert "BRAINSTORM_MARKER_TEXT" in prompt
+    assert "MORNING_REPORT_MARKER_TEXT" in prompt
+    assert "RECENT_TOPICS_MARKER_TEXT" in prompt
