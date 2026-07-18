@@ -1032,9 +1032,12 @@ against a *learned* weekly cap and trim inference proactively, before the wall i
   hardcoded: seeded from `UA_ZAI_WEEKLY_CAP_SEED_TOKENS` (default 400,000,000, `calibrated_from =
   "seed_estimate"`), then replaced by `zai_weekly_budget.py::maybe_calibrate` the next time R1's
   control-file `weekly_exhaustion` stamp is newer than what the current week last calibrated
-  from — `observed_cap` becomes the week-to-date total AT THAT MOMENT, floored at the prior
-  `observed_cap` (never silently lowered by a transient under-count), and `calibrated_from`
-  becomes `"1310@<iso last_seen_at>"`.
+  from — `observed_cap` becomes the week-to-date total AT THAT MOMENT. The FIRST real 1310 off a
+  `"seed_estimate"` row sets this DIRECTLY, with NO floor against the seed (the seed is a rough
+  a-priori guess, not an observation — flooring against it would let a too-high seed overshoot the
+  learned cap forever); from the second real 1310 onward (`calibrated_from` already starts with
+  `"1310@"`), the reading IS floored at the prior `observed_cap` (never silently lowered by a
+  transient under-count). `calibrated_from` becomes `"1310@<iso last_seen_at>"`.
 - **Week boundaries.** `zai_weekly_budget.py::current_week_start` anchors to the observed ZAI
   weekly reset instant (`UA_ZAI_WEEK_RESET_ANCHOR_EPOCH`, default the epoch of 2026-07-19
   00:54:25 Asia/Shanghai = `1784393665.0`), rolled forward (or backward) in whole 7-day
@@ -1053,19 +1056,43 @@ against a *learned* weekly cap and trim inference proactively, before the wall i
   2026-07 baseline). The tables involved are small (hundreds of rows/week), so this is
   recomputed from scratch every run rather than incrementally accumulated — idempotent and
   self-healing as soon as the window narrows to ≤6 days.
-- **Escalation — never-downgrade.** `zai_weekly_budget.py::maybe_escalate` maps the
+- **Escalation — never-downgrade, pause-safe.** `zai_weekly_budget.py::maybe_escalate` maps the
   week-to-date/observed_cap fraction to a target level via `zai_weekly_budget.py::target_level`
   (L1 ≥70%, L2 ≥85%, L3 ≥95%, all env-overridable) and calls `zai_control.py::apply_level(target,
   by="auto:weekly-budget")` **only when `target` is strictly greater than the control plane's
-  current `intervention_level`** — it never downgrades and never overwrites an operator-set or
-  R1 1310-set (L4) level. `zai_weekly_budget.py::maybe_release_new_week` releases back to L0 at
-  the top of a new week, but ONLY when the control plane is currently at a level `updated_by ==
-  "auto:weekly-budget"` set AND that level is ≤3 (L4 is never auto-released).
+  current `intervention_level`** — it never downgrades and never overwrites an operator-set
+  level. Guarded up front against an ACTIVE global pause (`zai_control.py::is_globally_paused`,
+  fail-open to not-paused on a control-read error): `maybe_escalate` returns `None` immediately
+  in that case, before writing anything, because `apply_level`'s wholesale preset-replace would
+  otherwise silently cancel an in-flight R1 1310 auto-pause (or an operator pause). On a
+  successful escalation, `zai_weekly_budget.py::_stamp_auto_escalation` merge-writes an
+  `auto_escalation` marker (`level` / `baseline_level` / `baseline_updated_by` / `set_at`) onto
+  the control file recording the pre-escalation baseline.
+- **Release — stateless, evaluated every pass.** `zai_weekly_budget.py::maybe_release_stale_escalation`
+  runs on EVERY `run_meter` call (no "is this a new week" gate, no reliance on `updated_by`
+  surviving between runs): if the `auto_escalation` stamp is present, nothing has since raised
+  the control plane's level further, this run's freshly-computed budget-driven target has
+  dropped below the stamp's `level`, and no global pause is active, it restores
+  `apply_level(stamp.baseline_level, by="auto:weekly-budget")` and clears the stamp — escalating
+  from an operator baseline (e.g. L1 → L2) releases back to L1, not L0, because `baseline_level`
+  carries the pre-escalation state. If the operator raised the level ABOVE the stamp's level in
+  the meantime, the stamp is cleared without touching the level (operator wins). This design is
+  self-healing across week rollover, a crashed/missed run (caught on the very next pass), and any
+  later writer changing `updated_by` — properties the prior "release only at the top of a new
+  week, gated on `updated_by == 'auto:weekly-budget'`" design did not have.
+- **`zai_control.py::apply_level` stamp preservation.** Because `apply_level` wholesale-replaces
+  the control dict with the level preset, it explicitly carries over an allowlist of stamp keys
+  (`_APPLY_LEVEL_STAMP_KEYS = ("weekly_exhaustion", "auto_escalation")`) from the existing control
+  file onto the new preset before writing — otherwise every level change would silently erase
+  R1's 1310 stamp and/or R3's escalation-release bookkeeping.
 - **State.** One row per ZAI week in `zai_weekly_budget_state` (`task_hub.py::ensure_schema`),
   keyed by that week's start/reset-instant epoch: `observed_cap`, `week_to_date_tokens`,
   `calibrated_from`, `last_escalation_level`, `last_escalated_at`. A new week's row carries
   forward the prior week's `observed_cap`/`calibrated_from` (the learned cap outlives the week
-  it was learned in) rather than resetting to the seed every week.
+  it was learned in) rather than resetting to the seed every week. Reset/anchor epochs
+  (`zai_control.py::handle_weekly_exhaustion`'s fallback stamp, `zai_weekly_budget.py::
+  resolve_anchor_epoch`'s adopted stamp) are int()-truncated on write/adoption so week rows keyed
+  on these values never drift across runs from a fractional-second artifact.
 - **Host.** `zai_weekly_budget.py::run_meter(conn)` — compute → calibrate → persist →
   maybe-escalate — is called every ~10 min from `proactive_health_timer_main.py::_run`, guarded
   in a try/except (log-only on failure, never blocks the proactive-health digest). Zero new
@@ -1076,8 +1103,14 @@ against a *learned* weekly cap and trim inference proactively, before the wall i
   (fail-open). These COMPOSE with §9.6's `weekly_limit_exhausted` condition rather than
   duplicating or clobbering it: `weekly_limit_exhausted` fires on an ACTUAL 1310 wall already
   hit; `weekly_budget_high`/`weekly_budget_critical` fire on the leading signal BEFORE the
-  account gets there. `observed_value` carries the pct, week-to-date, observed_cap,
-  `calibrated_from`, and reset time in both UTC and America/Chicago.
+  account gets there. Both are additionally gated on `zai_inference_health.py::
+  _weekly_budget_is_current`, which requires the snapshot's `last_computed_at` to be within
+  `WEEKLY_BUDGET_STALENESS_WINDOW_SECONDS` (3x the meter's ~10 min cadence = 1800s, both module
+  constants) of `now`, AND its `week_anchor_epoch` to cover the wall-clock CURRENT week — a
+  snapshot from a meter that stopped running, or one left over from a missed rollover, stays
+  quiet rather than alarming on a frozen/stale pct. `observed_value` carries the pct, week-to-date,
+  observed_cap, `calibrated_from`, the current-snapshot verdict, and reset time in both UTC and
+  America/Chicago.
 - **API + dashboard.** `zai_status.py::build_status` exposes a top-level `weekly_budget` key
   (fail-soft to `{"available": false}`) sourced from `zai_weekly_budget.py::get_status_snapshot`
   — no new endpoint; the dashboard already polls `/api/v1/ops/zai/status` every 5s.

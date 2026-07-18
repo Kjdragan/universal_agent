@@ -14,9 +14,14 @@ gets hard-blocked, instead of only reacting once it already has.
 - Replaced automatically the next time a real 1310 lands: when the control
   file's ``weekly_exhaustion`` stamp is newer than what we last calibrated
   from, ``observed_cap`` becomes the week-to-date total AT THAT MOMENT (the
-  actual observed wall), floored at the prior ``observed_cap`` so a transient
-  under-count (see the httpx-retention note below) can never silently LOWER
-  the learned cap. ``calibrated_from`` becomes ``"1310@<iso last_seen_at>"``.
+  actual observed wall). The FIRST real 1310 (row still on
+  ``"seed_estimate"``) sets this DIRECTLY, no floor — the seed is a rough
+  a-priori guess, not an observation, so flooring against it would let a
+  too-high seed overshoot the learned cap forever. From the second real 1310
+  onward (``calibrated_from`` already ``"1310@..."``), the reading IS floored
+  at the prior ``observed_cap`` so a transient under-count (see the
+  httpx-retention note below) can never silently LOWER an already-learned
+  cap. ``calibrated_from`` becomes ``"1310@<iso last_seen_at>"``.
 
 **Week boundaries** are anchored to ZAI's observed weekly reset instant
 (``UA_ZAI_WEEK_RESET_ANCHOR_EPOCH``, default the epoch of 2026-07-19 00:54:25
@@ -43,13 +48,29 @@ run: idempotent and self-healing as soon as the window narrows to ≤6 days.
 **Escalation** is one-directional: L1 (≥70% of observed_cap), L2 (≥85%), L3
 (≥95%) via `zai_control.apply_level(level, by="auto:weekly-budget")` — but
 ONLY when the computed target level is STRICTLY GREATER than the control
-plane's CURRENT intervention level. This never downgrades and never touches
-an operator-set level (a human at L2 stays at L2 even if the budget pct says
-L1). At the top of a new week, if the control plane is still at a level WE
-set (``updated_by == "auto:weekly-budget"``) and that level is ≤3 (never
-touches L4/an operator state), it is released back to L0 — our own
-escalation self-clears when the week rolls, without ever touching a level
-the operator or the L4 1310 auto-pause set.
+plane's CURRENT intervention level, and NEVER while a global pause (real
+1310 auto-pause, or an operator pause) is active — `maybe_escalate` returns
+`None` immediately in that case, before writing anything, because
+`apply_level`'s wholesale preset-replace would otherwise silently cancel an
+in-flight pause. Escalation never downgrades and never touches an
+operator-set level (a human at L2 stays at L2 even if the budget pct says
+L1). On a successful escalation, `_stamp_auto_escalation` merge-writes an
+`auto_escalation` marker (level / baseline_level / baseline_updated_by /
+set_at) recording what the control plane looked like right before our write.
+
+**Release is STATELESS**, evaluated fresh on every `run_meter` pass via
+`maybe_release_stale_escalation` — no "is this a new week" gate, no reliance
+on in-process or DB state surviving between runs. Every pass: if the
+`auto_escalation` stamp is present, the control plane hasn't since been
+raised further by anything else, and the CURRENT run's budget-driven target
+level has dropped below the stamp's level, and no global pause is active —
+restore `apply_level(stamp.baseline_level, by="auto:weekly-budget")` and
+clear the stamp. If the operator raised the level further in the meantime,
+the stamp is cleared without touching the level (their state wins). This
+design is self-healing across week rollover, a crashed/missed run (caught on
+the very next pass), and any later writer changing `updated_by` — none of
+which the original "release only at the top of a new week, gated on
+`updated_by`" design tolerated.
 
 Host: called every ~10 min by `proactive_health_timer_main.py::_run` via
 `run_meter(conn)` (fail-soft, log-only on error — never blocks the health
@@ -186,7 +207,10 @@ def resolve_anchor_epoch() -> float:
         except (TypeError, ValueError):
             reset_epoch = None
         if reset_epoch is not None and reset_epoch > base:
-            return reset_epoch
+            # int()-truncated (still returned as a float) so week rows keyed
+            # on this value never drift across runs from a fractional-second
+            # artifact of whatever wrote the control-file stamp.
+            return float(int(reset_epoch))
     return base
 
 
@@ -295,10 +319,15 @@ def maybe_calibrate(row: dict[str, Any], week_to_date_tokens: int) -> Optional[d
     this row was last calibrated from, return the calibration update
     ``{"observed_cap", "calibrated_from"}`` — else None (no-op, most calls).
 
-    `observed_cap` becomes `max(week_to_date_tokens now, prior observed_cap)`
-    — floored at the previous value so the httpx-retention undershoot (see
-    module docstring) can never silently LOWER the learned cap on a
-    still-narrow window.
+    The floor-against-prior-value guard (`max(week_to_date_tokens now, prior
+    observed_cap)`, protecting against the httpx-retention undershoot — see
+    module docstring) applies ONLY once a REAL 1310 has already calibrated
+    this row (``calibrated_from`` starts with ``"1310@"``). The FIRST real
+    1310 calibration — when the row is still on ``"seed_estimate"`` (or has
+    no ``calibrated_from`` at all) — sets ``observed_cap`` to the week-to-date
+    total DIRECTLY, with no floor: the seed is a rough a-priori guess, not an
+    observation, so flooring a real wall reading against it would let a
+    too-high seed permanently overshoot the learned cap forever.
     """
     weekly = _control_weekly_exhaustion()
     if not weekly:
@@ -306,19 +335,85 @@ def maybe_calibrate(row: dict[str, Any], week_to_date_tokens: int) -> Optional[d
     key = _calibration_key(weekly)
     if key is None or key == row.get("calibrated_from"):
         return None
-    prior_cap = int(row.get("observed_cap") or 0)
-    new_cap = max(int(week_to_date_tokens), prior_cap)
+    prior_calibrated_from = row.get("calibrated_from")
+    if prior_calibrated_from and str(prior_calibrated_from).startswith("1310@"):
+        prior_cap = int(row.get("observed_cap") or 0)
+        new_cap = max(int(week_to_date_tokens), prior_cap)
+    else:
+        new_cap = int(week_to_date_tokens)
     return {"observed_cap": new_cap, "calibrated_from": key}
 
 
 # ── Escalation (never-downgrade; new-week release) ─────────────────────────
 
 
+def _is_globally_paused_fail_open() -> bool:
+    """(bool) whether a global pause is currently active. A control-read
+    failure is treated as NOT paused (fail-open, matching every other
+    `zai_control` read) — the caller is responsible for its own additional
+    guards; this helper only isolates the read from the caller's try/except
+    so a single control hiccup can't be conflated with other failure modes."""
+    try:
+        from universal_agent.services import zai_control
+
+        paused, _ = zai_control.is_globally_paused()
+        return bool(paused)
+    except Exception:  # noqa: BLE001 — fail open: treat a read failure as not-paused
+        return False
+
+
+def _stamp_auto_escalation(level: int, baseline_level: int, baseline_updated_by: Any) -> None:
+    """Merge-write the `auto_escalation` marker onto the control file AFTER a
+    successful `apply_level` call — read/mutate/write, the same pattern
+    `zai_control.handle_weekly_exhaustion` uses for its own `weekly_exhaustion`
+    stamp. Records the PRE-escalation baseline (level + updated_by) so a later
+    run can restore it exactly, even across an escalation-on-top-of-an-
+    operator-baseline (e.g. operator at L1, we escalate to L2 — baseline_level
+    stays 1, so release lands back at L1, not L0). Fail-soft: a write failure
+    here never raises — the escalation itself already succeeded; only the
+    stateless-release bookkeeping is at risk, and the next run's read of a
+    missing stamp is a safe no-op."""
+    try:
+        from universal_agent.services import zai_control
+
+        data = zai_control.read_control()
+        data["auto_escalation"] = {
+            "level": level,
+            "baseline_level": baseline_level,
+            "baseline_updated_by": baseline_updated_by,
+            "set_at": time.time(),
+        }
+        zai_control.write_control(data)
+    except Exception:  # noqa: BLE001 — fail-soft, never raise
+        logger.warning("zai_weekly_budget: failed to stamp auto_escalation", exc_info=True)
+
+
 def maybe_escalate(pct: float) -> Optional[int]:
     """Apply the target intervention level via `zai_control.apply_level` ONLY
     when it is STRICTLY GREATER than the control plane's current level.
     Never downgrades; never touches an operator- or 1310-set level unless our
-    own target is higher. Returns the level actually applied, or None."""
+    own target is higher.
+
+    Guarded against an ACTIVE global pause (real 1310 auto-pause, or an
+    operator-set global pause): `apply_level` writes a FULL preset for the
+    target level, which has no `global_pause.active` of its own at L1-L3 —
+    writing over an active pause would silently cancel it mid-exhaustion.
+    So this returns None immediately whenever a global pause is active,
+    before computing or writing anything. A control-read failure during that
+    check is treated as NOT paused (fail-open, mirrors every other
+    `zai_control` read) rather than blocking escalation.
+
+    On a successful escalation, also stamps an `auto_escalation` marker
+    (`_stamp_auto_escalation`) recording the pre-escalation baseline so a
+    later `run_meter` pass can release it statelessly (see
+    `maybe_release_stale_escalation`) — no in-process or "new week" state is
+    needed for the release to fire correctly.
+
+    Returns the level actually applied, or None.
+    """
+    if _is_globally_paused_fail_open():
+        return None
+
     target = target_level(pct)
     if target <= 0:
         return None
@@ -329,37 +424,88 @@ def maybe_escalate(pct: float) -> Optional[int]:
         current_level = int(current.get("intervention_level") or 0)
         if target <= current_level:
             return None
+        baseline_level = current_level
+        baseline_updated_by = current.get("updated_by")
         zai_control.apply_level(
             target,
             reason=f"weekly_budget {pct * 100:.0f}% of observed cap",
             by="auto:weekly-budget",
         )
+        _stamp_auto_escalation(target, baseline_level, baseline_updated_by)
         return target
     except Exception:  # noqa: BLE001 — fail-soft, mirrors zai_control's contract
         logger.warning("zai_weekly_budget: maybe_escalate failed", exc_info=True)
         return None
 
 
-def maybe_release_new_week() -> bool:
-    """At the top of a new week, release the control plane back to L0 ONLY
-    when it is currently at a level WE set (`updated_by ==
-    "auto:weekly-budget"`) and that level is ≤3 — never touches an
-    operator-set state or the L4 1310 auto-pause. Returns True iff released."""
+def maybe_release_stale_escalation(target: int) -> bool:
+    """Stateless release of our own prior escalation — evaluated fresh on
+    EVERY `run_meter` pass (not gated on "is this a new week"), so it's
+    self-healing across week rollover, a crashed/missed run, and any later
+    writer changing `updated_by`.
+
+    Logic:
+    - No `auto_escalation` stamp on the control file → no-op (nothing to do).
+    - An active global pause → no-op entirely (neither restore nor clear —
+      wait for the pause to clear before touching anything).
+    - The control plane's CURRENT `intervention_level` is already above the
+      stamp's `level` (an operator raised it further since we escalated) →
+      the operator's higher state wins: clear the stamp and stand down,
+      WITHOUT downgrading anything.
+    - Otherwise, if `target` (this run's freshly computed budget-driven
+      level) is STILL >= the stamp's `level`, there's nothing to release yet
+      — leave the stamp in place.
+    - Otherwise (`target` has dropped below the stamp's level and nothing
+      has raised it further) — restore the pre-escalation `baseline_level`
+      via `apply_level` and remove the stamp.
+
+    Returns True iff a restore (`apply_level` to the baseline) was applied.
+    Never raises — fail-soft, mirrors every other function in this module.
+    """
     try:
         from universal_agent.services import zai_control
 
-        current = zai_control.current_state()
-        if current.get("updated_by") != "auto:weekly-budget":
+        if _is_globally_paused_fail_open():
             return False
-        level = int(current.get("intervention_level") or 0)
-        if level <= 0 or level > 3:
+
+        data = zai_control.read_control()
+        stamp = data.get("auto_escalation")
+        if not isinstance(stamp, dict):
             return False
+
+        stamp_level = int(stamp.get("level") or 0)
+        current_level = int(zai_control.current_state().get("intervention_level") or 0)
+
+        if current_level > stamp_level:
+            # The operator (or something else) raised the level further since
+            # we escalated — their higher state wins. Stand down: clear our
+            # stamp, do not touch the level.
+            data.pop("auto_escalation", None)
+            zai_control.write_control(data)
+            return False
+
+        if target >= stamp_level:
+            # Budget-driven level is still at/above what we escalated to —
+            # nothing to release yet; leave the stamp in place.
+            return False
+
+        baseline_level = int(stamp.get("baseline_level") or 0)
         zai_control.apply_level(
-            0, reason="weekly_budget new-week release", by="auto:weekly-budget"
+            baseline_level,
+            reason="weekly_budget stale-escalation release",
+            by="auto:weekly-budget",
         )
+        # apply_level carries over the still-present auto_escalation stamp
+        # (it's in the _APPLY_LEVEL_STAMP_KEYS allowlist) — a second
+        # read/mutate/write clears it now that the restore has landed.
+        data2 = zai_control.read_control()
+        data2.pop("auto_escalation", None)
+        zai_control.write_control(data2)
         return True
     except Exception:  # noqa: BLE001 — fail-soft
-        logger.warning("zai_weekly_budget: maybe_release_new_week failed", exc_info=True)
+        logger.warning(
+            "zai_weekly_budget: maybe_release_stale_escalation failed", exc_info=True
+        )
         return False
 
 
@@ -388,7 +534,13 @@ def run_meter(conn: sqlite3.Connection, *, now: Optional[float] = None) -> dict[
         wtd = compute_week_to_date(now, week_start)
         week_to_date_tokens = int(wtd["week_to_date_tokens"])
 
-        observed_cap = int(row.get("observed_cap") or _seed_cap_tokens())
+        # NOTE: `or _seed_cap_tokens()` would be wrong here — since fix 5, a
+        # first real 1310 calibration can legitimately persist observed_cap=0
+        # (a degenerate but valid reading), and 0 is falsy in Python. Use an
+        # explicit None-check so a real zero is never silently replaced by
+        # the seed default.
+        _stored_cap = row.get("observed_cap")
+        observed_cap = int(_stored_cap) if _stored_cap is not None else _seed_cap_tokens()
         calibrated_from = row.get("calibrated_from") or "seed_estimate"
         calibration = maybe_calibrate(row, week_to_date_tokens)
         if calibration:
@@ -396,10 +548,13 @@ def run_meter(conn: sqlite3.Connection, *, now: Optional[float] = None) -> dict[
             calibrated_from = calibration["calibrated_from"]
 
         pct = (week_to_date_tokens / observed_cap) if observed_cap > 0 else 0.0
+        target = target_level(pct)
 
-        released = False
-        if is_new_week:
-            released = maybe_release_new_week()
+        # Stateless release: evaluated every pass (not gated on "is this a
+        # new week"), so week rollover, a missed/crashed run, and any later
+        # writer changing updated_by are all self-healing — see
+        # `maybe_release_stale_escalation`'s docstring.
+        released = maybe_release_stale_escalation(target)
 
         applied_level = maybe_escalate(pct)
 
@@ -443,7 +598,7 @@ def run_meter(conn: sqlite3.Connection, *, now: Optional[float] = None) -> dict[
             "last_escalated_at": last_escalated_at,
             "applied_level": applied_level,
             "is_new_week": is_new_week,
-            "released_new_week": released,
+            "released_stale_escalation": released,
         }
     except Exception as exc:  # noqa: BLE001 — fail-soft, never raise (host contract)
         logger.warning("zai_weekly_budget: run_meter failed", exc_info=True)
