@@ -223,12 +223,23 @@ def _scan_weekly_exhaustion(now: float) -> tuple[bool, Optional[float]]:
             )
         except (TypeError, ValueError):
             fresh = False
-        try:
-            reset_epoch = float(weekly.get("reset_at_epoch"))
-            reset_in_future = reset_epoch > now
-        except (TypeError, ValueError):
+        # Defensive guard: a None/absent `reset_at_epoch` must be treated as
+        # "not fresh", never raise. (Historically this could happen when the
+        # handler's fallback path stamped `None` on an unparseable 1310
+        # body — the handler now always stamps a concrete epoch, but this
+        # scan stays defensive against a None/absent value regardless of
+        # what wrote the stamp.)
+        raw_reset = weekly.get("reset_at_epoch")
+        if raw_reset is None:
             reset_epoch = None
             reset_in_future = False
+        else:
+            try:
+                reset_epoch = float(raw_reset)
+                reset_in_future = reset_epoch > now
+            except (TypeError, ValueError):
+                reset_epoch = None
+                reset_in_future = False
         if fresh and reset_in_future:
             return True, reset_epoch
         return False, None
@@ -551,7 +562,7 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if weekly_exhaustion_active:
         headline = (
             "ZAI WEEKLY/MONTHLY QUOTA EXHAUSTED (error 1310) — the auto-1310 "
-            "detector tripped a full L4 global pause. ALL ZAI dispatch (httpx "
+            "detector tripped a global pause. ALL ZAI dispatch (httpx "
             "callers AND VP/Simone CLI-subprocess principals via the capacity "
             f"governor gate) is halted until reset at {weekly_limit_reset_at_utc} "
             f"UTC ({weekly_limit_reset_at_america_chicago} America/Chicago), when "

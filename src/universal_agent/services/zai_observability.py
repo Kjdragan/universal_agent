@@ -38,8 +38,9 @@ Captures per request:
 - `weekly_exhaustion` (bool, 2026-07-18): true on a 429 whose body matches
   ZAI's weekly/monthly quota-wall text (error code 1310). On a match, this
   hook invokes `services/zai_control.handle_weekly_exhaustion` (idempotent,
-  fail-open) to auto-trip the L4 global pause — the same call
-  `rate_limiter.py::with_rate_limit_retry` makes for its own lane.
+  fail-open) to auto-trip a pause-only global pause (NOT the L4 tier-override
+  preset) — the same call `rate_limiter.py::with_rate_limit_retry` makes for
+  its own lane.
 
 Rolling JSONL buffer at `AGENT_RUN_WORKSPACES/zai_inference_events.jsonl`
 with `UA_ZAI_EVENTS_MAX_LINES` cap (default 10000 — ~3 days at current

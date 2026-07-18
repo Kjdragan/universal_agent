@@ -96,6 +96,44 @@ def test_is_weekly_exhaustion_empty_string_false():
     assert _is_weekly_exhaustion("") is False
 
 
+# ── False-positive regression (BLOCKER fix) ─────────────────────────────────
+#
+# The keyword set used to include a bare "1310" and "limit exhausted", both
+# of which false-positive on real, non-1310 ZAI traffic: request ids embed a
+# timestamp (any id minted at 13:10:xx contains "1310"), and context-length
+# errors mention "131072" (which contains "1310" as a substring). The
+# narrowed keyword set — exactly `{"[1310]", "weekly/monthly limit"}` — must
+# NOT match any of these.
+
+
+def test_ordinary_1313_fup_429_is_not_weekly_exhaustion():
+    """A completely ordinary ZAI FUP-gradient 429 (code 1313, no 1310 at
+    all) must never be misclassified as the weekly wall."""
+    body = (
+        "Error code: 429 - {'error': {'code': '1313', 'message': \"[1313][Your "
+        "account's current usage pattern does not comply with the Fair Usage "
+        'Policy, and your request frequency has been limited.]"}}'
+    )
+    assert _is_weekly_exhaustion(body) is False
+
+
+def test_request_id_containing_1310_substring_is_not_weekly_exhaustion():
+    """A request id minted at 13:10:15 embeds the substring "1310" inside a
+    longer digit run — must NOT trip the weekly-exhaustion classifier."""
+    body = (
+        "Error code: 429 - [1313][Fair Usage Policy limited]"
+        "[20260718131015abcdef]"
+    )
+    assert _is_weekly_exhaustion(body) is False
+
+
+def test_context_length_error_containing_1310_substring_is_not_weekly_exhaustion():
+    """"131072" (a common max-context-length figure) contains the substring
+    "1310" — must NOT trip the weekly-exhaustion classifier."""
+    body = "Error: maximum context length is 131072 tokens, request exceeds it"
+    assert _is_weekly_exhaustion(body) is False
+
+
 # ── with_rate_limit_retry short-circuit ─────────────────────────────────────
 
 
@@ -115,7 +153,12 @@ def test_1310_stops_after_one_attempt_no_retries(isolated):
     assert calls["n"] == 1, "1310 must raise immediately — zero retries"
 
 
-def test_1310_trips_l4_global_pause_with_parsed_ttl(isolated):
+def test_1310_trips_pause_only_global_pause_with_parsed_ttl(isolated):
+    """Pause-only (BLOCKER/SERIOUS fix): the 1310 auto-trip must set the
+    global pause with the parsed TTL and leave tier_overrides/tier_pause
+    completely untouched — an L4-style tier preset has no TTL of its own,
+    so it would leave opus/mid permanently hard-stopped after the global
+    pause self-clears at the reset."""
     body, expected_reset_epoch = _future_1310_body(hours_ahead=48.0)
 
     async def always_1310() -> str:
@@ -131,9 +174,10 @@ def test_1310_trips_l4_global_pause_with_parsed_ttl(isolated):
     assert gp["until"] == pytest.approx(expected_until, abs=5)
 
     cstate = zai_control.current_state()
-    assert cstate["intervention_level"] == 4
-    assert cstate["tier_pause"]["opus"] is True
-    assert cstate["tier_pause"]["mid"] is True
+    # No tier preset — tier caps/pauses are left exactly as they were.
+    assert cstate["tier_pause"]["opus"] is False
+    assert cstate["tier_pause"]["mid"] is False
+    assert cstate["tier_overrides"] == {}
 
 
 # ── handle_weekly_exhaustion: parsing + fallback + idempotence ──────────────
@@ -164,6 +208,23 @@ def test_reset_in_the_past_falls_back_to_default_ttl(isolated, monkeypatch):
     zai_control.handle_weekly_exhaustion(past_body, source="test")
     _, gp = zai_control.is_globally_paused()
     assert gp["until"] == pytest.approx(before + 21600, abs=5)
+
+
+def test_unparseable_body_stamps_future_reset_epoch_not_none(isolated, monkeypatch):
+    """SERIOUS fix: when the reset timestamp can't be parsed, `reset_at_epoch`
+    must be stamped as `now + fallback_ttl` — NOT `None`. The
+    `zai_inference_health` alerting condition requires a reset time in the
+    future to fire; a `None` stamp would silently make this trip
+    unalertable forever (alert-silent fallback). See
+    ``test_zai_inference_health.py`` for the end-to-end proof that this
+    fallback stamp actually produces a critical finding."""
+    monkeypatch.setenv("UA_ZAI_1310_FALLBACK_TTL_SECONDS", "21600")
+    before = zai_control._now()
+    zai_control.handle_weekly_exhaustion("no timestamp in here at all", source="test")
+    weekly = zai_control.read_control().get("weekly_exhaustion") or {}
+    assert weekly["reset_at_epoch"] is not None
+    assert weekly["reset_at_epoch"] == pytest.approx(before + 21600, abs=5)
+    assert weekly["reset_at_epoch"] > zai_control._now()
 
 
 def test_idempotent_second_1310_does_not_extend_pause(isolated):

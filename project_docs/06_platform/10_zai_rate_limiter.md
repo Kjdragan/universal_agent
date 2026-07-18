@@ -946,7 +946,7 @@ ZAI's account-level weekly/monthly quota wall is a distinct failure mode from th
 1313/Fair-Usage throttle: it returns `error code 1310` with a body like `[1310][Weekly/Monthly
 Limit Exhausted. Your limit will reset at 2026-07-19 00:54:25][...]`. Retrying against this wall
 is pointless (it only clears at the stated reset) and wastes the retry budget hammering ZAI for
-nothing, so R1 taught the stack to recognize it, stop immediately, and auto-trip the existing L4
+nothing, so R1 taught the stack to recognize it, stop immediately, and auto-trip a pause-only
 global pause for exactly the right duration.
 
 **Detection is checked BEFORE the ordinary 429 classifier**, because a 1310 exception string ALSO
@@ -954,20 +954,33 @@ contains the substring `"429"` (e.g. `"Error code: 429 - [1310][...]"`) — with
 the 429 gradient branch would claim it and burn the whole retry budget against a wall that will not
 clear until the reset.
 
-- **Classifier** — `rate_limiter.py::_is_weekly_exhaustion` (keywords `{"1310", "limit exhausted",
-  "weekly/monthly limit"}`), checked first in `with_rate_limit_retry`'s except-branch — a match
-  raises immediately (zero retries) after invoking the handler below.
+- **Classifier** — `rate_limiter.py::_is_weekly_exhaustion` (keywords `{"[1310]",
+  "weekly/monthly limit"}`, matched case-insensitively), checked first in `with_rate_limit_retry`'s
+  except-branch — a match raises immediately (zero retries) after invoking the handler below. The
+  keyword set is deliberately narrow: a bare `"1310"` (an earlier draft) false-positives on ZAI
+  request ids, which embed a timestamp (any id minted at 13:10:xx contains `"1310"`, e.g.
+  `"...20260718131015abcdef..."`), and on context-length errors (`"maximum context length is
+  131072 tokens"` also contains `"1310"`). The bracketed error-code shape `"[1310]"` plus the
+  distinctive phrase `"weekly/monthly limit"` are the two substrings actually verified in the real
+  body and nowhere else.
 - **Handler** — `services/zai_control.py::handle_weekly_exhaustion(error_text, *, source)`:
   parses the reset timestamp out of the body with the regex `reset at (\d{4}-\d{2}-\d{2}
   \d{2}:\d{2}:\d{2})`, interprets it as **Beijing-local** (`ZoneInfo("Asia/Shanghai")`, fixed
-  UTC+8, no DST — the house pattern from `services/dormancy.py`), and calls `apply_level(4,
+  UTC+8, no DST — the house pattern from `services/dormancy.py`), and calls `set_global_pause(True,
   ttl_seconds=<reset - now + 120s margin>, reason="zai_1310_weekly_limit_exhausted (reset
-  <iso>)", by="auto_1310_detector")` — the FULL L4 preset (the same one the dashboard's L4
-  button writes), not a bare `set_global_pause`. A parse failure or a reset already in the past
-  falls back to a **6-hour** TTL (`UA_ZAI_1310_FALLBACK_TTL_SECONDS`, default 21600) — deliberately
-  NOT the 30-minute `DEFAULT_GLOBAL_PAUSE_TTL_SECONDS` default, since a weekly wall lasts days and
-  a short fallback would silently unpause ZAI while the account is still hard-blocked; 6h re-arms
-  detection (the next 1310 re-trips it) if the fallback undershoots. The handler also stamps a
+  <iso>)", by="auto_1310_detector")` — **pause-only**, deliberately NOT the L4 preset
+  (`apply_level(4, ...)`). During a global pause every tier's cap/pause knobs are redundant
+  (nothing dispatches at all), and only `global_pause.until` carries a TTL — the L4 preset's
+  `tier_overrides`/`tier_pause` have no expiry of their own, so applying it here would leave
+  opus/mid permanently hard-stopped after the global pause self-clears at the reset. A parse
+  failure or a reset already in the past falls back to a **6-hour** TTL
+  (`UA_ZAI_1310_FALLBACK_TTL_SECONDS`, default 21600) — deliberately NOT the 30-minute
+  `DEFAULT_GLOBAL_PAUSE_TTL_SECONDS` default, since a weekly wall lasts days and a short fallback
+  would silently unpause ZAI while the account is still hard-blocked; 6h re-arms detection (the
+  next 1310 re-trips it) if the fallback undershoots. In the fallback case, the `weekly_exhaustion`
+  stamp's `reset_at_epoch` is set to `now + fallback_ttl` (never `None`) — the watchdog's
+  freshness condition below requires a reset time in the future to fire, so stamping `None` would
+  silently make an unparseable-body trip permanently unalertable. The handler also stamps a
   `weekly_exhaustion: {last_seen_at, reset_at_epoch, source}` marker into the control file (read by
   the watchdog below) and is **idempotent** — a second 1310 while a `zai_1310`-reasoned global pause
   is already active is a no-op, so concurrent callers observing the same wall don't churn the file.
@@ -975,7 +988,13 @@ clear until the reset.
 - **Two call sites invoke the handler**, both fail-open and guarded: `rate_limiter.py::with_rate_limit_retry`
   (the in-band lane) and `zai_observability.py::_capture` (the httpx-hook lane — a 429 whose body
   matches the classifier gets `weekly_exhaustion: true` on its JSONL event, `category` stays
-  `rate_limited_429` since it IS a 429).
+  `rate_limited_429` since it IS a 429). A third principal, `mission_control_chief_of_staff.py::_record_throttle`,
+  does NOT special-case 1310 at all — and coverage still holds: its calls run through
+  `AsyncAnthropic` over the same instrumented httpx transport, so the httpx observability hook
+  above sees the identical 429 response and trips the pause independent of `_record_throttle`'s own
+  429-vs-FUP branching. The next retry's `limiter.acquire()` call then hits the just-tripped global
+  pause and raises `ZAIFupPauseError` — the sweeper's retries die at the request hook, not inside
+  `_record_throttle`.
 - **Dispatch gating — the architectural gap this closes.** Neither the limiter's `acquire()` nor
   the httpx hook see Simone-heartbeat / VP-coder turns, which run the Claude Agent SDK in-process
   and spawn the `claude` CLI as an OS subprocess (see §6). So R1 adds a pre-dispatch gate at the
@@ -983,9 +1002,12 @@ clear until the reset.
   gained a "Check -1" (`zai_control.is_globally_paused()`, lazy-imported, guarded) ahead of its
   existing backoff/api-down/slot checks, and `vp/worker_loop.py::VpWorkerLoop._tick` gained a
   matching pre-claim check (`_maybe_hold_for_capacity_governor`, before `claim_next_vp_mission`) that
-  reuses the same governor. Both fail OPEN on any control-read error. This means an L4 pause from a
-  1310 hit now stands down **every** VP profile (all are `inference_mode="zai"` today) in addition to
-  the httpx-hook lane — the same effect as a manual full-stack pause, by design.
+  reuses the same governor. Both fail OPEN on any control-read error. This means a global pause from
+  a 1310 hit now stands down **every** VP profile (all are `inference_mode="zai"` today) in addition to
+  the httpx-hook lane — the same effect as a manual full-stack pause, by design. Check -1 deliberately
+  does NOT increment `CapacityGovernor._total_shed` (unlike the checks below it) — a multi-day weekly
+  pause would otherwise inflate that metric by thousands of "sheds" for the same standing condition,
+  since every heartbeat/dispatch tick re-checks this gate.
 - **Alerting** — `zai_inference_health.py` gained a `weekly_limit_exhausted` triggered condition
   (severity `critical`, no grace period): fresh means the control file's `weekly_exhaustion.last_seen_at`
   is within 48h (`UA_ZAI_WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS`) AND `reset_at_epoch` is still in the

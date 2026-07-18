@@ -86,9 +86,17 @@ def _is_fup_error(error_str: str) -> bool:
 # BEFORE `_is_429_error` in `with_rate_limit_retry` or the ordinary 429
 # gradient branch would claim it and burn the full retry budget hammering a
 # hard wall that will not clear until the weekly reset.
+#
+# Keywords are deliberately narrow — the bracketed error-code shape
+# `"[1310]"` plus the distinctive phrase `"weekly/monthly limit"` — NOT a
+# bare `"1310"` or `"limit exhausted"`. A bare "1310" false-positives on
+# ZAI request ids, which embed a timestamp (any id minted at 13:10:xx
+# contains "1310", e.g. "...20260718131015abcdef...") and on context-length
+# errors ("maximum context length is 131072 tokens" contains "1310" too). A
+# bare "limit exhausted" would also swallow other limit-exhaustion messages
+# that are NOT the weekly wall. Matching is case-insensitive.
 WEEKLY_EXHAUSTION_KEYWORDS = frozenset({
-    "1310",
-    "limit exhausted",
+    "[1310]",
     "weekly/monthly limit",
 })
 
@@ -1059,7 +1067,7 @@ async def with_rate_limit_retry(
                     # 1310) — checked BEFORE `_is_429_error` since a 1310
                     # exception string also contains "429". Stop immediately:
                     # zero retries against a wall that only clears at the
-                    # weekly reset. Trip the L4 global pause (TTL parsed from
+                    # weekly reset. Trip a pause-only global pause (TTL parsed from
                     # the reset timestamp in the body) so every other caller
                     # stands down too; the handler is fail-open and never
                     # raises, so a control-plane hiccup can't block the raise.

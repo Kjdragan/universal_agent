@@ -373,15 +373,19 @@ def _future_1310_body(hours_ahead: float = 48.0) -> str:
     )
 
 
-def test_handle_weekly_exhaustion_writes_l4_preset_shape(isolated_control):
+def test_handle_weekly_exhaustion_writes_pause_only_shape(isolated_control):
+    """The 1310 auto-trip is pause-ONLY: no tier_overrides/tier_pause preset,
+    because during a global pause tier knobs are redundant and — critically
+    — only `global_pause.until` carries a TTL, so an L4-style tier preset
+    would leave opus/mid permanently hard-stopped after the pause expires."""
     result = zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test:writer")
     assert result is not None
-    assert result["intervention_level"] == 4
-    assert result["tier_pause"]["opus"] is True
-    assert result["tier_pause"]["mid"] is True
     assert result["global_pause"]["active"] is True
     assert "zai_1310" in result["global_pause"]["reason"]
     assert result["updated_by"] == "auto_1310_detector"
+    # Tier state must be left completely untouched by the 1310 auto-trip.
+    assert result.get("tier_overrides") in (None, {})
+    assert result.get("tier_pause") in (None, {})
 
 
 def test_handle_weekly_exhaustion_stamps_weekly_exhaustion_marker(isolated_control):
@@ -402,6 +406,6 @@ def test_handle_weekly_exhaustion_fails_open_never_raises(isolated_control, monk
     def boom(*a, **k):
         raise RuntimeError("disk on fire")
 
-    monkeypatch.setattr(zai_control, "apply_level", boom)
+    monkeypatch.setattr(zai_control, "set_global_pause", boom)
     result = zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test")
     assert result is None

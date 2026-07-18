@@ -660,3 +660,52 @@ def test_old_weekly_exhaustion_stamp_outside_48h_does_not_fire(isolated_state, i
         assert "weekly_limit_exhausted" not in triggered
     else:
         assert matches == []
+
+
+def test_unparseable_1310_trip_still_fires_critical_via_fallback_stamp(
+    isolated_state, isolated_zai_control
+):
+    """SERIOUS fix, end-to-end: an unparseable-body 1310 trip stamps
+    `reset_at_epoch = now + fallback_ttl` (not None), so the invariant must
+    still fire critical for it — proving the alert-silent-fallback bug is
+    closed all the way through to the alerting condition."""
+    from universal_agent.services import zai_control
+
+    zai_control.handle_weekly_exhaustion("no timestamp in here at all", source="test")
+
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    obs = matches[0].observed_value or {}
+    assert "weekly_limit_exhausted" in (obs.get("triggered_conditions") or [])
+    assert obs.get("weekly_limit_exhausted") is True
+
+
+def test_none_reset_at_epoch_stamp_does_not_crash_invariant(
+    isolated_state, isolated_zai_control
+):
+    """Defensive guard (SERIOUS fix): a `weekly_exhaustion` stamp with a
+    literal `reset_at_epoch: None` (e.g. written by an older/other code
+    path) must be treated as not-fresh — never raise a TypeError out of
+    `_scan_weekly_exhaustion` / the invariant."""
+    from universal_agent.services import zai_control
+
+    data = zai_control.read_control()
+    data["weekly_exhaustion"] = {
+        "last_seen_at": time.time(),
+        "reset_at_epoch": None,
+        "source": "test",
+    }
+    zai_control.write_control(data)
+    zai_control._invalidate_cache()
+
+    with _mock_process_count(10):
+        findings = run_invariants({})  # must not raise
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    if matches:
+        triggered = (matches[0].observed_value or {}).get("triggered_conditions") or []
+        assert "weekly_limit_exhausted" not in triggered
+    else:
+        assert matches == []

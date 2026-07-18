@@ -174,7 +174,12 @@ class CapacityGovernor:
             paused, pause_info = zai_control.is_globally_paused()
             if paused:
                 reason = f"zai_global_pause: {pause_info.get('reason') or 'active'}"
-                self._total_shed += 1
+                # Deliberately NOT incrementing `_total_shed` here: a
+                # multi-day weekly-exhaustion pause would inflate this
+                # metric by thousands of "sheds" for the same standing
+                # condition (every heartbeat/dispatch tick re-checks this
+                # gate). The other checks below shed real, distinct
+                # capacity-pressure events and keep incrementing normally.
                 return False, reason
         except Exception:  # noqa: BLE001 — control-plane read must fail open
             pass
