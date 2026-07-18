@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=ua
 WorkingDirectory=/opt/universal_agent
-ExecStart=/opt/universal_agent/.venv/bin/python -m http.server 8100 --directory site
+ExecStart=/opt/universal_agent/.venv/bin/python -m http.server 8100 --bind 127.0.0.1 --directory site
 Restart=on-failure
 RestartSec=5
 
