@@ -410,6 +410,70 @@ def test_hook_non_429_fup_body_classifies_as_cliff_real_socket(isolated_events_p
     assert event.get("body_snippet")
 
 
+# ── R1: 1310 weekly/monthly quota-exhaustion httpx-lane detection ──────────
+
+def test_hook_429_1310_body_tags_event_and_trips_l4_pause_real_socket(
+    isolated_events_path, monkeypatch, tmp_path,
+):
+    """A 429 whose body carries the 1310 weekly/monthly wall must: stay
+    `rate_limited_429` (it IS a 429), get `weekly_exhaustion: true`, AND
+    invoke `zai_control.handle_weekly_exhaustion` — proven by the control
+    file actually showing a tripped L4 global pause afterward."""
+    from universal_agent.services import zai_control
+    import universal_agent.services.zai_observability as _zo_mod
+
+    monkeypatch.setattr(_zo_mod, "_is_zai_url", lambda url: True)
+    monkeypatch.setenv("UA_ZAI_CONTROL_PATH", str(tmp_path / "zai_control.json"))
+    zai_control._invalidate_cache()
+
+    body = (
+        "[1310][Weekly/Monthly Limit Exhausted. Your limit will reset at "
+        "2026-07-19 00:54:25][20260718191643db4f685336574732]"
+    )
+    zo = _install_hooks_fresh()
+    try:
+        with _local_server(429, body) as base:
+            with httpx.Client() as client:
+                resp = client.post(f"{base}/api/anthropic/v1/messages",
+                                   json={"model": "glm-5.2", "messages": []})
+            assert resp.status_code == 429
+    finally:
+        _restore_hooks(zo)
+
+    try:
+        event = json.loads(isolated_events_path.read_text().strip().split("\n")[-1])
+        assert event["status"] == 429
+        assert event["category"] == EVENT_CATEGORY_RATE_LIMITED  # still a 429
+        assert event["weekly_exhaustion"] is True
+
+        paused, gp = zai_control.is_globally_paused()
+        assert paused is True
+        assert "zai_1310" in gp.get("reason", "")
+    finally:
+        # The control-file read cache is NOT keyed by path (see
+        # zai_control._cache) — invalidate so the tripped pause from this
+        # test's isolated control file doesn't leak (within the 2s cache
+        # TTL) into the next test once UA_ZAI_CONTROL_PATH reverts.
+        zai_control._invalidate_cache()
+
+
+def test_hook_ordinary_429_has_weekly_exhaustion_false(isolated_events_path):
+    """An ordinary (non-1310) 429 must carry `weekly_exhaustion: false`."""
+    zo = _install_hooks_fresh()
+    try:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, text='{"error": "rate limit"}')
+
+        transport = httpx.MockTransport(handler)
+        with httpx.Client(transport=transport) as client:
+            client.post("https://api.z.ai/api/anthropic/v1/messages",
+                       json={"model": "glm-4.6", "messages": []})
+    finally:
+        _restore_hooks(zo)
+    event = json.loads(isolated_events_path.read_text().strip().split("\n")[-1])
+    assert event["weekly_exhaustion"] is False
+
+
 # ── model field parsing (fail-soft) ─────────────────────────────────────────
 
 def test_model_field_parsed_from_json_body(isolated_events_path):
