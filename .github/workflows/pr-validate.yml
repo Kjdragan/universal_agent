@@ -63,7 +63,7 @@ jobs:
           fetch-depth: 50
 
       - name: Set up Python 3.13
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           # Matches `.python-version` and production. The cp313 band-aid
           # that lived here (cp312 + `--python 3.12` pins on every uv
