@@ -11,7 +11,6 @@ from __future__ import annotations
 from universal_agent.utils import env_utils
 from universal_agent.utils.env_utils import env_flag, env_flag_3state, env_int
 
-
 ENV_VAR = "UA_TEST_ENV_UTILS_FLAG"
 
 

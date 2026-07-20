@@ -11,8 +11,8 @@ correctly-tokened one passes the gate.
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-import universal_agent.gateway_server as gs
 from universal_agent.api.routers.csi_watchlist import router as watchlist_router
+import universal_agent.gateway_server as gs
 
 
 def _client(monkeypatch) -> TestClient:
