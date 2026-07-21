@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>OpenWhispr — install status &amp; 10-release change report</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    background: #ffffff; color: #1f2328;
+    font: 16px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    margin: 0; padding: 0;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 22px 90px; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .sub { color: #59636e; font-size: 15px; margin: 0 0 26px; }
+  h2 {
+    font-size: 22px; margin: 46px 0 14px; padding-bottom: 8px;
+    border-bottom: 1px solid #d1d9e0; letter-spacing: -0.01em; scroll-margin-top: 16px;
+  }
+  h3 { font-size: 17px; margin: 26px 0 8px; scroll-margin-top: 16px; }
+  p { margin: 0 0 12px; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    background: #f0f1f3; border-radius: 5px; padding: 1.5px 5px;
+    font: 13.5px/1.4 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin: 4px 0; }
+
+  .verdict {
+    border: 1px solid #d1d9e0; border-left: 5px solid #1a7f37;
+    background: #f6f8fa; border-radius: 8px; padding: 18px 20px; margin: 0 0 26px;
+  }
+  .verdict h2 { border: 0; margin: 0 0 10px; padding: 0; font-size: 18px; }
+  .vgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-top: 14px; }
+  .vcell { background: #fff; border: 1px solid #d1d9e0; border-radius: 7px; padding: 11px 13px; }
+  .vcell .k { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: #59636e; }
+  .vcell .v { font-size: 18px; font-weight: 600; margin-top: 3px; }
+  .vcell .n { font-size: 12.5px; color: #59636e; margin-top: 2px; }
+
+  .toc { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 16px 20px; margin: 0 0 30px; }
+  .toc strong { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: #59636e; margin-bottom: 8px; }
+  .toc ol { margin: 0; padding-left: 20px; }
+  .toc li { margin: 3px 0; }
+
+  .tablewrap { overflow-x: auto; margin: 0 0 18px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { border: 1px solid #d1d9e0; padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tr:nth-child(even) td { background: #fbfcfd; }
+
+  .rel { border: 1px solid #d1d9e0; border-radius: 8px; margin: 0 0 18px; overflow: hidden; }
+  .rel > header {
+    background: #f6f8fa; border-bottom: 1px solid #d1d9e0; padding: 11px 16px;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px;
+  }
+  .rel > header .ver { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .rel > header .date { color: #59636e; font-size: 13.5px; }
+  .rel .body { padding: 14px 16px 4px; }
+  .rel .why {
+    background: #fff8c5; border: 1px solid #eac54f; border-radius: 6px;
+    padding: 9px 12px; margin: 6px 0 14px; font-size: 14.5px;
+  }
+  .rel .why b { color: #7d4e00; }
+
+  .pill { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+  .pill.installed { background: #dafbe1; color: #1a7f37; border: 1px solid #aceebb; }
+  .pill.skipped   { background: #ffebe9; color: #a40e26; border: 1px solid #ffcecb; }
+  .pill.current   { background: #ddf4ff; color: #0550ae; border: 1px solid #b6e3ff; }
+
+  .tag { display: inline-block; font-size: 11.5px; background: #eaeef2; color: #444c56; border-radius: 4px; padding: 1px 7px; margin-right: 5px; }
+
+  .theme { border-left: 4px solid #0969da; background: #f6f8fa; border-radius: 0 7px 7px 0; padding: 13px 16px; margin: 0 0 14px; }
+  .theme h3 { margin: 0 0 6px; font-size: 16px; }
+  .theme .arc { font-size: 13.5px; color: #444c56; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin-top: 7px; }
+
+  .note { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 7px; padding: 13px 16px; margin: 0 0 16px; font-size: 14.5px; }
+  footer { margin-top: 54px; padding-top: 16px; border-top: 1px solid #d1d9e0; color: #59636e; font-size: 13px; }
+  .up { float: right; font-size: 12px; font-weight: 400; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>OpenWhispr — where you stand, and what the last 10 releases changed</h1>
+<p class="sub">Machine: <code>mint-desktop</code> · Linux Mint, X11 / Cinnamon · package <code>open-whispr:amd64</code> (apt/<code>.deb</code>) · report generated 2026-07-21</p>
+
+<div class="verdict">
+  <h2>Short answer</h2>
+  <p>You are on <strong>1.7.6</strong>, the newest release. And yes — <strong>you installed it today</strong>, roughly an hour before you asked: dpkg logged the <code>1.7.5 → 1.7.6</code> upgrade at <strong>11:23:44 on 2026-07-21</strong>, finishing configure at 11:24:36. Upstream cut 1.7.6 on 2026-07-18, so you picked it up three days after release.</p>
+  <div class="vgrid">
+    <div class="vcell"><div class="k">Installed version</div><div class="v">1.7.6</div><div class="n">latest available</div></div>
+    <div class="vcell"><div class="k">Installed at</div><div class="v">Today 11:23</div><div class="n">from 1.7.5</div></div>
+    <div class="vcell"><div class="k">Released upstream</div><div class="v">Jul 18</div><div class="n">3-day lag</div></div>
+    <div class="vcell"><div class="k">Your local models</div><div class="v">Intact</div><div class="n">2.9 GB survived</div></div>
+  </div>
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#history">Your actual install history</a></li>
+    <li><a href="#models">The model-deletion bug — you dodged it</a></li>
+    <li><a href="#releases">Release-by-release: the last 10</a></li>
+    <li><a href="#themes">The cumulative arc — six threads</a></li>
+    <li><a href="#linux">Linux ledger (what applied to your box)</a></li>
+    <li><a href="#coding">What this means for dictating code</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</div>
+
+<h2 id="history">1. Your actual install history <span class="up"><a href="#">↑</a></span></h2>
+<p>Reconstructed from <code>/var/log/dpkg.log*</code>. Nine package events since first install, against eleven upstream app releases in the same window — you skipped two.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Your install</th><th>Version</th><th>Upstream release date</th><th>Lag</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td><strong>2026-07-21 11:23</strong></td><td>1.7.5 → <strong>1.7.6</strong></td><td>2026-07-18</td><td>3 days</td><td><span class="pill current">current</span> the update you just noticed</td></tr>
+<tr><td>2026-07-12 14:39</td><td>1.7.3 → 1.7.5</td><td>2026-07-11</td><td>1 day</td><td>skipped 1.7.4 — got its fixes anyway</td></tr>
+<tr><td>2026-06-25 22:41</td><td>1.7.2 → 1.7.3</td><td>2026-06-24</td><td>1 day</td><td>—</td></tr>
+<tr><td>2026-05-22 10:47</td><td>1.7.0 → 1.7.2</td><td>2026-05-20</td><td>2 days</td><td>skipped 1.7.1 (superseded same day)</td></tr>
+<tr><td>2026-05-04 12:15</td><td>1.6.10 → 1.7.0</td><td>2026-05-04</td><td>same day</td><td>the big architectural release</td></tr>
+<tr><td>2026-04-20 15:59</td><td>1.6.9 → 1.6.10</td><td>2026-04-20</td><td>same day</td><td>—</td></tr>
+<tr><td>2026-04-16 17:53</td><td>1.6.8 → 1.6.9</td><td>2026-04-16</td><td>same day</td><td>—</td></tr>
+<tr><td>2026-04-15 10:07</td><td>1.6.7 → 1.6.8</td><td>2026-04-15</td><td>same day</td><td>—</td></tr>
+<tr><td>2026-04-03 19:47</td><td><em>fresh install</em> 1.6.7</td><td>2026-04-03</td><td>same day</td><td>pulled in <code>ydotool</code> + <code>ydotoold</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Two versions never touched your machine — <strong>1.7.1</strong> (superseded by 1.7.2 within an hour of release; 1.7.2 contained it) and <strong>1.7.4</strong> (rolled up into 1.7.5). Nothing was lost either time: both were cumulative. You've been running an average of ~11 days behind the newest release, and you've never been more than one version stale.</p>
+
+<h2 id="models">2. The model-deletion bug — you dodged it <span class="up"><a href="#">↑</a></span></h2>
+<p>This is the one thing in 1.7.6 worth checking rather than reading about, so I checked it.</p>
+<p>1.7.6 fixes a real Debian-packaging defect (#1160): the <code>.deb</code> maintainer scripts ran under <code>set -e</code>, and the <strong><code>postrm</code> script also ran during upgrades</strong> — deleting downloaded Whisper models when you were merely upgrading, not removing. Because the fix ships <em>in</em> 1.7.6, the script that executed during your 11:23 upgrade was still <strong>1.7.5's</strong> — the buggy one.</p>
+<p>Your cache came through clean:</p>
+<ul>
+  <li><code>~/.cache/openwhispr/</code> — <strong>2.9 GB</strong> still present</li>
+  <li><code>models/Qwen_Qwen3.5-4B-Q4_K_M.gguf</code> — 3.0 GB, mtime <strong>Jun 26</strong>, untouched by today's upgrade</li>
+  <li><code>embedding-models/all-MiniLM-L6-v2/</code> — 87 MB, intact (this is what powers semantic note search)</li>
+  <li><code>qdrant-data/</code> — intact</li>
+  <li><code>parakeet-models/</code> — empty, but its mtime is <strong>May 22</strong>, so it was always empty. You've never downloaded a Parakeet model; nothing was wiped today.</li>
+</ul>
+<p>So: no action needed. And from the <em>next</em> upgrade onward the fixed 1.7.6 scripts run, so this class of failure is behind you.</p>
+
+<h2 id="releases">3. Release-by-release: the last 10 <span class="up"><a href="#">↑</a></span></h2>
+<p>Newest first. The yellow line on each is what that release actually meant for <em>your</em> setup — Linux, X11/Cinnamon, dictating into a terminal and editor.</p>
+
+<div class="rel">
+  <header><span class="ver">1.7.6</span><span class="date">2026-07-18</span><span class="pill current">running now</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> two things land directly. The <code>.deb</code> packaging fix ends upgrade breakage on Linux, and <strong>Vulkan GPU acceleration</strong> finally opens the one-click local-Whisper GPU path beyond NVIDIA/CUDA — though on your GTX 1660 Ti the CUDA path already applied. The Nemotron streaming work roughly <strong>halves per-dictation CPU</strong> and removes the post-recording decode wait entirely.</div>
+    <p><span class="tag">new</span><strong>Translation mode</strong> — its own hotkey, its own model, up to 5 target languages, configured under Settings → AI Models → Translation. Dictate in one language, paste in another. Failures paste untranslated rather than losing the dictation.</p>
+    <p><span class="tag">new</span><strong>Audio import from URLs + batch</strong> — paste a YouTube or direct HTTPS link, or queue up to 50 URLs/files. Optional <strong>speaker detection</strong> labels who said what, running on-device by default. 500 MB cap, no playlists.</p>
+    <p><span class="tag">new</span><strong>Vulkan GPU acceleration</strong> — the one-click "Enable GPU" flow now covers AMD Radeon and Intel Arc/integrated on Windows and Linux. Binaries are SHA-256 pinned; any Vulkan failure (early exit, OOM-VRAM, hang) falls back to CPU automatically with an in-app notice. GPU Whisper also re-warms correctly after sleep now.</p>
+    <p><span class="tag">new</span><strong>NVIDIA Nemotron streaming models</strong> — Nemotron Speech Streaming EN 0.6B (632 MB) and Nemotron 3.5 ASR Streaming 0.6B (650 MB, 15 languages, auto-detect). True streaming: one persistent connection for the whole recording instead of re-transcribing 1.5 s chunks. Dictation now <strong>commits the streamed text the moment you stop</strong> — no second full decode.</p>
+    <p><span class="tag">new</span><strong>Liquid AI LFM2 / LFM2.5</strong> — five local reasoning models for on-device cleanup, from 0.25 GB (LFM2.5 230M) to 4.8 GB (LFM2.5 8B MoE). 32k context.</p>
+    <p><span class="tag">new</span>Collapsible sidebar with hover-to-peek · meeting prompts unified into the in-app overlay (survive Do Not Disturb, never appear in screen shares).</p>
+    <p><span class="tag">fix</span><strong>Local AI cleanup no longer freezes the machine.</strong> <code>llama-server</code> was spawned with no <code>--ctx-size</code> while auto-fit was off, so it allocated the model's full trained context — a ~15 GB KV cache for a 3B model. Now bounded to 16,384 tokens everywhere; a model that genuinely doesn't fit fails visibly instead of taking the box down.</p>
+    <p><span class="tag">fix</span><strong>Self-hosted routing, comprehensively.</strong> Audio uploads, History retries, note formatting and Chat all respect your self-hosted server now instead of silently falling through to a cloud provider. Model lists work without <code>/v1</code>; "disable thinking" works on Ollama.</p>
+    <p><span class="tag">fix</span>Mistral works as a custom cleanup provider (was a 422) · Groq no longer fails silently · <strong>failed cleanup pastes your raw dictation with a toast instead of losing it</strong> · muted/vanished mic falls back to default · local transcription survives a GPU crash by restarting on CPU and retrying the same request.</p>
+    <p><span class="tag">fix</span><strong>Linux:</strong> <code>.deb</code> install/upgrade/remove no longer fails in containers or chroots, and cache cleanup runs only on genuine remove/purge — <strong>never on upgrade</strong>.</p>
+  </div>
+</div>
+
+<div class="rel">
+  <header><span class="ver">1.7.5</span><span class="date">2026-07-11</span><span class="pill installed">installed Jul 12</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> the Wayland global-hotkey crash on Node 24 got fixed here — irrelevant on X11, but it tells you the Linux hotkey layer was being actively reworked. The headline for a coding workflow is <strong>multiple hotkeys per action</strong>.</div>
+    <p><span class="tag">new</span><strong>Latest cloud models</strong> — OpenAI GPT-5.6 (Sol/Terra/Luna), Anthropic Claude Fable 5 and Sonnet 5, plus Fable 5 on AWS Bedrock.</p>
+    <p><span class="tag">new</span><strong>OpenRouter</strong> as a built-in provider, with a searchable grouped picker across its 300+ models.</p>
+    <p><span class="tag">new</span><strong>Multiple hotkeys per action</strong> — bind more than one key to dictation, agent, voice agent, or meeting.</p>
+    <p><span class="tag">new</span>Corti can now run cleanup and reasoning, not just transcription (text stays in EU/HIPAA scope) · Tinfoil confidential transcription extends to uploaded audio · Bedrock gets region-aware model IDs, a live catalog, and Agent Mode tool-calling.</p>
+    <p><span class="tag">fix</span>Meetings: remote speakers no longer collapse into one, calls reconnect past the 60-minute limit, fewer words dropped in cross-talk · Notes: enhancement stops reusing another note's transcript · Cloud transcription retries failed chunks instead of leaving gaps · macOS: dictation into Claude Desktop / claude.ai no longer breaks after the first paste.</p>
+    <p><span class="tag">fix</span><strong>Linux:</strong> Wayland global-hotkey crashes on Node 24.</p>
+  </div>
+</div>
+
+<div class="rel">
+  <header><span class="ver">1.7.4</span><span class="date">2026-07-07</span><span class="pill skipped">skipped — rolled into 1.7.5</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> you never installed this one directly, but you're running all of it. Three items matter on your box: <strong>modifier-only hotkeys now work simultaneously on Linux</strong>, launch on hardened kernels that restrict user namespaces, and the mic falling back to your default device when a saved one goes stale.</div>
+    <p><span class="tag">new</span><strong>Tinfoil</strong> — confidential cloud (BYOK) running transcription <em>and</em> cleanup inside attested secure enclaves.</p>
+    <p><span class="tag">new</span><strong>Azure AI Foundry / Azure OpenAI</strong> speech-to-text as a custom transcription target · native Windows meeting audio capture · Enterprise SSO at sign-in.</p>
+    <p><span class="tag">new</span><strong>Background sync</strong> — dictations upload and remote changes pull on window focus, network reconnect, and every 5 minutes, even from the tray. Snippets now sync across devices like the dictionary already did. No more duplicate folders on a new device.</p>
+    <p><span class="tag">fix</span><strong>Cleaner cleanup</strong> — your transcript gets tidied instead of occasionally getting <em>answered</em>, and dictations only reach the voice agent when you actually address it by name.</p>
+    <p><span class="tag">fix</span>API keys no longer vanish when you type one and click away · rich clipboard formats survive auto-paste · paused media resumes the instant you stop recording rather than after transcription · empty recordings no longer crash transcription · GPU model reloads after sleep, multi-GPU machines pick the right card · fixed a crash on the first "Install &amp; Restart" after an update.</p>
+    <p><span class="tag">fix</span><strong>Linux:</strong> installs on openSUSE, launches on hardened kernels restricting user namespaces, and modifier-only hotkeys work simultaneously.</p>
+    <p><span class="tag">sec</span>Cleared all critical/high dependency alerts, restored lockfile integrity with a CI guard (SOC 2 hardening).</p>
+  </div>
+</div>
+
+<div class="rel">
+  <header><span class="ver">1.7.3</span><span class="date">2026-06-24</span><span class="pill installed">installed Jun 25</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> the most directly useful release for dictating code. <strong>Snippets</strong> turn a spoken shortcut into pasted boilerplate, and <strong>discarded dictations are now saved</strong> instead of evaporating.</div>
+    <p><span class="tag">new</span><strong>Snippets</strong> — say a shortcut like "cal link" and the full text gets pasted.</p>
+    <p><span class="tag">new</span><strong>Voice Agent hotkey</strong> — one key sends speech straight to your AI assistant, separate from plain dictation.</p>
+    <p><span class="tag">new</span>Redesigned dictionary that syncs across devices · audio upload gets its own settings and a cancel button · <strong>discarded dictations are saved</strong> · notification controls · medical dictation via Corti · setup that adapts to how you'll actually use it.</p>
+    <p><span class="tag">new</span>Models: Claude Opus 4.8, Gemini 3.5 Flash, Gemma 4, plus xAI transcription.</p>
+  </div>
+</div>
+
+<div class="rel">
+  <header><span class="ver">1.7.2</span><span class="date">2026-05-20</span><span class="pill installed">installed May 22</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> <strong>Wave Terminal joined the Linux terminal allowlist</strong>, so auto-paste routes through <code>Ctrl+Shift+V</code> instead of the <code>Ctrl+V</code> that terminals ignore. That allowlist is the mechanism behind paste-into-terminal working at all — worth knowing if you ever dictate into a terminal it doesn't recognise.</div>
+    <p><span class="tag">fix</span><strong>Cloud transcription worked again.</strong> 1.7.0's migration from <code>https.request</code> to Electron's <code>net.fetch</code> carried over a manual <code>Content-Length</code> header, which Electron rejects as a forbidden Fetch header — failing with <code>net::ERR_INVALID_ARGUMENT</code> before any bytes left the machine. Fixed across all five upload paths.</p>
+    <p><span class="tag">fix</span>The Note Formatting selector was a complete no-op in 1.7.1 — every Generate Notes call silently fell through to the Cleanup model. Now properly routed.</p>
+    <p><span class="tag">fix</span>macOS first-launch Keychain prompts dropped from ~3 to 0 · notes view no longer loses unsaved enhanced-content edits when switching.</p>
+  </div>
+</div>
+
+<div class="rel">
+  <header><span class="ver">1.7.1</span><span class="date">2026-05-20</span><span class="pill skipped">skipped — superseded in ~1 hour</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> a dense Linux release you received via 1.7.2 — Pop!_OS COSMIC support, GNOME Wayland terminal auto-paste, a Konsole paste fix, and the dictation overlay no longer stealing focus on Sway/i3/Hyprland.</div>
+    <p><span class="tag">new</span>macOS mouse-button hotkeys · optional automatic note titling · <strong>smarter local transcription that ignores silence and breathing</strong>, fully configurable for local models · Google Calendar "primary calendar only" toggle.</p>
+    <p><span class="tag">fix</span>Self-hosted models use their own URLs and keys instead of falling back to cleanup settings · custom dictionary reaches meeting note cleanup · language preference preserved on retry · idle local AI models release GPU memory after a timeout · works behind corporate proxies for model downloads, GPU detection, and calendar sync.</p>
+    <p><span class="tag">fix</span><strong>Linux:</strong> Pop!_OS COSMIC support, GNOME Wayland terminal auto-paste, Konsole paste, and overlay focus-stealing on Sway/i3/Hyprland.</p>
+  </div>
+</div>
+
+<div class="rel">
+  <header><span class="ver">1.7.0</span><span class="date">2026-05-04</span><span class="pill installed">installed same day</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> the architectural pivot of the whole window. Credentials moved into the OS keychain, auth was rebuilt, LLM config became per-scope, and the <code>openwhispr</code> CLI appeared. The macOS bundle-ID break didn't affect Linux — your <code>.deb</code> upgrade was ordinary.</div>
+    <p><span class="tag">new</span><strong>API keys encrypted at rest</strong> — all 12 BYOK + enterprise credentials moved out of <code>.env</code> into the OS keychain, with a silent one-time migration. Sessions also moved to the keychain, so they survive crashes and Electron restarts.</p>
+    <p><span class="tag">new</span><strong>Auth rebuilt on Better Auth</strong>, running on their own infrastructure — self-hosters can point at their own server. Added Sign in with Microsoft and Sign in with Apple.</p>
+    <p><span class="tag">new</span><strong>Per-scope LLM configuration</strong> — different providers/models for cleanup, agent, formatting, and chat independently. Cleanup can be ON while the dictation agent is OFF.</p>
+    <p><span class="tag">new</span><strong><code>openwhispr</code> CLI</strong> — talks to the desktop app over a local HTTP bridge on <code>127.0.0.1</code> with a bearer token, falling back to cloud when the app is closed. <em>(Your <code>~/.openwhispr/cli-bridge.json</code> is this — regenerated at today's 11:24 launch.)</em></p>
+    <p><span class="tag">new</span>Background meeting recording with a floating mic-level pill · NVIDIA Parakeet <code>parakeet-unified-en-0.6b</code> (5.91% WER, ~631 MB) · proxy-aware fetches with OS CA trust · auto-learn corrections extended to Cyrillic, CJK, Arabic, Devanagari · cleaner mic capture with a new acoustic gate.</p>
+    <p><span class="tag">brk</span><strong>macOS only:</strong> new app ID (<code>com.herotools.openwispr</code> → <code>com.gizmolabs.openwhispr</code>) required deleting the old app and re-granting permissions.</p>
+  </div>
+</div>
+
+<div class="rel">
+  <header><span class="ver">1.6.10</span><span class="date">2026-04-20</span><span class="pill installed">installed same day</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> mostly an information-architecture release — this is when Settings split "AI Models" into Speech-to-Text and Language Models, and the Agent hotkey moved under Hotkeys. If the settings layout ever felt like it moved under you, this was it.</div>
+    <p><span class="tag">new</span><strong>Integrations hub</strong> — a new top-level view with MCP connectivity for Claude, ChatGPT, and Cursor; API keys relocated here.</p>
+    <p><span class="tag">new</span>Speaker diarization controls (per-meeting toggle, "N others in call" stepper, auto-label on 1-on-1s) · enterprise connections via Bedrock.</p>
+    <p><span class="tag">fix</span>Model cache opens at the correct folder so downloaded models are actually visible · sync no longer resurrects cleared transcripts and deleted folders after restart · meeting transcription tuned to reduce GPT-4o hallucinations during silence.</p>
+  </div>
+</div>
+
+<div class="rel">
+  <header><span class="ver">1.6.9</span><span class="date">2026-04-16</span><span class="pill installed">installed same day</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> <strong>Linux push-to-talk via evdev</strong> landed here — this is the release that made the <code>ydotool</code>/evdev permission path a guided setup rather than a manual chore. Also the Electron 41 / Node 24 jump, which is what later caused (and required fixing) the Wayland hotkey crash in 1.7.5.</div>
+    <p><span class="tag">new</span><strong>Linux push-to-talk via evdev</strong> with guided permission setup · <strong>Cloud Sync</strong> — notes, folders, conversations and transcriptions sync bidirectionally · transcript export as TXT/SRT/JSON · API keys manageable from Settings · an auto-paste toggle.</p>
+    <p><span class="tag">chg</span>Upgraded to Electron 41 and Node 24 · llama.cpp detection now probes <code>/v1/models</code>.</p>
+    <p><span class="tag">fix</span>Windows hotkey false-triggering after lock/unlock · stuck recording when push-to-talk key-up is missed · retry button on failed transcriptions · floating icon position persists across restarts.</p>
+  </div>
+</div>
+
+<div class="rel">
+  <header><span class="ver">1.6.8</span><span class="date">2026-04-15</span><span class="pill installed">installed same day</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> the release that made local-first genuinely viable — <strong>self-hosted transcription and agent inference became first-class</strong>, and <strong>local live transcription preview</strong> arrived, showing words as you speak with no cloud round trip. Everything since builds on this.</div>
+    <p><span class="tag">new</span><strong>Self-hosted support</strong> — point OpenWhispr at your own LAN server for both transcription and agent inference; one click to swap between OpenAI, Anthropic, Gemini, a local GGUF, or your endpoint.</p>
+    <p><span class="tag">new</span><strong>Local live transcription preview</strong> — words appear in real time from a local Whisper or Parakeet model, before you release the hotkey. Fully on-device.</p>
+    <p><span class="tag">new</span>Meeting recording with on-device speaker diarization (voices never leave the device); system audio capture reaches Windows and Linux · improved echo cancellation via a native WebRTC AEC sidecar · Gemma 4 31B and 26B MoE local models · inline retry / switch-provider / open-logs CTAs on transcription failure.</p>
+    <p><span class="tag">fix</span><strong>Linux:</strong> Hyprland global hotkeys via <code>hyprctl</code>, correct active-window detection for terminal paste, GNOME shortcut-conflict detection with fallback.</p>
+    <p><span class="tag">fix</span>Stricter speech gate cuts hallucinated output on silent audio · 22 React Compiler lint issues resolved across 15 files.</p>
+  </div>
+</div>
+
+<div class="rel">
+  <header><span class="ver">1.6.7</span><span class="date">2026-04-03</span><span class="pill installed">your first install</span></header>
+  <div class="body">
+    <div class="why"><b>For you:</b> your baseline — the version you started on, installed the day it shipped, pulling in <code>ydotool</code> and <code>ydotoold</code> as dependencies.</div>
+    <p><span class="tag">new</span><strong>AI Chat &amp; semantic search</strong> over your notes — an embedded chat panel plus a local semantic search engine that finds notes by meaning. <em>(This is what the 87 MB <code>all-MiniLM-L6-v2</code> embedding model in your cache serves.)</em></p>
+    <p><span class="tag">new</span>Save notes as local Markdown files mirroring your folder structure · calendar attendees auto-appear on meeting notes · responsive settings dialog.</p>
+    <p><span class="tag">fix</span>Meeting transcription, folder switching, clipboard pasting, participant saving; improved Linux Wayland support.</p>
+  </div>
+</div>
+
+<h2 id="themes">4. The cumulative arc — six threads <span class="up"><a href="#">↑</a></span></h2>
+<p>Read release-by-release it looks like noise. Read as threads, the whole 1.6.7 → 1.7.6 window has a clear direction: <strong>move the work off the cloud, stop losing the user's words, and make Linux a real platform rather than a port.</strong></p>
+
+<div class="theme">
+  <h3>① Local &amp; private inference went from possible to default</h3>
+  <p>The single strongest thread. It starts with self-hosted endpoints being <em>allowed</em> and ends with GPU-accelerated streaming decode running on-device by default.</p>
+  <div class="arc">1.6.8 self-hosted + local live preview → 1.7.0 per-scope LLM config + Parakeet → 1.7.4 Tinfoil enclaves + Azure → 1.7.5 Corti reasoning, OpenRouter → 1.7.6 Vulkan GPU, Nemotron streaming, LFM2 local models</div>
+</div>
+
+<div class="theme">
+  <h3>② "Never lose the user's words" became an explicit invariant</h3>
+  <p>Early releases fixed individual data-loss bugs. Later ones added <em>structural</em> fallbacks: every failure path now degrades to pasting something rather than nothing.</p>
+  <div class="arc">1.6.9 retry button on failures → 1.7.3 discarded dictations saved → 1.7.4 empty recordings stop crashing → 1.7.6 failed cleanup pastes raw + toast; failed translation pastes untranslated; GPU crash restarts on CPU and retries the same request</div>
+</div>
+
+<div class="theme">
+  <h3>③ Credentials and auth got hardened, then audited</h3>
+  <p>A one-release rewrite followed by sustained tightening — the language of the later notes (SOC 2, lockfile-integrity CI guards, attested enclaves) says they're selling into enterprises now.</p>
+  <div class="arc">1.7.0 keys + sessions to OS keychain, Better Auth → 1.7.2 zero spurious Keychain prompts → 1.7.4 SOC 2 dependency hardening + Enterprise SSO → 1.7.5 Bedrock/Corti compliance scopes</div>
+</div>
+
+<div class="theme">
+  <h3>④ Linux stopped being a second-class target</h3>
+  <p>Nine of the ten releases carry Linux-specific fixes. The arc moves from <em>compositor coverage</em> (making hotkeys work at all across desktop environments) to <em>distribution correctness</em> (packaging that doesn't destroy your data).</p>
+  <div class="arc">1.6.6 KDE Wayland → 1.6.8 Hyprland + GNOME conflicts → 1.6.9 evdev push-to-talk → 1.7.1 COSMIC, Sway/i3, terminal paste → 1.7.2 Wave Terminal allowlist → 1.7.4 openSUSE + hardened kernels → 1.7.5 Wayland/Node 24 crash → 1.7.6 .deb maintainer scripts</div>
+</div>
+
+<div class="theme">
+  <h3>⑤ Latency and CPU cost fell, structurally</h3>
+  <p>Not tuning — architecture. The chunked record-then-transcribe model was replaced by a persistent stream that commits on stop.</p>
+  <div class="arc">1.6.8 live preview (still chunked) → 1.7.1 silence/breathing gating → 1.7.6 persistent stream, single-pass commit, ~half the CPU per dictation, bounded llama context</div>
+</div>
+
+<div class="theme">
+  <h3>⑥ The product grew from dictation tool into a notes/meetings workspace</h3>
+  <p>Worth naming because it's most of the changelog volume and <em>least</em> relevant to you — if you only dictate into an editor, roughly half of every release since 1.6.6 has been features you never touch.</p>
+  <div class="arc">1.6.6 rich text → 1.6.7 chat + semantic search → 1.6.9 sync + export → 1.6.10 integrations hub → 1.7.3 snippets + dictionary → 1.7.6 collapsible sidebar, URL/batch import</div>
+</div>
+
+<h2 id="linux">5. Linux ledger — what actually applied to your box <span class="up"><a href="#">↑</a></span></h2>
+<p>You run <strong>X11 / Cinnamon</strong>, so a fair share of the Linux work upstream was aimed elsewhere. Sorting it honestly:</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Version</th><th>Linux change</th><th>Applies to you?</th></tr></thead>
+<tbody>
+<tr><td>1.7.6</td><td><code>.deb</code> install/upgrade/remove no longer fails; cache cleanup only on genuine remove</td><td><strong>Yes</strong> — directly, every upgrade</td></tr>
+<tr><td>1.7.5</td><td>Wayland global-hotkey crash on Node 24</td><td>No — X11</td></tr>
+<tr><td>1.7.4</td><td>Modifier-only hotkeys work simultaneously</td><td><strong>Yes</strong> — if you use modifier-only bindings</td></tr>
+<tr><td>1.7.4</td><td>Launches on hardened kernels restricting user namespaces; openSUSE install</td><td>Situational</td></tr>
+<tr><td>1.7.2</td><td>Wave Terminal added to the terminal auto-paste allowlist</td><td>Only if you use Wave — but the <em>allowlist</em> matters</td></tr>
+<tr><td>1.7.1</td><td>COSMIC support, GNOME Wayland terminal auto-paste, Konsole paste, Sway/i3/Hyprland overlay focus</td><td>No — other compositors</td></tr>
+<tr><td>1.6.9</td><td>Native push-to-talk via evdev with guided permission setup</td><td><strong>Yes</strong> — this is your <code>ydotool</code> path</td></tr>
+<tr><td>1.6.8</td><td>Hyprland hotkeys; correct active-window detection for terminal paste; GNOME conflict detection</td><td><strong>Partly</strong> — active-window detection is shared</td></tr>
+<tr><td>1.6.7</td><td>Improved Wayland support; pulled in <code>ydotool</code> + <code>ydotoold</code></td><td><strong>Yes</strong> — the dependency install</td></tr>
+</tbody>
+</table>
+</div>
+
+<p class="note"><strong>Reading the pattern:</strong> the compositor-specific work (Wayland, Sway, COSMIC, KDE) passes you by, but the <em>shared</em> Linux layers — evdev input, active-window detection, terminal paste allowlisting, and Debian packaging — have all been reworked in the last four months. That's why your upgrades have been uneventful lately and were rockier in April.</p>
+
+<h2 id="coding">6. What this means for dictating code <span class="up"><a href="#">↑</a></span></h2>
+<p>Filtering all ten releases down to the workflow you actually use — speech into a terminal and editor on Linux — here's what changed and what's now available that you may not have turned on.</p>
+
+<h3>Already working better than when you started</h3>
+<ul>
+  <li><strong>Cleanup stopped answering you.</strong> 1.7.4 fixed the failure mode where dictated text that sounded like a question got <em>answered</em> by the cleanup model instead of tidied. Directly relevant when you dictate prompts.</li>
+  <li><strong>Voice agent only fires when addressed.</strong> Same release — dictations only route to the agent when you actually say its name.</li>
+  <li><strong>Failures paste something.</strong> As of 1.7.6, a failed cleanup pastes your raw transcript with a toast. You no longer lose a long dictation to a provider hiccup.</li>
+  <li><strong>Mic fallback.</strong> A muted or vanished device falls back to the default instead of silently recording nothing (1.7.4, hardened in 1.7.6) — and your selection now survives Chromium's device-ID rotation.</li>
+  <li><strong>Half the CPU per dictation</strong>, if you move to a streaming model (1.7.6).</li>
+</ul>
+
+<h3>Available and worth a look</h3>
+<ul>
+  <li><strong>Snippets (1.7.3).</strong> Spoken shortcut → pasted boilerplate. The obvious win for repeated code/prompt fragments.</li>
+  <li><strong>Multiple hotkeys per action (1.7.5).</strong> Bind dictation to more than one key.</li>
+  <li><strong>Nemotron streaming EN 0.6B (1.7.6, 632 MB).</strong> Live text as you speak plus single-pass commit. Your 1660 Ti has 6 GB — this is small and fits comfortably alongside your Qwen3.5-4B cleanup model.</li>
+  <li><strong>LFM2.5 230M / 1.2B (1.7.6, 0.25–0.73 GB).</strong> If your 3 GB Qwen3.5-4B cleanup model feels heavy on a 6 GB card, these are built for exactly that constraint.</li>
+  <li><strong>The custom dictionary</strong> (redesigned 1.7.3) is where you teach it your library and identifier names — the highest-leverage setting for dictating code, and it syncs across devices now.</li>
+</ul>
+
+<p class="note"><strong>One caveat on the GPU items:</strong> the local-LLM freeze bug fixed in 1.7.6 (unbounded <code>llama-server</code> context) was reported hardest on unified-memory Macs, but the same unbounded allocation applied everywhere. If local cleanup with your Qwen3.5-4B ever felt like it hung the machine before today, that's the explanation — and 1.7.6 is the fix.</p>
+
+<h2 id="sources">7. Sources <span class="up"><a href="#">↑</a></span></h2>
+<ul>
+  <li>Local package state — <code>dpkg -l open-whispr</code>, <code>/var/log/dpkg.log*</code>, <code>/var/log/apt/history.log*</code></li>
+  <li>Local model cache — <code>~/.cache/openwhispr/</code>, <code>~/.config/open-whispr/</code>, <code>~/.openwhispr/</code></li>
+  <li><a href="https://github.com/OpenWhispr/openwhispr/releases">github.com/OpenWhispr/openwhispr — releases</a> (15 fetched, 11 app releases)</li>
+  <li><a href="https://github.com/OpenWhispr/openwhispr/blob/main/CHANGELOG.md">CHANGELOG.md</a> — 1,923 lines, used for the 1.7.6 detail and PR numbers</li>
+</ul>
+
+<footer>
+Generated 2026-07-21 for <code>mint-desktop</code>. Version and timestamp claims come from local package logs; feature descriptions come from upstream release notes and the changelog. The model-survival check was run directly against the filesystem after the 11:23 upgrade.
+</footer>
+
+</div>
+</body>
+</html>
