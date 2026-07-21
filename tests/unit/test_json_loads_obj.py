@@ -48,3 +48,22 @@ def test_dict_input_returns_shallow_copy():
     src = {"k": "v"}
     out = json_loads_obj(src)
     assert out == src and out is not src
+
+
+def test_unexpected_parse_errors_propagate_not_swallowed(monkeypatch):
+    """Only ``json.JSONDecodeError`` should be tolerated — a genuinely
+    unexpected error from ``json.loads`` must surface, not be silently
+    flattened to ``{}`` by an over-broad ``except Exception``.
+
+    The realistic failure mode of ``json.loads(non_empty_str)`` is only
+    ``JSONDecodeError``; catching anything broader hides real bugs (e.g.
+    a future regression in the parser path) behind an empty dict.
+    """
+    import universal_agent.utils.json_utils as ju
+
+    def _boom(_raw):
+        raise RuntimeError("unexpected non-JSON failure")
+
+    monkeypatch.setattr(ju.json, "loads", _boom)
+    with pytest.raises(RuntimeError):
+        json_loads_obj('{"a": 1}')
