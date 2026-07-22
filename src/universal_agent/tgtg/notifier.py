@@ -13,6 +13,7 @@ import logging
 import httpx
 
 from .config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TGTG_WEBHOOK_URL
+from .targets import Target
 
 log = logging.getLogger(__name__)
 
@@ -173,7 +174,7 @@ def send_dead_item_alert(item_id: str, label: str) -> bool:
         return False
 
 
-def send_stock_alert(item: dict, order: dict | None = None, target=None) -> bool:
+def send_stock_alert(item: dict, order: dict | None = None, target: Target | None = None) -> bool:
     """
     Send a Telegram message for a newly available item.
 

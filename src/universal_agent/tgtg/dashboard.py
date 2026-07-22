@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from .config import DASHBOARD_HOST, DASHBOARD_PORT
+from .targets import Target
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ _sse_queues: list[asyncio.Queue] = []
 
 # ── State helpers (called from monitor thread) ────────────────────────────────
 
-def push_item_update(item: dict, target=None) -> None:
+def push_item_update(item: dict, target: Target | None = None) -> None:
     item_id = str(item.get("item", {}).get("item_id", ""))
     entry = {
         "item": item,
@@ -88,25 +89,25 @@ def _broadcast(data: dict) -> None:
 # ── API routes ────────────────────────────────────────────────────────────────
 
 @app.get("/api/state")
-def get_state():
+def get_state() -> dict[str, Any]:
     with _state_lock:
         return dict(_state)
 
 
 @app.get("/api/items")
-def get_items():
+def get_items() -> list[dict[str, Any]]:
     with _state_lock:
         return list(_state["items"].values())
 
 
 @app.get("/api/orders")
-def get_orders():
+def get_orders() -> list[dict[str, Any]]:
     with _state_lock:
         return _state["orders"]
 
 
 @app.get("/api/events")
-async def sse_events():
+async def sse_events() -> StreamingResponse:
     """Server-Sent Events endpoint for live updates."""
     q: asyncio.Queue = asyncio.Queue(maxsize=50)
     with _state_lock:
@@ -131,7 +132,7 @@ async def sse_events():
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard():
+def dashboard() -> HTMLResponse:
     return HTMLResponse(content=_DASHBOARD_HTML)
 
 
