@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Honeywell water-heater pilot — troubleshooting guide</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    background: #ffffff; color: #1f2328;
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0; padding: 0 20px 80px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  header { border-bottom: 3px solid #d97706; padding: 34px 0 18px; margin-bottom: 8px; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .sub { color: #59636e; font-size: 15px; margin: 0; }
+  h2 {
+    font-size: 22px; margin: 40px 0 12px; padding-top: 14px;
+    border-top: 1px solid #d1d9e0; letter-spacing: -0.01em;
+  }
+  h3 { font-size: 17px; margin: 26px 0 8px; }
+  p, li { font-size: 15.5px; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 5px 0; }
+  code {
+    background: #f0f1f3; padding: 1.5px 5px; border-radius: 4px;
+    font: 13.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  a { color: #0969da; }
+  .box { border-radius: 8px; padding: 14px 18px; margin: 18px 0; border: 1px solid; }
+  .danger { background: #fff5f5; border-color: #e5534b; }
+  .danger strong { color: #b62324; }
+  .warn { background: #fff8e6; border-color: #d4a72c; }
+  .info { background: #eef4fb; border-color: #7fa6d6; }
+  .ok   { background: #eefbf1; border-color: #6fbf87; }
+  .box p:first-child { margin-top: 0; } .box p:last-child { margin-bottom: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14.5px; }
+  th, td { border: 1px solid #d1d9e0; padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tbody tr:nth-child(even) { background: #fafbfc; }
+  .tablewrap { overflow-x: auto; }
+  .flash { font-weight: 700; white-space: nowrap; }
+  .verdict { font-weight: 600; }
+  nav.toc {
+    background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px;
+    padding: 16px 20px; margin: 24px 0 8px;
+  }
+  nav.toc p { margin: 0 0 8px; font-weight: 600; font-size: 14px;
+    text-transform: uppercase; letter-spacing: .06em; color: #59636e; }
+  nav.toc ol { margin: 0; padding-left: 20px; }
+  nav.toc li { margin: 3px 0; font-size: 15px; }
+  .step { background: #f6f8fa; border-left: 4px solid #d97706; padding: 12px 16px;
+    margin: 14px 0; border-radius: 0 6px 6px 0; }
+  .step b { display: block; margin-bottom: 3px; }
+  .lede { font-size: 17px; color: #333b42; }
+  .tag { display: inline-block; background: #d97706; color: #fff; font-size: 11px;
+    font-weight: 700; letter-spacing: .08em; padding: 2px 8px; border-radius: 10px;
+    vertical-align: middle; margin-left: 8px; text-transform: uppercase; }
+  .tag.gray { background: #6b7280; }
+  footer { margin-top: 46px; padding-top: 18px; border-top: 1px solid #d1d9e0;
+    color: #59636e; font-size: 13.5px; }
+  @media (max-width: 620px) { h1 { font-size: 25px; } body { padding: 0 14px 60px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Water heater won't light — Honeywell gas control troubleshooting</h1>
+  <p class="sub">Built from the photo of your valve + current field reports. 2026-07-22.</p>
+</header>
+
+<div class="box danger">
+  <p><strong>Before anything else.</strong> If you smell gas — especially a strong or persistent
+  smell — stop. Don't touch the valve, light anything, or flip a switch. Leave, and call the gas
+  utility from outside. A faint whiff right at the burner right after a failed light attempt is
+  normal; a smell that lingers or fills the space is not.</p>
+  <p style="margin-top:8px">Any time you've been trying to light it, turn the knob to
+  <code>OFF</code> and <strong>wait a full 5 minutes</strong> before the next attempt. That lets
+  unburned gas clear out of the chamber. This is the one step people skip.</p>
+</div>
+
+<nav class="toc">
+  <p>Contents</p>
+  <ol>
+    <li><a href="#what">What you actually have</a></li>
+    <li><a href="#status">Start here — the status light is the diagnosis</a></li>
+    <li><a href="#procedure">The correct lighting procedure (and the #1 mistake)</a></li>
+    <li><a href="#tree">Find your symptom</a></li>
+    <li><a href="#clean">The three cleanings, in order of payoff</a></li>
+    <li><a href="#meter">Multimeter tests — the real answer</a></li>
+    <li><a href="#parts">Parts, costs, and what's worth it</a></li>
+    <li><a href="#age">The uncomfortable question: how old is this heater?</a></li>
+    <li><a href="#pro">When to stop and call someone</a></li>
+    <li><a href="#tellme">What I need from you to narrow it down</a></li>
+  </ol>
+</nav>
+
+<h2 id="what">1. What you actually have</h2>
+
+<p>From the label in your photo, this is a <strong>Honeywell WV8840-series combination gas
+control valve + thermostat</strong> — one unit that does the thermostat, the pilot safety, and
+the main gas valve, with an electronic control board inside. Part marking <code>50032539-001</code>,
+date code <code>0912</code>.</p>
+
+<p>Under Honeywell's usual <code>YYWW</code> scheme that date code reads as
+<strong>week 12 of 2009</strong> — so the valve is around 17 years old. Worth confirming against
+the serial number on the heater's own rating plate, because it drives the economics at the end of
+this guide.</p>
+
+<p>Reading your photo left to right along the bottom edge of the valve:</p>
+
+<ul>
+  <li><strong>Piezo igniter terminal</strong> (left, lightning-bolt symbol) — the black wire runs
+  down to the white igniter module and on to the spark electrode.</li>
+  <li><strong><code>COM</code> terminal</strong> (centre) — this is your <strong>thermopile</strong>,
+  the thick braided lead. It's the part that generates the electricity.</li>
+  <li><strong>Red + white pair</strong> (right) — the <strong>resettable thermal switch</strong>
+  (ECO) on the burner assembly. It's wired in series, and if it's open the valve will not run.</li>
+</ul>
+
+<div class="box warn">
+  <p><strong>This is a sealed-combustion (FVIR) heater — you cannot light it with a match.</strong>
+  Modern heaters have a sealed chamber with a flame-arrestor screen and no match port. The piezo
+  igniter is the only ignition source you have. If the igniter is dead, that gets fixed first;
+  there's no workaround. Don't try to defeat the seal to get a flame in there.</p>
+</div>
+
+<h3>How this thing decides to run</h3>
+
+<p>Worth understanding, because it explains nearly every failure: there is <strong>no electricity
+coming into this heater</strong>. The pilot flame heats the thermopile, the thermopile generates a
+few hundred millivolts, and <em>that tiny current is what holds the gas valve open and powers the
+control board</em>. It's self-powered.</p>
+
+<p>So the chain is: <strong>spark → pilot lights → pilot heats thermopile → thermopile makes
+voltage → voltage holds the pilot valve open and runs the board → board opens the main burner when
+the thermostat calls.</strong> Any break in that chain gives you the same visible symptom — "it
+won't light" — which is why the status light matters so much.</p>
+
+<h2 id="status">2. Start here — the status light is the diagnosis</h2>
+
+<p class="lede">Don't start turning knobs. Your valve has a built-in diagnostic and it will tell
+you which half of the problem you have. The codes are printed right on the label in your photo:</p>
+
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Flashes</th><th>Means</th><th>What it's telling you</th></tr></thead>
+  <tbody>
+    <tr><td class="flash">0 / none</td><td>Control off, or pilot out</td>
+      <td>No pilot flame, or the thermopile is making no usable power at all. This is where you
+      are right now.</td></tr>
+    <tr><td class="flash">1</td><td>Normal operation</td>
+      <td>Pilot lit, thermopile healthy, control happy. This is the goal.</td></tr>
+    <tr><td class="flash">2</td><td>Thermopile voltage low</td>
+      <td><strong>The single most common repairable fault.</strong> Weak thermopile, dirty pilot,
+      unstable flame, or a loose <code>COM</code> connection. Cheap fix.</td></tr>
+    <tr><td class="flash">4</td><td>High temperature shutdown</td>
+      <td>Water got too hot. Turn the dial down; if it repeats, the control is misreading.</td></tr>
+    <tr><td class="flash">5</td><td>Temperature sensor failure</td>
+      <td class="verdict">Valve is bad. Not repairable — replacement.</td></tr>
+    <tr><td class="flash">7</td><td>Gas control or valve failure</td>
+      <td class="verdict">Valve is bad. Not repairable — replacement.</td></tr>
+    <tr><td class="flash">8</td><td>Flame sense error</td>
+      <td>Control can't confirm the flame. Try a full reset; often ends up being the valve.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>The pattern is a burst of flashes, then a roughly 3-second pause, then the burst repeats.
+Count the flashes in one burst. <strong>Do this in a dark basement</strong> — the LED is dim and
+it's easy to miscount or miss it entirely.</p>
+
+<div class="box info">
+  <p><strong>The one test that splits the problem in half.</strong> Your label says:
+  <em>"If Pilot is lit, Status Light will briefly turn solid red when Knob is turned to OFF."</em></p>
+  <p style="margin-top:8px">That red flash is powered <em>entirely by the thermopile</em> — there's
+  no other power source. So if you can get the pilot burning even briefly, then turn the knob to
+  <code>OFF</code> and watch:</p>
+  <ul style="margin-bottom:0">
+    <li><strong>Red flash appears</strong> → your thermopile is generating real power. The problem
+    is downstream (control board, or the flame isn't holding).</li>
+    <li><strong>Nothing at all</strong> → thermopile, its <code>COM</code> connection, or the
+    thermal switch. That's the cheap end of the problem.</li>
+  </ul>
+</div>
+
+<h2 id="procedure">3. The correct lighting procedure (and the #1 mistake)</h2>
+
+<div class="step"><b>1 — Reset.</b> Knob to <code>OFF</code>. Wait a full 5 minutes. Don't skip
+this; it's a safety step, not a formality.</div>
+<div class="step"><b>2 — Set to pilot.</b> Turn the knob to <code>PILOT</code> (it aligns with
+the ▲ mark at the bottom).</div>
+<div class="step"><b>3 — Press and HOLD the knob down.</b> This manually holds the pilot gas
+valve open. It only flows gas while you're physically holding it in.</div>
+<div class="step"><b>4 — Click the igniter.</b> Press the igniter button about once a second.
+Watch through the sight glass. It can genuinely take 10–30 clicks, especially if the heater has
+been off a while and there's air in the line.</div>
+<div class="step"><b>5 — Keep holding for 60 seconds after it lights.</b> ← <strong>This is the
+mistake almost everyone makes.</strong> The thermopile is a lump of metal that has to physically
+heat up before it makes enough voltage to hold the valve open on its own. Let go too early and
+the pilot dies every single time — which reads exactly like a broken part.</div>
+<div class="step"><b>6 — Release only when the status light blinks.</b> Ease off slowly. If the
+pilot dies the instant you release, go to <a href="#symptomC">symptom C</a>.</div>
+<div class="step"><b>7 — Turn to your temperature.</b> Once stable, turn the knob to
+<code>HOT</code> or your preferred setting. <code>A</code>/<code>B</code>/<code>C</code> are
+progressively hotter; ~120 °F is the usual safe target.</div>
+
+<div class="box warn">
+  <p>If it's been more than a few days since gas flowed — or the gas was recently off for any
+  reason — <strong>there's air in the pilot line</strong>. You may need to hold the knob down for
+  2–3 minutes of clicking before gas even reaches the pilot. Several rounds of this is normal and
+  is not evidence of a broken part.</p>
+</div>
+
+<h2 id="tree">4. Find your symptom</h2>
+
+<h3 id="symptomA">A — No spark at all when you press the igniter <span class="tag gray">check first</span></h3>
+
+<p>Kill the lights and look through the sight glass while pressing. You're looking for a
+bright blue-white spark jumping a small gap.</p>
+
+<ul>
+  <li><strong>You hear a click but see no spark</strong> → it's the wire or the electrode, not the
+  piezo. Follow the black igniter wire from the valve terminal down to the electrode: look for
+  chafed insulation, a loose push-on connector, or corrosion. Reseat both ends firmly.</li>
+  <li><strong>Bench test:</strong> pull the igniter wire off the electrode, hold the bare end about
+  ¼" from bare metal on the valve body, press the button. If a spark jumps to ground there, the
+  piezo and wire are fine and <strong>your electrode is bad</strong>. If nothing jumps anywhere,
+  the piezo module is dead.</li>
+  <li><strong>No click at all</strong> → the piezo mechanism itself has failed. Common and cheap.</li>
+  <li><strong>Spark gap</strong> should be roughly ⅛" from the electrode tip to the pilot hood.
+  Too wide and it won't jump; too close and it won't ignite reliably.</li>
+  <li>A dirty electrode can be cleaned with fine sandpaper or emery cloth.</li>
+</ul>
+
+<h3 id="symptomB">B — Good spark, but the pilot never lights</h3>
+
+<p>Spark is fine, so this is a <em>gas delivery</em> problem. In order of likelihood:</p>
+
+<ul>
+  <li><strong>Is gas actually on?</strong> Check the shutoff on the supply line to the heater, and
+  confirm another gas appliance (stove, furnace) still works. If nothing gas-fired works, it's the
+  supply, not the heater.</li>
+  <li><strong>Air in the line</strong> — see the box above. Keep holding and clicking.</li>
+  <li><strong>Blocked pilot orifice or tube</strong> — field reports put this at
+  <strong>40–50% of "spark but no flame" cases</strong>. Spider webs are the classic culprit
+  (they're drawn to the gas odorant), along with dust and carbon. See
+  <a href="#clean">cleaning</a>.</li>
+  <li><strong>Clogged air intake / flame arrestor</strong> at the base of the tank — starves the
+  chamber of combustion air. Very common in a dusty basement, a laundry area, or with pets.</li>
+</ul>
+
+<h3 id="symptomC">C — Pilot lights, but dies the moment you release the knob <span class="tag">most likely</span></h3>
+
+<p class="lede">This is the classic presentation, and it points almost straight at the thermopile
+circuit — the pilot burns fine while you hold the valve open mechanically, and drops the instant
+it has to hold itself open electrically.</p>
+
+<ol>
+  <li><strong>First, rule out the easy one:</strong> hold it a full 60 seconds. Genuinely time it.
+  A surprising share of "broken" heaters are people holding for 15 seconds.</li>
+  <li><strong>Check the pilot flame quality.</strong> It should be a crisp blue cone that
+  <em>visibly wraps the thermopile tip</em>. A small, lazy, yellow, or flickering flame won't make
+  enough voltage no matter how long you hold. A weak flame almost always means a partially blocked
+  pilot orifice — that's a cleaning problem, not a parts problem.</li>
+  <li><strong>Reseat the <code>COM</code> connection</strong> at the valve. It should be snug.
+  These back out over 17 years of heat cycling.</li>
+  <li><strong>Check the resettable thermal switch</strong> — the red/white pair. If it's tripped
+  or failed open, nothing will hold. Test continuity across it (below).</li>
+  <li><strong>Then suspect the thermopile itself.</strong> After ~17 years this is a completely
+  ordinary wear-out. A <span class="flash">2-flash</span> status code confirms it outright.</li>
+</ol>
+
+<h3 id="symptomD">D — Pilot stays lit, but the main burner never fires</h3>
+
+<ul>
+  <li>Turn the temperature dial up and listen for the valve to click open.</li>
+  <li><strong>A marginal thermopile does exactly this</strong> — enough voltage to hold the pilot,
+  not enough to also pull in the main valve. Same fix as C.</li>
+  <li>Check the status code. <span class="flash">5</span> or <span class="flash">7</span> here
+  means the valve is done.</li>
+</ul>
+
+<h2 id="clean">5. The three cleanings, in order of payoff</h2>
+
+<p>Do these with the knob at <code>OFF</code> and, ideally, the gas shut off at the supply valve.</p>
+
+<h3>1. Air intake and flame arrestor <span class="tag gray">highest payoff</span></h3>
+<p>At the base of the tank there's an air intake screen and, behind it, the flame arrestor. Lint,
+dust and pet hair clog it, the burner starves, the flame goes lazy, and the thermal switch
+eventually trips. Vacuum the intake filter and brush dust off the <strong>intake side</strong> of
+the arrestor — you're working through the openings at the base, not going inside the burner
+chamber. Doing this twice a year prevents most repeat outages.</p>
+
+<h3>2. Pilot tube and orifice</h3>
+<p>The most likely single cause of "spark but no flame". Clear the orifice with a fine wire or
+needle, work through the tube interior, and blow it out with compressed air. Don't ream or enlarge
+the orifice — you're dislodging debris, not drilling.</p>
+
+<h3>3. Thermopile tip</h3>
+<p>Soot and oxide on the tip insulate it from the flame and cut its output. Clean it gently with
+fine steel wool or emery cloth. Free, takes a minute, and occasionally fixes a 2-flash outright.</p>
+
+<h2 id="meter">6. Multimeter tests — the real answer</h2>
+
+<p>If you have a multimeter (set to DC millivolts), these tests end the guessing. Everything above
+is inference; this is measurement.</p>
+
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Test</th><th>How</th><th>Healthy</th><th>Replace if</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Thermopile, open circuit</strong></td>
+      <td>Disconnect the thermopile lead from <code>COM</code>. Light the pilot, hold it burning
+      60–90 s, measure across the thermopile leads.</td>
+      <td>650–850 mV</td>
+      <td>Below ~400 mV — and definitely below 350 mV</td>
+    </tr>
+    <tr>
+      <td><strong>Thermopile, under load</strong></td>
+      <td>Same, but connected to the valve with the pilot lit.</td>
+      <td>400–500 mV</td>
+      <td>Below ~350 mV</td>
+    </tr>
+    <tr>
+      <td><strong>Thermal switch</strong></td>
+      <td>Continuity/ohms across the red + white pair, disconnected from the valve.</td>
+      <td>Closed circuit, near 0 Ω</td>
+      <td>Open circuit = tripped or failed</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>How to read the result:</strong> a good open-circuit reading that collapses under load
+means the <em>valve</em> is drawing too much current — an internal fault, not a thermopile
+problem. A low reading both ways means the thermopile is simply worn out. Healthy on both, and
+your problem is elsewhere.</p>
+
+<div class="box warn">
+  <p><strong>If the thermal switch reads open:</strong> replacing it without asking why is a
+  mistake. That switch trips because the chamber overheated or was starved of air — a blocked
+  intake, a blocked flue, or a venting problem. Fix the cause. A switch that trips repeatedly is
+  the heater telling you something real about combustion, and that one is worth a professional.</p>
+</div>
+
+<h2 id="parts">7. Parts, costs, and what's worth it</h2>
+
+<div class="tablewrap">
+<table>
+  <thead><tr><th>If it's…</th><th>Part</th><th>Cost</th><th>DIY?</th></tr></thead>
+  <tbody>
+    <tr><td>Thermopile / 2-flash</td>
+      <td>Thermopile — usually sold as the <strong>whole pilot assembly</strong> (pilot, thermopile
+      and electrode together); on most of these you can't replace the thermopile alone</td>
+      <td>$30–80</td><td>Yes — about 45 min</td></tr>
+    <tr><td>No spark</td><td>Igniter / electrode assembly</td><td>$15–40</td>
+      <td>Yes</td></tr>
+    <tr><td>Thermal switch open</td><td>Thermal switch — <em>plus</em> finding the cause</td>
+      <td>$20–40</td><td>Cause first</td></tr>
+    <tr><td>5 or 7 flashes</td><td>Whole gas control valve</td><td>$200–400 installed</td>
+      <td>Not recommended</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Get the <strong>model and serial number off the heater's rating plate</strong> before ordering
+anything — pilot assemblies are specific to the heater and the fuel type (natural gas vs propane),
+and the valve part number alone won't get you the right one.</p>
+
+<h2 id="age">8. The uncomfortable question: how old is this heater?</h2>
+
+<p>If that <code>0912</code> date code is right, the valve — and almost certainly the tank —
+dates to 2009. Typical tank life is 8–12 years. You're past it.</p>
+
+<p>That doesn't mean don't fix it. It changes which fixes are worth doing:</p>
+
+<ul>
+  <li><strong>A $30–80 thermopile or igniter: absolutely do it.</strong> Cheap, quick, and even a
+  year or two more of service is a good return.</li>
+  <li><strong>A $200–400 gas valve on a 17-year-old tank: think hard.</strong> That's a large
+  fraction of a new heater, spent on a tank that could start leaking at any point — and when a
+  tank goes, it goes as water on your floor, not as a warning.</li>
+</ul>
+
+<p>While you're down there, look at the base of the tank for rust, mineral crust, or damp spots.
+Any weeping at the bottom seam means the tank is finished and no valve repair is worth doing.</p>
+
+<h2 id="pro">9. When to stop and call someone</h2>
+
+<ul>
+  <li><strong>Any persistent gas smell.</strong> Not a judgement call — leave and phone from
+  outside.</li>
+  <li><strong>Status code 5 or 7.</strong> The valve is dead; this isn't a DIY part.</li>
+  <li><strong>Anything requiring the gas line to be opened.</strong> Valve replacement means
+  breaking a gas union and leak-testing it afterward. Not a first-time DIY job.</li>
+  <li><strong>The thermal switch keeps tripping.</strong> That's a combustion or venting problem
+  and it's a genuine safety issue — carbon monoxide territory.</li>
+  <li><strong>Soot, scorching, or melted plastic anywhere near the burner.</strong></li>
+</ul>
+
+<h2 id="tellme">10. What I need from you to narrow it down</h2>
+
+<p class="lede">Everything above is a decision tree because I'm missing one piece of information —
+and it's the piece that collapses most of the tree.</p>
+
+<div class="box ok">
+  <p><strong>Go look at the status light in the dark and tell me two things:</strong></p>
+  <ol style="margin-bottom:0">
+    <li><strong>How many times does it flash</strong> between the ~3-second pauses? (Or is it
+    completely dark?)</li>
+    <li><strong>What exactly happens when you try to light it</strong> — do you get a spark? Does
+    the pilot catch at all? If it catches, how long does it survive after you release the knob?</li>
+  </ol>
+</div>
+
+<p>With those two answers I can tell you whether you're buying a $40 part or looking at a decision
+about the whole heater. My honest guess from the photo and the age: <strong>a worn thermopile or a
+dirty pilot assembly</strong> — the cheap, fixable end. But the status light decides it, not me.</p>
+
+<footer>
+  <p><strong>Sources.</strong> Compiled 2026-07-22 from:
+  <a href="https://kcwaterheater.com/water-heater-repair/honeywell-gas-control-valve/">KC Water Heater — Honeywell gas control valve troubleshooting</a> ·
+  <a href="https://hvaclaboratory.com/article/honeywell-gas-control-valve-troubleshooting/">HVAC Laboratory — Honeywell gas control valve</a> ·
+  <a href="https://hvaclaboratory.com/honeywell-water-heater-igniter-not-working/">HVAC Laboratory — igniter not working</a> ·
+  <a href="https://www.h2ouse.org/thermopile-voltage-low/">h2ouse — thermopile voltage low</a> ·
+  <a href="https://www.manualslib.com/manual/900065/A-O-Smith-Gcv300.html?page=12">A.O. Smith GCV300 service handbook — thermopile open/closed circuit checks</a> ·
+  <a href="https://www.waterheaterrescue.com/troubleshooting/tanklets/fvir-issues.html">Water Heater Rescue — FVIR issues</a> ·
+  <a href="https://www.plumbingforums.com/threads/thermopile-low-voltage-after-replacing-thermopile.19735/">Plumbing Forums — thermopile low voltage</a> ·
+  <a href="https://www.doityourself.com/forum/water-heaters/642611-pilot-wont-light-honeywell-wv-valve-possibly-thermocouple.html">DoItYourself — pilot won't light with Honeywell WV valve</a>.</p>
+  <p>Flash codes transcribed from the label on your own valve. Millivolt specs vary slightly by
+  source; the ranges given are where they agree. This is general troubleshooting guidance, not a
+  substitute for a licensed tech on a gas appliance.</p>
+</footer>
+
+</div>
+</body>
+</html>
