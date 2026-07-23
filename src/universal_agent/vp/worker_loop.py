@@ -40,8 +40,25 @@ from universal_agent.vp.clients.claude_code_client import ClaudeCodeClient
 from universal_agent.vp.clients.claude_generalist_client import ClaudeGeneralistClient
 from universal_agent.utils.env_utils import env_flag as _env_true
 from universal_agent.vp.profiles import get_vp_profile
+from universal_agent import task_hub
 
 logger = logging.getLogger(__name__)
+
+# Terminal mission event → terminal Kanban-MIRROR status (the row keyed by
+# task_id == mission_id). ``failed`` previously mapped to TASK_STATUS_OPEN,
+# which parked nothing anywhere: mirror rows are unclaimable by design
+# (agent_ready=False + forbidden_source_kinds in the dispatch sweep), so every
+# failed mission left a zombie ``open`` row forever (79 of the 104 orphans
+# triaged 2026-07-23). PARKED is terminal, keeps the row out of every
+# open-work surface, and the ``vp_terminal_status: failed`` metadata written
+# at the sync site preserves the failure signal. Failure-lane surfacing is
+# owned by the separate vp_mission_failure items + rescue evaluator, not by
+# this visibility mirror.
+TERMINAL_MIRROR_STATUS_MAP = {
+    "vp.mission.completed": task_hub.TASK_STATUS_COMPLETED,
+    "vp.mission.failed": task_hub.TASK_STATUS_PARKED,
+    "vp.mission.cancelled": task_hub.TASK_STATUS_CANCELLED,
+}
 
 # Path constraint key aliases — must stay in sync with
 # claude_code_client._PATH_CONSTRAINT_KEYS and dispatcher._extract_target_paths.
@@ -1092,12 +1109,9 @@ class VpWorkerLoop:
                 connect_runtime_db,
                 get_activity_db_path,
             )
-            _th_status_map = {
-                "vp.mission.completed": task_hub.TASK_STATUS_COMPLETED,
-                "vp.mission.failed": task_hub.TASK_STATUS_OPEN,
-                "vp.mission.cancelled": task_hub.TASK_STATUS_CANCELLED,
-            }
-            th_status = _th_status_map.get(event_type, task_hub.TASK_STATUS_COMPLETED)
+            th_status = TERMINAL_MIRROR_STATUS_MAP.get(
+                event_type, task_hub.TASK_STATUS_COMPLETED
+            )
             th_conn = connect_runtime_db(get_activity_db_path())
             task_hub.ensure_schema(th_conn)
 
