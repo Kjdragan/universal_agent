@@ -44,6 +44,60 @@ def _parse_int_env(key: str, default: int) -> int:
         return default
 
 
+# ── Backpressure faucet (top-9 handoff, task 6) ─────────────────────────────
+# When the held-proposal backlog is large AND the operator hasn't promoted or
+# dismissed anything recently, every additional proposal just deepens an
+# unread pile — the bottleneck is decision-throughput, not idea supply. The
+# heartbeat consults this before building the ideation prompt (emit 0, log
+# why); the morning report uses the same signal to switch to a ranked top-5
+# drain view.
+BACKPRESSURE_PENDING_THRESHOLD = _parse_int_env("UA_IDEATION_BACKPRESSURE_PENDING", 75)
+BACKPRESSURE_STALL_DAYS = _parse_int_env("UA_IDEATION_BACKPRESSURE_STALL_DAYS", 5)
+
+
+def _recent_review_activity_count(conn: sqlite3.Connection, days: int) -> int:
+    """Count reflection rows that LEFT the held state within the window.
+
+    A promote flips ``agent_ready`` to 1; a dismiss/park/complete moves
+    ``status`` off ``open`` — either counts as operator review activity.
+    """
+    task_hub.ensure_schema(conn)
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS c FROM task_hub_items
+        WHERE source_kind = 'reflection'
+          AND (status != 'open' OR agent_ready = 1)
+          AND updated_at >= datetime('now', ?)
+        """,
+        (f"-{int(days)} days",),
+    ).fetchone()
+    return int(row["c"]) if row else 0
+
+
+def ideation_backpressure_reason(conn: sqlite3.Connection) -> Optional[str]:
+    """Return why emission should pause, or None when the faucet may run.
+
+    Pauses only when BOTH hold: pending held proposals exceed
+    ``BACKPRESSURE_PENDING_THRESHOLD`` AND no reflection row left the held
+    state within ``BACKPRESSURE_STALL_DAYS``. Any recent promote/dismiss
+    re-opens the faucet immediately.
+    """
+    try:
+        _, pending = _get_open_reflection_proposals(conn, limit=1)
+        if pending <= BACKPRESSURE_PENDING_THRESHOLD:
+            return None
+        if _recent_review_activity_count(conn, BACKPRESSURE_STALL_DAYS) > 0:
+            return None
+        return (
+            f"{pending} held proposals exceed the {BACKPRESSURE_PENDING_THRESHOLD} "
+            f"backpressure threshold with no promote/dismiss activity in "
+            f"{BACKPRESSURE_STALL_DAYS}d — pausing emission until reviews resume"
+        )
+    except sqlite3.Error:
+        logger.debug("ideation_backpressure_reason: query failed", exc_info=True)
+        return None  # fail-open: a probe error must not silence ideation
+
+
 def is_reflection_enabled() -> bool:
     """Check if the reflection engine is enabled via feature flag."""
     raw = (os.getenv("UA_REFLECTION_ENABLED") or "").strip().lower()
