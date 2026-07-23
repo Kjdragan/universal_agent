@@ -215,6 +215,26 @@ wiring differs — some run continuously, some ship scaffolding only.
 > the idea is already covered, or to explicitly name the proposal it is superseding. This prevents
 > the near-duplicate at the source instead of catching it after insert.
 >
+> **Near-duplicate backstop (shipped 2026-07-23).** Between the exact-title key and the
+> prompt-level self-dedup sits a deterministic Jaccard token-overlap check
+> (`task_hub_bridge.py::_find_near_duplicate_reflection`, threshold
+> `UA_REFLECTION_DEDUP_JACCARD` default 0.6, `1.0` disables): after the incident_key misses,
+> the candidate's title+description token set is compared against every open/needs_review
+> reflection row's; at/above the threshold the create returns the existing row
+> (`deduplicated: true, dedup_kind: "near_duplicate"`). Catches the ideator's real near-dup
+> pattern — the structured description body re-emitted nearly verbatim under a reworded title.
+>
+> **Backpressure faucet + drain view (shipped 2026-07-23).** While held proposals exceed
+> `UA_IDEATION_BACKPRESSURE_PENDING` (75) AND no reflection row has left the held state in
+> `UA_IDEATION_BACKPRESSURE_STALL_DAYS` (5) — no promote, no dismiss —
+> `reflection_engine.py::ideation_backpressure_reason` returns a pause reason: the heartbeat
+> skips ideation injection entirely (`skip_reason=ideation_backpressure`), and
+> `ideation_report.py::deliver_ideation_report` switches the morning report from the raw
+> newest-first list to a **ranked top-5 drain view** (`get_held_proposals_ranked`: score desc,
+> priority desc, oldest first) with a "your bottleneck is decision-throughput" banner and an
+> `[ACTION/IDEATION]` subject; the stale section is suppressed in that view. Any review
+> activity reopens the faucet immediately.
+>
 > **Phase 2b (shipped):** the **morning ideation report** — `services/ideation_report.py`
 > (queries held proposals → renders HTML cards with one-click action links → publishes to the
 > scratchpad + emails via `AgentMailService`), driven by the `morning_ideation_report` cron

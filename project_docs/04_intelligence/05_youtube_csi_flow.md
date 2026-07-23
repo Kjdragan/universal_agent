@@ -574,7 +574,16 @@ hadn't written. Two heartbeat invariants now guard it
   > 50% floor).]
 - `youtube_transcript_coverage` — rows exist in `rss_event_analysis` but most
   carry `transcript_status != 'ok'`. Floor 50% per populated day (≥3 rows),
-  7-day window. **Recovered-guard** (added 2026-06-10): when the
+  7-day window. **Triage-skip exclusion** (added 2026-07-23): intentional
+  pre-ingest triage skips are recorded by the enricher as
+  `transcript_status='failed'` with
+  `transcript_error='pre_ingest_triage_skipped'` (the status column only
+  ever carries `ok`/`failed`); those rows are excluded from BOTH the
+  numerator and the denominator (`youtube_invariants.py::TRIAGE_SKIP_ERROR`)
+  so a triage-heavy day cannot page a false critical — 58 of 74 "failures"
+  in the seeding 14-day window were deliberate skips. Real failure classes
+  (`ip_block`, `youtube_transcript_api_failed`, `missing`) still count.
+  **Recovered-guard** (added 2026-06-10): when the
   `youtube_invariants.py::RECOVERED_RECENT_DAYS` (2) most recent populated
   days are both at/above the floor, the pipeline has recovered and any
   remaining offending days are residue aging out of the window — the finding

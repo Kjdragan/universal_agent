@@ -10,7 +10,8 @@ code_paths:
   - src/universal_agent/services/vp_failure_rescue.py
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/durable/state.py
-last_verified: 2026-07-03
+  - src/universal_agent/services/premise_check.py
+last_verified: 2026-07-23
 ---
 
 # Idle Dispatch & Goal Loop
@@ -363,13 +364,31 @@ Not strictly idle/goal, but it lives in the same worker terminal path and is a
 frequent confusion point. On a VP terminal, **two** Task Hub rows may close:
 
 1. The **mirror row** keyed by `task_id == mission_id` (created at start).
-   Always closed to the mapped status (`completed` / reopened to `open` on
-   fail / `cancelled`).
+   Always closed to a TERMINAL status via
+   `worker_loop.py::TERMINAL_MIRROR_STATUS_MAP` — `completed` / **`parked` on
+   fail** / `cancelled` — with `vp_terminal_status` metadata preserving the
+   real outcome. (Until 2026-07-23 a failed mission reopened its mirror to
+   `open`, but mirrors are unclaimable by design — `agent_ready=False` +
+   `forbidden_source_kinds` in the dispatch sweep — so nothing could ever act
+   on it and every failed mission left a zombie open row forever: 79 of the
+   104 orphans triaged that day. Failure-lane surfacing belongs to the
+   `vp_mission_failure` items above, not the visibility mirror.)
 2. The **original source task** that triggered dispatch (the row Simone
    `task_redirect_to`'d, now `status=delegated`). Resolved via
    `_resolve_source_task_id_from_payload`, which checks three locations in
    priority order: top-level `payload.task_id` → `payload.metadata.linked_task_id`
    → `payload.metadata.task_id` (legacy).
+
+On every completed mission the terminal metadata also carries a
+**verify-against-reality** stamp (`services/premise_check.py::verify_mission_against_reality`,
+piloted 2026-07-23 on the `tutorial_build`/`directed_build` lane): the landed
+demo workspace + `manifest.json` are re-checked ON DISK, independent of the
+finalize self-report; every other mission type gets an explicit fail-OPEN
+`no_check_defined` verdict, and Unverified completions log a warning. The
+sibling helper `premise_check.py::verify_code_claim` mechanically verifies
+`route:` / `cron:` / `timer:` / `symbol:` claims (registration syntax only —
+prose mentions don't vouch; seeded regressions: the phantom
+`/api/v1/hackernews/refresh` route and the retired `csi_analytics` timer).
 
 > **Gotcha (PR #493):** pre-fix, the worker only checked the third (legacy)
 > path, which nobody writes — so source-task closure silently no-op'd for
