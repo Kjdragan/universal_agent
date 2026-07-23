@@ -598,10 +598,24 @@ def _compose_heartbeat_prompt(
                 #    metadata would mislabel them "delegated to vp.coder.primary"
                 #    and point Simone at the wrong approve/review protocol). They
                 #    are surfaced separately below in CODY DEMO REVIEW.
+                #
+                #    ALLOWLIST, not blocklist (2026-07-23): a row belongs in this
+                #    block only when its delegation metadata resolves a REAL VP
+                #    mission id — transition_to_pending_review finds tasks BY
+                #    that id, so every genuine VP completion carries it. Rows
+                #    without one (e.g. reflection proposals parked in
+                #    pending_review) used to leak through the old
+                #    source_kind != cody_demo_task blocklist and page Simone
+                #    with fake "VP completed, sign off" items every heartbeat.
+                def _vp_mission_id(pr: dict) -> str:
+                    delegation = dict(pr.get("metadata") or {}).get("delegation") or {}
+                    return str(delegation.get("mission_id") or "").strip()
+
                 pending_reviews = [
                     pr
                     for pr in get_pending_review_tasks(_runtime_conn)
                     if str(pr.get("source_kind") or "") != "cody_demo_task"
+                    and _vp_mission_id(pr) not in ("", "?")
                 ]
                 if pending_reviews:
                     review_lines = ["\n== VP COMPLETION REVIEW =="]
