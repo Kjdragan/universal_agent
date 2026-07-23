@@ -284,6 +284,23 @@ Concurrency is bounded by an `asyncio.Semaphore(self.max_concurrency)` where
 - **Standard `!script`**: same subprocess execution but inside the full agent
   session bootstrap path, with Hermes Phase F Task-Hub linking + worker-PID
   stamping (below).
+- **Spawn-inclusive timeout (both `!script` paths, 2026-07-23).** Both paths
+  run through `cron_service.py::_spawn_script_with_timeout`, which puts the
+  per-job `timeout_seconds` around the WHOLE subprocess lifecycle —
+  `create_subprocess_exec` **and** `communicate()` in one `asyncio.wait_for`.
+  Previously the timer wrapped only `communicate()` and armed after the
+  process object existed, so a stalled fork/exec (~1 in 4,300 spawns under
+  resource pressure) never armed it; with no heartbeat on the path, the run
+  sat silent until the 60-minute stuck-run reaper — the recurring
+  `cron_job_dispatch` 60-minute wedge (29 reaped runs Jun–Jul, all the
+  every-minute `simone_chat_auto_complete` job; VP diagnosis
+  task_32c02c29e190). A hung spawn now trips the job's own timeout (60s for
+  that job — a 60× reduction), writes a proper `execution_timeout` record,
+  and leaves a warning breadcrumb (spawns ≥10s log the fork/exec-stall
+  class). The kill path tolerates the process object never having been
+  assigned. The Phase F.1 worker-PID stamp runs as the helper's
+  `on_spawned` hook, inside the timeout. The reaper remains the last-resort
+  backstop it was designed to be.
 - **LLM cron**: builds a `GatewayRequest` (prepending a
   `[SYSTEM CONTEXT: UA_ARTIFACTS_DIR=...]` header to the command) and runs it
   in-process via `gateway.run_query`. `force_complex` is resolved per-job by

@@ -796,6 +796,101 @@ def _cron_spawn_cwd(job: "CronJob") -> str:
     return str(job.workspace_dir)
 
 
+# How long a fork/exec may take before we log a warning breadcrumb. A healthy
+# spawn is milliseconds; anything in seconds points at the resource-pressure
+# stall class diagnosed 2026-07-23.
+_SPAWN_WARN_SECONDS = 10.0
+
+
+async def _spawn_script_with_timeout(
+    *,
+    argv: list[str],
+    cwd: str,
+    env: Dict[str, str],
+    timeout_seconds: float,
+    job_id: str = "",
+    on_spawned: Optional[Callable[[Any], None]] = None,
+) -> tuple[Any, bytes, bytes, bool]:
+    """Spawn + drain a ``!script`` worker under ONE timeout for the WHOLE
+    subprocess lifecycle — spawn included.
+
+    Root-cause fix for the recurring cron_job_dispatch 60-minute wedge
+    (diagnosed 2026-07-23, task_32c02c29e190): the per-job timeout previously
+    wrapped only ``proc.communicate()``, armed AFTER
+    ``asyncio.create_subprocess_exec`` resolved. When the fork/exec itself
+    stalled (~1 in 4,300 spawns under resource pressure), the timer never
+    armed, the path had no heartbeat, and the run sat silent until the
+    60-MINUTE stuck-run reaper — a 60-second job burning an hour, 29 times
+    across Jun–Jul. Moving the ``wait_for`` boundary outward collapses that
+    wedge to ``timeout_seconds`` and yields a proper ``execution_timeout``
+    failure record instead of a half-dispatched zombie. The reaper remains
+    the genuine last-resort backstop it was designed to be.
+
+    ``on_spawned(proc)`` runs right after a successful spawn (used by the
+    heavyweight path's Phase F.1 worker_pid stamp); its failures are logged
+    and swallowed. Returns ``(proc, stdout, stderr, was_timeout_killed)`` —
+    ``proc`` is ``None`` when the spawn itself never completed (the caller's
+    kill/returncode handling must tolerate that).
+    """
+    import subprocess as _sp
+
+    proc: Any = None
+
+    async def _spawn_and_run() -> tuple[bytes, bytes]:
+        nonlocal proc
+        _t0 = time.monotonic()
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=_sp.PIPE,
+            stderr=_sp.PIPE,
+            cwd=cwd,
+            env=env,
+        )
+        _spawn_s = time.monotonic() - _t0
+        if _spawn_s >= _SPAWN_WARN_SECONDS:
+            # Breadcrumb for the next spawn stall: today a stalled !script
+            # run leaves zero trace. This line names the job and the delay.
+            logger.warning(
+                "cron %s: subprocess spawn took %.1fs (resource-pressure "
+                "fork/exec stall class)",
+                job_id or "?",
+                _spawn_s,
+            )
+        if on_spawned is not None:
+            try:
+                on_spawned(proc)
+            except Exception:  # noqa: BLE001 — best-effort bookkeeping only
+                logger.debug(
+                    "cron %s: on_spawned hook failed", job_id or "?", exc_info=True
+                )
+        return await proc.communicate()
+
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            _spawn_and_run(), timeout=timeout_seconds
+        )
+        return proc, stdout, stderr, False
+    except asyncio.TimeoutError:
+        # proc may not exist yet — the spawn itself may be what hung.
+        if proc is not None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+            except Exception:  # noqa: BLE001
+                stdout, stderr = b"", b""
+        else:
+            logger.warning(
+                "cron %s: spawn itself hung past the %.0fs job timeout — "
+                "killed at the wait_for boundary (previously this wedged "
+                "until the 60-minute reaper)",
+                job_id or "?",
+                timeout_seconds,
+            )
+            stdout, stderr = b"", b""
+        return proc, stdout, stderr, True
+
+
 @dataclass
 class CronJob:
     """Scheduled job definition supporting interval, cron-expression, and one-shot scheduling."""
@@ -2031,30 +2126,24 @@ class CronService:
                             },
                         )
 
-                    _lw_proc = await asyncio.create_subprocess_exec(
-                        _lw_sys.executable,
-                        "-m",
-                        *script_argv,
-                        stdout=_lw_subprocess.PIPE,
-                        stderr=_lw_subprocess.PIPE,
+                    # ONE timeout covering spawn + communicate (the 60-minute
+                    # wedge fix — see _spawn_script_with_timeout). This
+                    # every-minute job is the fleet's highest-frequency
+                    # spawner and was the only cron the stuck-run reaper ever
+                    # fired on (7× Jul, 22× Jun — all spawn stalls).
+                    (
+                        _lw_proc,
+                        _lw_stdout,
+                        _lw_stderr,
+                        _lw_was_timeout_killed,
+                    ) = await _spawn_script_with_timeout(
+                        argv=[_lw_sys.executable, "-m", *script_argv],
                         cwd=_lw_cwd,
                         env=_lw_env,
+                        timeout_seconds=timeout_seconds,
+                        job_id=job.job_id,
                     )
-                    _lw_was_timeout_killed = False
-                    try:
-                        _lw_stdout, _lw_stderr = await asyncio.wait_for(
-                            _lw_proc.communicate(), timeout=timeout_seconds
-                        )
-                    except asyncio.TimeoutError:
-                        _lw_was_timeout_killed = True
-                        with contextlib.suppress(ProcessLookupError):
-                            _lw_proc.kill()
-                        try:
-                            _lw_stdout, _lw_stderr = await asyncio.wait_for(
-                                _lw_proc.communicate(), timeout=5
-                            )
-                        except Exception:
-                            _lw_stdout, _lw_stderr = b"", b""
+                    if _lw_was_timeout_killed:
                         _lw_text = (
                             _lw_stdout.decode(errors="replace")
                             + "\n"
@@ -2064,11 +2153,14 @@ class CronService:
                             job.workspace_dir,
                             job.job_id,
                             record.run_id,
-                            _lw_proc.returncode,
+                            _lw_proc.returncode if _lw_proc is not None else None,
                             _lw_text,
                         )
                         record.output_preview = _lw_text[:400]
-                        raise
+                        raise asyncio.TimeoutError(
+                            f"lightweight !script exceeded {timeout_seconds}s "
+                            "(spawn+communicate)"
+                        )
 
                     _lw_exit_code = _lw_proc.returncode
                     _lw_text = (
@@ -2345,22 +2437,20 @@ class CronService:
                                         job.job_id, _f_link_exc,
                                     )
 
-                                proc = await asyncio.create_subprocess_exec(
-                                    sys.executable, "-m", *script_argv,
-                                    stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE,
-                                    cwd=cwd_str,
-                                    env=env,
-                                )
                                 # Phase F.1 — record worker_pid on the linked
-                                # assignment.  When auto-linked, the helper
-                                # already created the assignment row and
-                                # populated `_f_assignment_id`; for the
-                                # email-scheduler path we still need to look
-                                # it up via the classifier helper.  Best-
-                                # effort throughout; never blocks the happy
-                                # path.
-                                if _f_task_id:
+                                # assignment, immediately after a successful
+                                # spawn (runs as _spawn_script_with_timeout's
+                                # on_spawned hook, INSIDE the job timeout).
+                                # When auto-linked, the helper already created
+                                # the assignment row and populated
+                                # `_f_assignment_id`; for the email-scheduler
+                                # path we still need to look it up via the
+                                # classifier helper.  Best-effort throughout;
+                                # never blocks the happy path.
+                                def _f_stamp_worker_pid(spawned_proc: Any) -> None:
+                                    nonlocal _f_assignment_id
+                                    if not _f_task_id:
+                                        return
                                     try:
                                         from universal_agent import (
                                             task_hub as _f_th,
@@ -2381,12 +2471,12 @@ class CronService:
                                                     _f_conn, task_id=_f_task_id,
                                                 )
                                                 _phase_f_done(job.job_id, "script.find_assignment", _t_find)
-                                            if _f_assignment_id and proc.pid:
+                                            if _f_assignment_id and spawned_proc.pid:
                                                 _t_pid = _phase_f_start(job.job_id, "script.record_worker_pid")
                                                 _f_th.record_worker_pid(
                                                     _f_conn,
                                                     assignment_id=_f_assignment_id,
-                                                    worker_pid=int(proc.pid),
+                                                    worker_pid=int(spawned_proc.pid),
                                                 )
                                                 _f_conn.commit()
                                                 _phase_f_done(job.job_id, "script.record_worker_pid", _t_pid)
@@ -2398,26 +2488,38 @@ class CronService:
                                             job.job_id, _f_pid_exc,
                                         )
 
-                                try:
-                                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
-                                except asyncio.TimeoutError:
+                                # ONE timeout covering spawn + communicate —
+                                # the 60-minute wedge fix, mirrored from the
+                                # lightweight path (identical shape, same
+                                # spawn-stall exposure).
+                                (
+                                    proc,
+                                    stdout,
+                                    stderr,
+                                    _f_spawn_timed_out,
+                                ) = await _spawn_script_with_timeout(
+                                    argv=[sys.executable, "-m", *script_argv],
+                                    cwd=cwd_str,
+                                    env=env,
+                                    timeout_seconds=timeout_seconds,
+                                    job_id=job.job_id,
+                                    on_spawned=_f_stamp_worker_pid,
+                                )
+                                if _f_spawn_timed_out:
                                     _f_was_timeout_killed = True
-                                    with contextlib.suppress(ProcessLookupError):
-                                        proc.kill()
-                                    try:
-                                        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
-                                    except Exception:
-                                        stdout, stderr = b"", b""
                                     output_text = stdout.decode(errors="replace") + "\n" + stderr.decode(errors="replace")
                                     _persist_cron_run_output(
                                         job.workspace_dir,
                                         job.job_id,
                                         record.run_id,
-                                        proc.returncode,
+                                        proc.returncode if proc is not None else None,
                                         output_text,
                                     )
                                     record.output_preview = output_text[:400]
-                                    raise
+                                    raise asyncio.TimeoutError(
+                                        f"!script exceeded {timeout_seconds}s "
+                                        "(spawn+communicate)"
+                                    )
 
                                 exit_code = proc.returncode
                                 output_text = stdout.decode(errors="replace") + "\n" + stderr.decode(errors="replace")
