@@ -17,6 +17,7 @@ code_paths:
   - src/universal_agent/services/pipeline_invariants.py
   - src/universal_agent/services/invariants/cron_staleness.py
   - src/universal_agent/services/invariants/cron_consecutive_failures.py
+  - src/universal_agent/services/invariants/cron_liveness.py
   - memory/HEARTBEAT.md
 last_verified: 2026-07-18
 ---
@@ -99,7 +100,7 @@ Every cycle (whether or not the agent turn runs) performs deterministic, best-ef
 - **Utilization + VP backlog sampling** (`record_utilization_sample`, `vp_mission_backlog.record_backlog_sample`) for the 3x-daily intelligence reports and the backlog trend probe.
 - **Proactive-health (System 2) — a deploy-independent systemd timer, NOT a heartbeat pre-flight** (S5 Phase C). The ~19 invariant probes are computed by `services/proactive_health_timer_main.py` (unit `universal-agent-proactive-health.{service,timer}`, `Type=oneshot`, `OnCalendar=*:0/10` + `Persistent=true`) — *not* inside `_run_heartbeat` anymore. The compute was moved out because the heartbeat skip-modes (lock / retry-not-due / not-scheduled / dormancy / no-targets / empty-directive) used to silence both the compute **and** its operator email on every skipped tick. The timer (a) writes a **durable snapshot** — a singleton `proactive_health_snapshots` row in `activity_state.db` (resolved via `durable/db.py::get_activity_db_path`, replacing the old ephemeral per-workspace `proactive_health_latest.json` sidecar) plus a fixed-path JSON mirror — and (b) emails the operator **ONE digest** of all current criticals (`services/proactive_health_notifier.py::send_critical_digest`, 6h cooldown keyed on the finding-SET fingerprint stored in that row, via `AgentMailService.send_email` → gws on HTTP-429, INCIDENT/ACTION tags), **independent of whether any heartbeat ran**. The digest (`proactive_health_notifier.py::_format_digest_email`) **leads with a plain-language `IN PLAIN LANGUAGE` / `WHAT YOU CAN DO` section** (so the operator can decide whether to hand it off) and puts the metric-key/observed/runbook specificity under a `TECHNICAL DETAIL (for Claude / handoff)` divider. The plain lead is **LLM-synthesized** — `proactive_health_notifier.py::_synthesize_plain_lead` feeds the findings (title / severity / recommendation / `operator_summary` / threshold / observed, never the runbook) through a ZAI call (`llm_classifier::_call_llm`, model `glm-4.6` mid-tier by default — a step up from haiku for better descriptions, overridable via `UA_PROACTIVE_HEALTH_LEAD_MODEL`) so Simone writes a cohesive plain-English "what's going on" narrative. The prompt tells the model to lead with the `recommendation`'s stated root cause (not where a resource merely sits) and to convey urgency from `severity` + how close `observed` is to `threshold_text`. It is robustly **fail-open**: on disable (`UA_HEARTBEAT_PROACTIVE_HEALTH_LLM_LEAD=0`) / empty / any LLM error it returns `None` and the formatter falls back to the **deterministic** per-finding lead — the invariant's optional **`operator_summary`** (a field on the `@invariant` contract — `pipeline_invariants.py::Invariant`; a probe may return a dynamic one with live numbers, carried via finding `metadata`), itself falling back to the first sentence of the recommendation (`proactive_health_notifier.py::_operator_plain_summary`). The alert is never blocked on the LLM. The heartbeat now only **READS** that snapshot: `_compose_heartbeat_prompt` injects a `== PROACTIVE HEALTH (N critical / M warn) ==` block (gated on `not task_focused`, modeled on the System-1 `== DATABASE HEALTH ALERTS ==` block) so Simone folds the findings into `heartbeat_findings_latest.json`. The live `gateway_server.py::ops_proactive_health` endpoint is unchanged and still recomputes on demand for the dashboard **System Health** panel. The in-process `run_pre_flight_check` / `_notify_critical` path remains in `proactive_health_notifier.py` as a tested primitive but has **no production caller** after Phase C (retiring it is a follow-up). proactive_health findings are **not** Task Hub rows (removed 2026-06-03; redundant with email + endpoint, and produced zombie rows / severity mislabels / board-lane pollution — see `08_operations/01_agent_operating_playbook.md` §1.1). The Task Hub "Needs Review" lane now means only genuinely-stalled real work sessions.
 
-### Cron watchdog invariants (`cron_staleness`, `cron_consecutive_failures`)
+### Cron watchdog invariants (`cron_staleness`, `cron_consecutive_failures`, `cron_liveness`)
 
 `services/proactive_health.build_proactive_health_payload` assembles the watchdog
 context and calls `pipeline_invariants.run_invariants` with a single `ctx` dict
@@ -132,6 +133,22 @@ both were hardened on 2026-06-04 to stop emitting false cards:
   unavailable. The backstop is deliberately longer than the longest cron cadence
   (monthly) so it can never suppress a legitimately-failing weekly/monthly cron.
 
+- **`invariants/cron_liveness`** (added 2026-07-23, top-9 task 5) — two critical
+  probes closing the sparse-schedule blind spot (`cron_staleness`'s 2×-max-gap
+  threshold means a dead scheduler under a daily cron went ~48h undetected; a
+  real wedge once ran ~20h):
+  `cron_liveness.cron_loop_liveness` flags any **enabled** cron whose
+  `next_run_at` (ISO or epoch-float) is in the past beyond
+  `clamp(interval × 1.5, 3 min, 2h)` — the scheduler's own promise, so a wedged
+  loop is caught in minutes for every-minute crons and ≤2h even for daily/weekly.
+  `cron_liveness.cron_tick_fired` asserts the seeded run-row-writing crons
+  (`UA_CRON_TICK_FIRED_JOBS`, default `paper_to_podcast_daily,morning_ideation_report`
+  — the only crons that provably open `task_hub_runs` rows; the systemd-migrated
+  briefing/report jobs are `enabled=false` in-app and write none) opened a
+  `task_hub_runs` row (`cron:<system_job>`) within 30 min of their most recent
+  scheduled tick (croniter, job timezone). Disabled/absent seeds skip rather
+  than alarm; both probes fail open without their context.
+
 > Known follow-up (not in the 2026-06-04 fix): `services/hackernews_snapshot_service`
 > (`_hydrate_stories` `ThreadPoolExecutor` + `_run_cli` subprocess panels) can raise
 > "can't start new thread" under gateway thread-pressure. Make hydration/panels resilient
@@ -146,6 +163,8 @@ both were hardened on 2026-06-04 to stop emitting false cards:
 > emission (`hackernews_csi_emitter`) and the HN briefing block.
 
 The prompt is built by `_compose_heartbeat_prompt`. For a normal (non-task-focused) run it stacks: the base prompt (`UA_HEARTBEAT_PROMPT` or `DEFAULT_HEARTBEAT_PROMPT`), the environment context (`_build_heartbeat_environment_context` — factory identity, mandatory file-write rules, mandatory findings-output rule), VP completion-review and stale-delegation-recovery sections, brainstorm/morning-report/recent-topics context, and a **Database Health Alerts** block from `utils/db_health_monitor.check_all_databases`. If `has_exec_completion` is detected in the drained system events, the base prompt is swapped for `EXEC_EVENT_PROMPT` (relay an async command's result).
+
+The **VP COMPLETION REVIEW** block is an ALLOWLIST (2026-07-23): a `pending_review`/`needs_review` row surfaces only when its `metadata.delegation.mission_id` resolves to a real mission id (`task_hub.transition_to_pending_review` finds tasks BY that id, so every genuine VP completion carries it) and its `source_kind` is not `cody_demo_task` (those get the dedicated Cody-demo-review block). The previous blocklist (`source_kind != "cody_demo_task"`) let reflection proposals parked in pending_review page Simone as fake "VP completed, sign off" items every heartbeat.
 
 The agent turn runs via `self.gateway.execute(session, request)` with `force_complex=True` (heartbeat always needs tools, so classification is skipped). `UA_HEARTBEAT_MOCK_RESPONSE=1` short-circuits to a deterministic mock for tests/CI. `metadata["source"]` is set to `"heartbeat"` unconditionally, every request — this is what actually protects routing (see `routing/__init__.py`'s Tier-1 `_is_system_intent` heuristic on `UA_RUN_SOURCE`), not `force_complex` itself, since the heuristic short-circuits before `force_complex` would ever matter. `test_heartbeat_task_focused.py::test_heartbeat_gateway_request_always_carries_source_heartbeat` guards this invariant across both task-focused and non-task-focused ticks.
 
@@ -163,7 +182,8 @@ This branch shipped hardcoded to `_is_task_focused = False` in commit `ae82c81c`
 - `autonomous_disabled` — `UA_HEARTBEAT_AUTONOMOUS_ENABLED` is off and there is actionable/brainstorm work but no exec completion / system events / pending questions.
 - `no_actionable_work` — nothing to do AND the reflection engine is not enabled.
 - `daily_budget_exhausted` / `ideation_paced` — the queue is empty and ideation *would* run, but the daily budget is spent (`services/proactive_budget.has_daily_budget`) or pacing is withholding this tick (`services/proactive_budget.should_ideate_now`). Either way the tick falls through to a cheap skip.
-- If the queue is empty AND `services/reflection_engine.is_reflection_enabled()` is true AND ideation is both in-budget and paced-OK, the run enters **Autonomous Ideation Mode** (24/7, no active-hours restriction) and `skip_reason` is cleared so the agent generates Task Hub items.
+- `ideation_backpressure` — the queue is empty, budget and pacing are fine, but the held reflection backlog exceeds the faucet threshold with no recent operator review activity (`services/reflection_engine.ideation_backpressure_reason`; knobs `UA_IDEATION_BACKPRESSURE_PENDING`, default 75, and `UA_IDEATION_BACKPRESSURE_STALL_DAYS`, default 5). Emitting more proposals would only deepen an unread pile, so the tick emits 0 and logs the full reason (also stamped into `heartbeat_guard.backpressure_reason`). Any promote/dismiss reopens the faucet immediately.
+- If the queue is empty AND `services/reflection_engine.is_reflection_enabled()` is true AND ideation is in-budget, paced-OK, and not under backpressure, the run enters **Autonomous Ideation Mode** (24/7, no active-hours restriction) and `skip_reason` is cleared so the agent generates Task Hub items.
 
 > **The "genuine work" signal is queue / system-event / exec-completion / pending-question / pending-demo-review — NOT `HEARTBEAT.md` content.** An earlier `and not has_heartbeat_content` term in `_heartbeat_guard_policy` gated this whole branch on the directive file being *empty*. Because `memory/HEARTBEAT.md` is a permanently-populated standing playbook (edited only via git through `_sync_heartbeat_file`, never a transient work queue), that term wedged the branch shut forever — silently defeating **both** the idle cheap-skip and ideation activation (0 `source_kind='reflection'` rows ever; the daily-budget counter was never incremented). The term was removed. Genuine transient operator asks still wake her via `pending_question_count` / chat tasks. **Ideation pacing** (`should_ideate_now`, knobs `UA_PROACTIVE_IDEATION_MIN_INTERVAL_SECONDS` / `UA_PROACTIVE_IDEATION_JITTER_FRAC`) then spreads the daily budget across the overnight window so it cannot burst right after the reset and spike ZAI rate limits.
 
