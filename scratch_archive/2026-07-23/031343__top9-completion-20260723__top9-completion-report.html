@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Top-9 Ideation Fixes — Completion Report</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#ffffff; color:#1f2328;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:15px; line-height:1.55; }
+  .wrap { max-width:960px; margin:0 auto; padding:28px 20px 70px; }
+  h1 { font-size:24px; margin:4px 0 2px; }
+  h2 { font-size:18px; margin:30px 0 8px; border-bottom:1px solid #d0d7de; padding-bottom:6px; }
+  .sub { color:#57606a; font-size:13px; margin-bottom:18px; }
+  .kicker { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#8250df; }
+  table { border-collapse:collapse; width:100%; margin:12px 0; font-size:13.5px; }
+  th,td { border:1px solid #d0d7de; padding:7px 10px; text-align:left; vertical-align:top; }
+  th { background:#f6f8fa; }
+  code { background:#f6f8fa; border:1px solid #d0d7de; border-radius:5px; padding:1px 5px; font-size:12.5px;
+    font-family:SFMono-Regular,Consolas,Menlo,monospace; }
+  .pill { display:inline-block; padding:1px 9px; border-radius:11px; font-size:11.5px; font-weight:700; white-space:nowrap; }
+  .ok   { background:#dafbe1; color:#116329; border:1px solid #aceebb; }
+  .noop { background:#ddf4ff; color:#0550ae; border:1px solid #a5d6ff; }
+  .warn { background:#fff8c5; color:#7d4e00; border:1px solid #eed888; }
+  .callout { border:1px solid #d0d7de; border-left:4px solid #8250df; background:#fbfaff; border-radius:6px; padding:12px 16px; margin:14px 0; }
+  .evidence { color:#57606a; font-size:12.5px; }
+  ul { margin:6px 0; padding-left:22px; } li { margin:4px 0; }
+  a { color:#0969da; }
+  .toc { background:#f6f8fa; border:1px solid #d0d7de; border-radius:8px; padding:12px 18px; margin:16px 0; }
+  .toc a { text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">UA · Top-9 ideation-fix handoff · executed by Claude (Fable 5)</div>
+  <h1>Top-9 Ideation Fixes — Completion Report</h1>
+  <div class="sub">2026-07-23 · HANDOFF-ua-top9.md (Jul-20 morning-report triage) + the operator-forwarded VP cron-wedge diagnosis as task 10 · all work sequential, one PR per task, auto-merged, deploy-verified</div>
+
+  <div class="callout">
+    <strong>Bottom line: everything is fixed or verified already-fixed.</strong>
+    7 PRs landed (#1470–#1477, incl. docs), 3 tasks closed as done-no-op with evidence, one prod data
+    triage (103 zombie rows), one prod DB reclaim (760&nbsp;MB). Three of the report's premises turned out
+    to describe <em>designed behavior</em> or already-landed fixes — re-verifying current state first
+    (per the handoff's own rule) prevented three wrong "fixes".
+  </div>
+
+  <div class="toc">
+    <strong>Jump to:</strong>
+    <a href="#tasks">Per-task outcomes</a> ·
+    <a href="#deviations">Deviations &amp; discoveries</a> ·
+    <a href="#verification">Production verification</a> ·
+    <a href="#followups">Follow-ups</a>
+  </div>
+
+  <h2 id="tasks">Per-task outcomes</h2>
+  <table>
+    <tr><th>#</th><th>Task</th><th>Outcome</th><th>What landed / evidence</th></tr>
+    <tr><td>1a</td><td>VP-completion-review false positives</td><td><span class="pill ok">FIXED #1470</span></td>
+      <td>Heartbeat filter blocklist → <strong>allowlist</strong> keyed on <code>metadata.delegation.mission_id</code>. Reflection proposals can no longer page as fake "VP completed, sign off" items.</td></tr>
+    <tr><td>1b</td><td>youtube_transcript_coverage false positives</td><td><span class="pill ok">FIXED #1470</span></td>
+      <td>Intentional triage skips excluded from the denominator. <span class="evidence">Deviation: the marker lives in <code>transcript_error='pre_ingest_triage_skipped'</code>, not transcript_status (verified on live csi.db — 58 of 74 recent "failures" were deliberate skips).</span></td></tr>
+    <tr><td>1c</td><td>disk-health du runs unprivileged</td><td><span class="pill ok">FIXED #1470</span></td>
+      <td><code>sudo -n du</code> with graceful unprivileged fallback — root-owned dirs (containerd, 9.3G) now measure for real.</td></tr>
+    <tr><td>1d</td><td>convergence-staleness fires every morning</td><td><span class="pill noop">ALREADY FIXED</span></td>
+      <td>PR #1412 (Jul 14, pre-dates the report): 26h threshold + 8–21 active-hours gate. Live check: invariant quiet, latest candidate hours old.</td></tr>
+    <tr><td>2</td><td>Disk root-cause: strip .venv + weekly→daily pruning</td><td><span class="pill noop">ALREADY FIXED</span></td>
+      <td>The <strong>daily</strong> regenerable reaper (#1188, Jun 26) already owns this: verified live (reaped 6.4G on Jul 20; workspace now 1.7G, zero .venvs; disk 82% not 89–93%). Weekly→daily flip explicitly rejected by the pruner's own two-tier design. Runbook already rewritten by #1433.</td></tr>
+    <tr><td>3</td><td>Disk-spike attribution</td><td><span class="pill ok">BUILT #1471</span></td>
+      <td>Rolling scan snapshots (keep 3) + growth diff on every pressured finding: message + <code>observed_value.growth_since_prev_scan</code> name which dirs grew most, e.g. <code>/opt/hog (+2.0G, 1.0G→3.0G)</code>. Reuses the existing scan — zero added cost.</td></tr>
+    <tr><td>4</td><td>paper_to_podcast guard false positive</td><td><span class="pill noop">ALREADY FIXED</span></td>
+      <td>#1432 (Jul 16) shipped the guard-accepts-both-paths fix with the FP repro tests; live cron timeout already 3600s (not 1800); <strong>today's podcast email delivered</strong> — live end-to-end proof.</td></tr>
+    <tr><td>5</td><td>Cron liveness invariants</td><td><span class="pill ok">BUILT #1472</span></td>
+      <td><code>cron_loop_liveness</code>: enabled cron past <code>next_run_at</code> beyond clamp(interval×1.5, 3min, 2h) → critical — a wedged scheduler is caught in minutes/≤2h instead of cron_staleness's ~48h for daily crons. <code>cron_tick_fired</code>: seeded run-row-writing crons must open a <code>task_hub_runs</code> row within 30min of their tick. Both dry-run verified quiet against live prod data before shipping.</td></tr>
+    <tr><td>6</td><td>Ideation backpressure + rank/dedup</td><td><span class="pill ok">BUILT #1473</span></td>
+      <td>Faucet gate (pause emission while held&gt;75 with no review in 5d, reopens on any promote/dismiss) + morning report switches to a <strong>ranked top-5 drain view</strong> with a "your bottleneck is decision-throughput" banner + Jaccard near-duplicate pre-create dedup (catches reworded re-proposals the exact-title key misses).</td></tr>
+    <tr><td>7</td><td>Orphaned vp_mission/cron rows + close-on-terminal</td><td><span class="pill ok">FIXED #1474</span></td>
+      <td>Root cause: failed missions mapped their Kanban mirror to <code>open</code> — but mirrors are unclaimable, so every failure left a zombie forever. Now <code>failed→parked</code> (terminal). <strong>One-time prod triage: 103 orphans closed</strong> (14 completed / 79 parked / 10 cancelled / 0 unjoinable); zero open vp_mission rows remain. <span class="evidence">Cron half was an invalid premise — open cron_run rows are the DESIGNED resting state of the perpetual anchor (close_cron_task_link flips completed→open after every clean run).</span></td></tr>
+    <tr><td>8</td><td>Verify-against-reality gate</td><td><span class="pill ok">BUILT #1475</span></td>
+      <td><code>services/premise_check.py::verify_code_claim</code> — deterministic Verified/Unverified for route/cron/timer/symbol claims (registration syntax only; prose mentions don't vouch). Both known-bad premises seeded as regressions (phantom hackernews route, retired csi_analytics timer). Completion gate piloted on tutorial_build/directed_build: workspace + manifest re-checked ON DISK; all other types fail-OPEN with an explicit <code>no_check_defined</code> stamp.</td></tr>
+    <tr><td>9</td><td>task_hub_evaluations runaway writer</td><td><span class="pill noop">MOSTLY PRE-FIXED</span> <span class="pill ok">VACUUM DONE</span></td>
+      <td>Write-site defer-dedup landed Jul 3 (#1259); 7-day env-flagged retention already prunes regardless of status. Measured live rate: <strong>26/hour</strong> (report said 22,000/h) with 557 rows. Remaining reclaim executed: WAL checkpoint + VACUUM — <strong>activity_state.db 1.15G → 395M</strong> (freelist 169K pages → 0).</td></tr>
+    <tr><td>10</td><td>Cron 60-min dispatch wedge (VP diagnosis)</td><td><span class="pill ok">FIXED #1476</span></td>
+      <td>The ★ fix: ONE <code>wait_for</code> around spawn+communicate on <strong>both</strong> !script paths (<code>_spawn_script_with_timeout</code>). A hung fork/exec now trips the job's own 60s timeout instead of the 60-minute reaper (60× reduction), writes a real <code>execution_timeout</code> record, kill path tolerates the never-assigned process, and ≥10s spawns leave a warning breadcrumb. <span class="evidence">Skipped the lease/heartbeat add-on: with spawn inside the timeout the wedge is gone; a per-run heartbeat on a 43k-spawn/month job is real write cost for marginal residual coverage.</span></td></tr>
+    <tr><td>docs</td><td>Canonical-doc updates for all of the above</td><td><span class="pill ok">#1477</span></td>
+      <td>5 canonical docs updated against their code_paths (heartbeat, cron/scheduling in-PR with #1476, YouTube CSI flow, proactive pipeline, deployment/disk, idle-dispatch/worker-loop); doc_audit 0 errors.</td></tr>
+  </table>
+
+  <h2 id="deviations">Deviations &amp; discoveries worth remembering</h2>
+  <ul>
+    <li><strong>Three premises in the Jul-20 report were stale or misread design.</strong> Task 2 (the daily reaper already existed and works), task 4 (#1432 + 3600s timeout already live), and task 7's cron half (<code>open</code> is the designed resting state for perpetual cron anchor rows — "fixing" them closed would have broken the cron link lifecycle).</li>
+    <li><strong>The transcript triage-skip marker lives in <code>transcript_error</code></strong>, not <code>transcript_status</code> — the status column only ever carries ok/failed. The fix targets the real column.</li>
+    <li><strong>Only 2 crons write task_hub_runs rows</strong> (paper_to_podcast_daily, morning_ideation_report). Seeding cron_tick_fired with the report's briefing/report jobs — all systemd-migrated, enabled=false in-app — would have shipped a brand-new crying-wolf alarm inside the anti-crying-wolf task.</li>
+    <li><strong>vp_mission task rows are unclaimable visibility mirrors</strong> (agent_ready=False + forbidden_source_kinds) — which is exactly why "failed→open" could never work and produced the 79-zombie pile.</li>
+  </ul>
+
+  <h2 id="verification">Production verification</h2>
+  <ul>
+    <li>Each PR: branch cut from fresh <code>origin/main</code>, exactly 1 commit, CI green, squash auto-merge, deploy workflow green, live <code>/api/v1/version</code> SHA confirmed on the VPS after each deploy wave.</li>
+    <li>New invariants dry-run against the <em>live</em> prod cron registry + task_hub_runs before shipping — both quiet (no new false positives introduced).</li>
+    <li>Orphan triage: dry-run first (103/103 joinable), then executed; post-check shows zero open vp_mission rows.</li>
+    <li>Full unit suite green for the watchdog wave (4598 passed); ~50 new unit tests across the 7 code PRs; adjacent suites run per PR (heartbeat/ideation/cron/worker-loop: 47–65 each).</li>
+  </ul>
+
+  <h2 id="followups">Follow-ups (small, non-blocking)</h2>
+  <ul>
+    <li><strong>Watch the first real fire</strong> of <code>cron_loop_liveness</code> / <code>cron_tick_fired</code> / the backpressure faucet — all verified quiet on today's data; their first triggering event is the true smoke test.</li>
+    <li><strong>Broaden verify-against-reality</strong> to a second mission type once tutorial_build runs through it end-to-end in prod.</li>
+    <li><strong>Optional forensics</strong> (from the VP diagnosis): a py-spy capture if a ≥10s spawn breadcrumb ever appears — low priority now that the wedge is capped at 60s.</li>
+    <li>The VP-health Mission Control tile counts <code>status IN ('failed','blocked')</code> for mirrors, but no 'failed' task status exists — its failure column was always 0 and still is; harmless, candidate cleanup.</li>
+  </ul>
+</div>
+</body>
+</html>
