@@ -122,22 +122,48 @@ def _du_children(root: str) -> List[Dict[str, Any]]:
     accurate (the Python walk it replaces silently reported truncated partial
     sums as real sizes), it stays on one filesystem (-x), and it does not
     follow symlinks. Returns [] for a missing/unreadable root.
+
+    Runs ``sudo -n du`` first: the scan runs as ``ua`` and root-owned dirs
+    (e.g. /var/lib/containerd, 9.3G) read as 4.0K unprivileged, which put a
+    top consumer completely out of view (2026-07 incident). ``ua`` has
+    passwordless sudo (/etc/sudoers.d/ua-nopasswd); on hosts without it
+    (dev boxes, CI) ``sudo -n`` fails fast with no stdout and we degrade to
+    unprivileged ``du``, which still measures everything the user owns.
     """
+    # Minimal env: `du`/`sudo` are installed system tools, not first-party
+    # code — do not hand them the process environment (Infisical secrets
+    # live there). See the least-privilege rule in CLAUDE.md.
+    env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
+    du_argv = ["du", "-x", "--max-depth=1", "-B1", root]
+    proc = None
     try:
         proc = subprocess.run(
-            ["du", "-x", "--max-depth=1", "-B1", root],
+            ["sudo", "-n", *du_argv],
             capture_output=True,
             text=True,
             timeout=_SCAN_TIMEOUT_S,
-            # Minimal env: `du` is an installed system tool, not first-party
-            # code — do not hand it the process environment (Infisical secrets
-            # live there). See the least-privilege rule in CLAUDE.md.
-            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            env=env,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        logger.debug("disk_usage_health: du failed for %s", root, exc_info=True)
-        return []
+        # sudo binary absent — fall through to unprivileged du below.
+        proc = None
+    if proc is None or (proc.returncode != 0 and not (proc.stdout or "").strip()):
+        # sudo -n refused (no passwordless sudo here) or sudo is absent.
+        # Distinguishable from du's own partial-permission errors, which
+        # still print what they could read. Fall back to unprivileged du.
+        try:
+            proc = subprocess.run(
+                du_argv,
+                capture_output=True,
+                text=True,
+                timeout=_SCAN_TIMEOUT_S,
+                env=env,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            logger.debug("disk_usage_health: du failed for %s", root, exc_info=True)
+            return []
 
     root_real = os.path.realpath(root)
     out: List[Dict[str, Any]] = []

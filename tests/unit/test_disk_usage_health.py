@@ -383,3 +383,92 @@ def test_scan_reports_children_not_the_root_aggregate(tmp_path, monkeypatch):
     paths = [c["path"] for c in consumers]
     assert any("child" in p for p in paths)
     assert str(tmp_path) not in paths, "root aggregate must not be reported"
+
+
+def test_du_children_elevates_with_sudo(tmp_path, monkeypatch):
+    """The scan must run `sudo -n du ...` so root-owned dirs (mode 700, e.g.
+    /var/lib/containerd — 9.3G read as 4.0K unprivileged) are measured for
+    real. Simulated with a recorded subprocess: the FIRST argv must be the
+    elevated form."""
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    secret = tmp_path / "rootonly"
+    secret.mkdir(mode=0o700)
+    calls: list[list[str]] = []
+
+    class _Proc:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def _fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return _Proc(f"9999999999\t{secret}\n123\t{tmp_path}\n")
+
+    monkeypatch.setattr(duh.subprocess, "run", _fake_run)
+    children = duh._du_children(str(tmp_path))
+
+    assert calls, "expected a du subprocess"
+    assert calls[0][:3] == ["sudo", "-n", "du"], (
+        f"scan must elevate via sudo -n, got argv {calls[0]}"
+    )
+    # Restricted env still passed (least-privilege — no Infisical secrets).
+    assert any(c["path"] == str(secret) for c in children)
+
+
+def test_du_children_falls_back_unprivileged_when_sudo_refused(tmp_path, monkeypatch):
+    """Dev boxes / CI without passwordless sudo: `sudo -n` fails fast with no
+    stdout — the scan must degrade to plain `du`, not return empty."""
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    (tmp_path / "child").mkdir()
+    calls: list[list[str]] = []
+
+    class _Proc:
+        stderr = ""
+
+        def __init__(self, returncode: int, stdout: str) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+
+    def _fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[0] == "sudo":
+            return _Proc(1, "")  # sudo -n refused: no password available
+        return _Proc(0, f"2048\t{tmp_path / 'child'}\n4096\t{tmp_path}\n")
+
+    monkeypatch.setattr(duh.subprocess, "run", _fake_run)
+    children = duh._du_children(str(tmp_path))
+
+    assert [c[0] for c in calls] == ["sudo", "du"], "must fall back to plain du"
+    assert any(c["path"] == str(tmp_path / "child") for c in children)
+
+
+def test_du_children_falls_back_when_sudo_binary_absent(tmp_path, monkeypatch):
+    """A box with no sudo installed raises FileNotFoundError on the elevated
+    attempt — the fallback must still run plain du."""
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    (tmp_path / "child").mkdir()
+    calls: list[list[str]] = []
+
+    class _Proc:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def _fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[0] == "sudo":
+            raise FileNotFoundError("sudo not found")
+        return _Proc(f"2048\t{tmp_path / 'child'}\n")
+
+    monkeypatch.setattr(duh.subprocess, "run", _fake_run)
+    children = duh._du_children(str(tmp_path))
+
+    assert [c[0] for c in calls] == ["sudo", "du"]
+    assert any(c["path"] == str(tmp_path / "child") for c in children)

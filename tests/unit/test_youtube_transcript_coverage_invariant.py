@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS rss_event_analysis (
     channel_name TEXT,
     category TEXT,
     transcript_status TEXT NOT NULL DEFAULT 'missing',
+    transcript_error TEXT,
     analyzed_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS events (
@@ -67,15 +68,26 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _seed_db(db_path: Path, rows: Iterable[tuple[str, str, str]]) -> None:
-    """rows: iterable of (event_id, source, transcript_status) inserted at now()."""
+def _seed_db(
+    db_path: Path,
+    rows: Iterable[tuple[str, str, str]],
+    *,
+    transcript_error: str | None = None,
+) -> None:
+    """rows: iterable of (event_id, source, transcript_status) inserted at now().
+
+    ``transcript_error`` applies to every row in this batch — production
+    records intentional triage skips as transcript_status='failed' with
+    transcript_error='pre_ingest_triage_skipped'.
+    """
     conn = _connect(db_path)
     try:
         for event_id, source, status in rows:
             conn.execute(
-                "INSERT INTO rss_event_analysis (event_id, source, transcript_status) "
-                "VALUES (?, ?, ?)",
-                (event_id, source, status),
+                "INSERT INTO rss_event_analysis "
+                "(event_id, source, transcript_status, transcript_error) "
+                "VALUES (?, ?, ?, ?)",
+                (event_id, source, status, transcript_error),
             )
         conn.commit()
     finally:
@@ -210,6 +222,67 @@ def test_mixed_with_majority_ok_emits_no_finding(tmp_path: Path) -> None:
 
     findings = run_invariants({"csi_db_path": db})
     assert findings == []
+
+
+def test_triage_skip_heavy_day_does_not_fire(tmp_path: Path) -> None:
+    """Intentional pre-ingest triage skips must NOT count as failures.
+
+    Regression for the 2026-07 cry-wolf incident: 58 of 74 'failed' rows in a
+    14-day window were transcript_error='pre_ingest_triage_skipped' —
+    deliberate metadata-triage decisions, not outages — yet the coverage
+    invariant paged critical on those days.
+    """
+    db = tmp_path / "csi.db"
+    # 3 genuinely-ok rows + 8 intentional triage skips on the same day.
+    _seed_db(db, [(f"ok{i}", "youtube_channel_rss", "ok") for i in range(3)])
+    _seed_db(
+        db,
+        [(f"skip{i}", "youtube_channel_rss", "failed") for i in range(8)],
+        transcript_error="pre_ingest_triage_skipped",
+    )
+
+    findings = run_invariants({"csi_db_path": db})
+    assert _only_finding_with_id(findings, "youtube_transcript_coverage") == []
+
+
+def test_genuine_api_failure_day_still_fires(tmp_path: Path) -> None:
+    """Real transcript failures (any non-triage error class) must keep firing."""
+    db = tmp_path / "csi.db"
+    _seed_db(db, [(f"ok{i}", "youtube_channel_rss", "ok") for i in range(3)])
+    _seed_db(
+        db,
+        [(f"fail{i}", "youtube_channel_rss", "failed") for i in range(8)],
+        transcript_error="youtube_transcript_api_failed",
+    )
+
+    findings = run_invariants({"csi_db_path": db})
+    transcript_findings = _only_finding_with_id(findings, "youtube_transcript_coverage")
+    assert len(transcript_findings) == 1
+    day = transcript_findings[0].observed_value["offending_days"][0]
+    # Denominator counts the real failures (3 ok of 11 total), not just ok rows.
+    assert day["total"] == 11
+    assert day["ok_count"] == 3
+
+
+def test_mixed_triage_and_real_failures_counts_only_real(tmp_path: Path) -> None:
+    """Triage skips are excluded while real failures on the same day count."""
+    db = tmp_path / "csi.db"
+    # 4 ok + 2 real failures (67% ok → above floor) + 20 triage skips that
+    # would drag the day to 4/26 = 15% if wrongly counted.
+    _seed_db(db, [(f"ok{i}", "youtube_channel_rss", "ok") for i in range(4)])
+    _seed_db(
+        db,
+        [(f"fail{i}", "youtube_channel_rss", "failed") for i in range(2)],
+        transcript_error="ip_block",
+    )
+    _seed_db(
+        db,
+        [(f"skip{i}", "youtube_channel_rss", "failed") for i in range(20)],
+        transcript_error="pre_ingest_triage_skipped",
+    )
+
+    findings = run_invariants({"csi_db_path": db})
+    assert _only_finding_with_id(findings, "youtube_transcript_coverage") == []
 
 
 def test_below_min_rows_per_day_is_skipped(tmp_path: Path) -> None:

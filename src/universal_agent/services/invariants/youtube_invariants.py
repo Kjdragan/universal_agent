@@ -52,6 +52,18 @@ WINDOW_DAYS = 7
 # paging 4 emails/day until it left the 7-day window.
 RECOVERED_RECENT_DAYS = 2
 
+# Intentional pre-ingest triage skips are NOT failures. youtube_ingest.py's
+# metadata triage (too-long/too-short videos etc.) deliberately skips the
+# transcript fetch; the enricher records those rows as
+# transcript_status='failed' with transcript_error='pre_ingest_triage_skipped'
+# (the status column itself only ever carries 'ok'/'failed'). Counting them in
+# the coverage denominator paged the operator on triage-heavy days while the
+# pipeline was healthy (2026-07 cry-wolf incident: 58 of 74 "failures" in a
+# 14-day window were triage skips). Excluded from BOTH numerator and
+# denominator; real failure classes (ip_block, youtube_transcript_api_failed,
+# missing, …) still count so a genuine outage fires.
+TRIAGE_SKIP_ERROR = "pre_ingest_triage_skipped"
+
 # Enrichment-coverage thresholds.  Below COVERAGE_FLOOR_PCT of *in-scope* events
 # (the ones the selective enricher is supposed to process) having a matching
 # rss_event_analysis row over the last 7 days, the pipeline is considered
@@ -147,14 +159,18 @@ def _resolve_csi_db_path(ctx: Dict[str, Any]) -> Optional[Path]:
         "Every populated day in the last 7 days should have at least "
         f"{OK_PCT_FLOOR:.0f}% of rss_event_analysis rows for "
         "source='youtube_channel_rss' with transcript_status='ok'. A populated "
-        f"day is one with >= {MIN_ROWS_PER_DAY} rows."
+        f"day is one with >= {MIN_ROWS_PER_DAY} rows. Intentional pre-ingest "
+        f"triage skips (transcript_error='{TRIAGE_SKIP_ERROR}') are excluded "
+        "from the denominator — they are deliberate, not failures."
     ),
     severity="critical",
     runbook_command=(
         "sqlite3 \"$UA_CSI_DB_PATH\" \"SELECT DATE(analyzed_at) day, "
         "COUNT(*) total, SUM(CASE WHEN transcript_status='ok' THEN 1 ELSE 0 END) ok "
         "FROM rss_event_analysis WHERE source='youtube_channel_rss' AND "
-        "analyzed_at >= datetime('now','-7 days') GROUP BY day ORDER BY day DESC;\""
+        "analyzed_at >= datetime('now','-7 days') AND "
+        "COALESCE(transcript_error,'') != 'pre_ingest_triage_skipped' "
+        "GROUP BY day ORDER BY day DESC;\""
     ),
     metadata={
         "pipeline": "youtube_daily_digest",
@@ -182,10 +198,11 @@ def youtube_transcript_coverage(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
             FROM rss_event_analysis
             WHERE source = 'youtube_channel_rss'
               AND analyzed_at >= datetime('now', ?)
+              AND COALESCE(transcript_error, '') != ?
             GROUP BY DATE(analyzed_at)
             ORDER BY day DESC
             """,
-            (f"-{WINDOW_DAYS} days",),
+            (f"-{WINDOW_DAYS} days", TRIAGE_SKIP_ERROR),
         ).fetchall()
     except sqlite3.Error as exc:
         # Table missing or schema mismatch — surface as probe_error via

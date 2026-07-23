@@ -30,6 +30,7 @@ CREATE TABLE rss_event_analysis (
     event_id TEXT UNIQUE NOT NULL,
     source TEXT NOT NULL DEFAULT 'youtube_channel_rss',
     transcript_status TEXT NOT NULL DEFAULT 'missing',
+    transcript_error TEXT,
     analyzed_at TEXT DEFAULT (datetime('now'))
 );
 """
