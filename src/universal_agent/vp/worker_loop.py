@@ -1204,6 +1204,38 @@ class VpWorkerLoop:
                             ],
                         )
 
+                    # Verify-against-reality completion gate (top-9 task 8,
+                    # piloted on the tutorial_build/directed_build lane): a
+                    # falsifiable, independently re-checked artifact claim
+                    # (landed workspace + manifest.json exist ON DISK) stamped
+                    # onto the terminal metadata. Every other mission type gets
+                    # an explicit fail-OPEN `no_check_defined` verdict — the
+                    # gate never blocks work it has no check for. Unverified
+                    # completions log a warning for the health surfaces.
+                    if event_type == "vp.mission.completed":
+                        try:
+                            from universal_agent.services.premise_check import (
+                                UNVERIFIED,
+                                verify_mission_against_reality,
+                            )
+                            _var = verify_mission_against_reality(
+                                source_kind=_src_kind,
+                                finalize_result=_tutorial_finalize or None,
+                            )
+                            _terminal_meta["verify_against_reality"] = _var
+                            if _var.get("status") == UNVERIFIED:
+                                logger.warning(
+                                    "verify_against_reality UNVERIFIED for %s "
+                                    "(mission=%s): %s",
+                                    _source_task_id,
+                                    mission_id,
+                                    _var.get("evidence"),
+                                )
+                        except Exception:
+                            logger.debug(
+                                "verify_against_reality stamp failed", exc_info=True
+                            )
+
                     # P5 (15_demo_tutorial_pipeline_adr.md "Cross-cutting
                     # requirement"): stamp the building mission's identity onto
                     # the demo manifest BEFORE terminal routing so
