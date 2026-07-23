@@ -49,6 +49,7 @@ Severity (strict per operator pattern set in P4):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -113,6 +114,132 @@ _SCAN_TTL_S = float(os.getenv("UA_DISK_HEALTH_SCAN_TTL_S", "21600"))  # 6h
 
 _scan_lock = threading.Lock()
 _scan_state: Dict[str, Any] = {"as_of": 0.0, "consumers": [], "refreshing": False}
+
+# ── Spike attribution: rolling snapshots + growth diff ──────────────────────
+# Every background scan appends its measurement to a small on-disk rolling
+# file (last _SNAPSHOT_KEEP entries ≈ 12-18h of history at the 6h TTL). When
+# the probe fires a pressured finding, it diffs the current measurement
+# against the previous snapshot and names which directories grew most — so a
+# future spike is a one-line answer instead of a forensic dig. Read-only
+# observability: nothing is deleted, cost is one small JSON write per scan.
+_SNAPSHOT_KEEP = int(os.getenv("UA_DISK_HEALTH_SNAPSHOT_KEEP", "3"))
+_GROWTH_TOP_N = 3
+# Growth below this is noise, not attribution signal.
+_GROWTH_MIN_BYTES = int(os.getenv("UA_DISK_HEALTH_GROWTH_MIN_BYTES", str(256 * 1024 * 1024)))
+
+
+def _snapshot_path() -> str:
+    """Where the rolling top-consumer snapshots live.
+
+    Env-overridable; defaults next to the activity DB (the canonical
+    AGENT_RUN_WORKSPACES resolution used across the codebase), falling back
+    to the repo-relative dir on fresh checkouts.
+    """
+    override = (os.getenv("UA_DISK_HEALTH_SNAPSHOT_PATH") or "").strip()
+    if override:
+        return override
+    env = os.getenv("AGENT_RUN_WORKSPACES_DIR")
+    if env:
+        return os.path.join(env, "disk_health_snapshots.json")
+    try:
+        from universal_agent.durable.db import get_activity_db_path
+
+        return os.path.join(
+            os.path.dirname(get_activity_db_path()), "disk_health_snapshots.json"
+        )
+    except Exception:  # noqa: BLE001 — fresh box without durable config
+        repo_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        )
+        return os.path.join(repo_root, "AGENT_RUN_WORKSPACES", "disk_health_snapshots.json")
+
+
+def _load_snapshots() -> List[Dict[str, Any]]:
+    """Load the rolling snapshot list (oldest first). Never raises."""
+    try:
+        with open(_snapshot_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _record_snapshot(consumers: List[Dict[str, Any]], as_of: float) -> None:
+    """Append a scan result to the rolling file, keeping the newest N. Never raises."""
+    if not consumers:
+        return
+    try:
+        snaps = _load_snapshots()
+        snaps.append({"as_of": as_of, "consumers": consumers})
+        snaps = snaps[-max(1, _SNAPSHOT_KEEP):]
+        path = _snapshot_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(snaps, fh)
+        os.replace(tmp, path)
+    except OSError:
+        logger.debug("disk_usage_health: snapshot write failed", exc_info=True)
+
+
+def _growth_since_previous(
+    current: List[Dict[str, Any]], current_as_of: Optional[float]
+) -> List[Dict[str, Any]]:
+    """Diff the current measurement against the previous snapshot.
+
+    Returns the top directories by positive growth (largest first), each as
+    ``{path, grew_bytes, grew_gb, prev_gb, now_gb, hours_between}``. Empty
+    when no prior snapshot exists or nothing grew meaningfully. Never raises.
+    """
+    try:
+        snaps = _load_snapshots()
+        # The newest snapshot strictly OLDER than the current measurement is
+        # the baseline (the current measurement itself is usually the last
+        # entry — skip it by timestamp, not position, so a probe racing the
+        # writer still diffs against real history).
+        cur_ts = float(current_as_of or 0.0)
+        prev = None
+        for snap in reversed(snaps):
+            if float(snap.get("as_of") or 0.0) < cur_ts or cur_ts == 0.0:
+                prev = snap
+                if float(snap.get("as_of") or 0.0) < cur_ts:
+                    break
+        if not prev or not isinstance(prev.get("consumers"), list):
+            return []
+        prev_by_path = {
+            str(c.get("path")): int(c.get("size_bytes") or 0)
+            for c in prev["consumers"]
+            if isinstance(c, dict) and c.get("path")
+        }
+        hours = None
+        prev_ts = float(prev.get("as_of") or 0.0)
+        if cur_ts and prev_ts and cur_ts > prev_ts:
+            hours = round((cur_ts - prev_ts) / 3600.0, 1)
+        grown: List[Dict[str, Any]] = []
+        for c in current:
+            path = str(c.get("path") or "")
+            if not path or path not in prev_by_path:
+                # A dir absent from the previous top-N list has no baseline;
+                # skipping avoids reporting "grew by its whole size" for a
+                # dir that merely entered the leaderboard.
+                continue
+            delta = int(c.get("size_bytes") or 0) - prev_by_path[path]
+            if delta >= _GROWTH_MIN_BYTES:
+                grown.append(
+                    {
+                        "path": path,
+                        "grew_bytes": delta,
+                        "grew_gb": _gb(delta),
+                        "prev_gb": _gb(prev_by_path[path]),
+                        "now_gb": c.get("size_gb"),
+                        "hours_between": hours,
+                    }
+                )
+        grown.sort(key=lambda g: g["grew_bytes"], reverse=True)
+        return grown[:_GROWTH_TOP_N]
+    except Exception:  # noqa: BLE001 — attribution must never break the finding
+        logger.debug("disk_usage_health: growth diff failed", exc_info=True)
+        return []
 
 
 def _du_children(root: str) -> List[Dict[str, Any]]:
@@ -215,9 +342,12 @@ def _refresh_top_consumers() -> None:
     """Re-measure in the background and publish the result. Never raises."""
     try:
         consumers = _top_consumers()
+        as_of = time.time()
         with _scan_lock:
             _scan_state["consumers"] = consumers
-            _scan_state["as_of"] = time.time()
+            _scan_state["as_of"] = as_of
+        # Rolling snapshot for spike attribution (growth diff on pressure).
+        _record_snapshot(consumers, as_of)
     except Exception:  # noqa: BLE001 — a background scan must never crash the process
         logger.debug("disk_usage_health: background scan failed", exc_info=True)
     finally:
@@ -406,6 +536,30 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         logger.debug("disk_usage_health: top-consumer lookup failed", exc_info=True)
         top_consumers, scan_age_s = [], None
 
+    # Spike attribution: which directories grew most since the previous
+    # snapshot. Answers "what caused this pressure" inline instead of
+    # requiring a forensic dig ([] when no prior snapshot / nothing grew).
+    growth = _growth_since_previous(
+        top_consumers,
+        (time.time() - scan_age_s) if scan_age_s is not None else None,
+    )
+    growth_text = ""
+    if growth:
+        growth_text = (
+            "Grew most since the previous scan"
+            + (
+                f" ({growth[0]['hours_between']}h earlier)"
+                if growth[0].get("hours_between") is not None
+                else ""
+            )
+            + ": "
+            + ", ".join(
+                f"{g['path']} (+{g['grew_gb']}G, {g['prev_gb']}G→{g['now_gb']}G)"
+                for g in growth
+            )
+            + ". "
+        )
+
     if top_consumers:
         age_text = (
             f"measured {int((scan_age_s or 0) // 60)}m ago"
@@ -438,6 +592,7 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "healthy_mounts": healthy,
             "worst_used_pct": worst_pct,
             "top_consumers": top_consumers,
+            "growth_since_prev_scan": growth,
         },
         "threshold_text": (
             f"every monitored mount used_pct ≤ {WARN_THRESHOLD_PCT}% "
@@ -473,7 +628,7 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # (2026-07-15 — the alert blamed vp_coder while 18G sat in ~/.cache).
         "message": (
             f"Disk pressure on {len(pressured)} mount(s): {', '.join(mount_names)}. "
-            f"Worst {worst_pct}%. {live_consumer_text}"
+            f"Worst {worst_pct}%. {live_consumer_text}{growth_text}"
             "Judge reclaim from the measured list above, not from habit. "
             "Usually-regenerable categories: per-mission .venv / __pycache__ / "
             "node_modules under AGENT_RUN_WORKSPACES (daily "
