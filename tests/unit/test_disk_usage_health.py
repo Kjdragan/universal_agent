@@ -472,3 +472,107 @@ def test_du_children_falls_back_when_sudo_binary_absent(tmp_path, monkeypatch):
 
     assert [c[0] for c in calls] == ["sudo", "du"]
     assert any(c["path"] == str(tmp_path / "child") for c in children)
+
+
+# ── Spike attribution: rolling snapshots + growth diff ──────────────────────
+
+
+def test_snapshot_rolls_and_keeps_newest(tmp_path, monkeypatch):
+    """_record_snapshot keeps only the newest _SNAPSHOT_KEEP entries."""
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    snap = tmp_path / "snaps.json"
+    monkeypatch.setenv("UA_DISK_HEALTH_SNAPSHOT_PATH", str(snap))
+    for i in range(5):
+        duh._record_snapshot(
+            [{"path": "/x", "size_bytes": i, "size_gb": 0.0}], as_of=1000.0 + i
+        )
+    snaps = duh._load_snapshots()
+    assert len(snaps) == duh._SNAPSHOT_KEEP
+    assert [s["as_of"] for s in snaps] == [1002.0, 1003.0, 1004.0]
+
+
+def test_growth_diff_names_the_grower(tmp_path, monkeypatch):
+    """The diff names the dir that grew most since the previous snapshot."""
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    snap = tmp_path / "snaps.json"
+    monkeypatch.setenv("UA_DISK_HEALTH_SNAPSHOT_PATH", str(snap))
+    gib = 1024 ** 3
+    duh._record_snapshot(
+        [
+            {"path": "/opt/big", "size_bytes": 2 * gib, "size_gb": 2.0},
+            {"path": "/opt/flat", "size_bytes": 5 * gib, "size_gb": 5.0},
+        ],
+        as_of=1000.0,
+    )
+    current = [
+        {"path": "/opt/big", "size_bytes": 6 * gib, "size_gb": 6.0},  # +4G
+        {"path": "/opt/flat", "size_bytes": 5 * gib, "size_gb": 5.0},  # +0
+    ]
+    growth = duh._growth_since_previous(current, current_as_of=1000.0 + 7200)
+    assert len(growth) == 1
+    g = growth[0]
+    assert g["path"] == "/opt/big"
+    assert g["grew_gb"] == 4.0
+    assert g["hours_between"] == 2.0
+
+
+def test_growth_diff_quiet_without_history(tmp_path, monkeypatch):
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    monkeypatch.setenv("UA_DISK_HEALTH_SNAPSHOT_PATH", str(tmp_path / "none.json"))
+    assert duh._growth_since_previous(
+        [{"path": "/x", "size_bytes": 10 ** 12, "size_gb": 931.3}], current_as_of=None
+    ) == []
+
+
+def test_growth_ignores_dirs_without_baseline(tmp_path, monkeypatch):
+    """A dir that just entered the top-N has no baseline — must not be
+    reported as having 'grown' by its entire size."""
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    snap = tmp_path / "snaps.json"
+    monkeypatch.setenv("UA_DISK_HEALTH_SNAPSHOT_PATH", str(snap))
+    gib = 1024 ** 3
+    duh._record_snapshot(
+        [{"path": "/opt/old", "size_bytes": gib, "size_gb": 1.0}], as_of=1000.0
+    )
+    growth = duh._growth_since_previous(
+        [{"path": "/opt/newcomer", "size_bytes": 50 * gib, "size_gb": 50.0}],
+        current_as_of=2000.0,
+    )
+    assert growth == []
+
+
+def test_pressured_finding_embeds_growth(tmp_path, monkeypatch):
+    """End-to-end: a pressured finding carries the growth attribution in both
+    observed_value and the message."""
+    from universal_agent.services.invariants import disk_usage_health as duh
+
+    snap = tmp_path / "snaps.json"
+    monkeypatch.setenv("UA_DISK_HEALTH_SNAPSHOT_PATH", str(snap))
+    gib = 1024 ** 3
+    # Prior snapshot: /opt/hog at 1G. Current cached scan: /opt/hog at 3G.
+    duh._record_snapshot(
+        [{"path": "/opt/hog", "size_bytes": gib, "size_gb": 1.0}], as_of=1000.0
+    )
+    now = 1000.0 + 3600
+    with duh._scan_lock:
+        duh._scan_state["consumers"] = [
+            {"path": "/opt/hog", "size_bytes": 3 * gib, "size_gb": 3.0}
+        ]
+        duh._scan_state["as_of"] = now
+        duh._scan_state["refreshing"] = False
+    monkeypatch.setattr(duh.time, "time", lambda: now)
+
+    with _mock_disk_usage({"/": DiskUsage(_gb(100), _gb(88), _gb(12))}):
+        findings = run_invariants({})
+
+    f = [x for x in findings if x.metric_key == "disk_usage_health"][0]
+    growth = f.observed_value["growth_since_prev_scan"]
+    assert growth and growth[0]["path"] == "/opt/hog"
+    assert growth[0]["grew_gb"] == 2.0
+    # The probe's "message" maps onto the finding's recommendation field.
+    assert "Grew most since the previous scan" in f.recommendation
+    assert "/opt/hog (+2.0G, 1.0G→3.0G)" in f.recommendation
