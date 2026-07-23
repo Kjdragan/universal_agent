@@ -16,6 +16,63 @@ _ACTION_ALIASES = {
 _LIFECYCLE_ACTIONS = {"review", "complete", "block", "park", "unblock", "delegate", "approve", "seize", "claim", "bulk_close_ambient"}
 
 
+def _reflection_dedup_jaccard() -> float:
+    """Token-overlap threshold above which two proposals are near-duplicates.
+
+    Mirrors the intel-digest backstop (UA_DIGEST_DEDUP_JACCARD): conservative
+    default, 1.0 disables. A false collapse hides a distinct idea, which is
+    worse than letting a near-duplicate through to the morning report.
+    """
+    import os
+
+    raw = str(os.getenv("UA_REFLECTION_DEDUP_JACCARD", "0.6")).strip()
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except ValueError:
+        return 0.6
+
+
+def _reflection_tokens(*parts: Any) -> frozenset[str]:
+    text = "".join(c if c.isalnum() else " " for c in " ".join(str(p or "") for p in parts).lower())
+    return frozenset(t for t in text.split() if len(t) > 2)
+
+
+def _find_near_duplicate_reflection(
+    conn: sqlite3.Connection, *, title: str, description: str
+) -> str | None:
+    """Return the task_id of an open held proposal near-duplicating the
+    candidate (Jaccard over title+description tokens >= threshold), else None.
+    Never raises — dedup is a convenience, not a gate."""
+    threshold = _reflection_dedup_jaccard()
+    if threshold >= 1.0:
+        return None
+    cand = _reflection_tokens(title, description)
+    if not cand:
+        return None
+    try:
+        rows = conn.execute(
+            """
+            SELECT task_id, title, description
+            FROM task_hub_items
+            WHERE source_kind = 'reflection'
+              AND status IN (?, ?)
+            ORDER BY updated_at DESC
+            LIMIT 200
+            """,
+            (task_hub.TASK_STATUS_OPEN, task_hub.TASK_STATUS_REVIEW),
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    for row in rows:
+        other = _reflection_tokens(row["title"], row["description"])
+        if not other:
+            continue
+        overlap = len(cand & other) / len(cand | other)
+        if overlap >= threshold:
+            return str(row["task_id"])
+    return None
+
+
 def _ok(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"content": [{"type": "text", "text": json.dumps(payload, indent=2, ensure_ascii=True)}]}
 
@@ -297,6 +354,23 @@ async def _task_hub_create_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                     "deduplicated": True,
                     "dedup_key": dedup_key,
                     "item": task_hub.get_item(conn, existing_id),
+                })
+
+        if dedup_key:
+            # Near-duplicate backstop (task 6): the exact-title key above only
+            # catches verbatim re-proposals; the ideator mostly RE-WORDS the
+            # same idea. Port of the intel-digest Jaccard dedup
+            # (hourly_intel_digest.dedup_near_duplicate_briefs): token-overlap
+            # against every open held proposal's title+description; >= the
+            # threshold → skip-as-duplicate, returning the existing row.
+            near = _find_near_duplicate_reflection(conn, title=title, description=description)
+            if near is not None:
+                return _ok({
+                    "success": True,
+                    "task_id": near,
+                    "deduplicated": True,
+                    "dedup_kind": "near_duplicate",
+                    "item": task_hub.get_item(conn, near),
                 })
 
         import uuid

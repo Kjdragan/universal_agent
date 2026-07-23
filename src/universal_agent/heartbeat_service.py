@@ -2719,6 +2719,7 @@ class HeartbeatService:
                     )
                     from universal_agent.services.reflection_engine import (
                         build_reflection_context,
+                        ideation_backpressure_reason,
                     )
                     ref_conn = connect_runtime_db(get_activity_db_path())
                     ref_conn.row_factory = sqlite3.Row  # type: ignore[name-defined]
@@ -2731,7 +2732,12 @@ class HeartbeatService:
                         # only consulted here (queue empty, no other work), so a
                         # False just lets the tick fall through to a cheap skip.
                         _paced_ok = should_ideate_now(ref_conn)
-                        if _has_budget and _paced_ok:
+                        # Backpressure faucet (task 6): while the held backlog
+                        # exceeds the threshold with no recent operator review
+                        # activity, emit 0 proposals and log why — new ideas
+                        # would just deepen an unread pile.
+                        _backpressure = ideation_backpressure_reason(ref_conn)
+                        if _has_budget and _paced_ok and _backpressure is None:
                             ref_ctx = build_reflection_context(
                                 ref_conn,
                                 workspace_dir=str(session.workspace_dir),
@@ -2753,15 +2759,21 @@ class HeartbeatService:
                                 len(ref_ctx.get("stalled_brainstorms") or []),
                             )
                         else:
-                            guard_skip_reason = (
-                                "daily_budget_exhausted" if not _has_budget else "ideation_paced"
-                            )
+                            if not _has_budget:
+                                guard_skip_reason = "daily_budget_exhausted"
+                            elif not _paced_ok:
+                                guard_skip_reason = "ideation_paced"
+                            else:
+                                guard_skip_reason = "ideation_backpressure"
                             _is_reflection_mode = False
                             metadata["heartbeat_guard"]["skip_reason"] = guard_skip_reason
+                            if _backpressure is not None:
+                                metadata["heartbeat_guard"]["backpressure_reason"] = _backpressure
                             logger.info(
-                                "Ideation mode skipped for %s: %s",
+                                "Ideation mode skipped for %s: %s%s",
                                 session.session_id,
                                 guard_skip_reason,
+                                f" ({_backpressure})" if _backpressure else "",
                             )
                     finally:
                         ref_conn.close()

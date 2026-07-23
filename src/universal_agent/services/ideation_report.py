@@ -61,6 +61,40 @@ def get_held_proposals(conn: sqlite3.Connection, *, limit: int = 25) -> list[dic
     return [dict(r) for r in rows]
 
 
+def count_held_proposals(conn: sqlite3.Connection) -> int:
+    """Total held reflection proposals (not capped by the render limit)."""
+    task_hub.ensure_schema(conn)
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM task_hub_items "
+        "WHERE source_kind = 'reflection' AND status = 'open' AND agent_ready = 0"
+    ).fetchone()
+    return int(row["c"]) if row else 0
+
+
+def get_held_proposals_ranked(
+    conn: sqlite3.Connection, *, limit: int = 5
+) -> list[dict[str, Any]]:
+    """Best-first slice of the held backlog for the backpressure drain view.
+
+    Rank: judge score (when present) desc, then priority desc, then oldest
+    first — the longest-waiting of otherwise-equal proposals drains first.
+    """
+    task_hub.ensure_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT task_id, title, description, priority, labels_json, score, created_at
+        FROM task_hub_items
+        WHERE source_kind = 'reflection'
+          AND status = 'open'
+          AND agent_ready = 0
+        ORDER BY COALESCE(score, 0) DESC, priority DESC, created_at ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 DEFAULT_STALE_PROPOSAL_SURFACE_HOURS = 72
 
 
@@ -271,15 +305,32 @@ def _shell(inner: str, *, count: int, generated_ct: str) -> str:
     )
 
 
+def _render_backpressure_banner(pending_total: int, reason: str) -> str:
+    """Drain-nudge callout shown INSTEAD of the raw held list under backpressure."""
+    safe_reason = _html.escape(reason or "")
+    return (
+        '<div style="background:#fff8f0;border:1px solid #d4a72c;border-radius:8px;'
+        'padding:14px 16px;margin:0 0 18px;">'
+        '<div style="font-weight:700;color:#9a6700;margin-bottom:6px;">'
+        f'⚠ {pending_total} proposals are waiting on you — your bottleneck is '
+        "decision-throughput, not idea supply.</div>"
+        '<div style="font-size:13px;color:#57606a;">'
+        "New proposal emission is paused until reviews resume "
+        f"({safe_reason}). Below are the top 5 to decide on now — promote or "
+        "dismiss these and the faucet reopens.</div></div>"
+    )
+
+
 def render_report_html(
     proposals: list[dict[str, Any]],
     *,
     base: str,
     generated_ct: str,
     stale: list[dict[str, Any]] | None = None,
+    banner: str = "",
 ) -> str:
     stale = stale or []
-    inner = _render_cards(proposals, base) + _render_stale_section(stale, base)
+    inner = banner + _render_cards(proposals, base) + _render_stale_section(stale, base)
     return _shell(inner, count=len(proposals) + len(stale), generated_ct=generated_ct)
 
 
@@ -290,6 +341,7 @@ def _email_html(
     generated_ct: str,
     scratch_url: str | None,
     stale: list[dict[str, Any]] | None = None,
+    banner: str = "",
 ) -> str:
     stale = stale or []
     link = (
@@ -298,14 +350,32 @@ def _email_html(
         if scratch_url
         else ""
     )
-    inner = link + _render_cards(proposals, base) + _render_stale_section(stale, base)
+    inner = link + banner + _render_cards(proposals, base) + _render_stale_section(stale, base)
     return _shell(inner, count=len(proposals) + len(stale), generated_ct=generated_ct)
 
 
 async def deliver_ideation_report(conn: sqlite3.Connection, mail_service: Any, recipient: str) -> dict[str, Any]:
-    """Compose + deliver the morning ideation report. Skips delivery when empty."""
-    proposals = get_held_proposals(conn)
-    stale = get_stale_proposals(conn, max_age_hours=DEFAULT_STALE_PROPOSAL_SURFACE_HOURS)
+    """Compose + deliver the morning ideation report. Skips delivery when empty.
+
+    Backpressure drain view (task 6): when the held backlog exceeds the
+    faucet threshold with no recent review activity, the report switches
+    from the raw newest-first list to a ranked TOP-5 batch plus a
+    "your bottleneck is decision-throughput" banner.
+    """
+    from universal_agent.services.reflection_engine import ideation_backpressure_reason
+
+    backpressure = ideation_backpressure_reason(conn)
+    pending_total = count_held_proposals(conn)
+    if backpressure:
+        proposals = get_held_proposals_ranked(conn, limit=5)
+        banner = _render_backpressure_banner(pending_total, backpressure)
+        # The drain view IS the report: the stale section would re-render the
+        # whole backlog under the top-5 and defeat the point.
+        stale: list[dict[str, Any]] = []
+    else:
+        proposals = get_held_proposals(conn)
+        banner = ""
+        stale = get_stale_proposals(conn, max_age_hours=DEFAULT_STALE_PROPOSAL_SURFACE_HOURS)
     now_ct = datetime.now(timezone.utc).astimezone(_CENTRAL)
     generated_ct = now_ct.strftime("%a %b %-d, %-I:%M %p %Z")
 
@@ -315,7 +385,9 @@ async def deliver_ideation_report(conn: sqlite3.Connection, mail_service: Any, r
 
     total = len(proposals) + len(stale)
     base = _action_base_url()
-    html_doc = render_report_html(proposals, base=base, generated_ct=generated_ct, stale=stale)
+    html_doc = render_report_html(
+        proposals, base=base, generated_ct=generated_ct, stale=stale, banner=banner
+    )
 
     scratch_url = publish_html_to_scratch(
         html_doc,
@@ -325,7 +397,13 @@ async def deliver_ideation_report(conn: sqlite3.Connection, mail_service: Any, r
         description=f"{total} proposal(s) awaiting review",
     )
 
-    subject = f"[FYI/IDEATION] Morning Ideation Report — {total} proposal(s)"
+    if backpressure:
+        subject = (
+            f"[ACTION/IDEATION] {pending_total} proposals pending — top 5 to decide "
+            "(emission paused)"
+        )
+    else:
+        subject = f"[FYI/IDEATION] Morning Ideation Report — {total} proposal(s)"
     lines = [
         f"- {p.get('title')}\n  {(' '.join(str(p.get('description') or '').split()))[:240]}"
         for p in proposals
@@ -333,14 +411,22 @@ async def deliver_ideation_report(conn: sqlite3.Connection, mail_service: Any, r
         f"- [STALE >72h] {s.get('title')}\n  {(' '.join(str(s.get('description') or '').split()))[:240]}"
         for s in stale
     ]
+    bp_lead = (
+        f"BACKPRESSURE: {pending_total} proposals pending, emission paused — "
+        "your bottleneck is decision-throughput. Top 5 below.\n"
+        if backpressure
+        else ""
+    )
     text = (
-        f"{total} proposal(s) awaiting your call ({len(proposals)} new, {len(stale)} stale >72h) "
+        bp_lead
+        + f"{total} proposal(s) awaiting your call ({len(proposals)} new, {len(stale)} stale >72h) "
         f"(generated {generated_ct}).\n"
         + ("Full report: " + scratch_url + "\n\n" if scratch_url else "\n")
         + "\n\n".join(lines)
     )
     email_html = _email_html(
         proposals, base=base, generated_ct=generated_ct, scratch_url=scratch_url, stale=stale,
+        banner=banner,
     )
 
     email_sent = False
