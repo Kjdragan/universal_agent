@@ -242,7 +242,10 @@ wiring differs — some run continuously, some ship scaffolding only.
 > action links are HMAC-signed (`cron_artifact_notifier.sign_ideation_token`) and handled by
 > `gateway_server.py::ideation_action_get` (`GET /api/v1/ideation/{task_id}/action`): **promote**
 > runs the new `task_hub.py` `ACTION_PROMOTE` verb (open + `agent_ready=1` + score floored above
-> the dispatch threshold so the next `dispatch_sweep` claims it); **dismiss** parks it; **refine**
+> the dispatch threshold so the next `dispatch_sweep` claims it); **dismiss** hard-deletes it
+(`task_hub.py::delete_held_proposal` — item row + child rows; guarded to reflection/brainstorm
+proposals still in `open`/`parked` status, so claimed/in-flight work is never destroyed), so a
+dismissed idea is gone rather than parked and never resurfaces in a later report; **refine**
 > is the scratchpad review toolbar. *Stale-proposal handling (shipped 2026-07-11):* the report
 > also emits a **STALE PROPOSALS NEEDING VERDICT (>72h)** section
 > (`ideation_report.py::get_stale_proposals` — OPEN reflection/brainstorm items older than 72h,

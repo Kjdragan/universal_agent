@@ -5,8 +5,9 @@ generated overnight (source_kind='reflection', status='open', agent_ready=0) as 
 rendered report with one-click **promote** / **dismiss** action links. The links
 are HMAC-signed (``cron_artifact_notifier.sign_ideation_token``) and verified by
 ``gateway_server.ideation_action_get`` — promote flips a proposal into the live
-dispatch queue, dismiss parks it. "Refine" is the scratchpad review toolbar that
-every published page already carries.
+dispatch queue, dismiss deletes it (``task_hub.delete_held_proposal``) so a
+dismissed idea is gone, not parked, and never resurfaces in a later report.
+"Refine" is the scratchpad review toolbar that every published page already carries.
 
 This is the separate-from-CSI proactive-idea channel: CSI Track-B convergence is
 its own pipeline; this is Simone's idle-time ideation. Delivered link-first
@@ -298,7 +299,7 @@ def _shell(inner: str, *, count: int, generated_ct: str) -> str:
         f"your call · generated {generated_ct} · separate from the CSI pipeline</div>"
         f"{inner}"
         "<div style=\"color:#8c959f;font-size:12px;margin-top:24px;border-top:1px solid #d0d7de;"
-        "padding-top:14px;\">Promote sends a proposal to the live dispatch queue; Dismiss parks it. "
+        "padding-top:14px;\">Promote sends a proposal to the live dispatch queue; Dismiss deletes it. "
         "To <strong>refine</strong> instead, use the highlight-and-comment toolbar on this page. "
         "Proposals you don't action stay here for the next report.</div>"
         "</div></body></html>"

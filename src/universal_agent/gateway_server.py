@@ -22806,7 +22806,8 @@ def ideation_action_get(task_id: str, a: str = "", t: str = ""):
     ``a`` in {"promote","dismiss"}, ``t`` an HMAC over ``f"ideation:{task_id}:{a}"``.
     The HMAC IS the auth (the link lands in a mail client, no bearer header).
     ``promote`` flips the held proposal into the live dispatch queue; ``dismiss``
-    parks it. Returns a small HTML landing page (200/401/404).
+    deletes it outright (row + child rows), so a dismissed idea is gone rather
+    than parked. Returns a small HTML landing page (200/401/404).
     """
     from fastapi.responses import HTMLResponse
 
@@ -22835,19 +22836,23 @@ def ideation_action_get(task_id: str, a: str = "", t: str = ""):
             status_code=401,
         )
 
-    verb = "promote" if action == "promote" else "park"
     with _activity_store_lock:
         conn = _activity_connect()
         try:
             _ensure_activity_schema(conn)
             try:
-                task_hub.perform_task_action(
-                    conn,
-                    task_id=task_id,
-                    action=verb,
-                    agent_id="kevin",
-                    reason=f"{action} from morning ideation report",
-                )
+                if action == "dismiss":
+                    # Dismiss deletes the held proposal outright — the operator is
+                    # not interested, so it should be gone, not parked.
+                    task_hub.delete_held_proposal(conn, task_id)
+                else:
+                    task_hub.perform_task_action(
+                        conn,
+                        task_id=task_id,
+                        action="promote",
+                        agent_id="kevin",
+                        reason="promote from morning ideation report",
+                    )
                 conn.commit()
             except ValueError:
                 return HTMLResponse(
@@ -22872,7 +22877,7 @@ def ideation_action_get(task_id: str, a: str = "", t: str = ""):
     else:
         body = _brief_chrome(
             "Dismissed ✓",
-            "<p>This idea has been parked and won't be worked on.</p>",
+            "<p>This idea has been deleted and won't appear in future reports.</p>",
             status_color="#6e7781",
         )
     return HTMLResponse(content=body, status_code=200)

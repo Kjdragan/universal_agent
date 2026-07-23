@@ -78,3 +78,75 @@ def test_report_queries_held_only_and_renders_buttons(monkeypatch):
     assert "Purge stale cards" in html
     assert "/api/v1/ideation/task_r1/action?a=promote" in html
     assert "a=dismiss" in html
+
+
+def _add_eval(conn, task_id):
+    conn.execute(
+        "INSERT INTO task_hub_evaluations (id, task_id, evaluated_at, decision) VALUES (?,?,?,?)",
+        (f"ev_{task_id}", task_id, "now", "score"),
+    )
+
+
+def test_dismiss_deletes_held_proposal_and_children():
+    conn = _mem()
+    task_hub.upsert_item(conn, {
+        "task_id": "task_d1", "title": "Held idea", "description": "x",
+        "source_kind": "reflection", "status": "open", "agent_ready": False,
+        "trigger_type": "autonomous",
+    })
+    _add_eval(conn, "task_d1")
+    assert task_hub.delete_held_proposal(conn, "task_d1") is True
+    assert task_hub.get_item(conn, "task_d1") is None            # row gone
+    assert conn.execute(
+        "SELECT count(*) FROM task_hub_evaluations WHERE task_id='task_d1'"
+    ).fetchone()[0] == 0                                          # no orphan children
+    # gone from the report surface too
+    assert not ideation_report.get_held_proposals(conn)
+
+
+def test_dismiss_deletes_already_parked_proposal():
+    conn = _mem()
+    task_hub.upsert_item(conn, {
+        "task_id": "task_d2", "title": "Parked idea", "source_kind": "reflection",
+        "status": "parked", "agent_ready": False, "trigger_type": "autonomous",
+    })
+    assert task_hub.delete_held_proposal(conn, "task_d2") is True
+    assert task_hub.get_item(conn, "task_d2") is None
+
+
+def test_prune_deletes_brainstorm_and_promoted_open_proposals():
+    """The stale section's Prune (same a=dismiss action) targets brainstorm items
+    and promoted-but-unclaimed (open, agent_ready=1) ones — both must delete."""
+    conn = _mem()
+    task_hub.upsert_item(conn, {
+        "task_id": "task_bs", "title": "Brainstorm idea", "source_kind": "brainstorm",
+        "status": "open", "agent_ready": False, "trigger_type": "autonomous",
+    })
+    task_hub.upsert_item(conn, {
+        "task_id": "task_promoted", "title": "Promoted, unclaimed",
+        "source_kind": "reflection", "status": "open", "agent_ready": True,
+        "trigger_type": "autonomous",
+    })
+    assert task_hub.delete_held_proposal(conn, "task_bs") is True
+    assert task_hub.delete_held_proposal(conn, "task_promoted") is True
+    assert task_hub.get_item(conn, "task_bs") is None
+    assert task_hub.get_item(conn, "task_promoted") is None
+
+
+def test_dismiss_refuses_inflight_or_non_proposal():
+    conn = _mem()
+    # claimed / in-flight — the status guard must protect live work
+    task_hub.upsert_item(conn, {
+        "task_id": "task_d3", "title": "In progress", "source_kind": "reflection",
+        "status": "in_progress", "agent_ready": True, "trigger_type": "autonomous",
+    })
+    # not an ideation proposal at all
+    task_hub.upsert_item(conn, {
+        "task_id": "task_d4", "title": "Real task", "source_kind": "cody_demo_task",
+        "status": "open", "agent_ready": False, "trigger_type": "autonomous",
+    })
+    for tid in ("task_d3", "task_d4", "task_missing"):
+        with pytest.raises(ValueError):
+            task_hub.delete_held_proposal(conn, tid)
+    assert task_hub.get_item(conn, "task_d3") is not None         # survived
+    assert task_hub.get_item(conn, "task_d4") is not None

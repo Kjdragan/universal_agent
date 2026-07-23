@@ -5965,6 +5965,55 @@ DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS = frozenset(
     {"tutorial_build", "cody_demo_task", "directed_build"}
 )
 
+# Source kinds a one-click ideation dismiss/prune may hard-delete. The morning
+# report's held section surfaces 'reflection'; its stale section (Prune button,
+# same a=dismiss action) also surfaces 'brainstorm' — both must be deletable.
+DISMISSIBLE_PROPOSAL_SOURCE_KINDS = frozenset({"reflection", "brainstorm"})
+
+# Every task_id-keyed child table, so deleting a held proposal leaves no orphans.
+# In practice a never-dispatched proposal only accumulates a creation-time
+# task_hub_evaluations row, but the delete is exhaustive to stay correct if that
+# changes.
+_TASK_CHILD_TABLES = (
+    "task_hub_evaluations",
+    "task_hub_assignments",
+    "task_hub_runs",
+    "task_hub_dispatch_queue",
+    "task_hub_comments",
+    "task_hub_question_queue",
+    "task_hub_notifications",
+    "task_hub_delivery_evidence",
+)
+
+
+def delete_held_proposal(conn: sqlite3.Connection, task_id: str) -> bool:
+    """Hard-delete an ideation proposal (item row + child rows) — dismiss, not park.
+
+    Backs the report's one-click dismiss/prune. Guarded so it can only delete an
+    ideation proposal (``DISMISSIBLE_PROPOSAL_SOURCE_KINDS``) that is still in an
+    ``open`` or ``parked`` status. The status guard is the safety net: anything
+    that was promoted AND claimed (``in_progress``/``delegated``/…) or already
+    terminal is refused, so a stale dismiss link can never destroy live or
+    finished work. A promoted-but-unclaimed proposal (still ``open``) stays
+    deletable — the stale section deliberately offers Prune on those. Returns True
+    on delete; raises ``ValueError`` if absent or ineligible.
+    """
+    ensure_schema(conn)
+    item = get_item(conn, task_id)
+    if not item:
+        raise ValueError("task not found")
+    source_kind = str(item.get("source_kind") or "").strip()
+    status = str(item.get("status") or "").strip()
+    if (
+        source_kind not in DISMISSIBLE_PROPOSAL_SOURCE_KINDS
+        or status not in {TASK_STATUS_OPEN, TASK_STATUS_PARKED}
+    ):
+        raise ValueError(f"not a dismissible proposal: {task_id}")
+    for table in _TASK_CHILD_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM task_hub_items WHERE task_id = ?", (task_id,))
+    return True
+
 
 def perform_task_action(
     conn: sqlite3.Connection,
