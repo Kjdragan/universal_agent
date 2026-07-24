@@ -109,9 +109,40 @@ class TestBuildMorningReport:
     def test_counts_active_tasks(self, conn):
         _insert_task(conn, "t1", "Task One", status="open")
         _insert_task(conn, "t2", "Task Two", status="in_progress")
-        _insert_task(conn, "t3", "Done Task", status="done")
+        _insert_task(conn, "t3", "Completed Task", status=task_hub.TASK_STATUS_COMPLETED)
         report = build_morning_report(conn)
-        assert report["total_active"] == 2  # t3 is done, excluded
+        assert report["total_active"] == 2  # t3 is completed, excluded
+
+    def test_excludes_every_terminal_status(self, conn):
+        """Regression: `completed` is the terminal-success status, not `done`.
+
+        The predicate used to exclude a literal 'done' — a status this schema
+        never writes — so every completed row counted as active (prod: 1389
+        reported vs 26 real).
+        """
+        _insert_task(conn, "live", "Live Task", status=task_hub.TASK_STATUS_OPEN)
+        for idx, status in enumerate(sorted(task_hub.TERMINAL_STATUSES)):
+            _insert_task(conn, f"term{idx}", f"Terminal {status}", status=status)
+        report = build_morning_report(conn)
+        assert report["total_active"] == 1
+
+    def test_counts_every_active_status(self, conn):
+        """Every ACTIVE_STATUS counts — no hand-rolled subset may drift out."""
+        for idx, status in enumerate(sorted(task_hub.ACTIVE_STATUSES)):
+            _insert_task(conn, f"act{idx}", f"Active {status}", status=status)
+        report = build_morning_report(conn)
+        assert report["total_active"] == len(task_hub.ACTIVE_STATUSES)
+
+    def test_completed_brainstorm_excluded_from_stale_set(self, conn):
+        """A completed brainstorm task is neither listed nor counted stale."""
+        old_ts = (datetime.now(timezone.utc) - timedelta(hours=50)).isoformat()
+        _insert_task(conn, "b_done", "Finished Brainstorm",
+                     status=task_hub.TASK_STATUS_COMPLETED,
+                     refinement_stage="research", updated_at=old_ts)
+        report = build_morning_report(conn)
+        assert report["brainstorm_tasks"] == []
+        assert report["stale_brainstorm_count"] == 0
+        assert report["total_active"] == 0
 
     def test_detects_brainstorm_tasks(self, conn):
         _insert_task(conn, "b1", "Brainstorm Task", status="in_progress",
@@ -214,6 +245,16 @@ class TestBuildBrainstormContext:
         assert len(ctx) == 1
         assert ctx[0]["title"] == "Brainstorm A"
         assert ctx[0]["stage"] == "ideation"
+
+    def test_excludes_terminal_brainstorm_tasks(self, conn):
+        """`list_brainstorm_tasks` drops every terminal status, incl. completed."""
+        _insert_task(conn, "b_live", "Live Brainstorm", status="in_progress",
+                     refinement_stage="ideation")
+        for idx, status in enumerate(sorted(task_hub.TERMINAL_STATUSES)):
+            _insert_task(conn, f"b_term{idx}", f"Terminal {status}", status=status,
+                         refinement_stage="ideation")
+        ctx = build_brainstorm_context(conn)
+        assert [c["task_id"] for c in ctx] == ["b_live"]
 
     def test_counts_pending_questions(self, conn):
         _insert_task(conn, "b1", "B1", status="in_progress",

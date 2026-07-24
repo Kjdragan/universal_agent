@@ -144,15 +144,17 @@ def collect_tier1_evidence(
     }
 
     # Active + recently-completed Task Hub items (full text)
+    active_placeholders, active_params = task_hub.status_sql_filter(task_hub.ACTIVE_STATUSES)
     try:
         rows = activity_conn.execute(
             f"""
             SELECT *
             FROM task_hub_items
-            WHERE status IN ('open','queued','pending','in_progress','blocked','review','pending_review','delegated')
+            WHERE status IN ({active_placeholders})
             ORDER BY priority DESC, updated_at DESC
             LIMIT {int(task_limit)}
-            """
+            """,
+            active_params,
         ).fetchall()
         evidence["active_or_attention_tasks"] = [_row_to_dict(r) for r in rows]
     except sqlite3.OperationalError as exc:
@@ -164,11 +166,12 @@ def collect_tier1_evidence(
             f"""
             SELECT *
             FROM task_hub_items
-            WHERE status IN ('completed','done')
+            WHERE status = ?
               AND updated_at > datetime('now','-7 days')
             ORDER BY updated_at DESC
             LIMIT {int(completed_task_limit)}
-            """
+            """,
+            (task_hub.TASK_STATUS_COMPLETED,),
         ).fetchall()
         evidence["recent_completed_tasks"] = [_row_to_dict(r) for r in rows]
     except sqlite3.OperationalError:

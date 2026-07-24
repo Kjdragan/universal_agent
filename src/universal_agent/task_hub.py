@@ -57,6 +57,25 @@ ACTIVE_STATUSES = {
     TASK_STATUS_REVIEW, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW,
     TASK_STATUS_SCHEDULED,
 }
+
+
+def status_sql_filter(statuses: set[str]) -> tuple[str, tuple[str, ...]]:
+    """Return ``(placeholders, params)`` for a ``status [NOT] IN (...)`` clause.
+
+    Never hand-write status literals into SQL over ``task_hub_items``: pass
+    ``TERMINAL_STATUSES`` or ``ACTIVE_STATUSES`` here instead. Hardcoded lists
+    drift silently — three call sites excluded a literal ``'done'``, a status
+    this schema has never had (``upsert_task`` coerces anything outside
+    ``ACTIVE_STATUSES | TERMINAL_STATUSES`` back to ``open``), so every
+    ``completed`` row counted as active and the morning report's "Active tasks"
+    read 1389 instead of 26.
+
+    Sorted so the parameter order is stable across processes.
+    """
+    params = tuple(sorted(statuses))
+    return ",".join("?" * len(params)), params
+
+
 # Task action verbs accepted by perform_task_action. Named constants mirror the
 # TASK_STATUS_* pattern above so consumers can reference symbols instead of raw
 # string literals scattered across the codebase.
@@ -1837,10 +1856,10 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
     ensure_schema(conn)
     policy = current_policy()
 
-    terminal_placeholders = ",".join("?" * len(TERMINAL_STATUSES))
+    terminal_placeholders, terminal_params = status_sql_filter(TERMINAL_STATUSES)
     rows = conn.execute(
         f"SELECT * FROM task_hub_items WHERE status NOT IN ({terminal_placeholders})",
-        tuple(TERMINAL_STATUSES),
+        terminal_params,
     ).fetchall()
     items = [hydrate_item(dict(row)) for row in rows]
 
@@ -5637,11 +5656,12 @@ def list_brainstorm_tasks(
 ) -> list[dict[str, Any]]:
     """List active tasks that have a refinement_stage (i.e. brainstorm tasks)."""
     ensure_schema(conn)
+    terminal_placeholders, terminal_params = status_sql_filter(TERMINAL_STATUSES)
     rows = conn.execute(
         "SELECT * FROM task_hub_items "
-        "WHERE refinement_stage IS NOT NULL AND status NOT IN ('done', 'parked', 'cancelled') "
+        f"WHERE refinement_stage IS NOT NULL AND status NOT IN ({terminal_placeholders}) "
         "ORDER BY updated_at DESC LIMIT ?",
-        (limit,),
+        terminal_params + (limit,),
     ).fetchall()
     return [dict(row) for row in rows]
 

@@ -127,6 +127,45 @@ def test_evidence_collection_bounds_large_fields(activity_db, tmp_path):
     assert evidence["counts"]["active_or_attention_tasks"] == 1
 
 
+def test_evidence_collection_uses_canonical_status_vocabulary(activity_db, tmp_path):
+    """Active/completed evidence follows task_hub's status constants.
+
+    The hand-written allowlist omitted the real `needs_review` and `scheduled`
+    statuses (under-counting active work) while listing phantoms that are never
+    written, and the completed query carried a dead `'done'` literal.
+    """
+    from universal_agent import task_hub
+
+    for idx, status in enumerate(sorted(task_hub.ACTIVE_STATUSES)):
+        activity_db.execute(
+            """
+            INSERT INTO task_hub_items
+                (task_id, source_kind, title, description, status, created_at, updated_at)
+            VALUES (?, 'manual', ?, '', ?, ?, ?)
+            """,
+            (f"act{idx}", f"Active {status}", status, _now_iso(), _now_iso()),
+        )
+    for idx, status in enumerate(sorted(task_hub.TERMINAL_STATUSES)):
+        activity_db.execute(
+            """
+            INSERT INTO task_hub_items
+                (task_id, source_kind, title, description, status, created_at, updated_at)
+            VALUES (?, 'manual', ?, '', ?, ?, ?)
+            """,
+            (f"term{idx}", f"Terminal {status}", status, _now_iso(), _now_iso()),
+        )
+    mc_conn = open_store(tmp_path / "mc.db")
+    try:
+        evidence = collect_tier1_evidence(activity_db, mc_conn)
+    finally:
+        mc_conn.close()
+
+    active_statuses = {t["status"] for t in evidence["active_or_attention_tasks"]}
+    assert active_statuses == task_hub.ACTIVE_STATUSES
+    completed_statuses = {t["status"] for t in evidence["recent_completed_tasks"]}
+    assert completed_statuses == {task_hub.TASK_STATUS_COMPLETED}
+
+
 def test_evidence_collection_handles_missing_tables(tmp_path):
     """Sweeper boots in environments where activity DB hasn't been
     initialized yet. Evidence collection must degrade gracefully."""

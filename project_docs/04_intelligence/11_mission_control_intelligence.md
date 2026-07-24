@@ -355,6 +355,16 @@ snapshot, and the prior pass's live cards (fed back so the LLM can re-emit them 
 rows (`WHERE substr(tile_id,1,2) != '__'`) — those are sweeper cadence bookkeeping, not real
 tiles, and must not leak into the LLM prompt or the evidence signature. Counts are bounded;
 individual text fields are never shortened.
+
+The active-task and recently-completed queries derive their status filters from
+`task_hub.py::ACTIVE_STATUSES` / `task_hub.py::TASK_STATUS_COMPLETED` via
+`task_hub.py::status_sql_filter` — never a hand-written allowlist. The previous
+hardcoded list omitted the real `needs_review` and `scheduled` statuses (silently
+under-reporting active work to the tier-1 LLM) while carrying three statuses
+(`queued`, `pending`, `review`) that are never written, and the completed query
+carried a dead `'done'` literal. Regression coverage:
+`tests/unit/test_mission_control_phase2.py::test_evidence_collection_uses_canonical_status_vocabulary`.
+Both queries stay plain `SELECT`s — the sweeper hands this module a `mode=ro` handle.
 `evidence_signature` hashes only the *identity* of bundle items (task_id+status,
 event id+severity+status, tile_id+state, subject_id+severity) — excluding volatile
 timestamps — so two bundles with the same identifying set hash equal and the sweeper
