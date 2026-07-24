@@ -38,14 +38,6 @@ def _csi_db_path() -> Path:
     return Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
 
 
-def _discord_db_path() -> Path:
-    # Mirror gateway_server._discord_intelligence_db_path():
-    #   <repo-root>/discord_intelligence/discord_intelligence.db
-    # This module is src/universal_agent/scripts/…, so the repo root is parents[3].
-    repo_root = Path(__file__).resolve().parents[3]
-    return repo_root / "discord_intelligence" / "discord_intelligence.db"
-
-
 def main() -> int:
     logging.basicConfig(level=logging.INFO)
 
@@ -60,13 +52,10 @@ def main() -> int:
         return 0
 
     csi_db_path = _csi_db_path()
-    discord_db_path = _discord_db_path()
 
     conn = connect_runtime_db(get_activity_db_path())
     try:
-        counts = generate_signal_cards(
-            conn, csi_db_path=csi_db_path, discord_db_path=discord_db_path
-        )
+        counts = generate_signal_cards(conn, csi_db_path=csi_db_path)
     except Exception as exc:  # noqa: BLE001 — log + non-zero exit for the unit
         logger.error("proactive signal card sync failed: %s", exc, exc_info=True)
         return 1

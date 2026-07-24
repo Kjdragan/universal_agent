@@ -1,6 +1,6 @@
 ---
-title: Discord Operations
-status: active
+title: Discord Operations (DECOMMISSIONED)
+status: archived
 canonical: true
 subsystem: chan-discord-ops
 code_paths:
@@ -13,19 +13,18 @@ code_paths:
   - "discord_intelligence/views/review_queue.py"
   - "discord_intelligence/integration/*.py"
   - "discord_intelligence/inventory/discord_inventory.py"
-  - "deployment/systemd/templates/ua-discord-*.service.template"
-  - "src/universal_agent/api/routers/csi_discord_watchlist.py"
-last_verified: 2026-07-11
+last_verified: 2026-07-24
 ---
 
 # Discord Operations
 
-> **Status at a glance:** Discord ops + intel are **LIVE** (standalone daemon +
-> C2 bot, two tokens). For the canonical backend process/port map and the
-> cross-channel inventory, see the
-> [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md) §1 / §7. **The UA
-> gateway runs on `:8002`** (`:8080` is filebrowser, NOT a UA component — see the
-> port note below).
+> **DECOMMISSIONED 2026-07-24.** The Discord subsystem is retired — the two daemons
+> are stopped/disabled/masked and no longer installed by the deploy, and the gateway
+> endpoints, web-UI pages, proactive Discord cards, and MCP entries were removed. The
+> `discord_intelligence/` package below remains on disk as a **dormant archive** but
+> nothing runs it. See [Discord Intelligence (decommissioned)](../04_intelligence/12_discord_intelligence.md)
+> for the removal summary and revival runbook. The operational content below is
+> **historical** — it describes how the subsystem worked while it was live.
 
 Operator-facing reference for the Universal Agent Discord subsystem. This describes
 how UA connects to Discord, what it ingests, what runs on a schedule, the slash

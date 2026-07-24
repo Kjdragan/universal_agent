@@ -1904,7 +1904,6 @@ class OpsPreferencesUpdateRequest(BaseModel):
     preferences: dict = {}
 
 
-
 class OpsConfigPatchRequest(BaseModel):
     patch: dict = {}
     base_hash: Optional[str] = None
@@ -2099,8 +2098,6 @@ class BulkParkRequest(BaseModel):
 
     lane: str  # "not_assigned" | "in_progress" | "blocked" | "needs_review"
     reason: Optional[str] = None
-
-
 
 
 class MemoryTaskCompactRequest(BaseModel):
@@ -5328,8 +5325,6 @@ def _classify_subtask_role(lowered_text: str) -> str:
     if CSI_WRITER_RE.search(lowered_text):
         return "writer"
     return "general"
-
-
 
 
 def _normalize_csi_recommendation_text(raw: Any) -> str:
@@ -12477,7 +12472,6 @@ def _hook_notification_sink(payload: dict[str, Any]) -> None:
         )
 
 
-
 def _normalize_notification_status(status: str) -> str:
     return str(status or "").strip().lower()
 
@@ -14902,7 +14896,6 @@ async def lifespan(app: FastAPI):
     logger.info("Lifespan: Initializing Redis delegation bus...")
 
 
-
     _delegation_mission_bus = None
     _delegation_metrics["connected"] = False
     _delegation_metrics["last_error"] = None
@@ -15928,9 +15921,6 @@ register_error_handlers(app)
 
 # Mount modular API routers
 try:
-    from universal_agent.api.routers.csi_discord_watchlist import (
-        router as csi_discord_watchlist_router,
-    )
     from universal_agent.api.routers.csi_watchlist import router as csi_watchlist_router
     # Gate the whole CSI watchlist router with ops auth. These routes are
     # outside the /api/v1/ops/* middleware, and the router itself imports no
@@ -15941,9 +15931,6 @@ try:
     # reaches these through the token-injecting proxy (web-ui/.../rss/page.tsx).
     app.include_router(
         csi_watchlist_router, dependencies=[Depends(_require_ops_auth)]
-    )
-    app.include_router(
-        csi_discord_watchlist_router, dependencies=[Depends(_require_ops_auth)]
     )
 except Exception:
     logger.warning("Could not mount CSI watchlist router on gateway", exc_info=True)
@@ -18796,10 +18783,6 @@ async def dashboard_summary():
     return await asyncio.to_thread(_dashboard_summary_cached)
 
 
-def _discord_intelligence_db_path() -> Path:
-    return BASE_DIR / "discord_intelligence" / "discord_intelligence.db"
-
-
 def _csi_default_db_path() -> Path:
     return Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
 
@@ -18860,7 +18843,6 @@ def _run_proactive_signal_sync_background() -> None:
                 counts = sync_proactive_signal_cards(
                     conn,
                     csi_db_path=_csi_default_db_path(),
-                    discord_db_path=_discord_intelligence_db_path(),
                 )
         finally:
             conn.close()
@@ -18906,528 +18888,6 @@ def _schedule_proactive_signal_sync(background_tasks: BackgroundTasks, *, force:
     if scheduled:
         background_tasks.add_task(_run_proactive_signal_sync_background)
     return _proactive_signal_sync_snapshot(scheduled=scheduled, reason=reason)
-
-
-def _discord_connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_discord_intelligence_db_path()))
-    conn.row_factory = sqlite3.Row
-    try:
-        from discord_intelligence.database import DiscordIntelligenceDB
-
-        DiscordIntelligenceDB(str(_discord_intelligence_db_path()))
-    except Exception as exc:
-        logger.warning("Discord intelligence schema init failed: %s", exc)
-    return conn
-
-
-def _discord_row(row: sqlite3.Row | None) -> dict[str, Any]:
-    return dict(row) if row is not None else {}
-
-
-@app.get("/api/v1/dashboard/discord/overview")
-def dashboard_discord_overview(request: Request):
-    _require_ops_auth(request)
-    db_path = _discord_intelligence_db_path()
-    if not db_path.exists():
-        return {"status": "unavailable", "detail": "Discord intelligence database not found"}
-    conn = _discord_connect()
-    try:
-        def count(table: str, where: str = "", params: tuple[Any, ...] = ()) -> int:
-            sql = f"SELECT COUNT(*) AS c FROM {table} {where}"
-            try:
-                return int(conn.execute(sql, params).fetchone()["c"] or 0)
-            except Exception:
-                return 0
-
-        signal_rows = conn.execute(
-            """
-            SELECT severity, rule_matched, COUNT(*) AS count
-            FROM signals
-            WHERE created_at >= datetime('now', '-24 hours')
-            GROUP BY severity, rule_matched
-            ORDER BY count DESC
-            LIMIT 12
-            """
-        ).fetchall()
-        insight_rows = conn.execute(
-            """
-            SELECT urgency, sentiment, notified, COUNT(*) AS count
-            FROM insights
-            WHERE created_at >= datetime('now', '-24 hours')
-            GROUP BY urgency, sentiment, notified
-            ORDER BY count DESC
-            LIMIT 12
-            """
-        ).fetchall()
-        upcoming_events = conn.execute(
-            """
-            SELECT COUNT(*) AS c
-            FROM scheduled_events
-            WHERE start_time >= datetime('now', '-1 hour')
-              AND LOWER(COALESCE(status, '')) = 'scheduled'
-              AND COALESCE(entity_type, '') IN ('stage_instance', 'voice', 'external')
-            """
-        ).fetchone()
-        return {
-            "status": "ok",
-            "db_path": str(db_path),
-            "counts": {
-                "servers": count("servers"),
-                "channels": count("channels"),
-                "active_channels": count("channels", "WHERE is_active = 1"),
-                "messages_24h": count("messages", "WHERE timestamp >= datetime('now', '-24 hours')"),
-                "unprocessed_messages": count("messages", "WHERE COALESCE(processed_by_triage, 0) = 0"),
-                "signals_24h": count("signals", "WHERE created_at >= datetime('now', '-24 hours')"),
-                "unhandled_signals": count("signals", "WHERE action_taken IS NULL OR action_taken = ''"),
-                "insights_24h": count("insights", "WHERE created_at >= datetime('now', '-24 hours')"),
-                "unnotified_insights": count("insights", "WHERE COALESCE(notified, 0) = 0"),
-                "upcoming_structured_events": int(upcoming_events["c"] if upcoming_events is not None else 0),
-            },
-            "signal_breakdown_24h": [_discord_row(row) for row in signal_rows],
-            "insight_breakdown_24h": [_discord_row(row) for row in insight_rows],
-        }
-    finally:
-        conn.close()
-
-
-@app.get("/api/v1/dashboard/discord/events")
-def dashboard_discord_events(
-    request: Request,
-    limit: int = 10,
-    include_text_candidates: bool = False,
-):
-    _require_ops_auth(request)
-    conn = _discord_connect()
-    try:
-        entity_filter = "('stage_instance', 'voice', 'external')"
-        extra = "" if include_text_candidates else f"AND COALESCE(ev.entity_type, '') IN {entity_filter}"
-        rows = conn.execute(
-            f"""
-            SELECT
-                ev.*,
-                srv.name AS server_name,
-                ch.name AS channel_name
-            FROM scheduled_events ev
-            LEFT JOIN servers srv ON srv.id = ev.server_id
-            LEFT JOIN channels ch ON ch.id = ev.channel_id
-            WHERE ev.start_time IS NOT NULL
-              AND ev.start_time >= datetime('now', '-1 day')
-              {extra}
-            ORDER BY ev.start_time ASC
-            LIMIT ?
-            """,
-            (max(1, min(int(limit), 100)),),
-        ).fetchall()
-        return {"status": "ok", "events": [_discord_row(row) for row in rows]}
-    finally:
-        conn.close()
-
-
-@app.get("/api/v1/dashboard/discord/channels")
-async def dashboard_discord_channels(request: Request, limit: int = 1000):
-    _require_ops_auth(request)
-    try:
-        from discord_intelligence.database import DiscordIntelligenceDB
-
-        db = DiscordIntelligenceDB(str(_discord_intelligence_db_path()))
-        rows = db.channel_overview(limit=max(1, min(int(limit), 5000)))
-    except Exception as exc:
-        logger.exception("Failed loading Discord channel overview")
-        raise HTTPException(status_code=500, detail=str(exc))
-    return {"status": "ok", "channels": rows}
-
-
-class DiscordChannelUpdateRequest(BaseModel):
-    tier: Optional[str] = None
-    is_active: Optional[bool] = None
-
-
-@app.patch("/api/v1/dashboard/discord/channels/{channel_id}")
-async def dashboard_discord_update_channel(
-    request: Request,
-    channel_id: str,
-    payload: DiscordChannelUpdateRequest,
-):
-    _require_ops_auth(request)
-    try:
-        from discord_intelligence.database import DiscordIntelligenceDB
-
-        db = DiscordIntelligenceDB(str(_discord_intelligence_db_path()))
-        db.update_channel_config(channel_id, tier=payload.tier, is_active=payload.is_active)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        logger.exception("Failed updating Discord channel config")
-        raise HTTPException(status_code=500, detail=str(exc))
-    return {"status": "ok", "channel_id": channel_id}
-
-
-@app.delete("/api/v1/dashboard/discord/events/{event_id}")
-def dashboard_discord_delete_event(request: Request, event_id: str):
-    """Delete a single structured event from the Discord intelligence DB."""
-    _require_ops_auth(request)
-    conn = _discord_connect()
-    try:
-        cur = conn.execute("DELETE FROM scheduled_events WHERE id = ?", (event_id,))
-        conn.commit()
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Event not found")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Failed deleting Discord event %s", event_id)
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
-    return {"status": "ok", "deleted": event_id}
-
-
-@app.delete("/api/v1/dashboard/discord/events")
-def dashboard_discord_delete_all_events(request: Request):
-    """Delete all structured events from the Discord intelligence DB."""
-    _require_ops_auth(request)
-    conn = _discord_connect()
-    try:
-        cur = conn.execute("DELETE FROM scheduled_events")
-        conn.commit()
-        deleted_count = cur.rowcount
-    except Exception as exc:
-        logger.exception("Failed bulk-deleting Discord events")
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
-    return {"status": "ok", "deleted_count": deleted_count}
-
-
-@app.get("/api/v1/dashboard/discord/channels/{channel_id}/messages")
-def dashboard_discord_channel_messages(
-    request: Request,
-    channel_id: str,
-    limit: int = 100,
-    offset: int = 0,
-):
-    """Fetch recent messages for a channel with any attached signals."""
-    _require_ops_auth(request)
-    conn = _discord_connect()
-    try:
-        rows = conn.execute(
-            """
-            SELECT m.id, m.author_name, m.content, m.timestamp,
-                   m.is_bot, m.reply_to_id, m.has_attachments,
-                   m.processed_by_triage,
-                   GROUP_CONCAT(s.rule_matched || ':' || s.severity, '|') AS signals
-            FROM messages m
-            LEFT JOIN signals s ON s.message_id = m.id
-            WHERE m.channel_id = ?
-            GROUP BY m.id
-            ORDER BY m.timestamp DESC
-            LIMIT ? OFFSET ?
-            """,
-            (channel_id, max(1, min(int(limit), 200)), max(0, int(offset))),
-        ).fetchall()
-        total = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE channel_id = ?", (channel_id,)
-        ).fetchone()[0]
-    except Exception as exc:
-        logger.exception("Failed loading Discord channel messages for %s", channel_id)
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
-
-    messages = []
-    for row in rows:
-        d = dict(row)
-        raw_sigs = d.pop("signals", None) or ""
-        sigs = []
-        for part in raw_sigs.split("|"):
-            if ":" in part:
-                rule, sev = part.split(":", 1)
-                sigs.append({"rule": rule, "severity": sev})
-        d["signals"] = sigs
-        messages.append(d)
-
-    return {"status": "ok", "channel_id": channel_id, "total": total, "messages": messages}
-
-
-@app.get("/api/v1/dashboard/discord/servers/{server_id}/messages")
-def dashboard_discord_server_messages(
-    request: Request,
-    server_id: str,
-    limit: int = 150,
-    offset: int = 0,
-    watched_only: bool = False,
-    show_all: bool = False,
-):
-    """Fetch recent messages aggregated across all channels for a server.
-    
-    By default, only messages classified as meaningful (or pending classification)
-    are returned. Pass show_all=true to include noise messages.
-    """
-    _require_ops_auth(request)
-    conn = _discord_connect()
-    try:
-        watched_clause = ""
-        if watched_only:
-            watched_clause = "AND c.tier IN ('A','B')"
-
-        # Relevance filter: hide noise unless show_all is requested
-        relevance_clause = ""
-        if not show_all:
-            relevance_clause = "AND (m.is_meaningful IS NULL OR m.is_meaningful = 1)"
-
-        rows = conn.execute(
-            f"""
-            SELECT m.id, m.channel_id, c.name AS channel_name,
-                   m.author_name, m.content, m.timestamp,
-                   m.is_bot, m.has_attachments, m.processed_by_triage,
-                   m.is_meaningful,
-                   GROUP_CONCAT(s.rule_matched || ':' || s.severity, '|') AS signals
-            FROM messages m
-            LEFT JOIN channels c ON c.id = m.channel_id
-            LEFT JOIN signals s ON s.message_id = m.id
-            WHERE m.server_id = ? {watched_clause} {relevance_clause}
-            GROUP BY m.id
-            ORDER BY m.timestamp DESC
-            LIMIT ? OFFSET ?
-            """,
-            (server_id, max(1, min(int(limit), 500)), max(0, int(offset))),
-        ).fetchall()
-        # Total count respects the same filter
-        total_filtered = conn.execute(
-            f"SELECT COUNT(*) FROM messages WHERE server_id = ? {relevance_clause.replace('m.is_meaningful', 'is_meaningful')}",
-            (server_id,)
-        ).fetchone()[0]
-        # Always return the unfiltered total for badge display
-        total_all = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE server_id = ?", (server_id,)
-        ).fetchone()[0]
-    except Exception as exc:
-        logger.exception("Failed loading Discord server messages for %s", server_id)
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
-
-    messages = []
-    for row in rows:
-        d = dict(row)
-        raw_sigs = d.pop("signals", None) or ""
-        sigs = []
-        for part in raw_sigs.split("|"):
-            if ":" in part:
-                rule, sev = part.split(":", 1)
-                sigs.append({"rule": rule, "severity": sev})
-        d["signals"] = sigs
-        messages.append(d)
-
-    return {"status": "ok", "server_id": server_id, "total": total_filtered, "total_all": total_all, "messages": messages}
-
-
-@app.get("/api/v1/dashboard/discord/recent-messages")
-def dashboard_discord_recent_messages(
-    request: Request,
-    limit: int = 50,
-    category: Optional[str] = None
-):
-    """Return the most recently ingested Discord messages from the intelligence DB."""
-    _require_ops_auth(request)
-    
-    target_server_ids = None
-    if category and category != "all":
-        import json
-        path = Path(os.getenv("DISCORD_WATCHLIST_PATH", "/var/lib/universal-agent/discord/discord_watchlist.json")).expanduser()
-        if path.exists():
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                target_server_ids = {srv["server_id"] for srv in data.get("servers", []) if srv.get("domain") == category}
-            except Exception as e:
-                logger.error("Error reading discord watchlist for category filter: %s", e)
-                target_server_ids = set()
-
-    conn = _discord_connect()
-    try:
-        where_clause = "WHERE m.is_meaningful = 1"
-        params = []
-        if target_server_ids is not None:
-            if not target_server_ids:
-                return {"status": "ok", "messages": []} # no servers for this category
-            placeholders = ",".join("?" for _ in target_server_ids)
-            where_clause += f" AND m.server_id IN ({placeholders})"
-            params.extend(target_server_ids)
-        
-        params.append(min(limit, 200))
-        
-        rows = conn.execute(
-            f"""
-            SELECT m.id, m.server_id, m.channel_id, c.name AS channel_name,
-                   m.author_name, m.content, m.timestamp,
-                   m.is_bot, m.has_attachments, m.processed_by_triage,
-                   m.is_meaningful,
-                   GROUP_CONCAT(s.rule_matched || ':' || s.severity, '|') AS signals
-            FROM messages m
-            LEFT JOIN channels c ON c.id = m.channel_id
-            LEFT JOIN signals s ON s.message_id = m.id
-            {where_clause}
-            GROUP BY m.id
-            ORDER BY m.timestamp DESC
-            LIMIT ?
-            """,
-            params,
-        ).fetchall()
-        
-        messages = []
-        for row in rows:
-            d = dict(row)
-            raw_sigs = d.pop("signals", None) or ""
-            sigs = []
-            for part in raw_sigs.split("|"):
-                if ":" in part:
-                    rule, sev = part.split(":", 1)
-                    sigs.append({"rule": rule, "severity": sev})
-            d["signals"] = sigs
-            
-            ts = d.get("timestamp") or ""
-            if ts and not ts.endswith(("Z", "+00:00", "+0000")) and "T" not in ts:
-                d["timestamp"] = ts.replace(" ", "T") + "Z"
-            elif ts and not ts.endswith(("Z", "+00:00", "+0000")):
-                d["timestamp"] = ts + "Z"
-                
-            messages.append(d)
-            
-        return {"status": "ok", "messages": messages}
-    except Exception as exc:
-        logger.exception("Failed loading recent Discord messages")
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
-
-
-@app.delete("/api/v1/dashboard/discord/servers/{server_id}/messages")
-def dashboard_discord_clear_server_messages(request: Request, server_id: str):
-    """Delete all stored messages for a server so you can start fresh."""
-    _require_ops_auth(request)
-    conn = _discord_connect()
-    try:
-        cur = conn.execute("DELETE FROM messages WHERE server_id = ?", (server_id,))
-        conn.commit()
-        deleted = cur.rowcount
-    except Exception as exc:
-        logger.exception("Failed clearing Discord messages for server %s", server_id)
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
-    return {"status": "ok", "server_id": server_id, "deleted": deleted}
-
-
-@app.delete("/api/v1/dashboard/discord/messages")
-def dashboard_discord_clear_all_messages(request: Request):
-    """Delete ALL stored Discord messages across all servers."""
-    _require_ops_auth(request)
-    conn = _discord_connect()
-    try:
-        cur = conn.execute("DELETE FROM messages")
-        conn.commit()
-        deleted = cur.rowcount
-    except Exception as exc:
-        logger.exception("Failed clearing all Discord messages")
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
-    return {"status": "ok", "deleted": deleted}
-
-
-@app.delete("/api/v1/dashboard/discord/signals")
-def dashboard_discord_clear_all_signals(request: Request):
-    """Delete ALL stored Discord signals across all servers."""
-    _require_ops_auth(request)
-    conn = _discord_connect()
-    try:
-        cur = conn.execute("DELETE FROM signals")
-        conn.commit()
-        deleted = cur.rowcount
-    except Exception as exc:
-        logger.exception("Failed clearing all Discord signals")
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
-    return {"status": "ok", "deleted": deleted}
-
-
-@app.post("/api/v1/dashboard/discord/channels/bulk-tier")
-async def dashboard_discord_bulk_tier(request: Request):
-    """Bulk-reassign channel tiers.
-
-    Body JSON:
-        from_tier: str  — current tier to match (e.g. "C")
-        to_tier: str    — new tier to assign (e.g. "MUTED")
-        server_id: str  — optional, scope to a single server
-    """
-    _require_ops_auth(request)
-    body = await request.json()
-    from_tier = str(body.get("from_tier", "")).strip().upper()
-    to_tier = str(body.get("to_tier", "")).strip().upper()
-    server_id = body.get("server_id")
-
-    valid_tiers = {"A", "B", "C", "D", "MUTED"}
-    if from_tier not in valid_tiers or to_tier not in valid_tiers:
-        raise HTTPException(status_code=400, detail=f"Invalid tier. Valid: {sorted(valid_tiers)}")
-
-    conn = _discord_connect()
-    try:
-        if server_id:
-            cur = conn.execute(
-                "UPDATE channels SET tier = ? WHERE tier = ? AND server_id = ? AND is_active = 1",
-                (to_tier, from_tier, str(server_id)),
-            )
-        else:
-            cur = conn.execute(
-                "UPDATE channels SET tier = ? WHERE tier = ? AND is_active = 1",
-                (to_tier, from_tier),
-            )
-        conn.commit()
-        updated = cur.rowcount
-    except Exception as exc:
-        logger.exception("Failed bulk tier reassignment")
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
-    return {"status": "ok", "updated": updated, "from_tier": from_tier, "to_tier": to_tier}
-
-
-@app.post("/api/v1/dashboard/discord/channels/promote")
-async def dashboard_discord_promote_channels(request: Request):
-    """Promote specific channels to a target tier.
-
-    Body JSON:
-        channel_ids: list[str]  — channel IDs to promote
-        tier: str               — target tier (default "A")
-    """
-    _require_ops_auth(request)
-    body = await request.json()
-    channel_ids = body.get("channel_ids", [])
-    tier = str(body.get("tier", "A")).strip().upper()
-
-    valid_tiers = {"A", "B", "C", "D", "MUTED"}
-    if tier not in valid_tiers:
-        raise HTTPException(status_code=400, detail=f"Invalid tier. Valid: {sorted(valid_tiers)}")
-    if not channel_ids:
-        raise HTTPException(status_code=400, detail="channel_ids list required")
-
-    conn = _discord_connect()
-    try:
-        placeholders = ",".join("?" for _ in channel_ids)
-        cur = conn.execute(
-            f"UPDATE channels SET tier = ? WHERE id IN ({placeholders})",
-            [tier] + list(channel_ids),
-        )
-        conn.commit()
-        updated = cur.rowcount
-    except Exception as exc:
-        logger.exception("Failed channel promotion")
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
-    return {"status": "ok", "updated": updated, "tier": tier}
 
 
 @app.get("/api/v1/dashboard/proactive-signals")
@@ -25546,7 +25006,6 @@ def _parse_iso_utc(raw: Any) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
-
 def _supervisor_artifacts_payload(paths: dict[str, Any]) -> dict[str, Any]:
     markdown_path = str(paths.get("markdown_path") or "").strip()
     json_path = str(paths.get("json_path") or "").strip()
@@ -29066,7 +28525,6 @@ async def dashboard_events_template_generate(
     finally:
         conn.close()
     return {"status": "ok", "template": stored}
-
 
 
 @app.get("/api/v1/dashboard/chief-of-staff")
@@ -33187,12 +32645,6 @@ def _autonomous_job_artifact_links(job_id: str, *, max_files: int = 6) -> list[d
     return links
 
 
-
-
-
-
-
-
 def _count_cron_runs_in_window_from_jsonl(
     *,
     window_start: float,
@@ -33554,8 +33006,6 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
     }
 
 
-
-
 def _normalize_interval_from_text(text: str) -> Optional[str]:
     raw = (text or "").strip().lower()
     if not raw:
@@ -33872,8 +33322,6 @@ async def _resolve_simplified_schedule_update_fields_with_agent(
             timezone_name=timezone_name,
             job=job,
         )
-
-
 
 
 @app.get("/api/v1/cron/jobs")
@@ -35304,8 +34752,6 @@ async def ops_activity_events_metrics(request: Request):
     return {"metrics": _activity_runtime_metrics_snapshot()}
 
 
-
-
 @app.get("/api/v1/ops/metrics/vp-bridge")
 async def ops_vp_bridge_metrics(request: Request):
     _require_ops_auth(request)
@@ -36119,8 +35565,6 @@ def ops_remote_sync_set(request: Request, payload: OpsRemoteSyncUpdateRequest):
         "config_key": "remote_debug.local_workspace_sync_enabled",
         "base_hash": ops_config_hash(updated),
     }
-
-
 
 
 @app.post("/api/v1/ops/memory/compact-task-intel")

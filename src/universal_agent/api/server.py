@@ -1531,13 +1531,9 @@ async def require_dashboard_auth(request: Request, call_next):
 # REST API Endpoints
 # =============================================================================
 
-from universal_agent.api.routers.csi_discord_watchlist import (
-    router as csi_discord_watchlist_router,
-)
 from universal_agent.api.routers.csi_watchlist import router as csi_watchlist_router
 
 app.include_router(csi_watchlist_router)
-app.include_router(csi_discord_watchlist_router)
 
 # Link payments router (Phase 2b). Mounts /api/link/* and /link/card/{token}.
 # Inert when UA_ENABLE_LINK=0 (bridge returns guardrail_disabled before any

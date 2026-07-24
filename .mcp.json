@@ -18,24 +18,6 @@
         "AGENTMAIL_API_KEY": "${AGENTMAIL_API_KEY}"
       }
     },
-    "discord": {
-      "command": "uvx",
-      "args": [
-        "mcp-discord"
-      ],
-      "env": {
-        "DISCORD_TOKEN": "${DISCORD_BOT_TOKEN}"
-      }
-    },
-    "discord-intelligence-bridge": {
-      "command": "uv",
-      "args": [
-        "run",
-        "python",
-        "/home/kjdragan/lrepos/universal_agent/discord_intelligence/mcp_bridge.py"
-      ]
-    },
-
     "web-reader": {
       "type": "http",
       "url": "https://api.z.ai/api/mcp/web_reader/mcp",

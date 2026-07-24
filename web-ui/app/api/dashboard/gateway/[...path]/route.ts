@@ -387,7 +387,7 @@ function getStubDataForPath(pathname: string): unknown | null {
   if (pathname === "/api/v1/dashboard/proactive-signals") {
     return {
       status: "ok",
-      sync: { youtube: 2, discord: 1 },
+      sync: { youtube: 2 },
       cards: [
         {
           card_id: "stub-youtube-cluster",
