@@ -34,6 +34,21 @@ from universal_agent.services.proactive_budget import (
 
 logger = logging.getLogger(__name__)
 
+# How far back "recent completions" reach for ideation pattern-awareness.
+# Complements the vp_mission_failure exclusion (see `_get_recent_completions`):
+# without a recency cap, resolved rescue items and other stale completions
+# re-surface every heartbeat cycle. Operator-tunable via env without redeploying.
+# Mirrors the freshness-window mechanism in
+# ``services/invariants/operator_daily_mission_freshness.py``.
+DEFAULT_RECENT_COMPLETION_HOURS = 6
+_RECENT_COMPLETION_HOURS_ENV = "UA_REFLECTION_RECENT_COMPLETION_HOURS"
+
+
+def _recent_completion_hours() -> int:
+    """Resolved freshness window (hours) for recent completions, >=1."""
+    return max(1, _parse_int_env(_RECENT_COMPLETION_HOURS_ENV, DEFAULT_RECENT_COMPLETION_HOURS))
+
+
 def _parse_int_env(key: str, default: int) -> int:
     raw = (os.getenv(key) or "").strip()
     if not raw:
@@ -116,18 +131,40 @@ def is_reflection_enabled() -> bool:
 # ---------------------------------------------------------------------------
 
 def _get_recent_completions(conn: sqlite3.Connection, limit: int = 10) -> list[dict[str, Any]]:
-    """Get recently completed tasks for pattern analysis."""
+    """Get recently completed tasks for pattern analysis.
+
+    Two independent gates (both required — see BRIEF):
+
+    * Part A — exclude ``vp_mission_failure`` rows. Those are failure-rescue
+      bookkeeping items (status completed/cancelled/parked), not meaningful
+      accomplished work. Without this, the completed rescue items sat at the
+      top of this list (they bump ``updated_at`` on every rescue) and rendered
+      as ``- VP failure — <vp> (<mode>) (immediate)`` every heartbeat cycle —
+      the ``(immediate)`` being the ``project_key`` default. This is the
+      dedup-against-resolved-rescue-tasks gate; it fires on the rescue status
+      regardless of age.
+    * Part B — freshness window (``UA_REFLECTION_RECENT_COMPLETION_HOURS``,
+      default 6h, mirroring
+      ``services/invariants/operator_daily_mission_freshness.py``): bounds
+      recency so stale completions of any kind stop re-surfacing.
+
+    Note: an unhandled (status='open') failure is never read here — this query
+    is the ideation pattern-awareness path, not the failure-alerting path.
+    """
     task_hub.ensure_schema(conn)
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=_recent_completion_hours())).isoformat()
     rows = conn.execute(
         """
         SELECT task_id, title, description, project_key, labels_json,
                created_at, updated_at
         FROM task_hub_items
         WHERE status = 'completed'
+          AND source_kind != 'vp_mission_failure'
+          AND updated_at >= ?
         ORDER BY updated_at DESC
         LIMIT ?
         """,
-        (limit,),
+        (cutoff, limit),
     ).fetchall()
     return [dict(r) for r in rows]
 

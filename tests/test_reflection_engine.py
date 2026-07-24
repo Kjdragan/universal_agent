@@ -50,6 +50,7 @@ def _insert_task(
     title: str = "Test task",
     status: str = "open",
     project_key: str = "immediate",
+    source_kind: str = "test",
     refinement_stage: str | None = None,
     updated_at: str | None = None,
 ):
@@ -63,7 +64,7 @@ def _insert_task(
         """,
         (
             f"test_{title.replace(' ', '_').lower()}_{now[:10]}",
-            "test",
+            source_kind,
             title,
             f"Description for {title}",
             status,
@@ -173,6 +174,43 @@ class TestContextQueries:
         titles = {r["title"] for r in result}
         assert "Done 1" in titles
         assert "Done 2" in titles
+
+    def test_get_recent_completions_excludes_resolved_vp_mission_failure(self, db_conn):
+        """Part A: completed vp_mission_failure rescue rows are excluded regardless of age."""
+        _insert_task(
+            db_conn,
+            title="VP failure — vp.coder.primary (vp_self_reported)",
+            status="completed",
+            source_kind="vp_mission_failure",
+        )
+        _insert_task(db_conn, title="Genuine done", status="completed", source_kind="test")
+        result = _get_recent_completions(db_conn)
+        titles = {r["title"] for r in result}
+        assert "Genuine done" in titles
+        assert all("VP failure" not in t for t in titles), \
+            "resolved vp_mission_failure rescue rows must not surface as completions"
+
+    @mock.patch.dict(os.environ, {"UA_REFLECTION_RECENT_COMPLETION_HOURS": "6"}, clear=False)
+    def test_get_recent_completions_surfaces_fresh_non_rescue(self, db_conn):
+        """Part B positive: a fresh (<6h) non-rescue completion surfaces."""
+        _insert_task(db_conn, title="Fresh genuine done", status="completed", source_kind="test")
+        result = _get_recent_completions(db_conn)
+        assert len(result) == 1
+        assert result[0]["title"] == "Fresh genuine done"
+
+    @mock.patch.dict(os.environ, {"UA_REFLECTION_RECENT_COMPLETION_HOURS": "6"}, clear=False)
+    def test_get_recent_completions_drops_stale(self, db_conn):
+        """Part B negative: completions older than the freshness window are dropped."""
+        stale = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+        _insert_task(
+            db_conn,
+            title="Stale done",
+            status="completed",
+            source_kind="test",
+            updated_at=stale,
+        )
+        result = _get_recent_completions(db_conn)
+        assert result == []
 
     def test_get_stalled_brainstorms_empty(self, db_conn):
         result = _get_stalled_brainstorms(db_conn)
