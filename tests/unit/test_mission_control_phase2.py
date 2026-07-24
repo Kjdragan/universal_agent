@@ -98,7 +98,12 @@ def _now_iso() -> str:
 # ── Evidence collection ────────────────────────────────────────────────
 
 
-def test_evidence_collection_returns_full_text(activity_db, tmp_path):
+def test_evidence_collection_bounds_large_fields(activity_db, tmp_path):
+    # Superseded the old NO-TRUNCATION contract: a 60KB description must be
+    # size-bounded so the discovery prompt stays lean (the ZAI-cost fix), while
+    # the ITEM itself is still present and counts are unchanged.
+    from universal_agent.services.mission_control_tier1 import _STR_FIELD_CAP
+
     big_description = "lorem ipsum " * 5000  # 60KB
     activity_db.execute(
         """
@@ -115,8 +120,10 @@ def test_evidence_collection_returns_full_text(activity_db, tmp_path):
         mc_conn.close()
     tasks = evidence["active_or_attention_tasks"]
     assert len(tasks) == 1
-    # No-truncation contract: full text round-trips
-    assert tasks[0]["description"] == big_description
+    # Item present, but the field is bounded (not the full 60KB).
+    assert len(tasks[0]["description"]) < len(big_description)
+    assert len(tasks[0]["description"]) <= _STR_FIELD_CAP + 40
+    assert tasks[0]["description"].startswith("lorem ipsum")
     assert evidence["counts"]["active_or_attention_tasks"] == 1
 
 

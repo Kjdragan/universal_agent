@@ -2,11 +2,15 @@
 
 Phase 2 deliverable. Defines:
 
-  - `collect_tier1_evidence()` — bounded, NO-TRUNCATION evidence
-    collection from task_hub, activity_events, workspace artifacts,
-    proactive history, tier-0 tile state, and the existing CSI digest
-    DB. The full text of every relevant item is included; storage is
-    bounded at the retention boundary (Phase 8), not at collection.
+  - `collect_tier1_evidence()` — bounded evidence collection from
+    task_hub, activity_events, workspace artifacts, proactive history,
+    tier-0 tile state, and the existing CSI digest DB. Every relevant
+    ITEM is included (counts unchanged), but individual fields are
+    size-bounded (`_cap_field`) and duplicate raw `*_json` columns are
+    dropped, so the discovery prompt stays lean. (Superseded the original
+    NO-TRUNCATION contract, which grew the prompt to ~150k tokens/call —
+    the dominant ZAI token sink and a 429 driver. See the cap note above
+    `_STR_FIELD_CAP`; tune via UA_MC_TIER1_FIELD_CHAR_CAP / _JSON_CHAR_CAP.)
 
   - `evidence_signature()` — cheap, deterministic hash of the evidence
     bundle's stable identifying parts. Used by the sweeper to skip
@@ -81,6 +85,18 @@ VALID_SEVERITIES = {
     SEVERITY_SUCCESS,
 }
 
+# Per-field size caps for the evidence bundle. The old "NO TRUNCATION" contract
+# shipped full untruncated payloads AND both the raw ``*_json`` string and its
+# parsed twin for every row — ballooning the discovery prompt to ~150k tokens/call
+# (measured on the VPS), making tier-1 the single largest ZAI token sink (~64% of
+# all ZAI tokens) and a Fair-Usage 429 driver. We keep every ITEM (counts are
+# unchanged, so the LLM still sees every task/event/card) but BOUND each field:
+# the model writes headline cards and never needs a task's full multi-page body or
+# raw machine metadata to do so. Signature/identity fields are short and untouched,
+# so delta-gating (evidence_signature) is unaffected. Tune via env; 0 disables a cap.
+_STR_FIELD_CAP = int(os.getenv("UA_MC_TIER1_FIELD_CHAR_CAP", "1500"))
+_JSON_FIELD_CAP = int(os.getenv("UA_MC_TIER1_JSON_CHAR_CAP", "800"))
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -98,11 +114,15 @@ def collect_tier1_evidence(
     event_limit: int = 60,
     activity_read_only: bool = False,
 ) -> dict[str, Any]:
-    """Bounded but UNTRUNCATED evidence bundle for tier-1 discovery.
+    """Bounded evidence bundle for tier-1 discovery.
 
-    Per the design contract (§2.4): we limit COUNTS of items in the
-    bundle but never shorten individual text fields. The LLM gets full
-    descriptions, full event payloads, full prior synthesis history.
+    We limit COUNTS of items in the bundle (unchanged) AND size-bound
+    individual fields via `_row_to_dict`/`_cap_field`: long descriptions,
+    raw machine metadata, and event payloads are capped, and duplicate raw
+    `*_json` columns are dropped. The LLM still sees every task/event/card
+    — enough to write headline cards — without the full multi-page bodies
+    that made this prompt the largest ZAI token sink. (Replaces the earlier
+    "never shorten individual text fields" contract; see the module cap note.)
 
     `activity_read_only` declares that `activity_conn` was opened with
     SQLite `mode=ro` (the sweeper does this — see
@@ -566,14 +586,45 @@ def apply_tier1_discovery(
 # ── Helpers ────────────────────────────────────────────────────────────
 
 
+def _cap_field(value: Any) -> Any:
+    """Bound a single evidence field so the prompt stays lean (see module note).
+
+    Long free-text strings are truncated to ``_STR_FIELD_CAP`` chars; nested
+    JSON (dict/list) is kept as-is when its serialized form is small, else
+    replaced with a truncated preview string capped at ``_JSON_FIELD_CAP``.
+    Short identifiers/timestamps fall through untouched, so the evidence
+    signature (which hashes only short identity fields) is unaffected.
+    """
+    if isinstance(value, str):
+        if _STR_FIELD_CAP and len(value) > _STR_FIELD_CAP:
+            return value[:_STR_FIELD_CAP] + f"…[+{len(value) - _STR_FIELD_CAP} chars]"
+        return value
+    if isinstance(value, (dict, list)):
+        if not _JSON_FIELD_CAP:
+            return value
+        serialized = json.dumps(value, ensure_ascii=False, default=str)
+        if len(serialized) > _JSON_FIELD_CAP:
+            return serialized[:_JSON_FIELD_CAP] + f"…[truncated, {len(serialized)} chars total]"
+        return value
+    return value
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    """Convert a sqlite Row to a plain dict, parsing known JSON columns."""
+    """Convert a sqlite Row to a bounded dict, parsing known JSON columns.
+
+    Two token-saving behaviors (see module-level cap note):
+      1. DEDUP — after parsing ``<col>_json`` into ``<col>``, the raw string
+         twin is dropped so the bundle never ships the same data twice.
+      2. BOUND — every field is passed through ``_cap_field`` to cap long
+         text / nested JSON. Counts are unchanged; only per-field size is.
+    """
     out = dict(row)
     for json_col in ("metadata_json", "actions_json", "channels_json", "entity_ref_json",
                      "labels_json", "evidence_refs_json", "evidence_payload_json"):
         if json_col in out and isinstance(out[json_col], str) and out[json_col]:
             try:
                 out[json_col[:-5]] = json.loads(out[json_col])
+                del out[json_col]  # dedup: drop the raw string twin
             except (TypeError, json.JSONDecodeError):
-                pass
-    return out
+                pass  # unparseable — keep the raw string (it's the only copy)
+    return {k: _cap_field(v) for k, v in out.items()}

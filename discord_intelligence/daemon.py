@@ -40,6 +40,15 @@ INGEST_TIERS = {
 SEND_SIMONE_ALERTS = str(os.getenv("UA_DISCORD_SEND_SIMONE_ALERTS", "0")).strip().lower() in {
     "1", "true", "yes", "on",
 }
+# The relevance filter (a 5-min sweep that LLM-labels every message meaningful/noise)
+# was ~40% of ALL ZAI calls for near-zero value: it only hides "noise" on a dashboard
+# nobody reads, fails-open on error anyway, and triage (the actual insight extractor)
+# reads `processed_by_triage`, NOT `is_meaningful` — so it does not depend on this flag.
+# Default OFF to relieve ZAI Fair-Usage 429 pressure; set =1 to restore. The dashboard
+# read path treats is_meaningful IS NULL as meaningful, so hiding stays a no-op.
+RELEVANCE_FILTER_ENABLED = str(os.getenv("UA_DISCORD_RELEVANCE_ENABLED", "0")).strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 # Base recordings directory (relative to discord_intelligence package)
 import pathlib
@@ -61,8 +70,14 @@ class DiscordIntelligenceClient(discord.Client):
         self.run_triage_jobs.start()
         self.run_audio_maintenance.start()
         self.poll_guild_events.start()
-        self.run_relevance_sweep_loop.start()
-        logger.info("Started built-in triage, audio maintenance, event polling, and relevance sweep loop tasks.")
+        if RELEVANCE_FILTER_ENABLED:
+            self.run_relevance_sweep_loop.start()
+            logger.info("Started built-in triage, audio maintenance, event polling, and relevance sweep loop tasks.")
+        else:
+            logger.info(
+                "Started built-in triage, audio maintenance, and event polling. "
+                "Relevance sweep DISABLED (UA_DISCORD_RELEVANCE_ENABLED=0) — ZAI-cost cut."
+            )
 
     @tasks.loop(minutes=CONFIG.get("scheduling", {}).get("triage_interval_minutes", 60))
     async def run_triage_jobs(self):
