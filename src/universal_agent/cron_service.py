@@ -21,6 +21,10 @@ from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run_attempt
 from universal_agent.gateway import GatewayRequest, InProcessGateway
 from universal_agent.heartbeat_service import _parse_duration_seconds
+from universal_agent.timeout_policy import (
+    LivenessWatchdog,
+    cron_script_idle_kill_seconds,
+)
 from universal_agent.workflow_admission import WorkflowAdmissionService, WorkflowTrigger
 
 logger = logging.getLogger(__name__)
@@ -802,6 +806,13 @@ def _cron_spawn_cwd(job: "CronJob") -> str:
 _SPAWN_WARN_SECONDS = 10.0
 
 
+# Upper bound on a single stdout/stderr readline poll inside the watchdog
+# drain. seconds_until_due() already sizes each wait to wake exactly at the
+# next idle/backstop deadline; this only caps the between-deadline re-check
+# so a genuinely-silent worker is still polled for process exit.
+_CRON_DRAIN_POLL_SECONDS = 5.0
+
+
 async def _spawn_script_with_timeout(
     *,
     argv: list[str],
@@ -810,85 +821,170 @@ async def _spawn_script_with_timeout(
     timeout_seconds: float,
     job_id: str = "",
     on_spawned: Optional[Callable[[Any], None]] = None,
+    idle_kill_seconds: float = 0.0,
 ) -> tuple[Any, bytes, bytes, bool]:
-    """Spawn + drain a ``!script`` worker under ONE timeout for the WHOLE
-    subprocess lifecycle — spawn included.
+    """Spawn + drain a ``!script`` worker under the SHARED
+    ``timeout_policy.LivenessWatchdog`` -- idle/no-progress governed, with the
+    per-job ``timeout_seconds`` kept ONLY as the absolute backstop.
 
-    Root-cause fix for the recurring cron_job_dispatch 60-minute wedge
-    (diagnosed 2026-07-23, task_32c02c29e190): the per-job timeout previously
-    wrapped only ``proc.communicate()``, armed AFTER
-    ``asyncio.create_subprocess_exec`` resolved. When the fork/exec itself
-    stalled (~1 in 4,300 spawns under resource pressure), the timer never
-    armed, the path had no heartbeat, and the run sat silent until the
-    60-MINUTE stuck-run reaper — a 60-second job burning an hour, 29 times
-    across Jun–Jul. Moving the ``wait_for`` boundary outward collapses that
-    wedge to ``timeout_seconds`` and yields a proper ``execution_timeout``
-    failure record instead of a half-dispatched zombie. The reaper remains
-    the genuine last-resort backstop it was designed to be.
+    This is the canonical lane-timeout convention -- the same
+    :class:`~universal_agent.timeout_policy.LivenessWatchdog` that governs the
+    in-process ``ProcessTurnAdapter`` and the VP ``claude`` CLI lane. It
+    replaces the prior bespoke ``asyncio.wait_for(proc.communicate(), ...)``
+    wall-clock cap, which wedged the single-threaded cron dispatch loop for up
+    to ~60 minutes at a time (recurring nightly, 2026-06 -> 2026-07):
+
+      * ``communicate()`` blocks until the child exits and emits NO incremental
+        signal, so a worker that spawned fine then hung silently (a sqlite
+        lock, a blocked import) left the loop with no heartbeat and no timely
+        kill; ``wait_for``'s cancellation of ``communicate()`` did not reliably
+        SIGKILL the child.
+      * With ``idle_kill_seconds > 0`` (the lightweight path used by
+        housekeeping crons such as ``simone_chat_auto_complete``), a worker
+        that produces no stdout/stderr for that long -- or whose fork/exec
+        itself stalls under resource pressure -- is reaped within
+        ``idle_kill_seconds`` instead of burning an hour. Each stdout/stderr
+        chunk is a heartbeat (``watchdog.note_activity``), so a run that keeps
+        emitting output runs freely up to the backstop.
+
+    ``idle_kill_seconds=0`` (the default) disables the idle kill and leaves
+    ONLY the ``timeout_seconds`` absolute backstop -- the mode the heavyweight
+    Claude-session cron lane deliberately stays in, since a real agent turn
+    legitimately goes silent for minutes during inference. That lane's
+    effective behaviour is unchanged by this refactor.
 
     ``on_spawned(proc)`` runs right after a successful spawn (used by the
     heavyweight path's Phase F.1 worker_pid stamp); its failures are logged
-    and swallowed. Returns ``(proc, stdout, stderr, was_timeout_killed)`` —
+    and swallowed. Returns ``(proc, stdout, stderr, was_timeout_killed)`` --
     ``proc`` is ``None`` when the spawn itself never completed (the caller's
-    kill/returncode handling must tolerate that).
+    kill/returncode handling must tolerate that). The 60-minute stuck-run
+    reaper remains the genuine last-resort backstop for the deepest stalls
+    (e.g. a fork that hard-blocks the event loop), exactly as designed.
     """
     import subprocess as _sp
 
+    watchdog = LivenessWatchdog(
+        idle_kill_seconds=float(idle_kill_seconds or 0.0),
+        absolute_backstop_seconds=float(timeout_seconds or 0.0),
+    )
+
+    # -- Phase 1 -- spawn, bounded by the watchdog's soonest deadline so a
+    # fork/exec stall is caught by the idle kill (lightweight) or the backstop
+    # (heavyweight), never left for the 60-min reaper.
+    spawn_bound = watchdog.seconds_until_due()
     proc: Any = None
-
-    async def _spawn_and_run() -> tuple[bytes, bytes]:
-        nonlocal proc
-        _t0 = time.monotonic()
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=_sp.PIPE,
-            stderr=_sp.PIPE,
-            cwd=cwd,
-            env=env,
-        )
-        _spawn_s = time.monotonic() - _t0
-        if _spawn_s >= _SPAWN_WARN_SECONDS:
-            # Breadcrumb for the next spawn stall: today a stalled !script
-            # run leaves zero trace. This line names the job and the delay.
-            logger.warning(
-                "cron %s: subprocess spawn took %.1fs (resource-pressure "
-                "fork/exec stall class)",
-                job_id or "?",
-                _spawn_s,
-            )
-        if on_spawned is not None:
-            try:
-                on_spawned(proc)
-            except Exception:  # noqa: BLE001 — best-effort bookkeeping only
-                logger.debug(
-                    "cron %s: on_spawned hook failed", job_id or "?", exc_info=True
-                )
-        return await proc.communicate()
-
+    _t0 = time.monotonic()
     try:
-        stdout, stderr = await asyncio.wait_for(
-            _spawn_and_run(), timeout=timeout_seconds
+        proc = await asyncio.wait_for(
+            asyncio.create_subprocess_exec(
+                *argv,
+                stdout=_sp.PIPE,
+                stderr=_sp.PIPE,
+                cwd=cwd,
+                env=env,
+            ),
+            timeout=None if spawn_bound == float("inf") else spawn_bound,
         )
-        return proc, stdout, stderr, False
     except asyncio.TimeoutError:
-        # proc may not exist yet — the spawn itself may be what hung.
-        if proc is not None:
+        # Spawn (fork/exec) stalled past the deadline -- proc was never
+        # assigned. Previously this is exactly the 60-minute wedge: no proc,
+        # no timer, no heartbeat.
+        logger.warning(
+            "cron %s: spawn itself hung past the watchdog deadline "
+            "(idle=%ss, backstop=%ss) -- killed at the boundary; previously "
+            "this wedged until the 60-minute reaper",
+            job_id or "?",
+            idle_kill_seconds or 0,
+            timeout_seconds or 0,
+        )
+        return None, b"", b"", True
+
+    _spawn_s = time.monotonic() - _t0
+    if _spawn_s >= _SPAWN_WARN_SECONDS:
+        # Breadcrumb for the next spawn stall: a stalled !script run otherwise
+        # leaves zero trace. This line names the job and the delay.
+        logger.warning(
+            "cron %s: subprocess spawn took %.1fs (resource-pressure "
+            "fork/exec stall class)",
+            job_id or "?",
+            _spawn_s,
+        )
+    if on_spawned is not None:
+        try:
+            on_spawned(proc)
+        except Exception:  # noqa: BLE001 -- best-effort bookkeeping only
+            logger.debug(
+                "cron %s: on_spawned hook failed", job_id or "?", exc_info=True
+            )
+
+    # A successfully forked process is itself a sign of life.
+    watchdog.note_activity()
+
+    # -- Phase 2 -- drain stdout + stderr incrementally. Each chunk is a
+    # heartbeat; the idle/backstop kill decision is delegated to the shared
+    # watchdog, polled every readline timeout.
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    kill_reason: list[str] = []
+
+    async def _drain(stream, sink: list[bytes]) -> None:
+        while True:
+            reason = watchdog.overdue()
+            if reason is not None:
+                if not kill_reason:
+                    kill_reason.append(reason)
+                # Kill the moment the watchdog is overdue so the sibling
+                # drain's in-flight readline unblocks (EOF) instead of
+                # waiting out its own poll window. Idempotent + guarded.
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                return
+            remaining = watchdog.seconds_until_due()
+            try:
+                chunk = await asyncio.wait_for(
+                    stream.readline(),
+                    timeout=min(remaining, _CRON_DRAIN_POLL_SECONDS),
+                )
+            except asyncio.TimeoutError:
+                # Either the process exited (pipes close -> readline would
+                # otherwise return b"") or a silent live process timed out.
+                # Loop back; the overdue() check at the top owns the kill.
+                if proc.returncode is not None:
+                    return
+                continue
+            if not chunk:
+                return  # EOF -- stream closed
+            watchdog.note_activity()  # heartbeat: output == sign of life
+            sink.append(chunk)
+
+    await asyncio.gather(
+        _drain(proc.stdout, stdout_chunks), _drain(proc.stderr, stderr_chunks)
+    )
+
+    was_killed = bool(kill_reason)
+    if was_killed and proc.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+    # Ensure the process is reaped (avoids zombies; sets returncode for the
+    # caller). On a natural EOF exit this resolves immediately.
+    if proc.returncode is None:
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except Exception:  # noqa: BLE001
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-            try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
-            except Exception:  # noqa: BLE001
-                stdout, stderr = b"", b""
-        else:
-            logger.warning(
-                "cron %s: spawn itself hung past the %.0fs job timeout — "
-                "killed at the wait_for boundary (previously this wedged "
-                "until the 60-minute reaper)",
-                job_id or "?",
-                timeout_seconds,
-            )
-            stdout, stderr = b"", b""
-        return proc, stdout, stderr, True
+
+    if was_killed:
+        logger.warning(
+            "cron %s: !script reaped by liveness watchdog (%s) -- idle=%ss, "
+            "backstop=%ss",
+            job_id or "?",
+            kill_reason[0],
+            idle_kill_seconds or 0,
+            timeout_seconds or 0,
+        )
+
+    return proc, b"".join(stdout_chunks), b"".join(stderr_chunks), was_killed
 
 
 @dataclass
@@ -2142,6 +2238,12 @@ class CronService:
                         env=_lw_env,
                         timeout_seconds=timeout_seconds,
                         job_id=job.job_id,
+                        # LivenessWatchdog idle kill: a wedged fork/exec
+                        # or a silently-hung housekeeping worker is reaped
+                        # in seconds, not by the 60-min stuck-run reaper.
+                        # The heavyweight Claude-session lane below stays
+                        # backstop-only (idle_kill_seconds=0).
+                        idle_kill_seconds=cron_script_idle_kill_seconds(),
                     )
                     if _lw_was_timeout_killed:
                         _lw_text = (

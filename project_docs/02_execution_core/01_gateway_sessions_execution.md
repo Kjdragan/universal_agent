@@ -385,12 +385,16 @@ coding/build turns legitimately exceed 30 min, so an arbitrary cap kills live,
 productive work (it caused the ≈13 h Simone daemon stall on 2026-06-14, where a
 session pinned to `glm-5.1` fell through to a 180 s sonnet cap and every long
 work turn was killed). The policy lives in **`timeout_policy.py::LivenessWatchdog`**
-and is shared by all three lanes so the convention can't drift:
+and is shared by all four lanes so the convention can't drift:
 
 - in-process `execution_engine.py::ProcessTurnAdapter.execute` (Simone heartbeat
   / daemon + in-process VP coder),
 - the VP SDK consumer `vp/clients/base.py::consume_adapter_events_with_idle_timeout`,
-- the `claude --print` subprocess `vp/clients/claude_cli_client.py::_monitor_cli_output`.
+- the `claude --print` subprocess `vp/clients/claude_cli_client.py::_monitor_cli_output`,
+- the cron `!script` spawn `cron_service.py::_spawn_script_with_timeout` (idle
+  kill armed on the lightweight housekeeping path via
+  `timeout_policy.py::cron_script_idle_kill_seconds`; the heavyweight
+  Claude-session cron lane runs backstop-only).
 
 `LivenessWatchdog` kills a turn only when **one** of these holds:
 

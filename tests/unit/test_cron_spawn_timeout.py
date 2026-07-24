@@ -1,12 +1,12 @@
-"""Tests for the spawn-inclusive cron script timeout (60-minute wedge fix).
+"""Legacy backstop-path tests for ``_spawn_script_with_timeout``.
 
-Root cause (VP diagnosis 2026-07-23, task_32c02c29e190): the per-job timeout
-wrapped only ``proc.communicate()``, so a hung
-``asyncio.create_subprocess_exec`` never armed the timer and the run sat
-silent until the 60-minute stuck-run reaper — 29 wedged runs across Jun–Jul,
-all the every-minute ``simone_chat_auto_complete`` job.
-``_spawn_script_with_timeout`` moves the ``wait_for`` boundary outward so the
-job timeout covers the WHOLE subprocess lifecycle.
+The helper is now governed by the shared ``timeout_policy.LivenessWatchdog``
+(idle/no-progress kill, heartbeats per stdout/stderr chunk); see
+test_cron_spawn_liveness_watchdog.py for the idle-kill regression tests.
+These tests exercise the ``absolute_backstop_seconds`` path of that same
+watchdog (``idle_kill_seconds=0`` default -> backstop-only), which preserves
+the prior contract: the per-job ``timeout_seconds`` still bounds the whole
+spawn+drain lifecycle as a last-resort ceiling.
 """
 
 from __future__ import annotations
