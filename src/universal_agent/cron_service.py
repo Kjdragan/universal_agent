@@ -255,11 +255,7 @@ def _resolve_dispatch_command(job: "CronJob", raw_command: str) -> str:
     Lazy-imports ``gateway_server`` to avoid the module-cycle
     (gateway_server imports cron_service at top level).
     """
-    system_job = ""
-    try:
-        system_job = str((getattr(job, "metadata", None) or {}).get("system_job") or "")
-    except Exception:
-        system_job = ""
+    system_job = str((getattr(job, "metadata", None) or {}).get("system_job") or "")
     if system_job == "paper_to_podcast_daily":
         try:
             from universal_agent.gateway_server import _paper_to_podcast_command
