@@ -98,41 +98,48 @@ _RETIRED_LANE_SOURCES = {
     "threads_trends_broad",
 }
 
+# Time-conversion factors used throughout the cadence / age math below (the
+# expected-period table, the conservative fallback, and the humanize/fmt
+# helpers). Named so the arithmetic reads as durations rather than raw ints.
+_SECONDS_PER_MINUTE = 60
+_SECONDS_PER_HOUR = 60 * _SECONDS_PER_MINUTE
+_SECONDS_PER_DAY = 24 * _SECONDS_PER_HOUR
+
 # Expected cadence (seconds) for systemd timers whose period cannot be inferred
 # from a single NEXT-LAST observation (e.g. weekly/monthly units, or units that
 # have only fired once). Keyed by the timer unit basename (without the
 # ``universal-agent-`` prefix / ``.timer`` suffix). A unit absent from this map
 # falls back to the observed NEXT-LAST delta with a generous multiplier.
 _SYSTEMD_EXPECTED_PERIOD_SECONDS = {
-    "service-watchdog": 60,
-    "oom-alert": 60,
-    "proactive-health": 5 * 60,
-    "proactive-signal-card-sync": 60 * 60,
-    "artifact-reminders-sweep": 30 * 60,
-    "csi-convergence-sync": 60 * 60,
-    "hourly-intel-digest": 60 * 60,
-    "morning-briefing": 24 * 60 * 60,
-    "evening-briefing": 24 * 60 * 60,
-    "proactive-report-morning": 24 * 60 * 60,
-    "proactive-report-midday": 24 * 60 * 60,
-    "proactive-report-afternoon": 24 * 60 * 60,
-    "nightly-wiki": 24 * 60 * 60,
-    "youtube-gold-channel-poller": 24 * 60 * 60,
-    "youtube-daily-digest": 24 * 60 * 60,
-    "youtube-oauth-watchdog": 24 * 60 * 60,
-    "intel-auto-promoter": 24 * 60 * 60,
-    "csi-demo-triage-rank": 24 * 60 * 60,
-    "scratch-pruning": 24 * 60 * 60,
-    "codie-proactive-cleanup": 24 * 60 * 60,
-    "proactive-demo-build-sweep": 24 * 60 * 60,
-    "backlog-triage": 24 * 60 * 60,
-    "proactive-artifact-digest": 24 * 60 * 60,
-    "session-reaper": 24 * 60 * 60,
-    "uv-cache-prune": 24 * 60 * 60,
-    "skill-gap-finder": 7 * 24 * 60 * 60,
-    "vp-coder-workspace-pruning": 7 * 24 * 60 * 60,
-    "architecture-canvas-drift": 7 * 24 * 60 * 60,
-    "vault-lint-contradictions": 30 * 24 * 60 * 60,
+    "service-watchdog": _SECONDS_PER_MINUTE,
+    "oom-alert": _SECONDS_PER_MINUTE,
+    "proactive-health": 5 * _SECONDS_PER_MINUTE,
+    "proactive-signal-card-sync": _SECONDS_PER_HOUR,
+    "artifact-reminders-sweep": 30 * _SECONDS_PER_MINUTE,
+    "csi-convergence-sync": _SECONDS_PER_HOUR,
+    "hourly-intel-digest": _SECONDS_PER_HOUR,
+    "morning-briefing": _SECONDS_PER_DAY,
+    "evening-briefing": _SECONDS_PER_DAY,
+    "proactive-report-morning": _SECONDS_PER_DAY,
+    "proactive-report-midday": _SECONDS_PER_DAY,
+    "proactive-report-afternoon": _SECONDS_PER_DAY,
+    "nightly-wiki": _SECONDS_PER_DAY,
+    "youtube-gold-channel-poller": _SECONDS_PER_DAY,
+    "youtube-daily-digest": _SECONDS_PER_DAY,
+    "youtube-oauth-watchdog": _SECONDS_PER_DAY,
+    "intel-auto-promoter": _SECONDS_PER_DAY,
+    "csi-demo-triage-rank": _SECONDS_PER_DAY,
+    "scratch-pruning": _SECONDS_PER_DAY,
+    "codie-proactive-cleanup": _SECONDS_PER_DAY,
+    "proactive-demo-build-sweep": _SECONDS_PER_DAY,
+    "backlog-triage": _SECONDS_PER_DAY,
+    "proactive-artifact-digest": _SECONDS_PER_DAY,
+    "session-reaper": _SECONDS_PER_DAY,
+    "uv-cache-prune": _SECONDS_PER_DAY,
+    "skill-gap-finder": 7 * _SECONDS_PER_DAY,
+    "vp-coder-workspace-pruning": 7 * _SECONDS_PER_DAY,
+    "architecture-canvas-drift": 7 * _SECONDS_PER_DAY,
+    "vault-lint-contradictions": 30 * _SECONDS_PER_DAY,
 }
 
 # Category grouping for the rendered section (unit basename → category).
@@ -243,11 +250,11 @@ def _humanize_age(dt: datetime | None) -> str:
         secs = 0
     if secs < 90:
         return f"{int(secs)}s ago"
-    if secs < 90 * 60:
-        return f"{int(secs // 60)}m ago"
-    if secs < 36 * 3600:
-        return f"{int(secs // 3600)}h ago"
-    return f"{int(secs // 86400)}d ago"
+    if secs < 90 * _SECONDS_PER_MINUTE:
+        return f"{int(secs // _SECONDS_PER_MINUTE)}m ago"
+    if secs < 36 * _SECONDS_PER_HOUR:
+        return f"{int(secs // _SECONDS_PER_HOUR)}h ago"
+    return f"{int(secs // _SECONDS_PER_DAY)}d ago"
 
 
 def _workspaces_dir() -> str:
@@ -382,7 +389,7 @@ def _classify_systemd(row: dict[str, Any]) -> tuple[str, str]:
         if gap > 0:
             expected = gap
     if expected is None:
-        expected = 24 * 60 * 60  # conservative default
+        expected = _SECONDS_PER_DAY  # conservative default
 
     # Healthy if the last run is within ~2× the expected period (one missed
     # window tolerated for scheduling jitter / deploy restarts).
@@ -392,11 +399,11 @@ def _classify_systemd(row: dict[str, Any]) -> tuple[str, str]:
 
 
 def _fmt_period(secs: float) -> str:
-    if secs < 90 * 60:
-        return f"{int(round(secs / 60))}m"
-    if secs < 36 * 3600:
-        return f"{int(round(secs / 3600))}h"
-    return f"{int(round(secs / 86400))}d"
+    if secs < 90 * _SECONDS_PER_MINUTE:
+        return f"{int(round(secs / _SECONDS_PER_MINUTE))}m"
+    if secs < 36 * _SECONDS_PER_HOUR:
+        return f"{int(round(secs / _SECONDS_PER_HOUR))}h"
+    return f"{int(round(secs / _SECONDS_PER_DAY))}d"
 
 
 def _collect_systemd_activities() -> list[dict[str, Any]]:
@@ -596,7 +603,7 @@ def _classify_inapp(
             return STATUS_HEALTHY, f"last {_humanize_age(last_dt)}"
         return STATUS_DEGRADED, f"last {_humanize_age(last_dt)} (overdue)"
     # cron_expr daily/weekly job — tolerate ~36h.
-    if age <= 36 * 3600:
+    if age <= 36 * _SECONDS_PER_HOUR:
         return STATUS_HEALTHY, f"last {_humanize_age(last_dt)}"
     return STATUS_DEGRADED, f"last {_humanize_age(last_dt)} (overdue)"
 
@@ -625,7 +632,7 @@ def _collect_lane_activities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             "SELECT MAX(created_at) AS m FROM convergence_candidates"
         ).fetchone()
         last_dt = _parse_iso(row["m"] if row else None)
-        status, detail = _lane_status(last_dt, fresh_window_secs=6 * 3600, parked=False)
+        status, detail = _lane_status(last_dt, fresh_window_secs=6 * _SECONDS_PER_HOUR, parked=False)
         activities.append(
             {
                 "name": "Convergence pipeline",
@@ -657,7 +664,7 @@ def _collect_lane_activities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             vp_conn.close()
         last_dt = _parse_iso(recent["m"] if recent else None)
         run_n = int(running["c"]) if running else 0
-        status, detail = _lane_status(last_dt, fresh_window_secs=12 * 3600, parked=False)
+        status, detail = _lane_status(last_dt, fresh_window_secs=12 * _SECONDS_PER_HOUR, parked=False)
         detail = f"{detail}; {run_n} running"
         activities.append(
             {
@@ -709,7 +716,7 @@ def _collect_lane_activities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 continue
             last_dt = _parse_iso(r["m"])
             parked = any(p in source.lower() for p in _PARKED_LANE_SOURCES)
-            status, detail = _lane_status(last_dt, fresh_window_secs=6 * 3600, parked=parked)
+            status, detail = _lane_status(last_dt, fresh_window_secs=6 * _SECONDS_PER_HOUR, parked=parked)
             activities.append(
                 {
                     "name": f"CSI · {source}",
@@ -748,7 +755,7 @@ def _collect_lane_activities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             "SELECT MAX(COALESCE(created_at, '')) AS m, COUNT(*) AS c FROM proactive_artifacts"
         ).fetchone()
         last_dt = _parse_iso((row["m"] if row else None) or None)
-        status, detail = _lane_status(last_dt, fresh_window_secs=48 * 3600, parked=False)
+        status, detail = _lane_status(last_dt, fresh_window_secs=48 * _SECONDS_PER_HOUR, parked=False)
         activities.append(
             {
                 "name": "Proactive artifacts",
