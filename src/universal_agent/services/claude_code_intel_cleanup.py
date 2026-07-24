@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
+
 from universal_agent.utils.time_utils import now_iso as _now_iso
 
 _HEARTBEAT_ARTIFACT_REL_PATHS = (

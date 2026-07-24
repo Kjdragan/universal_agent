@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import json
 import sqlite3
 from typing import Any, Iterable, Optional
+
 from universal_agent.utils.time_utils import now_iso as _now_iso
 
 # Delivery slot constants — keep aligned with hourly_insight_email composer.

@@ -39,7 +39,6 @@ from typing import Any
 
 from universal_agent import task_hub
 from universal_agent.feature_flags import task_hub_missions_enabled
-from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.services.mission_control_cards import (
     SEVERITY_CRITICAL,
     SEVERITY_INFORMATIONAL,
@@ -59,6 +58,7 @@ from universal_agent.services.mission_control_cards import (
     retire_card,
     upsert_card,
 )
+from universal_agent.utils.json_utils import extract_json_payload
 
 logger = logging.getLogger(__name__)
 

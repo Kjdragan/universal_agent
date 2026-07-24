@@ -14,7 +14,6 @@ import time
 from typing import Any, Callable, Optional
 
 from universal_agent import task_hub
-from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 from universal_agent.rate_limiter import _is_fup_error
 from universal_agent.services.llm_classifier import (
     _call_llm,
@@ -28,6 +27,7 @@ from universal_agent.services.proactive_artifacts import (
     upsert_artifact,
 )
 from universal_agent.services.proactive_task_builder import queue_proactive_task
+from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)

@@ -26,12 +26,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
-from universal_agent.wiki.core import _slugify as _base_slugify
 import logging
 import os
 from pathlib import Path
 import re
 from typing import Any
+
+from universal_agent.wiki.core import _slugify as _base_slugify
 
 logger = logging.getLogger(__name__)
 

@@ -37,8 +37,8 @@ from universal_agent.services.demo_workspace import (
     WorkspaceProvisionResult,
     provision_demo_workspace,
 )
-from universal_agent.wiki.core import _slugify
 from universal_agent.utils.time_utils import now_iso as _now_iso
+from universal_agent.wiki.core import _slugify
 
 logger = logging.getLogger(__name__)
 
