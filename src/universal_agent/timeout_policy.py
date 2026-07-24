@@ -92,6 +92,32 @@ def process_turn_absolute_backstop_seconds(default: float = 7200.0) -> float:
     )
 
 
+
+def cron_script_idle_kill_seconds(default: float = 60.0) -> float:
+    """Idle / no-progress kill threshold for the cron ``!script`` spawn+drain
+    (the lightweight path used by housekeeping crons such as
+    ``simone_chat_auto_complete``).
+
+    A lightweight cron worker that produces NO stdout/stderr for this many
+    seconds -- including one whose fork/exec stalls under resource pressure,
+    or one that spawns fine then hangs silently (a sqlite lock, a blocked
+    import) -- is reaped by :class:`LivenessWatchdog`. This collapses the
+    recurring ~60-minute cron-dispatch wedge (the every-minute
+    ``simone_chat_auto_complete`` job blocking the single-threaded dispatch
+    loop until the 60-minute stuck-run reaper) to ~``idle_kill`` seconds.
+
+    Idle-based -- NOT a wall-clock cap -- so a lightweight run that keeps
+    emitting output runs freely. Generous by default (lightweight
+    housekeeping runs normally finish in well under a second), but tight
+    enough that a wedged spawn frees the dispatch loop quickly instead of
+    burning an hour. ``0`` disables (falls back to the absolute backstop
+    only -- the mode the heavyweight Claude-session cron lane deliberately
+    stays in, since real agent turns legitimately go silent for minutes
+    during inference). See :class:`LivenessWatchdog`.
+    """
+    return _read_float("UA_CRON_SCRIPT_IDLE_KILL_SECONDS", default, minimum=0.0)
+
+
 class LivenessWatchdog:
     """Canonical idle / no-progress kill policy for UA agent-execution lanes.
 
