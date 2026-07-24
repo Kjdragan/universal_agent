@@ -752,14 +752,6 @@ def _llm_prompt(evidence: dict[str, Any]) -> str:
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
-    """Parse the LLM's JSON object via the canonical robust parser.
-
-    Consolidated onto ``utils.json_utils.extract_json_payload`` (the shared
-    5-layer parser: json.loads -> json_repair -> brace extraction ->
-    Python-literal normalization). Keeps this module's local contract:
-    always returns a dict, raises ``ValueError`` when no object can be
-    recovered (callers wrap in try/except and fall back).
-    """
     payload = extract_json_payload(text)
     if not isinstance(payload, dict):
         raise ValueError("LLM response JSON is not an object")

@@ -16,7 +16,6 @@ from universal_agent.services import mission_control_tier1 as tier1
 
 PARSERS = [tier1._extract_json_object, cos._extract_json_object]
 
-# (input, expected) pairs the OLD parser already handled — behavior must hold.
 EQUIVALENCE_CASES = [
     ('{"cards": []}', {"cards": []}),
     ('```json\n{"cards": [1]}\n```', {"cards": [1]}),
@@ -24,7 +23,6 @@ EQUIVALENCE_CASES = [
     ('Here you go:\n{"a": 1} thanks', {"a": 1}),
 ]
 
-# Inputs the OLD parser raised on that the canonical parser now recovers.
 NEW_TOLERANCE_CASES = [
     ("{'single': 'quotes'}", {"single": "quotes"}),
     ('{"trailing": 1,}', {"trailing": 1}),
