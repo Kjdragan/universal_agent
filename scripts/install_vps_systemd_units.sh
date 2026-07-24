@@ -143,14 +143,10 @@ if [[ "$LANE" == "production" ]]; then
     "Universal Agent Telegram Poller" \
     "" \
     "universal-agent-gateway.service"
-  render_template \
-    "$TEMPLATE_DIR/ua-discord-cc-bot.service.template" \
-    "$SYSTEMD_DIR/ua-discord-cc-bot.service" \
-    "Universal Agent - Command and Control Discord Bot"
-  render_template \
-    "$TEMPLATE_DIR/ua-discord-intelligence.service.template" \
-    "$SYSTEMD_DIR/ua-discord-intelligence.service" \
-    "Universal Agent - Discord Intelligence Daemon"
+  # Discord Intelligence decommissioned 2026-07-24 — the two ua-discord-* units are
+  # no longer rendered, enabled, or restarted. The discord_intelligence/ package
+  # remains on disk as a dormant archive; nothing runs it. (See PR decommissioning
+  # the Discord subsystem.)
   install_stack_limit_dropin "universal-agent-gateway.service"
   install_stack_limit_dropin "universal-agent-api.service"
   units_to_enable=(
@@ -158,8 +154,6 @@ if [[ "$LANE" == "production" ]]; then
     "universal-agent-api.service"
     "universal-agent-webui.service"
     "universal-agent-telegram.service"
-    "ua-discord-cc-bot.service"
-    "ua-discord-intelligence.service"
   )
 else
   render_template \

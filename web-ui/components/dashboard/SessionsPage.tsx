@@ -66,7 +66,7 @@ const AGE_DOTS: Record<AgeTier, string> = {
 
 const ACTIVE_WINDOW_MS = 36 * 3600 * 1000; // 36 hours
 
-type ChannelKey = "interactive" | "vp_mission" | "email" | "scheduled" | "proactive" | "discord" | "infrastructure" | "system";
+type ChannelKey = "interactive" | "vp_mission" | "email" | "scheduled" | "proactive" | "infrastructure" | "system";
 
 const CHANNEL_META: Record<ChannelKey, { icon: string; label: string; color: string; border: string; bg: string }> = {
   interactive:    { icon: "💬", label: "Interactive Chats",   color: "text-primary",       border: "border-primary/25",       bg: "bg-primary/5" },
@@ -74,12 +74,11 @@ const CHANNEL_META: Record<ChannelKey, { icon: string; label: string; color: str
   email:          { icon: "📧", label: "Email",              color: "text-sky-400",       border: "border-sky-500/25",       bg: "bg-sky-500/5" },
   scheduled:      { icon: "⏰", label: "Scheduled / Cron",   color: "text-amber-400",     border: "border-amber-500/25",     bg: "bg-amber-500/5" },
   proactive:      { icon: "📡", label: "Proactive Signals",  color: "text-emerald-400",   border: "border-emerald-500/25",   bg: "bg-emerald-500/5" },
-  discord:        { icon: "🎮", label: "Discord",            color: "text-indigo-400",    border: "border-indigo-500/25",    bg: "bg-indigo-500/5" },
   infrastructure: { icon: "🔧", label: "Infrastructure",     color: "text-muted-foreground", border: "border-border/30",     bg: "bg-card/20" },
   system:         { icon: "⚙️",  label: "System",             color: "text-muted-foreground", border: "border-border/30",     bg: "bg-card/20" },
 };
 
-const CHANNEL_ORDER: ChannelKey[] = ["interactive", "vp_mission", "email", "scheduled", "proactive", "discord", "infrastructure", "system"];
+const CHANNEL_ORDER: ChannelKey[] = ["interactive", "vp_mission", "email", "scheduled", "proactive", "infrastructure", "system"];
 
 function isDaemonSession(s: { session_id: string }): boolean {
   return (s.session_id || "").startsWith("daemon_");

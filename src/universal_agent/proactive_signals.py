@@ -475,13 +475,13 @@ def generate_signal_cards(
     + the convergence/tutorial syncs); both share this function so the card logic
     lives in exactly one place. Returns ``{youtube, discord, expired, purged}``.
     """
+    # Discord decommissioned 2026-07-24: the discord_db_path param is retained as a
+    # no-op for call-site compatibility; the "discord" count stays in the shape but
+    # is always 0. generate_discord_cards / _discord_actions were removed.
     counts = {"youtube": 0, "discord": 0, "expired": 0, "purged": 0}
     for card in generate_youtube_cards(csi_db_path):
         upsert_generated_card(conn, card)
         counts["youtube"] += 1
-    for card in generate_discord_cards(discord_db_path):
-        upsert_generated_card(conn, card)
-        counts["discord"] += 1
     counts["expired"] = expire_stale_pending_cards(
         conn, older_than_days=_card_ttl_days() if ttl_days is None else ttl_days
     )
@@ -596,70 +596,6 @@ def generate_youtube_cards(csi_db_path: Optional[Path], *, limit: int = 400) -> 
     return cards[:50]
 
 
-def generate_discord_cards(discord_db_path: Optional[Path], *, limit: int = 60) -> list[dict[str, Any]]:
-    if discord_db_path is None or not discord_db_path.exists():
-        return []
-    db = sqlite3.connect(str(discord_db_path))
-    db.row_factory = sqlite3.Row
-    cards: list[dict[str, Any]] = []
-    try:
-        insight_rows = db.execute(
-            """
-            SELECT i.id, i.topic, i.summary, i.sentiment, i.urgency, i.confidence,
-                   i.created_at, tb.channel_id, c.name AS channel_name, srv.name AS server_name
-            FROM insights i
-            JOIN triage_batches tb ON i.batch_id = tb.id
-            LEFT JOIN channels c ON tb.channel_id = c.id
-            LEFT JOIN servers srv ON c.server_id = srv.id
-            ORDER BY i.created_at DESC
-            LIMIT ?
-            """,
-            (max(1, min(int(limit), 200)),),
-        ).fetchall()
-    except sqlite3.Error:
-        insight_rows = []
-    finally:
-        db.close()
-    for row in insight_rows:
-        urgency = str(row["urgency"] or "low").lower()
-        confidence = float(row["confidence"] or 0.0)
-        if urgency == "low" and confidence < 0.65:
-            continue
-        topic = str(row["topic"] or "Discord insight").strip()
-        source_label = " / ".join(
-            part for part in [str(row["server_name"] or "").strip(), str(row["channel_name"] or "").strip()] if part
-        )
-        cards.append(
-            {
-                "card_id": _card_id("discord", str(row["id"])),
-                "source": "discord",
-                "card_type": "insight",
-                "title": topic[:180],
-                "summary": str(row["summary"] or "").strip()[:1200],
-                "priority": 3 if urgency == "high" else 2,
-                "confidence_score": max(0.35, min(0.95, confidence)),
-                "novelty_score": 0.55,
-                "evidence": [
-                    {
-                        "source": "discord",
-                        "label": source_label or "Discord",
-                        "created_at": str(row["created_at"] or ""),
-                        "summary": str(row["summary"] or "").strip()[:500],
-                    }
-                ],
-                "actions": _discord_actions(topic),
-                "metadata": {
-                    "discord_insight_id": int(row["id"] or 0),
-                    "urgency": urgency,
-                    "sentiment": str(row["sentiment"] or ""),
-                    "topic": topic,
-                },
-                "created_at": str(row["created_at"] or _now_iso()),
-            }
-        )
-    return cards
-
-
 def _youtube_diamond_cards(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     scored: list[tuple[float, dict[str, Any]]] = []
     for item in items:
@@ -745,14 +681,6 @@ def _youtube_actions(*, topic: str, has_transcripts: bool, cluster: bool) -> lis
         {"id": "fetch_transcripts", "label": "Fetch Transcript", "description": "Create a task to fetch and analyze this non-Short video transcript."},
         {"id": "track_topic", "label": "Track Topic", "description": "Keep watching for related videos before deeper work."},
         {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. GROUNDING (anti-drift): keep the wiki about THIS signal's actual subject — add the source (e.g. the YouTube video) as the anchor, build a DISAMBIGUATED research query from the card's summary (never a bare ambiguous name like 'Olympus Protocol'), and import only on-topic/cited sources so unrelated material sharing a keyword is excluded."},
-    ]
-
-
-def _discord_actions(topic: str) -> list[dict[str, str]]:
-    return [
-        {"id": "research_further", "label": "Research Further", "description": "Create a research task from this Discord intelligence signal."},
-        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. GROUNDING (anti-drift): keep the wiki about THIS signal's actual subject — add the source (e.g. the YouTube video) as the anchor, build a DISAMBIGUATED research query from the card's summary (never a bare ambiguous name like 'Olympus Protocol'), and import only on-topic/cited sources so unrelated material sharing a keyword is excluded."},
-        {"id": "track_topic", "label": "Track Topic", "description": "Keep watching this topic before deeper work."},
     ]
 
 

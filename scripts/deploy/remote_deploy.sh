@@ -411,21 +411,9 @@ else
   echo "WARN: csi_install_systemd_extras.sh missing or not executable; CSI timers may drift"
 fi
 
-# Capture discord-services state BEFORE the restart so the
-# post-restart health gate can distinguish "this deploy broke
-# discord" (regression — fail) from "discord was already
-# crashing before this deploy" (pre-existing — warn only).
-# See PR #259 deploy-fail (2026-05-12): all HTTP services
-# healthy on the new SHA, but ua-discord-intelligence was in
-# an existing crash loop and the old hard gate flagged the
-# whole deploy as failed.
-discord_cc_pre="unknown"
-discord_intel_pre="unknown"
-if command -v systemctl >/dev/null 2>&1; then
-  discord_cc_pre="$(systemctl is-active ua-discord-cc-bot 2>/dev/null || echo unknown)"
-  discord_intel_pre="$(systemctl is-active ua-discord-intelligence 2>/dev/null || echo unknown)"
-  echo "--> Discord baseline (pre-deploy): cc-bot=$discord_cc_pre intelligence=$discord_intel_pre"
-fi
+# Discord Intelligence decommissioned 2026-07-24 — those units are no longer
+# installed, restarted, or health-gated by this deploy (the prior pre-restart
+# baseline capture and the regression health-gate were removed with it).
 
 # Sync project skills to the ua user's ~/.claude/skills/ so they're
 # discoverable from any CWD — including VP worker subprocess
@@ -453,7 +441,7 @@ fi
 echo "--> Restarting production services..."
 if command -v systemctl >/dev/null 2>&1; then
   if command -v sudo >/dev/null 2>&1; then
-    sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram ua-discord-cc-bot ua-discord-intelligence
+    sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
     # VP workers are deliberately NOT restarted here. Restarting them mid-deploy
     # killed in-flight Cody/VP missions: the worker process died, its claim
     # lease lapsed, and the reconciler reaped the orphan as "failed" (every
@@ -480,7 +468,7 @@ if command -v systemctl >/dev/null 2>&1; then
       fi
     done
   else
-    systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram ua-discord-cc-bot ua-discord-intelligence
+    systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
     # VP workers are deliberately NOT restarted here — see the sudo branch above
     # for the rationale (restarting them mid-deploy killed in-flight missions;
     # they now self-restart between missions for code currency).
@@ -528,7 +516,6 @@ ensure_current_venv_interpreter() {
 if command -v systemctl >/dev/null 2>&1; then
   ensure_current_venv_interpreter universal-agent-gateway
   ensure_current_venv_interpreter universal-agent-api
-  ensure_current_venv_interpreter ua-discord-intelligence
 fi
 
 echo "--> Verifying production service health..."
@@ -603,32 +590,8 @@ for health_name in gateway api webui; do
   fi
 done
 rm -rf "$health_status_dir"
-# Discord services: baseline-aware health check. Only fail
-# the deploy if the service was healthy BEFORE the deploy
-# and is unhealthy AFTER (true regression). Pre-existing
-# crash loops surface as a warning so chronic discord
-# flakiness doesn't mask real PR-caused failures elsewhere.
-check_discord_regression() {
-  svc="$1"
-  pre_state="$2"
-  if systemctl is-active --quiet "$svc"; then
-    if [ "$pre_state" != "active" ] && [ "$pre_state" != "unknown" ]; then
-      echo "    [RECOVERED] $svc transitioned $pre_state -> active across this deploy."
-    fi
-    return 0
-  fi
-  now_state="$(systemctl is-active "$svc" 2>/dev/null || echo unknown)"
-  if [ "$pre_state" = "active" ]; then
-    echo "::error::$svc was active pre-deploy but is now $now_state — likely regression caused by this deploy."
-    return 1
-  fi
-  echo "::warning::$svc is $now_state (pre-deploy was $pre_state). Pre-existing failure, not blocking this deploy."
-  return 0
-}
-if command -v systemctl >/dev/null 2>&1; then
-  check_discord_regression ua-discord-cc-bot "$discord_cc_pre" || health_ok=false
-  check_discord_regression ua-discord-intelligence "$discord_intel_pre" || health_ok=false
-fi
+# (Discord regression health-gate removed 2026-07-24 — the ua-discord-* services
+# were decommissioned; nothing to health-check here anymore.)
 
 if [ "$health_ok" != "true" ]; then
   echo "--> Production service health check failed; collecting diagnostics..."

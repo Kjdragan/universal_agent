@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 const API_BASE = "/api/dashboard/gateway";
 const FILTER_PREFS_KEY = "ua.dashboard.proactiveSignals.filterPrefs.v1";
-const SOURCE_FILTERS = ["all", "youtube", "discord"] as const;
+const SOURCE_FILTERS = ["all", "youtube"] as const;
 // "live" = pending + tracking (the active triage set, backend-defined in
 // proactive_signals.list_cards). Default view, so the tab shows live work, not
 // the rejected/promoted/deleted historical ledger.
@@ -268,7 +268,7 @@ export default function ProactiveSignalsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Proactive Signals</h1>
-          <p className="text-sm text-muted-foreground">Cheap discovery cards from YouTube and Discord with action and feedback loops.</p>
+          <p className="text-sm text-muted-foreground">Cheap discovery cards from YouTube with action and feedback loops.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {cards.length > 0 && (
