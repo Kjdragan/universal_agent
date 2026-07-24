@@ -143,3 +143,16 @@ src/universal_agent/services/proactive_activity_report.py
 # silently truncated and reported partial sums as real sizes — `du` is the correct
 # primitive, not a worker spawn. (disk watchdog accuracy fix, 2026-07-15)
 src/universal_agent/services/invariants/disk_usage_health.py
+
+# vp_coder_workspace_pruner.py [rationale (a) — not a task unit]: the weekly
+# workspace-pruning maintenance sweep. It became a spawn site on 2026-07-24 when the
+# merged-worktree prune tier was added; every one of its subprocess calls is ephemeral
+# and bounded — read-only git interrogation (`git worktree list --porcelain`,
+# `status --porcelain`, `rev-parse`, `rev-list --count`, `merge-base --is-ancestor`),
+# one `git fetch <remote> <branch>`, `git worktree prune`/`remove`, and a read-only
+# `gh pr list --state merged` (argv-only, no shell, explicit timeout, minimal env
+# allow-list so Infisical secrets are never handed to `gh`). It reclaims disk; it does
+# not execute a unit of work: there is no task_hub_items row to own and no long-running
+# worker PID to classify. Same shape as prune_scratch.py (filesystem GC sweep) and
+# disk_usage_health.py (`du` measurement) above. (merged-worktree auto-prune, 2026-07-24)
+src/universal_agent/scripts/vp_coder_workspace_pruner.py

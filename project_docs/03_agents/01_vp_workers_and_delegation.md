@@ -13,7 +13,9 @@ code_paths:
   - src/universal_agent/services/vp_failure_rescue.py
   - src/universal_agent/services/wiki_rescue_policy.py
   - src/universal_agent/services/wiki_rescue_driver.py
-last_verified: 2026-06-30
+  - src/universal_agent/scripts/vp_coder_workspace_pruner.py
+  - src/universal_agent/scripts/vp_coder_regenerable_reaper.py
+last_verified: 2026-07-24
 ---
 
 # VP Workers & Delegation
@@ -507,14 +509,23 @@ there), in which case teardown is skipped to preserve artifacts. Reusable
 worktree helpers live in `vp/worktree_utils.py` (`provision_worktree`,
 `syntax_check_changed_py`, `revert_changed_files`, etc.).
 
-### Workspace reaping (regenerable + archival)
+### Workspace reaping (regenerable + archival + merged worktrees)
 
 Two complementary reapers keep `UA_VP_CODER_WORKSPACE_ROOT` bounded; both
 resolve the same path the writer uses (`vp/profiles.py::resolve_vp_profiles`,
-via `get_vp_profile("vp.coder.primary").workspace_root`):
+via `get_vp_profile("vp.coder.primary").workspace_root`). A third tier, added
+2026-07-24, rides along on the weekly job and reclaims a **different** tree
+(`<repo>/.worktrees`) that neither of the first two can see:
 
 - **Daily regenerable-artifact reap** — `scripts/vp_coder_regenerable_reaper.py::reap_regenerable_artifacts`, registered as the `vp_coder_workspace_regenerable_reap` cron job (`gateway_server.py::_ensure_vp_coder_regenerable_reap_cron_job`, default `25 6 * * *` CT); migrated 2026-06-30 to the deploy-independent `universal-agent-vp-coder-regenerable-reap.timer` (armed by `scripts/install_vps_phase_a_batch1_timers.sh`) because its in-process cron registration no-op'd in prod. Removes ONLY regenerable names (`.venv`, `__pycache__`, `node_modules`, `.pytest_cache`, `.ruff_cache`, `dist`, `build`, `.next`) from each mission dir — these rebuild via `uv sync` / build, so no evidence window is needed. Direct-child mission dirs modified within `UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS` (default 6h) are skipped so an in-flight `uv sync` is never raced. The live repo `.venv` and any `activity_state.db` are hard-excluded (resolved-path equality + filename guard). Mission source / manifests / logs / `SOURCES/` / `BRIEF.md` / `ACCEPTANCE.md` / `COMPLETION.md` are always preserved. Added 2026-06-25 after the disk-critical incident where `AGENT_RUN_WORKSPACES/vp_coder_primary_external/` held 30G across 221 mission dirs (19.6G of it regenerable `.venv`) because the weekly pruner is structurally blind to sub-7d `.venv` bloat.
-- **Weekly whole-dir archival** — `scripts/vp_coder_workspace_pruner.py`, registered as the `vp_coder_workspace_pruning` cron job (`gateway_server.py::_ensure_vp_coder_workspace_pruning_cron_job`, default `5 17 * * 0` CT). Owns whole-dir archival of fully-completed missions (everything older than `UA_VP_CODER_WORKSPACE_RETENTION_HOURS`, default 168h/7d, moves to a sibling `_archive/`, then is hard-deleted after 2× retention). Running weekly is acceptable BECAUSE the daily reaper holds the line on the regenerable driver.
+- **Weekly whole-dir archival** — `scripts/vp_coder_workspace_pruner.py`, registered as the `vp_coder_workspace_pruning` cron job (`gateway_server.py::_ensure_vp_coder_workspace_pruning_cron_job`, default `5 17 * * 0` CT). Owns whole-dir archival of fully-completed missions (everything older than `UA_VP_CODER_WORKSPACE_RETENTION_HOURS`, default 168h/7d, moves to a sibling `_archive/`, then is hard-deleted after 2× retention). Running weekly is acceptable BECAUSE the daily reaper holds the line on the regenerable driver. (The unit comment claiming this job "no-ops in prod because the root is unset" was stale and was corrected 2026-07-24 — the 2026-07-19 run archived 30 workspaces and hard-deleted 57.)
+- **Weekly merged-worktree prune** — `scripts/vp_coder_workspace_pruner.py::prune_merged_worktrees`, called from that same weekly job's `main` (additive; it never aborts the two tiers above and the job still always exits 0). Removes *registered git worktrees* under `<repo>/.worktrees` whose branch is provably merged. This is a different tree from the two tiers above: measured 2026-07-24, `/opt/universal_agent/.worktrees` held 15,700 MiB across 8 worktrees — the largest single consumer under `/opt/universal_agent`, larger than the live `.venv` — and nothing in the estate had ever reclaimed it, because both existing tiers scope to the VP-coder profile root.
+
+  **The merged predicate is deliberately a union of two proofs.** `git merge-base --is-ancestor <head> origin/main` (against a freshly-fetched base ref) is checked first, but this repo squash-merges every PR, so a merged branch's tip is never an ancestor of `main` — measured 2026-07-24, `--is-ancestor` reported NOT-merged for all 8 worktree branches *including* two whose PRs (#1482, #1415) were definitively merged. An `--is-ancestor`-only rule reclaims zero bytes forever while looking healthy in the log. When ancestry says no, the GitHub PR state is consulted via `gh pr list --head <branch> --state merged` (`_gh_pr_merged_at`, spawned with a minimal env allow-list, authenticated from `~ua/.config/gh/hosts.yml`; `GITHUB_TOKEN` is absent from prod `.env` and is not relied on). `--state merged` also means closed-but-unmerged branches are left alone.
+
+  A worktree is removed only when **all ten** guards hold; anything that errors or is unknown is a SKIP (fail-closed), and every candidate is logged with its removal-or-skip reason: (1) it came from `vp/worktree_utils.py::list_registered_worktrees` (`git worktree list --porcelain`) — never a filesystem walk; (2) not the main working tree, not `bare`; (3) its parent is in the allowlist (`UA_WORKTREE_PRUNE_ROOTS`, default `<repo>/.worktrees`) — load-bearing, since nine registered worktrees live under `AGENT_RUN_WORKSPACES/vp_coder_primary_external/**` where the other two tiers are already moving/deleting dirs; (4) not `detached`; (5) not `locked`; (6) `git status --porcelain` empty; (7) `refs/remotes/origin/<branch>` resolves and nothing is unpushed (a missing tracking ref is ambiguous ⇒ skip, which is why `_fetch_base` fetches one branch and never `--prune`s); (8) merged by either proof above; (9) quiescent — merge age **and** the worktree *directory's* mtime both older than `UA_WORKTREE_PRUNE_MIN_MERGE_AGE_HOURS` (default 24h); *file* mtimes are unusable here because one repo-root `ruff check .` rewrote `.ruff_cache` inside six worktrees at one identical instant; (10) no running process has its cwd inside the tree (`vp/clients/claude_cli_client.py` launches the CLI with `cwd=<workspace_dir>`). Removal goes through `worktree_utils.py::teardown_worktree(force=False)` so git independently refuses a dirty/locked tree, and `git worktree remove` keeps the branch ref — a mistaken removal loses no commits. An unconditional `git worktree prune` runs first to clear registrations whose directory is already gone.
+
+  **Ships OFF and dry-run:** `UA_WORKTREE_PRUNE_ENABLED` defaults `0`, `UA_WORKTREE_PRUNE_DRY_RUN` defaults `1`. This is the first code in the estate that deletes git-managed state on a timer, and the largest single candidate measured was a 7,060 MiB worktree whose PR merged 19h after its files were last written. Run enabled-but-dry for a week, read the journal, then flip the dry-run knob.
 
 ### Finalization
 
