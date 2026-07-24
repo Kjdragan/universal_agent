@@ -206,7 +206,6 @@ def check_stale_runs() -> list[HeartbeatFinding]:
         # alert self-clears. See
         # services.stuck_run_reaper.finalize_stale_youtube_hook_runs.
         youtube_orphans_finalized: list[Any] = []
-        _yt_ttl_minutes = 60
         try:
             from universal_agent.services.stuck_run_reaper import (
                 DEFAULT_YOUTUBE_ORPHAN_TTL_MINUTES as _yt_ttl_minutes,
