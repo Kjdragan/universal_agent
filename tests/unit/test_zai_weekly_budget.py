@@ -2,16 +2,18 @@
 services/zai_weekly_budget.py).
 
 Covers: anchor rolling (incl. multi-week gaps + control-stamp supersession),
-week-to-date cache-inclusive compute from seeded activity-DB rows, seed-cap
-fallback, calibration overwrite on a fresh 1310 stamp, threshold→level
-mapping, never-downgrade escalation, new-week release (only for our own
-`updated_by`), and fail-soft behavior on a missing csi.db / corrupt control
-file.
+week-to-date cache-inclusive compute from seeded activity-DB rows, ledger
+reconciliation (the meter is a superset of the token_usage_events lane, not
+an overcount of it), both accounting bases in the snapshot, the cap ladder
+(real 1310 > history-derived rolling max > seed fallback), the rule that an
+uncalibrated seed never escalates or alerts, threshold→level mapping,
+never-downgrade escalation, stateless release, and fail-soft behavior on a
+missing csi.db / corrupt control file.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 from zoneinfo import ZoneInfo
 
@@ -65,6 +67,35 @@ def _insert_sink(conn, *, principal, model, input_t, output_t, cache_read, ts):
            VALUES (?,?, 'cli-in-process', ?,?,?,?, 'ok', ?,?,0,?, 0.5, 1)""",
         (ts, "2026-07-18T00:00:00", principal, model, principal, f"{principal}::turn",
          input_t, output_t, cache_read),
+    )
+    conn.commit()
+
+
+def _insert_cody(conn, *, mode, model, input_t, output_t, cache_read, recorded_at):
+    conn.execute(
+        """INSERT INTO cody_token_usage
+           (cody_mode, model, input_tokens, output_tokens,
+            cache_creation_input_tokens, cache_read_input_tokens,
+            total_cost_usd, duration_ms, recorded_at)
+           VALUES (?,?,?,?,0,?,0.0,0,?)""",
+        (mode, model, input_t, output_t, cache_read, recorded_at),
+    )
+    conn.commit()
+
+
+def _insert_week_row(conn, *, week_anchor_epoch, week_to_date_tokens, observed_cap=None,
+                     calibrated_from="history_max@2w"):
+    """Seed a COMPLETED prior week row — the input `derive_cap_from_history`
+    reads."""
+    conn.execute(
+        """INSERT INTO zai_weekly_budget_state
+           (week_anchor_epoch, observed_cap, week_to_date_tokens, last_computed_at,
+            last_escalation_level, last_escalated_at, calibrated_from, updated_at)
+           VALUES (?,?,?,?,0,NULL,?,?)""",
+        (week_anchor_epoch,
+         week_to_date_tokens if observed_cap is None else observed_cap,
+         week_to_date_tokens, week_anchor_epoch + zwb.WEEK_SECONDS,
+         calibrated_from, "2026-07-01T00:00:00+00:00"),
     )
     conn.commit()
 
@@ -574,11 +605,18 @@ def test_run_meter_rollover_release_restores_baseline(activity_db):
 
     anchor = zwb.DEFAULT_ANCHOR_EPOCH
     week1_now = anchor + 100  # early in week 1 (starts at anchor)
+    # Two COMPLETE prior weeks so the cap is history-derived (500M) rather
+    # than the uncalibrated seed — an uncalibrated cap never escalates.
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - 2 * zwb.WEEK_SECONDS,
+                     week_to_date_tokens=500_000_000)
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - zwb.WEEK_SECONDS,
+                     week_to_date_tokens=500_000_000)
     _insert_sink(
         activity_db, principal="simone", model="glm-5.1",
-        input_t=zwb.DEFAULT_SEED_CAP_TOKENS, output_t=0, cache_read=0, ts=week1_now - 10,
+        input_t=600_000_000, output_t=0, cache_read=0, ts=week1_now - 10,
     )
     r1 = zwb.run_meter(activity_db, now=week1_now)
+    assert r1["calibrated_from"] == "history_max@2w"
     assert r1["applied_level"] is not None and r1["applied_level"] >= 1
     assert zai_control.current_state()["updated_by"] == "auto:weekly-budget"
 
@@ -600,9 +638,13 @@ def test_run_meter_crash_simulated_missed_release_still_releases_next_run(activi
 
     anchor = zwb.DEFAULT_ANCHOR_EPOCH
     week1_now = anchor + 100
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - 2 * zwb.WEEK_SECONDS,
+                     week_to_date_tokens=500_000_000)
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - zwb.WEEK_SECONDS,
+                     week_to_date_tokens=500_000_000)
     _insert_sink(
         activity_db, principal="simone", model="glm-5.1",
-        input_t=zwb.DEFAULT_SEED_CAP_TOKENS, output_t=0, cache_read=0, ts=week1_now - 10,
+        input_t=600_000_000, output_t=0, cache_read=0, ts=week1_now - 10,
     )
     r1 = zwb.run_meter(activity_db, now=week1_now)
     assert r1["applied_level"] is not None and r1["applied_level"] >= 1
@@ -656,7 +698,267 @@ def test_get_status_snapshot_shape_when_available(activity_db):
     assert snap["available"] is True
     for key in (
         "week_anchor_epoch", "reset_at_epoch", "observed_cap",
-        "week_to_date_tokens", "pct", "calibrated_from",
+        "week_to_date_tokens", "week_to_date_tokens_excl_cache",
+        "accounting_basis", "pct", "calibrated_from", "calibrated",
         "last_escalation_level",
     ):
         assert key in snap
+
+
+# ── Ledger reconciliation: the meter is NOT overcounting ────────────────────
+# The 2026-07-24 false-alarm investigation started from "the meter says 378M
+# but the ledger says 40M — it must be double-counting retries". It is not.
+# The 9.4x is (a) cache accounting — the meter is cache-INCLUSIVE and
+# cache_read is ~89% of the mass — and (b) lane scope — the meter sums four
+# lanes, the ledger query read one. These tests pin BOTH halves so the
+# reconciliation can't silently rot: on a like-for-like basis the meter must
+# stay within a sane factor of the raw ledger.
+
+
+def test_meter_total_within_2x_of_like_for_like_ledger_total(activity_db):
+    """On the SAME accounting basis (cache-inclusive), the meter's total must
+    stay within <2x of a direct SUM over the token_usage_events ledger — the
+    extra mass is only the other capture lanes, never re-counted rows."""
+    now = time.time()
+    week_start = now - 3600
+    for i in range(3):
+        _insert_sink(
+            activity_db, principal="simone", model="glm-5.2",
+            input_t=100_000, output_t=5_000, cache_read=900_000, ts=now - 100 - i,
+        )
+    # A second lane (claude --print subprocess) at ~20% of the sink lane.
+    _insert_cody(
+        activity_db, mode="zai", model="glm-5.2",
+        input_t=20_000, output_t=2_000, cache_read=180_000,
+        recorded_at=datetime.fromtimestamp(now - 200, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        ),
+    )
+
+    ledger_incl, ledger_excl = activity_db.execute(
+        """SELECT SUM(input_tokens + output_tokens
+                      + cache_creation_input_tokens + cache_read_input_tokens),
+                  SUM(input_tokens + output_tokens)
+           FROM token_usage_events WHERE ts >= ?""",
+        (week_start,),
+    ).fetchone()
+
+    result = zwb.compute_week_to_date(now, week_start)
+    meter_total = result["week_to_date_tokens"]
+
+    # Superset of the single ledger lane, and NOT an inflated one.
+    assert meter_total >= ledger_incl
+    assert meter_total < 2 * ledger_incl
+    # Exact: sink lane + cody lane, nothing counted twice.
+    assert meter_total == ledger_incl + (20_000 + 2_000 + 180_000)
+    # And the trap the false alarm walked into: the naive cache-EXCLUSIVE
+    # ledger query reports ~10% of the same rows. That gap is a basis
+    # difference, not an overcount.
+    assert meter_total > 5 * ledger_excl
+
+
+def test_compute_week_to_date_reports_both_accounting_bases(activity_db):
+    """`week_to_date_tokens_excl_cache` must be the SAME rows counted
+    input+output only, so the two bases can be reconciled from the snapshot
+    without re-deriving them."""
+    now = time.time()
+    week_start = now - 3600
+    _insert_sink(
+        activity_db, principal="simone", model="glm-5.2",
+        input_t=100_000, output_t=5_000, cache_read=900_000, ts=now - 100,
+    )
+    result = zwb.compute_week_to_date(now, week_start)
+    assert result["week_to_date_tokens"] == 1_005_000
+    assert result["week_to_date_tokens_excl_cache"] == 105_000
+
+
+def test_snapshot_persists_and_exposes_excl_cache_basis(activity_db):
+    now = time.time()
+    _insert_sink(
+        activity_db, principal="simone", model="glm-5.2",
+        input_t=100_000, output_t=5_000, cache_read=900_000, ts=now - 100,
+    )
+    result = zwb.run_meter(activity_db, now=now)
+    assert result["week_to_date_tokens"] == 1_005_000
+    assert result["week_to_date_tokens_excl_cache"] == 105_000
+    snap = zwb.get_status_snapshot()
+    assert snap["week_to_date_tokens"] == 1_005_000
+    assert snap["week_to_date_tokens_excl_cache"] == 105_000
+    assert snap["accounting_basis"] == "cache_inclusive_4lane"
+
+
+# ── Cap derived from observed consumption history ───────────────────────────
+
+
+def test_derive_cap_from_history_insufficient_history_returns_none(activity_db):
+    """The documented fallback: with fewer than CAP_HISTORY_MIN_WEEKS complete
+    prior weeks there is nothing to derive from — run_meter keeps the seed."""
+    anchor = zwb.DEFAULT_ANCHOR_EPOCH
+    assert zwb.derive_cap_from_history(activity_db, anchor) is None
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - zwb.WEEK_SECONDS,
+                     week_to_date_tokens=900_000_000)
+    assert zwb.derive_cap_from_history(activity_db, anchor) is None  # 1 week < 2
+
+
+def test_derive_cap_from_history_takes_rolling_max(activity_db):
+    anchor = zwb.DEFAULT_ANCHOR_EPOCH
+    for i, tokens in enumerate((900_000_000, 1_200_000_000, 700_000_000), start=1):
+        _insert_week_row(activity_db, week_anchor_epoch=anchor - i * zwb.WEEK_SECONDS,
+                         week_to_date_tokens=tokens)
+    derived = zwb.derive_cap_from_history(activity_db, anchor)
+    assert derived == {"observed_cap": 1_200_000_000, "calibrated_from": "history_max@3w"}
+
+
+def test_derive_cap_from_history_applies_floor(activity_db):
+    """A quiet stretch must not produce a hair-trigger denominator."""
+    anchor = zwb.DEFAULT_ANCHOR_EPOCH
+    for i in (1, 2):
+        _insert_week_row(activity_db, week_anchor_epoch=anchor - i * zwb.WEEK_SECONDS,
+                         week_to_date_tokens=1_000_000)
+    derived = zwb.derive_cap_from_history(activity_db, anchor)
+    assert derived["observed_cap"] == zwb.CAP_FLOOR_TOKENS
+
+
+def test_derive_cap_from_history_window_is_last_four_weeks_only(activity_db):
+    """A 5th, older, much larger week falls out of the rolling window."""
+    anchor = zwb.DEFAULT_ANCHOR_EPOCH
+    for i in range(1, 5):
+        _insert_week_row(activity_db, week_anchor_epoch=anchor - i * zwb.WEEK_SECONDS,
+                         week_to_date_tokens=600_000_000)
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - 5 * zwb.WEEK_SECONDS,
+                     week_to_date_tokens=9_000_000_000)
+    derived = zwb.derive_cap_from_history(activity_db, anchor)
+    assert derived == {"observed_cap": 600_000_000, "calibrated_from": "history_max@4w"}
+
+
+def test_derive_cap_from_history_ignores_current_and_future_weeks(activity_db):
+    """Only COMPLETE prior weeks count — the in-flight week's partial total
+    must never become the denominator it is measured against."""
+    anchor = zwb.DEFAULT_ANCHOR_EPOCH
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - 2 * zwb.WEEK_SECONDS,
+                     week_to_date_tokens=500_000_000)
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - zwb.WEEK_SECONDS,
+                     week_to_date_tokens=500_000_000)
+    _insert_week_row(activity_db, week_anchor_epoch=anchor,
+                     week_to_date_tokens=8_000_000_000)  # the current week
+    derived = zwb.derive_cap_from_history(activity_db, anchor)
+    assert derived["observed_cap"] == 500_000_000
+
+
+def test_derive_cap_from_history_skips_empty_weeks(activity_db):
+    """A week the meter recorded as zero (never ran / no spend) is not
+    evidence about the cap."""
+    anchor = zwb.DEFAULT_ANCHOR_EPOCH
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - 2 * zwb.WEEK_SECONDS,
+                     week_to_date_tokens=0)
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - zwb.WEEK_SECONDS,
+                     week_to_date_tokens=900_000_000)
+    assert zwb.derive_cap_from_history(activity_db, anchor) is None
+
+
+def test_run_meter_uses_history_derived_cap(activity_db):
+    anchor = zwb.DEFAULT_ANCHOR_EPOCH
+    now = anchor + 100
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - 2 * zwb.WEEK_SECONDS,
+                     week_to_date_tokens=800_000_000)
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - zwb.WEEK_SECONDS,
+                     week_to_date_tokens=1_100_000_000)
+    result = zwb.run_meter(activity_db, now=now)
+    assert result["observed_cap"] == 1_100_000_000
+    assert result["calibrated_from"] == "history_max@2w"
+    assert result["calibrated"] is True
+
+
+def test_real_1310_cap_outranks_history(activity_db):
+    """A real observed wall is ground truth — history must not overwrite it."""
+    from universal_agent.services import zai_control
+
+    anchor = zwb.DEFAULT_ANCHOR_EPOCH
+    now = anchor + 100
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - 2 * zwb.WEEK_SECONDS,
+                     week_to_date_tokens=900_000_000)
+    _insert_week_row(activity_db, week_anchor_epoch=anchor - zwb.WEEK_SECONDS,
+                     week_to_date_tokens=900_000_000)
+    _insert_sink(
+        activity_db, principal="simone", model="glm-5.2",
+        input_t=250_000_000, output_t=0, cache_read=0, ts=now - 10,
+    )
+    zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test")
+    r1 = zwb.run_meter(activity_db, now=now)
+    assert r1["calibrated_from"].startswith("1310@")
+    assert r1["observed_cap"] == 250_000_000
+    # A later pass must keep the 1310 cap, not fall back to history_max.
+    r2 = zwb.run_meter(activity_db, now=now + 5)
+    assert r2["calibrated_from"] == r1["calibrated_from"]
+    assert r2["observed_cap"] == 250_000_000
+
+
+# ── An uncalibrated seed never throttles and never alerts ────────────────────
+# The production defect this fixes: `calibrated_from` sat on "seed_estimate"
+# for the meter's entire life (the only calibration trigger was the exact
+# event the meter exists to prevent), and that guess auto-applied zai_control
+# level 3 in live production on 2026-07-24 at a reported 99.9% of cap.
+
+
+def test_run_meter_never_escalates_on_uncalibrated_seed(activity_db):
+    from universal_agent.services import zai_control
+
+    now = time.time()
+    _insert_sink(
+        activity_db, principal="simone", model="glm-5.2",
+        input_t=3 * zwb.DEFAULT_SEED_CAP_TOKENS, output_t=0, cache_read=0, ts=now - 10,
+    )
+    result = zwb.run_meter(activity_db, now=now)
+    assert result["calibrated_from"] == "seed_estimate"
+    assert result["calibrated"] is False
+    assert result["pct"] > 2.0  # wildly "over cap" on the guess
+    assert result["applied_level"] is None
+    assert zai_control.current_state()["intervention_level"] == 0
+    assert zai_control.read_control().get("auto_escalation") is None
+
+
+def test_maybe_escalate_refuses_when_uncalibrated():
+    from universal_agent.services import zai_control
+
+    assert zwb.maybe_escalate(pct=1.0, calibrated=False) is None
+    assert zai_control.current_state()["intervention_level"] == 0
+
+
+def test_run_meter_releases_escalation_once_cap_is_uncalibrated(activity_db):
+    """A level applied off a stale/derived cap must self-release on the next
+    pass once the cap falls back to an uncalibrated seed — no manual
+    intervention, no operator ticket."""
+    from universal_agent.services import zai_control
+
+    zai_control.apply_level(3, reason="auto weekly", by="auto:weekly-budget")
+    _stamp(level=3, baseline_level=0)
+
+    result = zwb.run_meter(activity_db, now=time.time())
+    assert result["calibrated_from"] == "seed_estimate"
+    assert result["released_stale_escalation"] is True
+    assert zai_control.current_state()["intervention_level"] == 0
+
+
+def test_release_unwinds_fully_when_baseline_was_our_own_escalation():
+    """A stacked escalation (L1 -> L2, both by auto:weekly-budget) must
+    release all the way to L0, not to the L1 rung we set ourselves — that is
+    exactly the state live production was left in on 2026-07-24
+    (auto_escalation {level: 3, baseline_level: 2, baseline_updated_by:
+    "auto:weekly-budget"})."""
+    from universal_agent.services import zai_control
+
+    zai_control.apply_level(2, reason="auto weekly", by="auto:weekly-budget")
+    _stamp(level=3, baseline_level=2, baseline_updated_by="auto:weekly-budget")
+    zai_control.apply_level(3, reason="auto weekly", by="auto:weekly-budget")
+
+    released = zwb.maybe_release_stale_escalation(target=0)
+    assert released is True
+    assert zai_control.current_state()["intervention_level"] == 0
+    assert zai_control.read_control().get("auto_escalation") is None
+
+
+def test_is_calibrated_basis_names():
+    assert zwb.is_calibrated("1310@2026-07-01T00:00:00+00:00") is True
+    assert zwb.is_calibrated("history_max@4w") is True
+    assert zwb.is_calibrated("seed_estimate") is False
+    assert zwb.is_calibrated(None) is False

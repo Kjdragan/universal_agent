@@ -26,7 +26,7 @@ code_paths:
   - src/universal_agent/infisical_loader.py
   - src/universal_agent/services/batched_judge.py
   - web-ui/app/dashboard/zai-control/page.tsx
-last_verified: 2026-07-19
+last_verified: 2026-07-24
 ---
 
 # ZAI Rate Limiter & Inference Governance
@@ -1022,22 +1022,45 @@ clear until the reset.
   of any `zai_activity_control`-disabled proactive units (the L4 TTL expiry self-clears only the
   pause — it never touched systemd units).
 
-### 9.7 Self-calibrating weekly budget meter + auto-escalation (R3, 2026-07-19)
+### 9.7 Self-calibrating weekly budget meter + auto-escalation (R3, 2026-07-19; cap ladder + uncalibrated-seed rule 2026-07-24)
 
 R1 (§9.6) is reactive: it stops retries and pauses only AFTER the account already hit the 1310
 wall. `services/zai_weekly_budget.py` adds the LEADING signal — track week-to-date ZAI spend
 against a *learned* weekly cap and trim inference proactively, before the wall is hit.
 
-- **No fixed cap number.** `zai_weekly_budget.py::target_level`'s `observed_cap` is learned, never
-  hardcoded: seeded from `UA_ZAI_WEEKLY_CAP_SEED_TOKENS` (default 400,000,000, `calibrated_from =
-  "seed_estimate"`), then replaced by `zai_weekly_budget.py::maybe_calibrate` the next time R1's
-  control-file `weekly_exhaustion` stamp is newer than what the current week last calibrated
-  from — `observed_cap` becomes the week-to-date total AT THAT MOMENT. The FIRST real 1310 off a
-  `"seed_estimate"` row sets this DIRECTLY, with NO floor against the seed (the seed is a rough
-  a-priori guess, not an observation — flooring against it would let a too-high seed overshoot the
-  learned cap forever); from the second real 1310 onward (`calibrated_from` already starts with
-  `"1310@"`), the reading IS floored at the prior `observed_cap` (never silently lowered by a
-  transient under-count). `calibrated_from` becomes `"1310@<iso last_seen_at>"`.
+- **Cap ladder — three sources, descending authority; `calibrated_from` always names the one in
+  force.** (1) `"1310@<iso last_seen_at>"` — a REAL observed wall, applied by
+  `zai_weekly_budget.py::maybe_calibrate` the next time R1's control-file `weekly_exhaustion`
+  stamp is newer than what the current week last calibrated from: `observed_cap` becomes the
+  week-to-date total AT THAT MOMENT. The first real 1310 off a NON-1310 basis sets this DIRECTLY,
+  with NO floor (an estimate must never floor an observation); from the second real 1310 onward
+  the reading IS floored at the prior `observed_cap` (never silently lowered by a transient
+  under-count). (2) `"history_max@<k>w"` — `zai_weekly_budget.py::derive_cap_from_history`: the
+  max `week_to_date_tokens` over the last up-to-`CAP_HISTORY_WEEKS` (4) COMPLETE prior weeks in
+  the meter's own state table, floored at `CAP_FLOOR_TOKENS` (400M), requiring at least
+  `CAP_HISTORY_MIN_WEEKS` (2) non-empty prior weeks. Recomputed on every pass, same accounting
+  basis as the numerator. (3) `"seed_estimate"` — the insufficient-history fallback
+  (`UA_ZAI_WEEKLY_CAP_SEED_TOKENS`, default 1,000,000,000).
+- **An uncalibrated seed NEVER throttles and NEVER alerts** (2026-07-24). While `calibrated_from`
+  is `"seed_estimate"`, `zai_weekly_budget.py::maybe_escalate` returns None before reading or
+  writing the control plane, `zai_weekly_budget.py::run_meter` feeds a release target of 0 into
+  `maybe_release_stale_escalation` (so a level applied off a stale guess self-releases on the next
+  pass), and `zai_inference_health.py` suppresses both budget conditions. Why: the meter shipped
+  with a 400,000,000 seed described as "the 2026-07 exhausted-week estimate", and the ONLY
+  calibration trigger was a real 1310 — the exact event the meter exists to prevent — so the
+  guess stayed in force for the meter's entire life and auto-applied `zai_control` **level 3**
+  ("cheap-only", opus+mid hard-stopped) in live production on 2026-07-24 at a reported 99.9% of
+  cap. The seed was also falsified by the meter's own history: on this exact basis the four weeks
+  before the one real 1310 ran 1.74B / 1.17B / 931M / 911M tokens with no wall, while the week
+  that DID trip 1310 was the second-smallest at 431M. Treat a history-derived cap as a
+  **burn-rate anomaly detector**, not a distance-to-wall gauge — ZAI's own quota accounting is
+  not readable from here (see the open questions in
+  [`08_operations/08_zai_token_usage_management.md` §4](../08_operations/08_zai_token_usage_management.md)).
+- **Release unwinds our own ladder fully.** `maybe_release_stale_escalation` restores the stamp's
+  `baseline_level`, EXCEPT when `baseline_updated_by == "auto:weekly-budget"` (the baseline was
+  itself an earlier budget escalation we stacked on) — then it releases to 0, or a stacked
+  L1→L2→L3 ladder would stay permanently one rung up. An operator- or `auto_1310_detector`-set
+  baseline is still restored exactly.
 - **Week boundaries.** `zai_weekly_budget.py::current_week_start` anchors to the observed ZAI
   weekly reset instant (`UA_ZAI_WEEK_RESET_ANCHOR_EPOCH`, default the epoch of 2026-07-19
   00:54:25 Asia/Shanghai = `1784393665.0`), rolled forward (or backward) in whole 7-day
@@ -1050,16 +1073,28 @@ against a *learned* weekly cap and trim inference proactively, before the wall i
   `token_consolidation.py::analyze_sink_token_usage` (in-process SDK),
   `token_consolidation.py::analyze_cody_token_usage` (claude --print subprocess),
   `token_consolidation.py::read_csi_token_usage` (CSI), and `zai_status.py::analyze_token_usage`
-  (httpx JSONL) — then `token_consolidation.py::consolidate`. Cache-INCLUSIVE throughout.
-  **Known, accepted limitation:** the httpx JSONL lane only retains ~6 days of events, so early in
-  a fresh 7-day window it can under-count that lane's contribution (~17% of total spend per the
-  2026-07 baseline). The tables involved are small (hundreds of rows/week), so this is
-  recomputed from scratch every run rather than incrementally accumulated — idempotent and
-  self-healing as soon as the window narrows to ≤6 days.
-- **Escalation — never-downgrade, pause-safe.** `zai_weekly_budget.py::maybe_escalate` maps the
-  week-to-date/observed_cap fraction to a target level via `zai_weekly_budget.py::target_level`
+  (httpx JSONL) — then `token_consolidation.py::consolidate`. Recomputed from scratch every run
+  (never incrementally accumulated) — idempotent and self-healing.
+- **Accounting basis — read this before comparing the meter to any other token number.** The
+  headline `week_to_date_tokens` is **cache-INCLUSIVE across four lanes** (`accounting_basis =
+  "cache_inclusive_4lane"` in the snapshot). A naive
+  `SELECT SUM(input_tokens + output_tokens) FROM token_usage_events` reports **~10% of the same
+  mass** and is a DIFFERENT QUANTITY, not a contradiction: measured 2026-07-24 over the identical
+  rows, 37.1M cache-exclusive vs 343.6M cache-inclusive (cache_read is ~89% of real spend), and
+  the csi.db + httpx-JSONL lanes add a further ~10% on top of `token_usage_events`. The meter's
+  arithmetic was independently reconstructed to the token from the raw lanes — zero duplicate
+  rows, zero retry inflation (no 429s in the window at all). `compute_week_to_date` therefore
+  returns and persists `week_to_date_tokens_excl_cache` alongside the headline figure, and both
+  appear in `get_status_snapshot`, the `zai_inference_health` `observed_value`, and its WARN /
+  CRITICAL headlines, so the two bases can be reconciled without re-deriving them. (An earlier
+  version of this section claimed the httpx JSONL lane retains only ~6 days and therefore
+  under-counts early in a window; measured retention on the VPS 2026-07-24 was 48 days / 40,155
+  lines. That claim was false and has been removed.)
+- **Escalation — never-downgrade, pause-safe, calibrated-only.** `zai_weekly_budget.py::maybe_escalate`
+  maps the week-to-date/observed_cap fraction to a target level via `zai_weekly_budget.py::target_level`
   (L1 ≥70%, L2 ≥85%, L3 ≥95%, all env-overridable) and calls `zai_control.py::apply_level(target,
-  by="auto:weekly-budget")` **only when `target` is strictly greater than the control plane's
+  by="auto:weekly-budget")` **only when the cap is calibrated** (see the uncalibrated-seed rule
+  above) **and only when `target` is strictly greater than the control plane's
   current `intervention_level`** — it never downgrades and never overwrites an operator-set
   level. Guarded up front against an ACTIVE global pause (`zai_control.py::is_globally_paused`,
   fail-open to not-paused on a control-read error): `maybe_escalate` returns `None` immediately
@@ -1087,9 +1122,13 @@ against a *learned* weekly cap and trim inference proactively, before the wall i
   R1's 1310 stamp and/or R3's escalation-release bookkeeping.
 - **State.** One row per ZAI week in `zai_weekly_budget_state` (`task_hub.py::ensure_schema`),
   keyed by that week's start/reset-instant epoch: `observed_cap`, `week_to_date_tokens`,
-  `calibrated_from`, `last_escalation_level`, `last_escalated_at`. A new week's row carries
+  `week_to_date_tokens_excl_cache`, `calibrated_from`, `last_escalation_level`,
+  `last_escalated_at`. These rows are also the INPUT to the history-derived cap, so the table is
+  both the meter's state and its evidence base. A new week's row carries
   forward the prior week's `observed_cap`/`calibrated_from` (the learned cap outlives the week
-  it was learned in) rather than resetting to the seed every week. Reset/anchor epochs
+  it was learned in) rather than resetting to the seed every week; `run_meter` then re-resolves
+  the cap ladder on every pass, so a history-derived cap tracks the rolling window instead of
+  going stale. Reset/anchor epochs
   (`zai_control.py::handle_weekly_exhaustion`'s fallback stamp, `zai_weekly_budget.py::
   resolve_anchor_epoch`'s adopted stamp) are int()-truncated on write/adoption so week rows keyed
   on these values never drift across runs from a fractional-second artifact.
@@ -1108,9 +1147,12 @@ against a *learned* weekly cap and trim inference proactively, before the wall i
   `WEEKLY_BUDGET_STALENESS_WINDOW_SECONDS` (3x the meter's ~10 min cadence = 1800s, both module
   constants) of `now`, AND its `week_anchor_epoch` to cover the wall-clock CURRENT week — a
   snapshot from a meter that stopped running, or one left over from a missed rollover, stays
-  quiet rather than alarming on a frozen/stale pct. `observed_value` carries the pct, week-to-date,
-  observed_cap, `calibrated_from`, the current-snapshot verdict, and reset time in both UTC and
-  America/Chicago.
+  quiet rather than alarming on a frozen/stale pct — AND on the cap being CALIBRATED
+  (`calibrated_from != "seed_estimate"`; a guess must not page). `observed_value` carries the pct,
+  week-to-date on BOTH accounting bases (`weekly_budget_week_to_date_tokens` cache-inclusive and
+  `weekly_budget_week_to_date_tokens_excl_cache`), `weekly_budget_accounting_basis`,
+  observed_cap, `calibrated_from`, `weekly_budget_calibrated`, the current-snapshot verdict, and
+  reset time in both UTC and America/Chicago.
 - **API + dashboard.** `zai_status.py::build_status` exposes a top-level `weekly_budget` key
   (fail-soft to `{"available": false}`) sourced from `zai_weekly_budget.py::get_status_snapshot`
   — no new endpoint; the dashboard already polls `/api/v1/ops/zai/status` every 5s.

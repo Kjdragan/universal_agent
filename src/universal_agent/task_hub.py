@@ -601,10 +601,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         -- R3: self-calibrating weekly ZAI budget meter (services/zai_weekly_budget.py).
         -- One row per ZAI week (keyed by that week's start/reset-instant epoch),
         -- written by run_meter() every ~10 min from the proactive_health timer.
-        -- observed_cap is LEARNED (seeded, then replaced by the actual week-to-date
-        -- total the next time zai_control's weekly_exhaustion stamp is fresh),
-        -- never a hardcoded number. calibrated_from is 'seed_estimate' or
-        -- '1310@<iso>'. last_escalation_level/last_escalated_at track our own
+        -- observed_cap is LEARNED, in descending authority: a real 1310 wall
+        -- ('1310@<iso>'), else this meter's own completed weeks
+        -- ('history_max@<k>w'), else the a-priori fallback ('seed_estimate',
+        -- which never escalates or alerts). calibrated_from names which is in
+        -- force. last_escalation_level/last_escalated_at track our own
         -- auto-escalation (services/zai_control.py::apply_level, by="auto:weekly-budget")
         -- so a new week can release it without touching an operator- or 1310-set level.
         CREATE TABLE IF NOT EXISTS zai_weekly_budget_state (
@@ -671,6 +672,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         # 7200s / 2h). Resolved at spawn time and passed to each site's
         # existing timeout machinery.
         "ALTER TABLE task_hub_items ADD COLUMN max_runtime_seconds INTEGER",
+        # R3 accounting-basis transparency: `week_to_date_tokens` is
+        # cache-INCLUSIVE across 4 lanes (the basis observed_cap is learned
+        # on); this column carries the SAME rows counted input+output only,
+        # so the ~10x gap against a naive cache-exclusive ledger query is
+        # visible instead of looking like an overcount.
+        # See services/zai_weekly_budget.py::compute_week_to_date.
+        "ALTER TABLE zai_weekly_budget_state ADD COLUMN week_to_date_tokens_excl_cache INTEGER NOT NULL DEFAULT 0",
     ):
         try:
             conn.execute(ddl)
