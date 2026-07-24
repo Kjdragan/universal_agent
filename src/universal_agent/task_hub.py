@@ -924,21 +924,38 @@ def build_workstream_summary(
     ]
     children_raw.sort(
         key=lambda item: (
-            {"in_progress": 0, "needs_review": 1, "blocked": 2, "open": 3, "completed": 4}.get(
+            {
+                TASK_STATUS_IN_PROGRESS: 0,
+                TASK_STATUS_REVIEW: 1,
+                TASK_STATUS_BLOCKED: 2,
+                TASK_STATUS_OPEN: 3,
+                TASK_STATUS_COMPLETED: 4,
+            }.get(
                 _phase_task_status_bucket(item.get("status") or ""), 5
             ),
             -_parse_iso(item.get("updated_at") or "").timestamp() if _parse_iso(item.get("updated_at") or "") else 0,
         )
     )
 
-    child_counts = {"total": 0, "open": 0, "in_progress": 0, "needs_review": 0, "completed": 0, "blocked": 0}
+    child_counts = {
+        "total": 0,
+        TASK_STATUS_OPEN: 0,
+        TASK_STATUS_IN_PROGRESS: 0,
+        TASK_STATUS_REVIEW: 0,
+        TASK_STATUS_COMPLETED: 0,
+        TASK_STATUS_BLOCKED: 0,
+    }
     for child in children_raw:
         bucket = _phase_task_status_bucket(child.get("status") or "")
         child_counts["total"] += 1
         child_counts[bucket] += 1
 
     current_child = next(
-        (child for child in children_raw if _phase_task_status_bucket(child.get("status") or "") != "completed"),
+        (
+            child
+            for child in children_raw
+            if _phase_task_status_bucket(child.get("status") or "") != TASK_STATUS_COMPLETED
+        ),
         None,
     )
     latest_child = children_raw[0] if children_raw else None
@@ -964,13 +981,13 @@ def build_workstream_summary(
 
     if child_counts["total"] == 0:
         mission_status = str(root.get("status") or TASK_STATUS_OPEN)
-    elif child_counts["blocked"] > 0:
+    elif child_counts[TASK_STATUS_BLOCKED] > 0:
         mission_status = TASK_STATUS_BLOCKED
-    elif child_counts["needs_review"] > 0:
+    elif child_counts[TASK_STATUS_REVIEW] > 0:
         mission_status = TASK_STATUS_REVIEW
-    elif child_counts["in_progress"] > 0:
+    elif child_counts[TASK_STATUS_IN_PROGRESS] > 0:
         mission_status = TASK_STATUS_IN_PROGRESS
-    elif child_counts["open"] > 0:
+    elif child_counts[TASK_STATUS_OPEN] > 0:
         mission_status = TASK_STATUS_OPEN
     else:
         mission_status = TASK_STATUS_COMPLETED
@@ -1040,7 +1057,14 @@ def build_task_mission_summary(
             "current_phase_id": str(item.get("subtask_role") or "") or None,
             "current_phase_title": str(item.get("title") or "") or None,
             "current_child_task_id": str(item.get("task_id") or "") or None,
-            "child_counts": {"total": 1, "open": 0, "in_progress": 0, "needs_review": 0, "completed": 0, "blocked": 0},
+            "child_counts": {
+                "total": 1,
+                TASK_STATUS_OPEN: 0,
+                TASK_STATUS_IN_PROGRESS: 0,
+                TASK_STATUS_REVIEW: 0,
+                TASK_STATUS_COMPLETED: 0,
+                TASK_STATUS_BLOCKED: 0,
+            },
             "latest_artifacts": [],
             "latest_workspace_dir": None,
             "latest_run_id": None,
