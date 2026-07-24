@@ -186,6 +186,16 @@ def _classify_outcome_failure_mode(outcome) -> Optional[str]:
     status = str(getattr(outcome, "status", "") or "").lower()
     msg = str(getattr(outcome, "message", "") or "")
     payload = getattr(outcome, "payload", {}) or {}
+    # Diagnosability: a work_done_finalize_failed disposition means the real
+    # work (apply-edits) ran before the finalize-step crash — recognize it
+    # BEFORE the generic vp_self_reported fallback so the rescue/dispatch
+    # sweep treat this as a recoverable done-but-unfinalized mission, not a
+    # destructive re-run candidate. See vp.finalize_failure_context.
+    if (
+        str(payload.get("disposition") or "") == "work_done_finalize_failed"
+        or bool(payload.get("work_snapshot"))
+    ):
+        return "work_done_finalize_failed"
     final_text = str(payload.get("final_text") or "")
     haystack = (msg + " " + final_text).lower()
 

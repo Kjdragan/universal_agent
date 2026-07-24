@@ -605,7 +605,27 @@ Each verb closes the corresponding `vp_failure:<mission_id>` task hub item with 
 `rescue_log` audit entry. `failure_mode` values produced by the classifier:
 `missing_completion_attestation`, `auth_failure`, `workspace_guard`,
 `subprocess_crash`, `timeout`, `goal_cap_hit`, `operator_cancel`,
-`vp_self_reported`.
+`vp_self_reported`, `work_done_finalize_failed`.
+
+`work_done_finalize_failed` is the diagnosability disposition for the recurring
+class where the finalize/finish step crashes AFTER the real work (apply-edits)
+already ran — historically such missions collapsed to an opaque
+`message="Unknown error"` with `final_text=""` and `trace_id=null`, silently
+losing the completed work and forcing destructive re-runs.
+`_classify_outcome_failure_mode` recognizes it BEFORE the generic
+`vp_self_reported` fallback, keyed off `payload.disposition ==
+"work_done_finalize_failed"` or a present `payload.work_snapshot`. The
+recoverable payload
+(`vp.finalize_failure_context.build_work_done_finalize_failed_payload`) carries
+the salvaged `final_text` (`clients/base.py::consume_adapter_events_with_idle_timeout`
+falls back to the last streamed assistant text when the `final=True` marker never
+arrived), the propagated `trace_id` (`execution_engine.py` emits it on the
+`ERROR` event, since `ITERATION_END` only fires on success), and a pre-crash
+`WorkSnapshot` (apply-scripts / work-products / `fail_with_edits.txt` marker /
+the sibling recovery lane's `apply_checkpoint.has_validated_apply` when present,
+read via a lazy import that degrades gracefully until that lane lands). This is
+the diagnosability complement to that sibling crash-recovery checkpoint lane; the
+two modules never write the same files.
 
 ### Deterministic wiki-rescue (flag-gated)
 
