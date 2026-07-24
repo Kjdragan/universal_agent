@@ -7,21 +7,45 @@ stack to *react* to ZAI's weekly/monthly quota wall (error 1310) after the fact
 proactively trim inference (via `zai_control.apply_level`) BEFORE the account
 gets hard-blocked, instead of only reacting once it already has.
 
-**No fixed cap number is hardcoded.** ``observed_cap`` is *learned*:
+**The cap is learned, never guessed into production.** ``observed_cap`` comes
+from one of three sources, in DESCENDING authority; ``calibrated_from`` always
+names which one is in force:
 
-- Seeded from ``UA_ZAI_WEEKLY_CAP_SEED_TOKENS`` (default 400,000,000 — the
-  2026-07 exhausted-week estimate) with ``calibrated_from="seed_estimate"``.
-- Replaced automatically the next time a real 1310 lands: when the control
-  file's ``weekly_exhaustion`` stamp is newer than what we last calibrated
-  from, ``observed_cap`` becomes the week-to-date total AT THAT MOMENT (the
-  actual observed wall). The FIRST real 1310 (row still on
-  ``"seed_estimate"``) sets this DIRECTLY, no floor — the seed is a rough
-  a-priori guess, not an observation, so flooring against it would let a
-  too-high seed overshoot the learned cap forever. From the second real 1310
-  onward (``calibrated_from`` already ``"1310@..."``), the reading IS floored
-  at the prior ``observed_cap`` so a transient under-count (see the
-  httpx-retention note below) can never silently LOWER an already-learned
-  cap. ``calibrated_from`` becomes ``"1310@<iso last_seen_at>"``.
+1. ``"1310@<iso last_seen_at>"`` — a REAL observed wall. When the control
+   file's ``weekly_exhaustion`` stamp is newer than what we last calibrated
+   from, ``observed_cap`` becomes the week-to-date total AT THAT MOMENT.
+   The first real 1310 off a NON-1310 basis sets this DIRECTLY, with no
+   floor (an estimate must never floor an observation); from the second
+   real 1310 onward (``calibrated_from`` already ``"1310@..."``) the reading
+   IS floored at the prior ``observed_cap``, so a transient under-count can
+   never silently LOWER an already-learned cap.
+2. ``"history_max@<k>w"`` — derived from this meter's OWN observed
+   consumption (``derive_cap_from_history``): the max ``week_to_date_tokens``
+   over the last up-to-``CAP_HISTORY_WEEKS`` COMPLETE prior weeks, floored at
+   ``CAP_FLOOR_TOKENS``, requiring at least ``CAP_HISTORY_MIN_WEEKS`` weeks of
+   history. Same accounting basis as the numerator, so the ratio is
+   self-consistent. Treat it as a BURN-RATE ANOMALY DETECTOR ("this week is
+   heavier than any of the last four") — NOT a distance-to-wall gauge: we
+   have no read access to ZAI's own quota accounting and cannot know whether
+   their quota is token- or request-denominated, or whether it counts cache
+   reads.
+3. ``"seed_estimate"`` — the insufficient-history fallback
+   (``UA_ZAI_WEEKLY_CAP_SEED_TOKENS``). An a-priori guess, nothing more.
+
+**An uncalibrated seed NEVER throttles and NEVER alerts.** While
+``calibrated_from`` is ``"seed_estimate"``, ``maybe_escalate`` refuses to
+escalate and ``services/invariants/zai_inference_health.py`` suppresses its
+``weekly_budget_high`` / ``weekly_budget_critical`` conditions. Why this rule
+exists: the meter shipped with a 400,000,000 seed described as "the 2026-07
+exhausted-week estimate", and because the ONLY calibration trigger was a real
+1310 — which has not occurred since the meter shipped — that guess stayed in
+force for the meter's entire life and auto-applied ``zai_control`` level 3
+("cheap-only", opus+mid hard-stopped) in live production on 2026-07-24 at a
+reported "99.9% of cap". The seed was also falsified by this meter's own
+history: measured on this exact basis, the four weeks before the one real
+1310 ran 1.74B / 1.17B / 931M / 911M tokens with no wall, while the week that
+DID trip 1310 was the second-smallest at 431M. An estimate does not get to
+move levers.
 
 **Week boundaries** are anchored to ZAI's observed weekly reset instant
 (``UA_ZAI_WEEK_RESET_ANCHOR_EPOCH``, default the epoch of 2026-07-19 00:54:25
@@ -32,22 +56,38 @@ FRESHER real reset timestamp is available (the control file's
 ``weekly_exhaustion.reset_at_epoch``), that supersedes the seeded anchor —
 self-correcting if ZAI ever shifts its reset schedule.
 
-**Week-to-date** is computed by fanning out across the SAME four capture lanes
-`zai_status.py::build_token_usage` uses — `token_consolidation.
-analyze_sink_token_usage` (in-process SDK), `analyze_cody_token_usage`
-(claude --print subprocess), `read_csi_token_usage` (CSI), and
-`zai_status.analyze_token_usage` (httpx JSONL) — then `token_consolidation.
-consolidate()`. Cache-INCLUSIVE throughout (cache_read dominates real spend;
-see `token_consolidation` module docstring). KNOWN LIMITATION, accepted: the
-httpx JSONL lane only retains ~6 days of events, so early in a fresh 7-day
-window it can under-count that lane's contribution (~17% of total spend per
-the 2026-07 baseline) — the tables involved are small (hundreds of rows/week),
-so this is recomputed from scratch (not incrementally accumulated) on every
-run: idempotent and self-healing as soon as the window narrows to ≤6 days.
+**Week-to-date accounting basis — read this before comparing the meter's
+number to any other token figure.** `compute_week_to_date` fans out across the
+SAME four capture lanes `zai_status.py::build_token_usage` uses —
+`token_consolidation.analyze_sink_token_usage` (in-process SDK),
+`analyze_cody_token_usage` (claude --print subprocess), `read_csi_token_usage`
+(CSI), and `zai_status.analyze_token_usage` (httpx JSONL) — then
+`token_consolidation.consolidate()`. Two properties make the headline number
+~10x larger than a naive "ledger" query, BY DESIGN and NOT a bug:
+
+- **Cache-INCLUSIVE** (input + output + cache_creation + cache_read).
+  cache_read is ~89% of real spend — measured 2026-07-24 over the identical
+  rows: 37.1M cache-exclusive vs 343.6M cache-inclusive — so
+  ``SELECT SUM(input_tokens + output_tokens) FROM token_usage_events``
+  reports ~10% of the mass and is a DIFFERENT QUANTITY, not a contradiction.
+  ``week_to_date_tokens_excl_cache`` is computed and persisted alongside so
+  both bases are visible in the snapshot and the two can be reconciled
+  without re-deriving them.
+- **Four lanes, not one.** ``token_usage_events`` is the largest lane (~90%)
+  but not the only one; the csi.db and httpx-JSONL lanes added a further
+  ~10% in that same measurement.
+
+Recomputed from scratch on every run (never incrementally accumulated) — the
+tables are small (hundreds of rows/week), so the meter is idempotent and
+self-healing. (A previous version of this docstring claimed the httpx JSONL
+lane retains only ~6 days and therefore under-counts early in a window;
+measured retention on the VPS 2026-07-24 was 48 days / 40,155 lines. That
+claim was false and has been removed.)
 
 **Escalation** is one-directional: L1 (≥70% of observed_cap), L2 (≥85%), L3
 (≥95%) via `zai_control.apply_level(level, by="auto:weekly-budget")` — but
-ONLY when the computed target level is STRICTLY GREATER than the control
+ONLY when the cap is calibrated (see above), and ONLY when the computed
+target level is STRICTLY GREATER than the control
 plane's CURRENT intervention level, and NEVER while a global pause (real
 1310 auto-pause, or an operator pause) is active — `maybe_escalate` returns
 `None` immediately in that case, before writing anything, because
@@ -105,7 +145,27 @@ WEEK_SECONDS = 7 * 24 * 3600
 #   == 1784393665.0
 DEFAULT_ANCHOR_EPOCH = 1784393665.0
 
-DEFAULT_SEED_CAP_TOKENS = 400_000_000
+# Insufficient-history FALLBACK cap only (see the module docstring's cap
+# ladder). Never escalates or alerts while it is in force. 1.0B is the order
+# of magnitude of a normal heavy week measured on THIS meter's basis
+# (cache-inclusive, 4 lanes): the anchored weeks from 2026-06-13 to 2026-07-24
+# ran 431M / 911M / 931M / 1.17B / 1.74B. The meter originally shipped with
+# 400,000,000 here, which four clean weeks falsified by 2.3x-4.3x.
+DEFAULT_SEED_CAP_TOKENS = 1_000_000_000
+
+# Cap derivation from observed history (`derive_cap_from_history`).
+CAP_HISTORY_WEEKS = 4          # rolling window: at most this many COMPLETE prior weeks
+CAP_HISTORY_MIN_WEEKS = 2      # below this, fall back to the seed and stay quiet
+# Floor under a history-derived cap so a quiet stretch can't produce a
+# hair-trigger denominator. 431M was the measured total of the ONE week that
+# actually tripped a real 1310, so nothing below ~400M has ever been
+# associated with a quota wall.
+CAP_FLOOR_TOKENS = 400_000_000
+
+# What `week_to_date_tokens` actually measures — surfaced in the snapshot so
+# no consumer has to guess (a cache-EXCLUSIVE single-lane query over
+# token_usage_events reports ~10% of this; see the module docstring).
+ACCOUNTING_BASIS = "cache_inclusive_4lane"
 
 # Escalation / alert thresholds as a fraction of observed_cap (0..1).
 LEVEL_1_PCT_DEFAULT = 0.70
@@ -232,8 +292,15 @@ def current_week_start(now: float, anchor_epoch: Optional[float] = None) -> floa
 
 def compute_week_to_date(now: float, week_start: float, top_n: int = 5) -> dict[str, Any]:
     """Cache-inclusive week-to-date token total across every ZAI capture lane.
-    Fail-soft per-lane: one lane erroring never blocks the others. Returns
-    ``{"week_to_date_tokens": int, "window_seconds": int, "totals": {...}}``.
+    Fail-soft per-lane: one lane erroring never blocks the others.
+
+    Returns ``{"week_to_date_tokens", "week_to_date_tokens_excl_cache",
+    "window_seconds", "totals"}``. ``week_to_date_tokens`` is the meter's
+    headline figure (cache-INCLUSIVE, all four lanes — the basis the cap is
+    learned on); ``week_to_date_tokens_excl_cache`` is the SAME rows counted
+    input+output only, carried so the ~10x gap against a naive
+    ``SUM(input_tokens + output_tokens)`` ledger query is visible rather than
+    looking like an overcount. See the module docstring.
     """
     from universal_agent.services import token_consolidation as tc, zai_status
 
@@ -260,10 +327,14 @@ def compute_week_to_date(now: float, week_start: float, top_n: int = 5) -> dict[
         logger.debug("zai_weekly_budget: httpx lane failed: %s", exc)
 
     consolidated = tc.consolidate(sources, top_n=top_n)
+    totals = consolidated["totals"]
     return {
-        "week_to_date_tokens": int(consolidated["totals"].get("total_tokens") or 0),
+        "week_to_date_tokens": int(totals.get("total_tokens") or 0),
+        "week_to_date_tokens_excl_cache": (
+            int(totals.get("input_tokens") or 0) + int(totals.get("output_tokens") or 0)
+        ),
         "window_seconds": window_seconds,
-        "totals": consolidated["totals"],
+        "totals": totals,
     }
 
 
@@ -312,6 +383,58 @@ def _get_or_create_week_row(conn: sqlite3.Connection, week_start: float) -> dict
         f"SELECT * FROM {TABLE_NAME} WHERE week_anchor_epoch = ?", (week_start,)
     ).fetchone()
     return dict(row)
+
+
+def derive_cap_from_history(
+    conn: sqlite3.Connection, week_start: float
+) -> Optional[dict[str, Any]]:
+    """Cap derived from REAL observed consumption: the max recorded
+    ``week_to_date_tokens`` over the last up-to-``CAP_HISTORY_WEEKS`` COMPLETE
+    prior weeks (rows whose ``week_anchor_epoch`` is strictly before this
+    week's), floored at ``CAP_FLOOR_TOKENS``.
+
+    Returns ``{"observed_cap", "calibrated_from"}`` — ``calibrated_from`` is
+    ``"history_max@<k>w"`` where ``k`` is how many prior weeks actually
+    contributed — or **None** when there is not enough history
+    (< ``CAP_HISTORY_MIN_WEEKS`` non-empty prior weeks), which is the
+    documented fallback path: `run_meter` then keeps the
+    ``UA_ZAI_WEEKLY_CAP_SEED_TOKENS`` seed and, because the basis is still
+    ``"seed_estimate"``, neither escalates nor alerts.
+
+    Same accounting basis as the numerator (cache-inclusive, 4 lanes), so
+    ``week_to_date / observed_cap`` is self-consistent. A week whose meter
+    stopped running mid-week records a low total; taking the MAX over four
+    weeks plus the floor keeps one such gap from producing a hair-trigger
+    denominator. Never raises — a query failure degrades to None (seed).
+    """
+    try:
+        rows = conn.execute(
+            f"""SELECT week_to_date_tokens FROM {TABLE_NAME}
+                WHERE week_anchor_epoch < ?
+                ORDER BY week_anchor_epoch DESC LIMIT ?""",
+            (week_start, CAP_HISTORY_WEEKS),
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — fail soft to the seed fallback
+        logger.debug("zai_weekly_budget: derive_cap_from_history failed: %s", exc)
+        return None
+
+    weeks = [int(r[0] or 0) for r in rows]
+    weeks = [w for w in weeks if w > 0]
+    if len(weeks) < CAP_HISTORY_MIN_WEEKS:
+        return None
+    return {
+        "observed_cap": max(CAP_FLOOR_TOKENS, max(weeks)),
+        "calibrated_from": f"history_max@{len(weeks)}w",
+    }
+
+
+def is_calibrated(calibrated_from: Any) -> bool:
+    """True when ``observed_cap`` rests on something OBSERVED (a real 1310
+    wall, or this meter's own consumption history) rather than the a-priori
+    seed. Only a calibrated cap may move levers or raise alerts — see the
+    module docstring's "An uncalibrated seed NEVER throttles and NEVER
+    alerts"."""
+    return bool(calibrated_from) and str(calibrated_from) != "seed_estimate"
 
 
 def maybe_calibrate(row: dict[str, Any], week_to_date_tokens: int) -> Optional[dict[str, Any]]:
@@ -388,11 +511,19 @@ def _stamp_auto_escalation(level: int, baseline_level: int, baseline_updated_by:
         logger.warning("zai_weekly_budget: failed to stamp auto_escalation", exc_info=True)
 
 
-def maybe_escalate(pct: float) -> Optional[int]:
+def maybe_escalate(pct: float, *, calibrated: bool = True) -> Optional[int]:
     """Apply the target intervention level via `zai_control.apply_level` ONLY
     when it is STRICTLY GREATER than the control plane's current level.
     Never downgrades; never touches an operator- or 1310-set level unless our
     own target is higher.
+
+    `calibrated` is False whenever `observed_cap` is still the a-priori
+    ``seed_estimate`` (no real 1310 and not enough consumption history to
+    derive one). In that case this returns None immediately WITHOUT reading
+    or writing the control plane: a guess must never throttle production.
+    That gate exists because the shipped 400M seed — falsified by four clean
+    weeks at 911M-1.74B on the same basis — auto-applied level 3 in live
+    production on 2026-07-24. `run_meter` always passes it explicitly.
 
     Guarded against an ACTIVE global pause (real 1310 auto-pause, or an
     operator-set global pause): `apply_level` writes a FULL preset for the
@@ -411,6 +542,8 @@ def maybe_escalate(pct: float) -> Optional[int]:
 
     Returns the level actually applied, or None.
     """
+    if not calibrated:
+        return None
     if _is_globally_paused_fail_open():
         return None
 
@@ -457,7 +590,10 @@ def maybe_release_stale_escalation(target: int) -> bool:
       — leave the stamp in place.
     - Otherwise (`target` has dropped below the stamp's level and nothing
       has raised it further) — restore the pre-escalation `baseline_level`
-      via `apply_level` and remove the stamp.
+      via `apply_level` and remove the stamp. EXCEPT when that baseline was
+      itself set by us (`baseline_updated_by == "auto:weekly-budget"`, i.e.
+      an earlier budget escalation we're stacked on top of): then release
+      all the way to 0, or the ladder stays permanently one rung up.
 
     Returns True iff a restore (`apply_level` to the baseline) was applied.
     Never raises — fail-soft, mirrors every other function in this module.
@@ -490,6 +626,14 @@ def maybe_release_stale_escalation(target: int) -> bool:
             return False
 
         baseline_level = int(stamp.get("baseline_level") or 0)
+        if str(stamp.get("baseline_updated_by") or "") == "auto:weekly-budget":
+            # The "baseline" we captured was OUR OWN earlier budget
+            # escalation, not an operator- or 1310-set state to preserve
+            # (a second escalation, e.g. L1→L2, stamps baseline_level=1 with
+            # baseline_updated_by="auto:weekly-budget"). Releasing to it
+            # would leave the ladder permanently stuck one rung up. Only an
+            # externally-set baseline is worth restoring; ours unwinds fully.
+            baseline_level = 0
         zai_control.apply_level(
             baseline_level,
             reason="weekly_budget stale-escalation release",
@@ -533,15 +677,34 @@ def run_meter(conn: sqlite3.Connection, *, now: Optional[float] = None) -> dict[
 
         wtd = compute_week_to_date(now, week_start)
         week_to_date_tokens = int(wtd["week_to_date_tokens"])
+        week_to_date_tokens_excl_cache = int(wtd["week_to_date_tokens_excl_cache"])
 
-        # NOTE: `or _seed_cap_tokens()` would be wrong here — since fix 5, a
-        # first real 1310 calibration can legitimately persist observed_cap=0
-        # (a degenerate but valid reading), and 0 is falsy in Python. Use an
+        # Cap ladder (descending authority — see the module docstring):
+        #   1310@<iso>  a real observed wall   > everything
+        #   history_max@<k>w  derived from our own completed weeks
+        #   seed_estimate     a-priori fallback, never escalates/alerts
+        #
+        # NOTE: `or _seed_cap_tokens()` would be wrong here — a first real
+        # 1310 calibration can legitimately persist observed_cap=0 (a
+        # degenerate but valid reading), and 0 is falsy in Python. Use an
         # explicit None-check so a real zero is never silently replaced by
         # the seed default.
         _stored_cap = row.get("observed_cap")
         observed_cap = int(_stored_cap) if _stored_cap is not None else _seed_cap_tokens()
         calibrated_from = row.get("calibrated_from") or "seed_estimate"
+
+        if not str(calibrated_from).startswith("1310@"):
+            # Recomputed every pass (cheap, ≤4 rows) rather than frozen at
+            # week creation, so a cap learned from history tracks the rolling
+            # window instead of going stale.
+            derived = derive_cap_from_history(conn, week_start)
+            if derived is not None:
+                observed_cap = int(derived["observed_cap"])
+                calibrated_from = str(derived["calibrated_from"])
+            else:
+                observed_cap = _seed_cap_tokens()
+                calibrated_from = "seed_estimate"
+
         calibration = maybe_calibrate(row, week_to_date_tokens)
         if calibration:
             observed_cap = int(calibration["observed_cap"])
@@ -549,14 +712,19 @@ def run_meter(conn: sqlite3.Connection, *, now: Optional[float] = None) -> dict[
 
         pct = (week_to_date_tokens / observed_cap) if observed_cap > 0 else 0.0
         target = target_level(pct)
+        calibrated = is_calibrated(calibrated_from)
 
         # Stateless release: evaluated every pass (not gated on "is this a
         # new week"), so week rollover, a missed/crashed run, and any later
         # writer changing updated_by are all self-healing — see
-        # `maybe_release_stale_escalation`'s docstring.
-        released = maybe_release_stale_escalation(target)
+        # `maybe_release_stale_escalation`'s docstring. An UNCALIBRATED cap
+        # contributes a release target of 0: a guess may not hold an
+        # escalation in place any more than it may create one, so a level
+        # applied off a stale seed is released on the next pass instead of
+        # needing a manual intervention.
+        released = maybe_release_stale_escalation(target if calibrated else 0)
 
-        applied_level = maybe_escalate(pct)
+        applied_level = maybe_escalate(pct, calibrated=calibrated)
 
         last_escalation_level = int(row.get("last_escalation_level") or 0)
         last_escalated_at = row.get("last_escalated_at")
@@ -569,13 +737,15 @@ def run_meter(conn: sqlite3.Connection, *, now: Optional[float] = None) -> dict[
         now_iso = datetime.now(timezone.utc).isoformat()
         conn.execute(
             f"""UPDATE {TABLE_NAME}
-                SET observed_cap = ?, week_to_date_tokens = ?, last_computed_at = ?,
+                SET observed_cap = ?, week_to_date_tokens = ?,
+                    week_to_date_tokens_excl_cache = ?, last_computed_at = ?,
                     last_escalation_level = ?, last_escalated_at = ?, calibrated_from = ?,
                     updated_at = ?
                 WHERE week_anchor_epoch = ?""",
             (
                 observed_cap,
                 week_to_date_tokens,
+                week_to_date_tokens_excl_cache,
                 now,
                 last_escalation_level,
                 last_escalated_at,
@@ -592,8 +762,11 @@ def run_meter(conn: sqlite3.Connection, *, now: Optional[float] = None) -> dict[
             "reset_at_epoch": week_start + WEEK_SECONDS,
             "observed_cap": observed_cap,
             "week_to_date_tokens": week_to_date_tokens,
+            "week_to_date_tokens_excl_cache": week_to_date_tokens_excl_cache,
+            "accounting_basis": ACCOUNTING_BASIS,
             "pct": pct,
             "calibrated_from": calibrated_from,
+            "calibrated": calibrated,
             "last_escalation_level": last_escalation_level,
             "last_escalated_at": last_escalated_at,
             "applied_level": applied_level,
@@ -673,9 +846,17 @@ def get_status_snapshot() -> dict[str, Any]:
         "week_anchor_epoch": week_anchor_epoch,
         "reset_at_epoch": reset_at_epoch,
         "observed_cap": observed_cap,
+        # BOTH accounting bases, so a consumer comparing this to a
+        # cache-exclusive ledger query can see the ~10x gap is a basis
+        # difference, not an overcount (see the module docstring).
         "week_to_date_tokens": week_to_date_tokens,
+        "week_to_date_tokens_excl_cache": int(
+            row.get("week_to_date_tokens_excl_cache") or 0
+        ),
+        "accounting_basis": ACCOUNTING_BASIS,
         "pct": round(pct, 4),
         "calibrated_from": row.get("calibrated_from"),
+        "calibrated": is_calibrated(row.get("calibrated_from")),
         "last_escalation_level": int(row.get("last_escalation_level") or 0),
         "last_escalated_at": row.get("last_escalated_at"),
         "last_computed_at": row.get("last_computed_at"),

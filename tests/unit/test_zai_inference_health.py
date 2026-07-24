@@ -726,7 +726,13 @@ def _mock_weekly_budget(**fields):
         "pct": 0.0,
         "observed_cap": 400_000_000,
         "week_to_date_tokens": 0,
-        "calibrated_from": "seed_estimate",
+        "week_to_date_tokens_excl_cache": 0,
+        "accounting_basis": "cache_inclusive_4lane",
+        # Default to a CALIBRATED basis: the conditions are suppressed
+        # entirely on "seed_estimate" (see
+        # test_weekly_budget_suppressed_when_cap_is_uncalibrated_seed).
+        "calibrated_from": "history_max@4w",
+        "calibrated": True,
         "last_escalation_level": 0,
         "last_computed_at": time.time(),
         "week_anchor_epoch": time.time() - 100,
@@ -758,6 +764,25 @@ def test_weekly_budget_high_fires_when_snapshot_is_current(isolated_state):
     assert matches[0].severity == "warn"
     obs = matches[0].observed_value or {}
     assert "weekly_budget_high" in (obs.get("triggered_conditions") or [])
+
+
+def test_weekly_budget_suppressed_when_cap_is_uncalibrated_seed(isolated_state):
+    """A cap still on the a-priori `seed_estimate` (no real 1310, not enough
+    consumption history to derive one) must never page, however hot the pct.
+    The shipped 400M seed reported 99.9% every week against weeks that ran
+    clean at 2.3-4.3x that figure — a standing false alarm that also
+    auto-throttled production."""
+    with _mock_process_count(10), _mock_weekly_budget(
+        pct=0.99, calibrated_from="seed_estimate", calibrated=False
+    ):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    if matches:
+        triggered = (matches[0].observed_value or {}).get("triggered_conditions") or []
+        assert "weekly_budget_critical" not in triggered
+        assert "weekly_budget_high" not in triggered
+    else:
+        assert matches == []
 
 
 def test_weekly_budget_stale_last_computed_at_suppressed(isolated_state):

@@ -37,7 +37,13 @@ throughput or — worse — the subscription itself:
    on ``_weekly_budget_is_current`` — a snapshot whose meter stopped running
    (``last_computed_at`` stale by 3x the ~10 min cadence) or whose
    ``week_anchor_epoch`` isn't the CURRENT week (a missed-rollover leftover)
-   stays quiet rather than alarming on a frozen/stale pct.
+   stays quiet rather than alarming on a frozen/stale pct — AND on the cap
+   being CALIBRATED (``calibrated_from != "seed_estimate"``): an a-priori
+   seed is a guess, and a guess must not page. Both figures are carried in
+   ``observed_value`` (``..._week_to_date_tokens`` cache-INCLUSIVE over 4
+   lanes, ``..._week_to_date_tokens_excl_cache`` input+output only) so the
+   pct is interpretable next to a cache-exclusive ledger query, which reports
+   ~10% of the same mass.
 
 One invariant emits one finding listing every triggered condition in
 `observed_value.triggered_conditions` so the operator gets the full picture
@@ -416,14 +422,27 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     weekly_budget_current = weekly_budget_available and _weekly_budget_is_current(
         weekly_budget, now
     )
+    # An UNCALIBRATED cap (calibrated_from == "seed_estimate": no real 1310 and
+    # not enough consumption history to derive one) is an a-priori guess, and a
+    # guess must not page. The shipped 400M seed reported "99.9% of cap" every
+    # week against weeks that ran clean at 2.3-4.3x that figure — a standing
+    # false alarm. `zai_weekly_budget.py::maybe_escalate` refuses to throttle in
+    # the same state; this is the alerting half of that rule.
+    weekly_budget_calibrated = bool(
+        weekly_budget.get("calibrated")
+        if weekly_budget.get("calibrated") is not None
+        else str(weekly_budget.get("calibrated_from") or "") not in ("", "seed_estimate")
+    )
     weekly_budget_pct = float(weekly_budget.get("pct") or 0.0) if weekly_budget_current else None
     weekly_budget_critical_active = (
         weekly_budget_current
+        and weekly_budget_calibrated
         and weekly_budget_pct is not None
         and weekly_budget_pct >= WEEKLY_BUDGET_CRITICAL_PCT
     )
     weekly_budget_high_active = (
         weekly_budget_current
+        and weekly_budget_calibrated
         and not weekly_budget_critical_active
         and weekly_budget_pct is not None
         and weekly_budget_pct >= WEEKLY_BUDGET_WARN_PCT
@@ -695,7 +714,14 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "weekly_budget_pct": weekly_budget_pct,
         "weekly_budget_observed_cap": weekly_budget.get("observed_cap"),
         "weekly_budget_week_to_date_tokens": weekly_budget.get("week_to_date_tokens"),
+        # Both accounting bases + the basis label, so the headline number is
+        # interpretable next to any cache-exclusive ledger query (~10x smaller).
+        "weekly_budget_week_to_date_tokens_excl_cache": weekly_budget.get(
+            "week_to_date_tokens_excl_cache"
+        ),
+        "weekly_budget_accounting_basis": weekly_budget.get("accounting_basis"),
         "weekly_budget_calibrated_from": weekly_budget.get("calibrated_from"),
+        "weekly_budget_calibrated": weekly_budget_calibrated,
         "weekly_budget_last_escalation_level": weekly_budget.get("last_escalation_level"),
         "weekly_budget_reset_at_utc": weekly_budget_reset_at_utc,
         "weekly_budget_reset_at_america_chicago": weekly_budget_reset_at_america_chicago,
@@ -755,7 +781,10 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"ZAI WEEKLY BUDGET CRITICAL — {(weekly_budget_pct or 0.0) * 100:.0f}% of the "
             f"learned observed_cap ({observed_value['weekly_budget_observed_cap']} tokens, "
             f"calibrated_from={observed_value['weekly_budget_calibrated_from']}) consumed "
-            f"week-to-date ({observed_value['weekly_budget_week_to_date_tokens']} tokens). "
+            f"week-to-date ({observed_value['weekly_budget_week_to_date_tokens']} tokens "
+            "cache-INCLUSIVE across 4 lanes — the basis the cap is learned on; "
+            f"{observed_value['weekly_budget_week_to_date_tokens_excl_cache']} tokens "
+            "excluding cache reads). "
             "About to hit the ZAI weekly/monthly quota wall (error 1310). Auto-escalation "
             f"(services/zai_control.py, by=\"auto:weekly-budget\") is at level "
             f"{observed_value['weekly_budget_last_escalation_level']}; resets "
@@ -768,7 +797,10 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"ZAI weekly budget high (WARN) — {(weekly_budget_pct or 0.0) * 100:.0f}% of the "
             f"learned observed_cap ({observed_value['weekly_budget_observed_cap']} tokens, "
             f"calibrated_from={observed_value['weekly_budget_calibrated_from']}) consumed "
-            f"week-to-date. Auto-escalation is at level "
+            f"week-to-date ({observed_value['weekly_budget_week_to_date_tokens']} tokens "
+            "cache-INCLUSIVE across 4 lanes; "
+            f"{observed_value['weekly_budget_week_to_date_tokens_excl_cache']} excluding "
+            "cache reads). Auto-escalation is at level "
             f"{observed_value['weekly_budget_last_escalation_level']}; resets "
             f"{weekly_budget_reset_at_america_chicago or 'unknown'} America/Chicago. No action "
             "needed unless this climbs toward 95%."
@@ -871,7 +903,8 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"events-file 429s < {EVENTS_429_CRITICAL_COUNT} in last "
             f"{EVENTS_429_WINDOW_SECONDS // 60} min AND "
             f"events-file FUP count = 0 in last {EVENTS_FUP_WINDOW_SECONDS // 60} min AND "
-            f"weekly_budget pct < {WEEKLY_BUDGET_WARN_PCT * 100:.0f}% of observed_cap"
+            f"weekly_budget pct < {WEEKLY_BUDGET_WARN_PCT * 100:.0f}% of a CALIBRATED "
+            "observed_cap"
         ),
         "message": headline,
         "severity_override": severity,
