@@ -107,6 +107,26 @@ scheduled (cron will fire at due_at)
 `TERMINAL_STATUSES = {completed, parked, cancelled}`. Only `open` and
 `needs_review` are claimable.
 
+**Never hand-write status literals into SQL over `task_hub_items`.** Build the
+clause from the constants via `task_hub.py::status_sql_filter`, which returns
+`(placeholders, params)` for `TERMINAL_STATUSES` / `ACTIVE_STATUSES`:
+
+```python
+placeholders, params = task_hub.status_sql_filter(task_hub.TERMINAL_STATUSES)
+conn.execute(f"SELECT * FROM task_hub_items WHERE status NOT IN ({placeholders})", params)
+```
+
+`task_hub.py::upsert_task` coerces any status outside
+`ACTIVE_STATUSES | TERMINAL_STATUSES` back to `open`, so an invented literal is
+unwritable — and therefore silently useless in a filter. Three call sites
+excluded `'done'` (a status this schema has never had) instead of `completed`,
+so every completed row counted as active: the morning report's "Active tasks"
+read **1389** against a real active backlog of **26**. Consumers now on the
+constants: `task_hub.py::rebuild_dispatch_queue`,
+`task_hub.py::list_brainstorm_tasks`,
+`proactive_advisor.py::build_morning_report`,
+`mission_control_tier1.py::collect_tier1_evidence`.
+
 ### Action verbs
 
 `VALID_ACTIONS` (handled by `perform_task_action`):

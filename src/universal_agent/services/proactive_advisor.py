@@ -57,8 +57,12 @@ def build_morning_report(
     task_hub.ensure_schema(conn)
 
     # --- Active task counts ---
+    terminal_placeholders, terminal_params = task_hub.status_sql_filter(
+        task_hub.TERMINAL_STATUSES
+    )
     active_rows = conn.execute(
-        "SELECT * FROM task_hub_items WHERE status NOT IN ('done', 'parked', 'cancelled')"
+        f"SELECT * FROM task_hub_items WHERE status NOT IN ({terminal_placeholders})",
+        terminal_params,
     ).fetchall()
     active_items = [dict(r) for r in active_rows]
 

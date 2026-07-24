@@ -591,6 +591,16 @@ pending questions, stale in-progress, overdue scheduled, expiring questions) and
 a pre-formatted `report_text`. The heartbeat injects this text as additional
 prompt context — the LLM only ever sees the formatted report, never re-derives it.
 
+**"Active tasks" = every row whose status is not in `task_hub.py::TERMINAL_STATUSES`.**
+`build_morning_report` and `task_hub.py::list_brainstorm_tasks` build that clause
+with `task_hub.py::status_sql_filter`, never a literal status list. Until this
+was fixed both excluded `'done'` — a status the schema never writes (`completed`
+is the terminal-success literal) — so every completed row was counted as active
+and the report told Simone there were **1389** active tasks against a real
+backlog of **26**. Regression coverage:
+`tests/unit/test_proactive_advisor.py::TestBuildMorningReport::test_excludes_every_terminal_status`
+and `::test_completed_brainstorm_excluded_from_stale_set`.
+
 ### 6. Intel lanes config — SCAFFOLDING ONLY
 
 `intel_lanes.py` loads `config/intel_lanes.yaml` into typed `LaneConfig`
