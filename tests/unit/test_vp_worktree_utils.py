@@ -22,6 +22,7 @@ from universal_agent.vp.worktree_utils import (
     assert_no_artifacts,
     detect_repo_root,
     list_changed_py_files,
+    list_registered_worktrees,
     provision_worktree,
     revert_changed_files,
     syntax_check_changed_py,
@@ -263,3 +264,53 @@ class TestListChangedPyFiles:
         assert "hello.py" in names
         assert "new_module.py" in names
         assert "README.txt" not in names
+
+
+class TestListRegisteredWorktrees:
+    """``list_registered_worktrees`` is the ONLY enumeration source the
+    merged-worktree pruner is allowed to use, so its flags are load-bearing:
+    ``is_main`` protects the deployed tree and ``locked`` is git's own
+    do-not-touch marker."""
+
+    def test_main_worktree_is_first_and_flagged(self, fresh_git_repo: Path):
+        entries = list_registered_worktrees(repo_root=fresh_git_repo)
+        assert entries[0].path.resolve() == fresh_git_repo.resolve()
+        assert entries[0].is_main is True
+        assert entries[0].branch == "feature/latest2"
+        assert entries[0].detached is False
+
+    def test_reports_branch_lock_and_detached_state(
+        self, fresh_git_repo: Path, tmp_path: Path,
+    ):
+        linked = provision_worktree(
+            bot_name="codie",
+            task_id="listing",
+            base_branch="feature/latest2",
+            repo_root=fresh_git_repo,
+            workspace_root=tmp_path / "ws",
+        )
+        assert linked.succeeded
+        detached_path = tmp_path / "ws" / "detached"
+        subprocess.run(
+            ["git", "worktree", "add", "--detach", str(detached_path), "HEAD"],
+            cwd=str(fresh_git_repo), check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "worktree", "lock", "--reason", "session active",
+             str(linked.worktree_path)],
+            cwd=str(fresh_git_repo), check=True, capture_output=True,
+        )
+
+        by_path = {
+            e.path.resolve(): e
+            for e in list_registered_worktrees(repo_root=fresh_git_repo)
+        }
+        locked = by_path[linked.worktree_path.resolve()]
+        assert locked.is_main is False
+        assert locked.branch == "codie/listing"
+        assert locked.locked is True
+        assert locked.lock_reason == "session active"
+
+        detached = by_path[detached_path.resolve()]
+        assert detached.detached is True
+        assert detached.branch is None

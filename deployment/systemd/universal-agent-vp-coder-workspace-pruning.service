@@ -12,20 +12,35 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/universal_agent/src
 Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
 # Secrets-bootstrap backstop (mirrors universal-agent-proactive-health). .env
-# OVERRIDES these when present. vp_coder_workspace_pruner is pure FS (iterate +
-# shutil.move) with NO Infisical-resolved secrets; it reads only the plain
-# config knobs UA_VP_CODER_WORKSPACE_ROOT / UA_VP_CODER_WORKSPACE_RETENTION_HOURS
-# (both env-with-code-default, supplied by .env if set). The root is currently
-# unset in prod, so this job no-ops ("nothing to prune") today and continues to
-# no-op identically under systemd — faithful migration. The inline profile vars
-# are inert for this job and kept only for unit uniformity.
+# OVERRIDES these when present. No Infisical-resolved secrets are required; the
+# job reads only plain config knobs (UA_VP_CODER_WORKSPACE_ROOT /
+# UA_VP_CODER_WORKSPACE_RETENTION_HOURS / the UA_WORKTREE_PRUNE_* family), all
+# env-with-code-default and supplied by .env if set. The inline profile vars are
+# inert for this job and kept only for unit uniformity.
+#
+# CORRECTION 2026-07-24: an earlier version of this comment claimed the job
+# "no-ops in prod because the root is unset". That was stale — the pruner
+# resolves the root via the VP-coder profile (H21 fix), and the 2026-07-19 run
+# archived 30 workspaces and hard-deleted 57. Do not re-introduce that claim.
+#
+# NO LONGER PURE-FS (2026-07-24): tier 3 (prune_merged_worktrees) shells out to
+# `git fetch` and, for squash-merged branches, to `gh pr list`. gh authenticates
+# from ~ua/.config/gh/hosts.yml — systemd supplies HOME=/home/ua from User=ua,
+# which is what that lookup needs (GITHUB_TOKEN is absent from prod .env, so the
+# env-var path is deliberately NOT relied on). Every subprocess has its own
+# timeout; TimeoutStartSec is the outer backstop so a hung network call can
+# never wedge the oneshot.
 Environment=UA_DEPLOYMENT_PROFILE=vps
 Environment=UA_INFISICAL_ENABLED=1
 Environment=INFISICAL_ENVIRONMENT=production
 EnvironmentFile=-/opt/universal_agent/.env
-# Archives stale VP-coder workspace subdirs into a sibling _archive dir. Always
-# exits 0 (unset root / missing root / archived all return 0).
+# Three tiers, all best-effort: (1) archive stale VP-coder workspace subdirs
+# into a sibling _archive dir, (2) hard-delete aged _archive entries, (3) remove
+# merged git worktrees under /opt/universal_agent/.worktrees. Tier 3 is OFF by
+# default (UA_WORKTREE_PRUNE_ENABLED=0) and dry-run when first enabled
+# (UA_WORKTREE_PRUNE_DRY_RUN=1). Always exits 0.
 ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.vp_coder_workspace_pruner
+TimeoutStartSec=600
 MemoryMax=1G
 
 [Install]

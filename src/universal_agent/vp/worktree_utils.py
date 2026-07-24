@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "ArtifactLeakError",
+    "RegisteredWorktree",
     "RepoNotFoundError",
     "SyntaxCheckResult",
     "WorktreeError",
@@ -36,6 +37,7 @@ __all__ = [
     "assert_no_artifacts",
     "detect_repo_root",
     "list_changed_py_files",
+    "list_registered_worktrees",
     "provision_worktree",
     "revert_changed_files",
     "syntax_check_changed_py",
@@ -81,6 +83,27 @@ class SyntaxCheckResult:
     failures: list[tuple[Path, str]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class RegisteredWorktree:
+    """One record from ``git worktree list --porcelain``.
+
+    ``is_main`` marks the repository's main working tree — git always emits it
+    first, and it is the one entry no cleanup job may ever remove.
+    """
+
+    path: Path
+    head: str | None
+    #: Short branch name (``refs/heads/`` stripped); ``None`` when detached.
+    branch: str | None
+    detached: bool
+    bare: bool
+    locked: bool
+    lock_reason: str | None
+    prunable: bool
+    prunable_reason: str | None
+    is_main: bool
+
+
 def detect_repo_root(start: Path | None = None) -> Path:
     """Return the git working-tree root that contains ``start``.
 
@@ -101,6 +124,73 @@ def detect_repo_root(start: Path | None = None) -> Path:
             f"{result.stderr.strip() or 'no output'}"
         )
     return Path(result.stdout.strip()).resolve()
+
+
+def list_registered_worktrees(repo_root: Path | None = None) -> list[RegisteredWorktree]:
+    """Enumerate the worktrees git itself knows about.
+
+    Parses ``git worktree list --porcelain`` (blank-line separated records;
+    ``worktree`` / ``HEAD`` / ``branch`` / ``detached`` / ``bare`` / ``locked``
+    / ``prunable`` attributes). This is the ONLY enumeration source any cleanup
+    job should use — walking the filesystem would let a job delete a directory
+    git has no registration for.
+
+    Returns an empty list (never raises) when git fails, so a caller running on
+    a timer degrades to "prune nothing".
+    """
+
+    repo = (repo_root or detect_repo_root()).resolve()
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "list_registered_worktrees: git worktree list failed in %s: %s",
+            repo, (result.stderr or result.stdout).strip(),
+        )
+        return []
+
+    out: list[RegisteredWorktree] = []
+    record: dict[str, object] = {}
+
+    def _flush() -> None:
+        raw_path = record.get("worktree")
+        if not raw_path:
+            return
+        raw_branch = record.get("branch")
+        branch = str(raw_branch).removeprefix("refs/heads/") if raw_branch else None
+        out.append(
+            RegisteredWorktree(
+                path=Path(str(raw_path)),
+                head=record.get("HEAD"),  # type: ignore[arg-type]
+                branch=branch,
+                detached=bool(record.get("detached")),
+                bare=bool(record.get("bare")),
+                locked="locked" in record,
+                lock_reason=(record.get("locked") or None),  # type: ignore[arg-type]
+                prunable="prunable" in record,
+                prunable_reason=(record.get("prunable") or None),  # type: ignore[arg-type]
+                # git documents the main working tree as the first record.
+                is_main=not out,
+            )
+        )
+        record.clear()
+
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            _flush()
+            continue
+        key, _, value = line.partition(" ")
+        if key in {"detached", "bare"}:
+            record[key] = True
+        else:
+            record[key] = value.strip()
+    _flush()
+
+    return out
 
 
 def _safe_segment(value: str) -> str:
@@ -190,16 +280,32 @@ def teardown_worktree(
     worktree_path: Path,
     *,
     repo_root: Path | None = None,
+    force: bool = True,
 ) -> bool:
-    """Force-remove the worktree. Returns True iff the directory is gone."""
+    """Remove the worktree. Returns True iff the directory is gone.
+
+    ``force=True`` (the default, preserving every existing caller) passes
+    ``--force`` so a dirty mission workspace is still torn down. Unattended
+    cleanup jobs should pass ``force=False``: git then refuses to remove a
+    dirty or locked worktree on its own, which is a second safety net
+    independent of whatever checks the caller ran.
+
+    Note ``git worktree remove`` deletes only the checkout and the admin
+    files — the branch ref (and every commit on it) survives, which is what
+    makes a mistaken removal recoverable.
+    """
 
     worktree_path = worktree_path.resolve()
     if not worktree_path.exists():
         return True
 
     repo = (repo_root or detect_repo_root()).resolve()
+    cmd = ["git", "worktree", "remove"]
+    if force:
+        cmd.append("--force")
+    cmd.append(str(worktree_path))
     result = subprocess.run(
-        ["git", "worktree", "remove", "--force", str(worktree_path)],
+        cmd,
         cwd=str(repo),
         capture_output=True,
         text=True,
