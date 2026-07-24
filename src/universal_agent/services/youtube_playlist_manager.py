@@ -19,6 +19,24 @@ logger = logging.getLogger(__name__)
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 OAUTH2_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
+# HTTP request timeouts (seconds). Single API calls share a short timeout; the
+# paginating list call gets a longer one because it loops until nextPageToken
+# is exhausted.
+_DEFAULT_API_TIMEOUT_SECONDS = 15.0
+_LIST_API_TIMEOUT_SECONDS = 30.0
+
+# YouTube Data API v3 allows at most 50 playlistItems per page.
+_MAX_PLAYLIST_ITEMS_PER_PAGE = 50
+
+# HTTP status codes treated specially by the delete paths.
+_HTTP_OK = 200
+_HTTP_CREATED = 201
+_HTTP_NO_CONTENT = 204
+_HTTP_NOT_FOUND = 404
+
+# Privacy default for freshly-created playlists — never accidentally public.
+_DEFAULT_PRIVACY_STATUS = "private"
+
 
 class YouTubeOAuthError(Exception):
     """Raised when OAuth2 token exchange or refresh fails."""
@@ -49,9 +67,9 @@ def _get_access_token() -> str:
             "refresh_token": refresh_token,
             "grant_type": "refresh_token",
         },
-        timeout=15.0,
+        timeout=_DEFAULT_API_TIMEOUT_SECONDS,
     )
-    if response.status_code != 200:
+    if response.status_code != _HTTP_OK:
         raise YouTubeOAuthError(f"Failed to refresh access token: {response.text}")
     
     data = response.json()
@@ -69,18 +87,18 @@ def get_playlist_items(playlist_id: str) -> list[dict[str, Any]]:
     items = []
     page_token = None
     
-    with httpx.Client(headers=headers, timeout=30.0) as client:
+    with httpx.Client(headers=headers, timeout=_LIST_API_TIMEOUT_SECONDS) as client:
         while True:
             params: dict[str, Any] = {
                 "part": "snippet",
                 "playlistId": playlist_id,
-                "maxResults": 50,
+                "maxResults": _MAX_PLAYLIST_ITEMS_PER_PAGE,
             }
             if page_token:
                 params["pageToken"] = page_token
                 
             response = client.get(f"{YOUTUBE_API_BASE}/playlistItems", params=params)
-            if response.status_code != 200:
+            if response.status_code != _HTTP_OK:
                 raise YouTubeAPIError(f"Failed to fetch playlist items: {response.text}")
             
             data = response.json()
@@ -120,13 +138,13 @@ def add_playlist_item(playlist_id: str, video_id: str) -> dict[str, Any]:
         },
     }
 
-    with httpx.Client(headers=headers, timeout=15.0) as client:
+    with httpx.Client(headers=headers, timeout=_DEFAULT_API_TIMEOUT_SECONDS) as client:
         response = client.post(
             f"{YOUTUBE_API_BASE}/playlistItems",
             params={"part": "snippet"},
             json=payload,
         )
-        if response.status_code not in {200, 201}:
+        if response.status_code not in {_HTTP_OK, _HTTP_CREATED}:
             raise YouTubeAPIError(f"Failed to add video {video_id} to playlist {playlist_id}: {response.text}")
         return response.json()
 
@@ -136,14 +154,14 @@ def remove_playlist_item(playlist_item_id: str) -> bool:
     access_token = _get_access_token()
     headers = {"Authorization": f"Bearer {access_token}"}
 
-    with httpx.Client(headers=headers, timeout=15.0) as client:
+    with httpx.Client(headers=headers, timeout=_DEFAULT_API_TIMEOUT_SECONDS) as client:
         response = client.delete(
             f"{YOUTUBE_API_BASE}/playlistItems",
             params={"id": playlist_item_id}
         )
-        if response.status_code == 204:
+        if response.status_code == _HTTP_NO_CONTENT:
             return True
-        elif response.status_code == 404:
+        elif response.status_code == _HTTP_NOT_FOUND:
             logger.warning("Playlist item %s already deleted or not found.", playlist_item_id)
             return True
         else:
@@ -162,12 +180,12 @@ def get_playlist_metadata(playlist_id: str) -> dict[str, Any]:
     access_token = _get_access_token()
     headers = {"Authorization": f"Bearer {access_token}"}
 
-    with httpx.Client(headers=headers, timeout=15.0) as client:
+    with httpx.Client(headers=headers, timeout=_DEFAULT_API_TIMEOUT_SECONDS) as client:
         response = client.get(
             f"{YOUTUBE_API_BASE}/playlists",
             params={"part": "snippet,status", "id": playlist_id},
         )
-    if response.status_code != 200:
+    if response.status_code != _HTTP_OK:
         raise YouTubeAPIError(
             f"Failed to fetch playlist metadata for {playlist_id}: {response.text}"
         )
@@ -181,7 +199,7 @@ def get_playlist_metadata(playlist_id: str) -> dict[str, Any]:
     return {
         "title": str(snippet.get("title") or "").strip(),
         "description": str(snippet.get("description") or ""),
-        "privacy_status": str(status.get("privacyStatus") or "private").strip(),
+        "privacy_status": str(status.get("privacyStatus") or _DEFAULT_PRIVACY_STATUS).strip(),
     }
 
 
@@ -189,7 +207,7 @@ def create_playlist(
     *,
     title: str,
     description: str = "",
-    privacy_status: str = "private",
+    privacy_status: str = _DEFAULT_PRIVACY_STATUS,
 ) -> str:
     """Create a new playlist with the given metadata. Returns the new playlist ID.
 
@@ -206,13 +224,13 @@ def create_playlist(
         "snippet": {"title": title, "description": description},
         "status": {"privacyStatus": privacy_status},
     }
-    with httpx.Client(headers=headers, timeout=15.0) as client:
+    with httpx.Client(headers=headers, timeout=_DEFAULT_API_TIMEOUT_SECONDS) as client:
         response = client.post(
             f"{YOUTUBE_API_BASE}/playlists",
             params={"part": "snippet,status"},
             json=payload,
         )
-    if response.status_code not in {200, 201}:
+    if response.status_code not in {_HTTP_OK, _HTTP_CREATED}:
         raise YouTubeAPIError(
             f"Failed to create playlist {title!r}: {response.text}"
         )
@@ -233,14 +251,14 @@ def delete_playlist(playlist_id: str) -> bool:
     """
     access_token = _get_access_token()
     headers = {"Authorization": f"Bearer {access_token}"}
-    with httpx.Client(headers=headers, timeout=15.0) as client:
+    with httpx.Client(headers=headers, timeout=_DEFAULT_API_TIMEOUT_SECONDS) as client:
         response = client.delete(
             f"{YOUTUBE_API_BASE}/playlists",
             params={"id": playlist_id},
         )
-    if response.status_code == 204:
+    if response.status_code == _HTTP_NO_CONTENT:
         return True
-    if response.status_code == 404:
+    if response.status_code == _HTTP_NOT_FOUND:
         logger.warning("Playlist %s already deleted or not found.", playlist_id)
         return True
     raise YouTubeAPIError(
