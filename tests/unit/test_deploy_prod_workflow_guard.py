@@ -75,7 +75,9 @@ def test_deploy_workflow_restarts_python_services_on_stale_interpreter() -> None
     assert 'echo "--> Verifying Python services use current venv interpreter..."' in content
     assert 'ensure_current_venv_interpreter universal-agent-gateway' in content
     assert 'ensure_current_venv_interpreter universal-agent-api' in content
-    assert 'ensure_current_venv_interpreter ua-discord-intelligence' in content
+    # Discord Intelligence decommissioned 2026-07-24 — neither ua-discord-* unit
+    # is interpreter-checked anymore.
+    assert 'ensure_current_venv_interpreter ua-discord-intelligence' not in content
     assert 'ensure_current_venv_interpreter ua-discord-cc-bot' not in content
     assert 'actual_python="$(readlink -f "/proc/$pid/exe"' in content
     assert 'expected_python="$(readlink -f "$PROD_DIR/.venv/bin/python")"' in content
@@ -133,24 +135,21 @@ def test_deploy_workflow_paths_ignore_suppresses_docs_only_deploys() -> None:
         assert glob in content, f"paths-ignore missing required glob: {glob}"
 
 
-def test_production_systemd_installer_manages_discord_services() -> None:
+def test_production_systemd_installer_does_not_manage_discord_services() -> None:
+    # Discord Intelligence was decommissioned 2026-07-24. This guard is the
+    # INVERSE of the old "manages discord services" test: the installer must NOT
+    # render/enable the ua-discord-* units, and remote_deploy must NOT restart or
+    # health-gate them. Because those units are template-rendered + re-enabled on
+    # every deploy, a silent re-add here would resurrect the retired subsystem —
+    # so pin the absence.
     content = _SYSTEMD_INSTALLER.read_text(encoding="utf-8")
+    assert "ua-discord-cc-bot.service.template" not in content
+    assert "ua-discord-intelligence.service.template" not in content
+    assert '"ua-discord-cc-bot.service"' not in content
+    assert '"ua-discord-intelligence.service"' not in content
 
-    assert "ua-discord-cc-bot.service.template" in content
-    assert "ua-discord-intelligence.service.template" in content
-    assert '"ua-discord-cc-bot.service"' in content
-    assert '"ua-discord-intelligence.service"' in content
-    # Discord restart + health gate moved into remote_deploy.sh with the rest
-    # of the deploy logic (Phase 1 decomposition, 2026-05-30).
     remote_content = _REMOTE_DEPLOY.read_text(encoding="utf-8")
-    # Discord services must still be restarted by deploy.
-    assert "ua-discord-cc-bot ua-discord-intelligence" in remote_content
-    # Discord services must still be health-checked, but the gate is now
-    # baseline-aware (see `check_discord_regression`) so chronic crash
-    # loops don't false-positive the deploy. Pin the new mechanism so a
-    # future refactor can't silently drop discord from the health gate.
-    assert "discord_cc_pre=" in remote_content
-    assert "discord_intel_pre=" in remote_content
-    assert "check_discord_regression()" in remote_content
-    assert "check_discord_regression ua-discord-cc-bot" in remote_content
-    assert "check_discord_regression ua-discord-intelligence" in remote_content
+    assert "ua-discord-cc-bot ua-discord-intelligence" not in remote_content
+    assert "check_discord_regression" not in remote_content
+    assert "discord_cc_pre=" not in remote_content
+    assert "discord_intel_pre=" not in remote_content

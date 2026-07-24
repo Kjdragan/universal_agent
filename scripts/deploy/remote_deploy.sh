@@ -411,9 +411,9 @@ else
   echo "WARN: csi_install_systemd_extras.sh missing or not executable; CSI timers may drift"
 fi
 
-# Discord Intelligence decommissioned 2026-07-24 — the ua-discord-* units are no
-# longer installed, restarted, or health-gated by this deploy. (Prior baseline
-# capture + check_discord_regression removed with the subsystem.)
+# Discord Intelligence decommissioned 2026-07-24 — those units are no longer
+# installed, restarted, or health-gated by this deploy (the prior pre-restart
+# baseline capture and the regression health-gate were removed with it).
 
 # Sync project skills to the ua user's ~/.claude/skills/ so they're
 # discoverable from any CWD — including VP worker subprocess
