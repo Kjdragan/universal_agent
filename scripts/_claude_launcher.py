@@ -74,6 +74,37 @@ _INTERACTIVE_STRIP_PREFIX: str = "ANTHROPIC_"
 # watching). Crons/services still see these via the normal Infisical load.
 _INTERACTIVE_STRIP_NAMES: tuple[str, ...] = ("GH_TOKEN", "GITHUB_TOKEN")
 
+# The Telegram channel token is claim-gated, not vault-gated, so it gets its
+# own rule rather than a slot in _INTERACTIVE_STRIP_NAMES.
+#
+# Why: the Claude Code telegram plugin is a per-session getUpdates poller, and
+# Telegram allows exactly ONE consumer per bot token. Infisical's production
+# TELEGRAM_BOT_TOKEN is the Universal Agent bot, and initialize_runtime_secrets
+# injects it with overwrite=True — so before this rule EVERY interactive
+# claudereal session became a second poller on UA's bot. That produced a
+# week-long 409 storm (10,577 conflicts) which left the VPS bot deaf, and the
+# losing poller never recovers: its retry loop resets `attempt = 0` in onStart,
+# so the give-up is unreachable and the backoff is zero. It hammers forever and
+# pins a core once its session exits.
+#
+# Rule: a token the caller *deliberately* handed us (claude-tg-claim won the
+# flock for this session) is preserved; anything the vault injected is removed.
+_CHANNEL_TOKEN_NAME: str = "TELEGRAM_BOT_TOKEN"
+
+
+def _reconcile_channel_token(env: dict[str, str], inherited: str | None) -> str:
+    """Keep a caller-supplied channel token; drop a vault-injected one.
+
+    `inherited` is the value present BEFORE the Infisical bootstrap ran.
+    Returns a short status string for the launcher's diagnostic line.
+    """
+    if inherited is not None:
+        env[_CHANNEL_TOKEN_NAME] = inherited  # undo overwrite=True
+        return f"kept caller's {_CHANNEL_TOKEN_NAME} (bot {inherited.split(':', 1)[0]})"
+    if env.pop(_CHANNEL_TOKEN_NAME, None) is not None:
+        return f"dropped vault {_CHANNEL_TOKEN_NAME} (no channel claim for this session)"
+    return ""
+
 
 def _strip_interactive_routing_vars(env: dict[str, str]) -> list[str]:
     """Remove every ANTHROPIC_* key from `env` in place; return removed keys.
@@ -150,6 +181,11 @@ def main() -> int:
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
 
+    # Snapshot BEFORE the bootstrap: initialize_runtime_secrets uses
+    # overwrite=True, so a token this session legitimately claimed would
+    # otherwise be clobbered by the vault's (Universal Agent) one.
+    inherited_channel_token = os.environ.get(_CHANNEL_TOKEN_NAME)
+
     try:
         from universal_agent.infisical_loader import initialize_runtime_secrets
     except ImportError as exc:
@@ -204,6 +240,12 @@ def main() -> int:
             f"var(s) from os.environ: {', '.join(stripped_named)}",
             file=sys.stderr,
         )
+
+    # Telegram channel token: keep a claimed one, drop a vault-injected one.
+    # Without this every interactive session polls UA's bot (see the constant).
+    channel_note = _reconcile_channel_token(os.environ, inherited_channel_token)
+    if channel_note:
+        print(f"📞 telegram channel: {channel_note}", file=sys.stderr)
 
     # Restore the caller's original working directory so Claude Code opens
     # in the project the user was actually in. The shell wrapper had to cd
