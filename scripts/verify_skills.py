@@ -57,7 +57,6 @@ def main():
     
     agent_dirs = [
         os.path.join(repo_root, ".claude", "agents"),
-        os.path.join(repo_root, "src", "universal_agent", "agent_college"),
     ]
     
     found_agents = {}
