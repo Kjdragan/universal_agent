@@ -1954,8 +1954,34 @@ class CronService:
         return await self._run_job(job, scheduled_at=scheduled_at, reason=reason, dispatch_key=dispatch_key)
 
     async def _scheduler_loop(self) -> None:
+        # CRONDIAG (2026-07-25, temporary): the per-minute job stalls ~18-27 min
+        # every night at 02:00 UTC, exactly spanning paper_to_podcast_daily's
+        # run, while executing in 1.2s itself. Two candidate causes with
+        # different fixes: (a) no free semaphore slot, or (b) the event loop
+        # itself starved (CPU-bound work holding the GIL in a to_thread).
+        # These two probes tell them apart. Remove once diagnosed.
+        _diag_last_tick = time.time()
+        _diag_last_beat = 0.0
         while self.running:
             now = time.time()
+            _diag_gap = now - _diag_last_tick
+            # A tick should come ~1s after the last. A long gap means the loop
+            # itself could not be scheduled => (b) event-loop starvation.
+            if _diag_gap > 5.0:
+                logger.warning(
+                    "CRONDIAG tick_gap=%.1fs (expected ~1s) sem_free=%s running=%s "
+                    "-- loop was not scheduled; suspects event-loop starvation",
+                    _diag_gap, getattr(self._semaphore, "_value", "?"),
+                    sorted(self.running_jobs),
+                )
+            if now - _diag_last_beat >= 60.0:
+                _diag_last_beat = now
+                logger.info(
+                    "CRONDIAG heartbeat sem_free=%s/%s running=%s",
+                    getattr(self._semaphore, "_value", "?"), self.max_concurrency,
+                    sorted(self.running_jobs),
+                )
+            _diag_last_tick = now
             for job in list(self.jobs.values()):
                 if not job.enabled:
                     continue
@@ -2051,7 +2077,20 @@ class CronService:
             )
         # running_jobs is set by the caller (_scheduler_loop or run_job_now)
         # before dispatching, so no duplicate-guard needed here.
+        # CRONDIAG (2026-07-25, temporary): time blocked here separates
+        # "queued behind a full semaphore" (a) from "the loop never ran us" (b).
+        _diag_wait_t0 = time.time()
+        _diag_sem_free_before = getattr(self._semaphore, "_value", "?")
         async with self._semaphore:
+            _diag_waited = time.time() - _diag_wait_t0
+            if _diag_waited > 5.0:
+                logger.warning(
+                    "CRONDIAG sem_wait=%.1fs job=%s system_job=%s sem_free_before=%s "
+                    "running_at_acquire=%s",
+                    _diag_waited, job.job_id,
+                    (getattr(job, "metadata", None) or {}).get("system_job"),
+                    _diag_sem_free_before, sorted(self.running_jobs),
+                )
             dispatch_key = dispatch_key or self._dispatch_key_for_job(job, reason=reason, scheduled_at=scheduled_at)
             admission_service = self._workflow_admission_service()
             trigger = self._build_workflow_trigger(job, dispatch_key=dispatch_key)
