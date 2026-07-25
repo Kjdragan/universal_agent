@@ -12,24 +12,43 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/universal_agent/src
 Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
 # Secrets-bootstrap backstop (mirrors universal-agent-vp-coder-workspace-pruning).
-# vp_coder_regenerable_reaper is pure FS (os.walk + shutil.rmtree) with NO
-# Infisical-resolved secrets; it resolves the workspace root via
-# vp/profiles.py::get_vp_profile("vp.coder.primary").workspace_root (a plain
-# path, env-or-default; no secret fetch) and reads only the plain config knob
-# UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS (env-with-code-default). It therefore
-# does NOT call initialize_runtime_secrets() - same faithful no-secret shape as
-# its weekly sibling. The inline profile vars below are inert for this job and
-# kept only for unit uniformity. .env OVERRIDES these when present.
+# vp_coder_regenerable_reaper resolves NO Infisical secrets: it resolves the
+# workspace root via vp/profiles.py::get_vp_profile("vp.coder.primary").
+# workspace_root (a plain path, env-or-default; no secret fetch) and reads only
+# plain config knobs (UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS, the
+# UA_WORKTREE_REGENERABLE_REAP_* family, UA_WORKTREE_PRUNE_ROOTS), all
+# env-with-code-default. It therefore does NOT call initialize_runtime_secrets()
+# - same faithful no-secret shape as its weekly sibling. The inline profile vars
+# below are inert for this job and kept only for unit uniformity. .env OVERRIDES
+# these when present.
+#
+# CORRECTION 2026-07-25: this comment used to say the job is "pure FS (os.walk +
+# shutil.rmtree)". That is now true only of ROOT 1. Root 2 (the .worktrees reap,
+# below) shells out to `git` for every guard and to `gh pr list` to tell a
+# merged tree (the weekly prune's) from an open one (this job's). gh
+# authenticates from ~ua/.config/gh/hosts.yml - systemd supplies HOME=/home/ua
+# from User=ua, which is what that lookup needs. Root 2 is OFF by default, so
+# TODAY the process still makes no network call; TimeoutStartSec is the outer
+# backstop for when it is enabled (every subprocess also has its own timeout).
 Environment=UA_DEPLOYMENT_PROFILE=vps
 Environment=UA_INFISICAL_ENABLED=1
 Environment=INFISICAL_ENVIRONMENT=production
 EnvironmentFile=-/opt/universal_agent/.env
-# Reaps regenerable artifacts (.venv, __pycache__, node_modules, .pytest_cache,
-# .ruff_cache, dist, build, .next) from each VP-coder mission dir. Active
-# missions (mtime within UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS, default 6h) are
-# skipped; the live repo .venv and any activity_state.db are hard-excluded.
-# Always exits 0 (missing root / nothing-to-reap / reaped-all return 0).
+# TWO roots, both best-effort, always exits 0:
+#  1. VP-coder mission dirs (AGENT_RUN_WORKSPACES/vp_coder_primary_external):
+#     reaps .venv, __pycache__, node_modules, .pytest_cache, .ruff_cache, dist,
+#     build, .next. Missions touched within UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS
+#     (default 6h) are skipped; the live repo .venv, any activity_state.db, and
+#     anything git TRACKS are hard-excluded.
+#  2. Registered git worktrees under /opt/universal_agent/.worktrees: reaps ONLY
+#     __pycache__ / .pytest_cache / .ruff_cache (a worktree .venv is NOT
+#     auto-regenerated, and node_modules holds tracked content), and only from
+#     trees whose PR is still OPEN - merged trees belong to the weekly
+#     universal-agent-vp-coder-workspace-pruning, which removes them whole. OFF
+#     by default (UA_WORKTREE_REGENERABLE_REAP_ENABLED=0) and dry-run when first
+#     enabled (UA_WORKTREE_REGENERABLE_REAP_DRY_RUN=1).
 ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.vp_coder_regenerable_reaper
+TimeoutStartSec=600
 MemoryMax=1G
 
 [Install]
