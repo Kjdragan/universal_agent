@@ -88,8 +88,14 @@ async def cleanup_stale_workspaces(
         try:
             last_modified = datetime.fromtimestamp(ws.stat().st_mtime)
             age_hours = (now - last_modified).total_seconds() / 3600
-        except OSError as e:
-            logger.warning(f"Could not stat workspace {ws.name}: {e}")
+        except OSError:
+            # exc_info preserves the traceback so the underlying filesystem
+            # error (permissions, broken symlink, TOCTOU race) is diagnosable.
+            logger.warning(
+                "Could not stat workspace %s during stale-workspace sweep",
+                ws.name,
+                exc_info=True,
+            )
             continue
 
         # Check if workspace is stale
@@ -120,8 +126,11 @@ async def cleanup_stale_workspaces(
                     logger.info(
                         f"Archived stale workspace: {ws.name} (age: {age_hours:.1f}h)"
                     )
-                except Exception as e:
-                    logger.error(f"Failed to archive {ws.name}: {e}")
+                except Exception:
+                    # logger.exception() captures the traceback at ERROR level,
+                    # exposing the root cause of shutil.move failures
+                    # (cross-device link, permissions, disk full, read-only fs).
+                    logger.exception("Failed to archive stale workspace %s", ws.name)
                     continue
 
             archived.append(archive_info)
@@ -217,7 +226,9 @@ Examples:
     )
 
     # Print summary
-    print(f"\nSummary: {len(result)} stale workspace(s) {'would be ' if dry_run else ''}archived")
+    print(
+        f"\nSummary: {len(result)} stale workspace(s) {'would be ' if dry_run else ''}archived"
+    )
     for info in result:
         print(f"  - {info['name']} (age: {info['age_hours']}h)")
 

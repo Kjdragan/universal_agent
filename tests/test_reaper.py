@@ -1,6 +1,7 @@
 """Tests for the session reaper module."""
 
 from datetime import datetime, timedelta
+import logging
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
@@ -31,6 +32,7 @@ def temp_workspace_setup():
         (stale_ws / "test.txt").write_text("stale")
         # Set mtime to 25 hours ago
         import os
+
         stale_time = (datetime.now() - timedelta(hours=25)).timestamp()
         os.utime(stale_ws, (stale_time, stale_time))
 
@@ -166,6 +168,7 @@ async def test_custom_max_age(temp_workspace_setup):
     ws_12h.mkdir()
     (ws_12h / "test.txt").write_text("12h")
     import os
+
     time_12h = (datetime.now() - timedelta(hours=12)).timestamp()
     os.utime(ws_12h, (time_12h, time_12h))
 
@@ -207,3 +210,100 @@ async def test_missing_workspaces_dir():
 async def test_skip_prefixes_constant():
     """Test that SKIP_PREFIXES contains expected values."""
     assert "cron_" in SKIP_PREFIXES
+
+
+@pytest.mark.asyncio
+async def test_archive_failure_logs_traceback_with_exc_info(tmp_path, caplog):
+    """Archive failures must capture a traceback so filesystem errors are diagnosable.
+
+    Regression guard: the broad ``except Exception`` around ``shutil.move`` previously
+    logged only ``f"Failed to archive {ws.name}: {e}"`` with no ``exc_info``, dropping
+    the traceback for cross-device / permission / disk-full failures.
+    """
+    workspaces_dir = tmp_path / "workspaces"
+    workspaces_dir.mkdir()
+    archive_dir = tmp_path / "archive"
+    stale_ws = workspaces_dir / "session_stale"
+    stale_ws.mkdir()
+    (stale_ws / "test.txt").write_text("stale")
+    import os
+
+    stale_time = (datetime.now() - timedelta(hours=25)).timestamp()
+    os.utime(stale_ws, (stale_time, stale_time))
+
+    with patch(
+        "universal_agent.session.reaper.shutil.move",
+        side_effect=OSError("cross-device link not permitted"),
+    ):
+        with caplog.at_level(logging.ERROR, logger="universal_agent.session.reaper"):
+            result = await cleanup_stale_workspaces(
+                max_age_hours=24,
+                workspaces_dir=workspaces_dir,
+                archive_dir=archive_dir,
+                dry_run=False,
+            )
+
+    # The failed workspace is not moved and not reported as archived.
+    assert result == []
+    assert stale_ws.exists()
+
+    errors = [
+        r
+        for r in caplog.records
+        if r.levelname == "ERROR" and "Failed to archive" in r.getMessage()
+    ]
+    assert errors, "expected an ERROR log for the archive failure"
+    assert "session_stale" in errors[0].getMessage()
+    assert errors[0].exc_info, "archive-failure log must carry exc_info (traceback)"
+
+
+@pytest.mark.asyncio
+async def test_stat_failure_logs_traceback_with_exc_info(tmp_path, caplog):
+    """Stat failures must capture a traceback so filesystem errors are diagnosable.
+
+    Regression guard: the ``except OSError`` around ``ws.stat()`` previously logged only
+    ``f"Could not stat workspace {ws.name}: {e}"`` with no ``exc_info``.
+    """
+    workspaces_dir = tmp_path / "workspaces"
+    workspaces_dir.mkdir()
+    archive_dir = tmp_path / "archive"
+    stale_ws = workspaces_dir / "session_stale"
+    stale_ws.mkdir()
+    (stale_ws / "test.txt").write_text("stale")
+
+    real_stat = Path.stat
+    real_is_dir = Path.is_dir
+
+    def patched_stat(self, *args, **kwargs):
+        if self.name == "session_stale":
+            raise OSError("stat boom")
+        return real_stat(self, *args, **kwargs)
+
+    def patched_is_dir(self, *args, **kwargs):
+        # Bypass pathlib's OSError-swallowing is_dir() so execution reaches the
+        # explicit ws.stat() call whose except handler is under test.
+        if self.name == "session_stale":
+            return True
+        return real_is_dir(self, *args, **kwargs)
+
+    with (
+        patch("pathlib.Path.stat", patched_stat),
+        patch("pathlib.Path.is_dir", patched_is_dir),
+    ):
+        with caplog.at_level(logging.WARNING, logger="universal_agent.session.reaper"):
+            result = await cleanup_stale_workspaces(
+                max_age_hours=24,
+                workspaces_dir=workspaces_dir,
+                archive_dir=archive_dir,
+                dry_run=False,
+            )
+
+    assert result == []
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and "Could not stat" in r.getMessage()
+    ]
+    assert warnings, "expected a WARNING log for the stat failure"
+    assert "session_stale" in warnings[0].getMessage()
+    assert warnings[0].exc_info, "stat-failure log must carry exc_info (traceback)"
