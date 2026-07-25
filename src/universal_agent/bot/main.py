@@ -37,6 +37,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# httpx logs every request URL at INFO, and python-telegram-bot puts the bot
+# token IN the URL path (https://api.telegram.org/bot<TOKEN>/getUpdates). At the
+# long-poll cadence that wrote this bot's token into journald thousands of times
+# a day in plaintext, readable by anyone with journal access on the host. Same
+# treatment agent_college/runner.py already applies.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 
 async def _send_with_retry(bot, chat_id, text, retries: int = 3, base_delay_s: float = 0.5):
     """Best-effort Telegram send with bounded retry for transient failures.
