@@ -369,7 +369,6 @@ def _discover_agent_profiles(project_root: str) -> list[dict]:
     seen: set[str] = set()
     agent_dirs = [
         os.path.join(project_root, ".claude", "agents"),
-        os.path.join(project_root, "src", "universal_agent", "agent_college"),
     ]
 
     for directory in agent_dirs:

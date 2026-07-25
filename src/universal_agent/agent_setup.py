@@ -646,7 +646,6 @@ class AgentSetup:
             
             agent_dirs = [
                 os.path.join(self.src_dir, ".claude", "agents"),
-                os.path.join(self.src_dir, "src", "universal_agent", "agent_college"),
             ]
             
             found_agents = {} # name -> description
