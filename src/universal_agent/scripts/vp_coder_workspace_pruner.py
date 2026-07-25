@@ -33,11 +33,33 @@ daily or address the regression before disk pressure returns.
 
 THIRD TIER — MERGED-ONLY GIT-WORKTREE PRUNE (added 2026-07-24):
 ``prune_merged_worktrees`` removes registered git worktrees under
-``<repo>/.worktrees`` whose branch is provably merged. Measured
-2026-07-24: ``/opt/universal_agent/.worktrees`` held 15,700 MiB across 8
-worktrees — the single largest consumer under ``/opt/universal_agent``,
-larger than the live ``.venv`` — and nothing in the estate had ever
-reclaimed it (both existing tiers scope to the VP-coder profile root).
+``<repo>/.worktrees`` whose branch is provably merged. Re-measured
+2026-07-25: ``/opt/universal_agent/.worktrees`` holds 8,772,672,614 B
+(8.17 GiB) across **7** worktrees — still the single largest consumer under
+``/opt/universal_agent``, larger than the live ``.venv`` (6.9 GiB) — and
+nothing in the estate had ever reclaimed it (both existing tiers scope to the
+VP-coder profile root). The figure this docstring shipped with on 2026-07-24
+("15,700 MiB across 8 worktrees, 13.25 GiB of it two ``.venv`` trees") went
+~7 GiB stale within a day: an autonomous proactive-health run removed the 8th
+worktree at 2026-07-25 00:06 UTC. Re-measure before quoting; the estate moves
+underneath this file.
+
+The still-live 6.9 GiB ``.venv`` is in ``cron-dispatch-wedge`` (PR #1482,
+merged) — i.e. inside THIS tier's reach, not something an open-PR rule could
+get. Both of the two large ``.venv`` trees the original note described were
+behind MERGED PRs.
+
+COMPANION — DAILY WORKTREE REGENERABLE REAP (added 2026-07-25):
+``vp_coder_regenerable_reaper.py::reap_worktree_regenerable_artifacts`` reaps
+regenerable artifacts (``__pycache__`` / ``.pytest_cache`` / ``.ruff_cache``
+only) from worktrees in the SAME allowlisted roots, and it explicitly SKIPS any
+tree whose PR is merged — those are this tier's, and this tier reclaims the
+whole tree rather than a few MiB of caches. The two compose rather than
+overlap: daily owns OPEN-PR trees (73.3 MiB across five of them, measured
+2026-07-25), weekly owns merged ones (6.94 GiB). Neither may leave a tree
+dirty, because guard 6 below would then refuse it forever — which is why both
+jobs run ``vp/worktree_utils.py::tracked_artifact_dirs`` before deleting
+anything.
 
 **The merged predicate is a UNION, deliberately.** ``git merge-base
 --is-ancestor <head> origin/main`` is checked first, but this repo
@@ -61,12 +83,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-import json
 import logging
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 import time
 from typing import Callable, Optional
@@ -74,20 +94,26 @@ from typing import Callable, Optional
 # Reuse the daily reaper's best-effort du rather than writing a second one.
 from universal_agent.scripts.vp_coder_regenerable_reaper import _dir_size_bytes
 from universal_agent.session.reaper import cleanup_stale_workspaces
+from universal_agent.utils.env_utils import env_flag as _env_flag
 from universal_agent.vp.profiles import get_vp_profile
+
+# Shared with the daily worktree reap — one copy in worktree_utils so the two
+# jobs can never disagree about scope (`_prune_roots`), liveness
+# (`_live_process_inside`) or merged-state (`_gh_pr_merged_at`). They cannot
+# live in either script: this module already imports from the reaper.
 from universal_agent.vp.worktree_utils import (
+    GIT_TIMEOUT_S as _GIT_TIMEOUT_S,
     RegisteredWorktree,
     detect_repo_root,
+    gh_pr_merged_at as _gh_pr_merged_at,
     list_registered_worktrees,
+    live_process_inside as _live_process_inside,
+    run_git as _run,
     teardown_worktree,
+    worktree_prune_roots as _prune_roots,
 )
 
 logger = logging.getLogger(__name__)
-
-# Subprocess budget for every git/gh call this module makes. A hung network
-# call must not wedge the oneshot unit forever.
-_GIT_TIMEOUT_S = 60
-_GH_TIMEOUT_S = 30
 
 
 def _retention_hours(default: int = 168) -> int:
@@ -144,13 +170,6 @@ def _hard_delete_aged_archive(archive_root: Path, max_age_hours: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _env_flag(name: str, default: bool) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return default
-    return raw in {"1", "true", "yes", "on"}
-
-
 def _min_merge_age_hours(default: int = 24) -> int:
     """Quiescence window between "PR merged" and "safe to remove the tree".
 
@@ -171,39 +190,6 @@ def _min_merge_age_hours(default: int = 24) -> int:
         )
         return default
     return value if value > 0 else default
-
-
-def _prune_roots(repo_root: Path) -> list[Path]:
-    """Directories whose CHILDREN are prunable worktrees (the allowlist).
-
-    Default ``<repo>/.worktrees``; override with a colon-separated
-    ``UA_WORKTREE_PRUNE_ROOTS``. This allowlist is load-bearing, not
-    decoration: nine registered worktrees live under
-    ``AGENT_RUN_WORKSPACES/vp_coder_primary_external/**``, a subtree already
-    owned by the two tiers above, and a worktree pruner that enumerated every
-    registration without a path allowlist would race their ``shutil.move`` /
-    ``shutil.rmtree``.
-    """
-    raw = (os.getenv("UA_WORKTREE_PRUNE_ROOTS") or "").strip()
-    if not raw:
-        return [(repo_root / ".worktrees").resolve()]
-    roots: list[Path] = []
-    for part in raw.split(":"):
-        part = part.strip()
-        if part:
-            roots.append(Path(part).expanduser().resolve())
-    return roots or [(repo_root / ".worktrees").resolve()]
-
-
-def _run(cmd: list[str], *, cwd: Path, timeout: int) -> Optional[subprocess.CompletedProcess]:
-    """Run a git command, returning None on timeout/OSError (never raising)."""
-    try:
-        return subprocess.run(
-            cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("Command failed (%s): %s", " ".join(cmd), exc)
-        return None
 
 
 def _fetch_base(repo_root: Path, base_ref: str) -> bool:
@@ -227,88 +213,6 @@ def _fetch_base(repo_root: Path, base_ref: str) -> bool:
         logger.warning("git fetch %s %s failed: %s", remote, branch, detail)
         return False
     return True
-
-
-def _gh_pr_merged_at(branch: str) -> Optional[datetime]:
-    """Return the merge timestamp of ``branch``'s PR, or None.
-
-    Fail-closed: ANY non-zero exit, timeout, empty result, or missing
-    ``mergedAt`` returns None (the caller then treats the branch as unmerged).
-    ``--state merged`` also excludes closed-but-unmerged branches, whose trees
-    are deliberately left alone.
-
-    Spawns ``gh`` (third-party binary) with a minimal env allow-list rather
-    than the full environment, per the least-privilege rule for trust
-    boundaries: the process env of this unit carries Infisical-resolved
-    secrets that ``gh`` has no business reading.
-    """
-    allowed = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "XDG_CONFIG_HOME",
-               "GH_HOST", "GH_TOKEN", "GITHUB_TOKEN")
-    env = {k: v for k, v in os.environ.items() if k in allowed and v}
-    repo = os.getenv("UA_GH_REPO", "Kjdragan/universal_agent")
-    cmd = [
-        "gh", "pr", "list", "--repo", repo, "--head", branch,
-        "--state", "merged", "--json", "number,mergedAt",
-    ]
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_GH_TIMEOUT_S, env=env,
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("gh pr list failed for %s: %s", branch, exc)
-        return None
-    if result.returncode != 0:
-        logger.warning(
-            "gh pr list returned %d for %s: %s",
-            result.returncode, branch, (result.stderr or "").strip(),
-        )
-        return None
-
-    try:
-        rows = json.loads(result.stdout or "[]")
-    except ValueError as exc:
-        logger.warning("gh pr list emitted unparseable JSON for %s: %s", branch, exc)
-        return None
-    if not isinstance(rows, list) or len(rows) != 1:
-        logger.info(
-            "gh reports %d merged PR(s) for %s; treating as not-merged.",
-            len(rows) if isinstance(rows, list) else -1, branch,
-        )
-        return None
-    raw = (rows[0] or {}).get("mergedAt")
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except ValueError:
-        logger.warning("Unparseable mergedAt %r for %s", raw, branch)
-        return None
-
-
-def _live_process_inside(path: Path) -> bool:
-    """True when any running process has its cwd inside ``path``.
-
-    The only positive proof of active use available to us:
-    ``vp/clients/claude_cli_client.py`` launches the CLI with
-    ``cwd=str(workspace_dir)``, so a live mission sits inside its own tree.
-    Unreadable ``/proc`` entries are ignored (a process we cannot inspect is
-    almost always another user's, i.e. not one of ours).
-    """
-    proc = Path("/proc")
-    if not proc.is_dir():
-        return False
-    target = str(path.resolve())
-    for entry in proc.iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            cwd = os.readlink(entry / "cwd")
-        except OSError:
-            continue
-        if cwd == target or cwd.startswith(target + os.sep):
-            logger.info("Live process %s has cwd inside %s", entry.name, path)
-            return True
-    return False
 
 
 def _skip(records: list[dict], wt: RegisteredWorktree, reason: str) -> None:

@@ -19,16 +19,22 @@ follow-ups, future autonomous patchers) can compose with.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
+import json
 import logging
+import os
 from pathlib import Path
 import shlex
 import subprocess
+from typing import Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
 
 __all__ = [
     "ArtifactLeakError",
+    "GH_TIMEOUT_S",
+    "GIT_TIMEOUT_S",
     "RegisteredWorktree",
     "RepoNotFoundError",
     "SyntaxCheckResult",
@@ -36,12 +42,17 @@ __all__ = [
     "WorktreeProvisionResult",
     "assert_no_artifacts",
     "detect_repo_root",
+    "gh_pr_merged_at",
     "list_changed_py_files",
     "list_registered_worktrees",
+    "live_process_inside",
     "provision_worktree",
     "revert_changed_files",
+    "run_git",
     "syntax_check_changed_py",
     "teardown_worktree",
+    "tracked_artifact_dirs",
+    "worktree_prune_roots",
 ]
 
 
@@ -190,6 +201,237 @@ def list_registered_worktrees(repo_root: Path | None = None) -> list[RegisteredW
             record[key] = value.strip()
     _flush()
 
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Shared cleanup helpers
+#
+# Used by BOTH unattended worktree jobs: the WEEKLY merged-worktree prune
+# (``scripts/vp_coder_workspace_pruner.py::prune_merged_worktrees``) and the
+# DAILY worktree regenerable reap
+# (``scripts/vp_coder_regenerable_reaper.py::reap_worktree_regenerable_artifacts``).
+# They live here rather than in either script because the pruner already
+# imports ``_dir_size_bytes`` FROM the reaper — putting a shared helper in
+# either script makes the other's import circular. One copy also means the two
+# jobs can never drift about scope (``worktree_prune_roots``) or liveness
+# (``live_process_inside``), which is exactly how two halves of a cleanup
+# system start fighting each other.
+# ---------------------------------------------------------------------------
+
+#: Subprocess budget for git/gh calls made by unattended cleanup jobs. A hung
+#: network call must never wedge a oneshot systemd unit.
+GIT_TIMEOUT_S = 60
+GH_TIMEOUT_S = 30
+
+
+def run_git(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    timeout: int = GIT_TIMEOUT_S,
+) -> Optional[subprocess.CompletedProcess]:
+    """Run a git command, returning ``None`` on timeout/OSError (never raising).
+
+    ``None`` means "we could not find out" — every caller treats that as a
+    fail-closed SKIP rather than as a negative answer.
+    """
+
+    try:
+        return subprocess.run(
+            cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("Command failed (%s): %s", " ".join(cmd), exc)
+        return None
+
+
+def worktree_prune_roots(repo_root: Path) -> list[Path]:
+    """Directories whose CHILDREN are prunable worktrees (the allowlist).
+
+    Default ``<repo>/.worktrees``; override with a colon-separated
+    ``UA_WORKTREE_PRUNE_ROOTS``. This allowlist is load-bearing, not
+    decoration: nine registered worktrees live under
+    ``AGENT_RUN_WORKSPACES/vp_coder_primary_external/**``, a subtree already
+    owned by the VP-coder-profile jobs, and a worktree job that enumerated
+    every registration without a path allowlist would race their
+    ``shutil.move`` / ``shutil.rmtree``.
+
+    Both worktree jobs read the SAME env var deliberately: a daily reaper and a
+    weekly pruner that disagreed about scope would be much worse than either
+    being slightly too narrow.
+    """
+
+    raw = (os.getenv("UA_WORKTREE_PRUNE_ROOTS") or "").strip()
+    if not raw:
+        return [(repo_root / ".worktrees").resolve()]
+    roots: list[Path] = []
+    for part in raw.split(":"):
+        part = part.strip()
+        if part:
+            roots.append(Path(part).expanduser().resolve())
+    return roots or [(repo_root / ".worktrees").resolve()]
+
+
+def live_process_inside(path: Path, *, deep: bool = False) -> bool:
+    """True when a running process is using ``path``.
+
+    ``cwd`` is the baseline signal: ``vp/clients/claude_cli_client.py`` launches
+    the CLI with ``cwd=str(workspace_dir)``, so a live mission sits inside its
+    own tree. ``deep=True`` additionally inspects ``/proc/<pid>/exe`` and
+    ``/proc/<pid>/maps``, because a process *running* an interpreter from a
+    tree's ``.venv`` (or mmapping a shared object out of it) is bound by
+    exe/maps, not by cwd — and such a process may well have been started from
+    somewhere else entirely.
+
+    Unreadable ``/proc`` entries are ignored (a process we cannot inspect is
+    almost always another user's, i.e. not one of ours).
+
+    KNOWN GAP — do not mistake a False for proof of idleness: interactive agent
+    sessions on the production box run with ``cwd=/opt/universal_agent`` even
+    while editing a worktree through absolute paths, so a live editing session
+    is invisible here. Callers must pair this with a long quiescence window.
+    """
+
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return False
+    target = str(path.resolve())
+    prefix = target + os.sep
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        links = ("cwd", "exe") if deep else ("cwd",)
+        for link in links:
+            try:
+                dest = os.readlink(entry / link)
+            except OSError:
+                continue
+            if dest == target or dest.startswith(prefix):
+                logger.info(
+                    "Live process %s has %s inside %s", entry.name, link, path
+                )
+                return True
+        if deep:
+            try:
+                mapped = (entry / "maps").read_text(errors="ignore")
+            except OSError:
+                continue
+            if prefix in mapped:
+                logger.info(
+                    "Live process %s maps a file inside %s", entry.name, path
+                )
+                return True
+    return False
+
+
+def gh_pr_merged_at(branch: str) -> Optional[datetime]:
+    """Return the merge timestamp of ``branch``'s PR, or ``None``.
+
+    Fail-closed: ANY non-zero exit, timeout, empty result, or missing
+    ``mergedAt`` returns ``None``. What ``None`` *means* differs by caller —
+    the weekly prune reads it as "not provably merged, leave the tree alone",
+    the daily reap reads it as "not merged, so this open tree is mine" — which
+    is why both keep their own additional guards.
+
+    ``--state merged`` also excludes closed-but-unmerged branches, whose trees
+    are deliberately left alone.
+
+    Spawns ``gh`` (third-party binary) with a minimal env allow-list rather
+    than the full environment, per the least-privilege rule for trust
+    boundaries: the process env of these units carries Infisical-resolved
+    secrets that ``gh`` has no business reading.
+    """
+
+    allowed = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "XDG_CONFIG_HOME",
+               "GH_HOST", "GH_TOKEN", "GITHUB_TOKEN")
+    env = {k: v for k, v in os.environ.items() if k in allowed and v}
+    repo = os.getenv("UA_GH_REPO", "Kjdragan/universal_agent")
+    cmd = [
+        "gh", "pr", "list", "--repo", repo, "--head", branch,
+        "--state", "merged", "--json", "number,mergedAt",
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=GH_TIMEOUT_S, env=env,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("gh pr list failed for %s: %s", branch, exc)
+        return None
+    if result.returncode != 0:
+        logger.warning(
+            "gh pr list returned %d for %s: %s",
+            result.returncode, branch, (result.stderr or "").strip(),
+        )
+        return None
+
+    try:
+        rows = json.loads(result.stdout or "[]")
+    except ValueError as exc:
+        logger.warning("gh pr list emitted unparseable JSON for %s: %s", branch, exc)
+        return None
+    if not isinstance(rows, list) or len(rows) != 1:
+        logger.info(
+            "gh reports %d merged PR(s) for %s; treating as not-merged.",
+            len(rows) if isinstance(rows, list) else -1, branch,
+        )
+        return None
+    raw = (rows[0] or {}).get("mergedAt")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("Unparseable mergedAt %r for %s", raw, branch)
+        return None
+
+
+def tracked_artifact_dirs(
+    tree_root: Path,
+    names: Iterable[str],
+) -> Optional[set[str]]:
+    """Relative dir paths under ``tree_root`` that git TRACKS content inside.
+
+    Returns POSIX-relative paths (e.g. ``"node_modules"``, ``"web/dist"``)
+    whose final component is in ``names`` and under which at least one tracked
+    file exists. ``set()`` means "nothing tracked" (including: ``tree_root`` is
+    not inside a git work tree at all, so nothing under it *can* be tracked).
+    ``None`` means "could not determine" — the caller MUST skip.
+
+    WHY THIS EXISTS (measured 2026-07-25): this repo tracks exactly one path
+    under a regenerable name —
+    ``node_modules/.vite/vitest/<sha>/results.json`` — so every full checkout
+    has a *tracked* ``node_modules/``. Reaping it by name deletes tracked
+    source and leaves ` D` in ``git status``, which (a) is data loss, however
+    small, and (b) permanently disqualifies that worktree from the weekly
+    merged-worktree prune, whose clean-tree guard would then never pass. One
+    ``git ls-files`` per tree is the whole fix.
+    """
+
+    wanted = {n for n in names if n}
+    if not wanted:
+        return set()
+
+    inside = run_git(
+        ["git", "rev-parse", "--is-inside-work-tree"], cwd=tree_root
+    )
+    if inside is None:
+        return None  # timeout / OSError => unknown => caller skips
+    if inside.returncode != 0:
+        return set()  # not a git work tree: nothing here can be tracked
+
+    listed = run_git(["git", "ls-files", "-z"], cwd=tree_root)
+    if listed is None or listed.returncode != 0:
+        return None
+
+    out: set[str] = set()
+    for entry in listed.stdout.split("\0"):
+        if not entry:
+            continue
+        parts = entry.split("/")
+        for idx, part in enumerate(parts[:-1]):
+            if part in wanted:
+                out.add("/".join(parts[: idx + 1]))
     return out
 
 
