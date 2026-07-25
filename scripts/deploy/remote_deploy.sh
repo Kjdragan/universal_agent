@@ -147,6 +147,26 @@ export PROD_DIR
 # edit would be wiped). See project_docs/05_channels/01_email_agentmail.md and
 # services/agentmail_service.py module docstring.
 #
+# UA_WORKTREE_PRUNE_ENABLED='1' / UA_WORKTREE_PRUNE_DRY_RUN='0': arm the weekly
+# merged-worktree prune (vp_coder_workspace_pruner.py::prune_merged_worktrees,
+# PR #1493). It shipped OFF because it is the first code in the estate that
+# deletes git-managed state on a timer; both flags live HERE because the VPS
+# .env is rewritten from this dict every deploy, so a VPS-only edit is wiped.
+#
+# Armed 2026-07-25 after verifying the guard chain against real data rather
+# than trusting it: a dry run named exactly the two merged trees and skipped
+# all five open-PR trees with correct reasons, and the real run reclaimed
+# 7,105 MiB (.worktrees 8.5G -> 1.3G, disk 76% -> 72%) losing nothing —
+# both branch refs survived removal and both PRs were already squash-merged.
+#
+# Why this cannot destroy work: removal requires ALL of a clean
+# `git status --porcelain`, ZERO unpushed commits vs refs/remotes/origin/<branch>,
+# and a proven merge — so any work would have to exist in no working tree, no
+# unpushed commit, and not on the remote. `git worktree remove` also runs
+# WITHOUT --force, so git independently refuses a dirty or locked tree, and the
+# branch ref survives. Every guard is fail-closed (unknown => skip, logged).
+# Disarm by flipping ENABLED to '0'. See project_docs/03_agents/01_vp_workers_and_delegation.md.
+#
 # UA_ARTIFACTS_DIR=<PROD_DIR>/artifacts: pin the durable artifacts root explicitly
 # so it is NEVER unset in prod. The primary code paths (main.py / agent_setup.py /
 # artifacts.resolve_artifacts_dir) already default to <repo>/artifacts, but a few
@@ -156,7 +176,7 @@ export PROD_DIR
 # land on /opt/universal_agent/artifacts regardless of cwd, and is belt-and-suspenders
 # against the relative-path orphan class fixed in Phase D (see the scheduling ADR
 # Decision 4 / Phase D and project_docs/06_platform/01_secrets_and_infisical.md).
-python3 -c "from pathlib import Path; import json, os; env_path = Path(os.environ['PROD_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'production', 'UA_RUNTIME_STAGE': 'production', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_ARTIFACTS_DIR': str(Path(os.environ['PROD_DIR']) / 'artifacts'), 'UA_NOTEBOOKLM_PROFILE': 'default', 'UA_HACKERNEWS_SNAPSHOT_ENABLED': '0', 'UA_AGENTMAIL_GMAIL_FALLBACK': '1', 'UA_AGENTMAIL_GMAIL_LABEL': '1', 'UA_MACHINE_SLUG': 'vps-hq-production', 'UA_INFISICAL_ENABLED': '1', 'UA_GATEWAY_PORT': '8002', 'UA_API_PORT': '8001', 'UA_GATEWAY_URL': 'http://127.0.0.1:8002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\n' for key, value in bootstrap.items()), encoding='utf-8')"
+python3 -c "from pathlib import Path; import json, os; env_path = Path(os.environ['PROD_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'production', 'UA_RUNTIME_STAGE': 'production', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_ARTIFACTS_DIR': str(Path(os.environ['PROD_DIR']) / 'artifacts'), 'UA_NOTEBOOKLM_PROFILE': 'default', 'UA_HACKERNEWS_SNAPSHOT_ENABLED': '0', 'UA_AGENTMAIL_GMAIL_FALLBACK': '1', 'UA_AGENTMAIL_GMAIL_LABEL': '1', 'UA_MACHINE_SLUG': 'vps-hq-production', 'UA_INFISICAL_ENABLED': '1', 'UA_WORKTREE_PRUNE_ENABLED': '1', 'UA_WORKTREE_PRUNE_DRY_RUN': '0', 'UA_GATEWAY_PORT': '8002', 'UA_API_PORT': '8001', 'UA_GATEWAY_URL': 'http://127.0.0.1:8002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\n' for key, value in bootstrap.items()), encoding='utf-8')"
 sudo chown ua:ua "$PROD_DIR/.env"
 sudo chmod 600 "$PROD_DIR/.env"
 
