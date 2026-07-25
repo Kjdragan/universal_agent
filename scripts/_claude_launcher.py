@@ -87,22 +87,38 @@ _INTERACTIVE_STRIP_NAMES: tuple[str, ...] = ("GH_TOKEN", "GITHUB_TOKEN")
 # so the give-up is unreachable and the backoff is zero. It hammers forever and
 # pins a core once its session exits.
 #
-# Rule: a token the caller *deliberately* handed us (claude-tg-claim won the
-# flock for this session) is preserved; anything the vault injected is removed.
+# Rule: a token is preserved ONLY when claude-tg-claim won this session the flock
+# and said so via CLAUDE_TG_CLAIM (which names the bot). Everything else is
+# dropped.
+#
+# The marker is load-bearing, not decoration. An earlier version inferred the
+# claim from the mere PRESENCE of an inherited token — and several launch paths
+# already carry UA's TELEGRAM_BOT_TOKEN in their environment (anything wrapped in
+# `infisical run` does; the giveaway is TELEGRAM_ALLOWED_USER_IDS sitting beside
+# it). That inference put a live session straight back on UA's bot and restarted
+# the 409 storm within minutes of the first fix landing. Presence of a token
+# proves nothing; only the marker does.
 _CHANNEL_TOKEN_NAME: str = "TELEGRAM_BOT_TOKEN"
+_CHANNEL_CLAIM_NAME: str = "CLAUDE_TG_CLAIM"
 
 
-def _reconcile_channel_token(env: dict[str, str], inherited: str | None) -> str:
-    """Keep a caller-supplied channel token; drop a vault-injected one.
+def _reconcile_channel_token(
+    env: dict[str, str], inherited: str | None, claim: str | None = None
+) -> str:
+    """Keep a *claimed* channel token; drop everything else.
 
-    `inherited` is the value present BEFORE the Infisical bootstrap ran.
-    Returns a short status string for the launcher's diagnostic line.
+    `inherited`/`claim` are the values present BEFORE the Infisical bootstrap.
+    A token survives only if `claim` names the same bot it belongs to, so an
+    ambient token from some other tooling can never turn this session into a
+    second getUpdates consumer. Returns a status string for the diagnostic line.
     """
-    if inherited is not None:
+    env.pop(_CHANNEL_CLAIM_NAME, None)  # never forward the marker to claude
+    if inherited and claim and inherited.split(":", 1)[0] == claim:
         env[_CHANNEL_TOKEN_NAME] = inherited  # undo overwrite=True
-        return f"kept caller's {_CHANNEL_TOKEN_NAME} (bot {inherited.split(':', 1)[0]})"
+        return f"kept claimed {_CHANNEL_TOKEN_NAME} (bot {claim})"
     if env.pop(_CHANNEL_TOKEN_NAME, None) is not None:
-        return f"dropped vault {_CHANNEL_TOKEN_NAME} (no channel claim for this session)"
+        why = "no claim marker" if not claim else "claim marker does not match the token"
+        return f"dropped {_CHANNEL_TOKEN_NAME} ({why}) — this session will not poll"
     return ""
 
 
@@ -185,6 +201,7 @@ def main() -> int:
     # overwrite=True, so a token this session legitimately claimed would
     # otherwise be clobbered by the vault's (Universal Agent) one.
     inherited_channel_token = os.environ.get(_CHANNEL_TOKEN_NAME)
+    inherited_channel_claim = os.environ.get(_CHANNEL_CLAIM_NAME)
 
     try:
         from universal_agent.infisical_loader import initialize_runtime_secrets
@@ -243,7 +260,9 @@ def main() -> int:
 
     # Telegram channel token: keep a claimed one, drop a vault-injected one.
     # Without this every interactive session polls UA's bot (see the constant).
-    channel_note = _reconcile_channel_token(os.environ, inherited_channel_token)
+    channel_note = _reconcile_channel_token(
+        os.environ, inherited_channel_token, inherited_channel_claim
+    )
     if channel_note:
         print(f"📞 telegram channel: {channel_note}", file=sys.stderr)
 
