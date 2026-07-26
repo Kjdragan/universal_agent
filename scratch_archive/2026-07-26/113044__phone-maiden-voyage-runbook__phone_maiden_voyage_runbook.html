@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Maiden Voyage Runbook — New Project From Your Phone</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { background:#fff; color:#1f2328; font:17px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; margin:0; padding:0 14px 80px; }
+    main { max-width: 760px; margin: 0 auto; }
+    h1 { font-size:1.5em; border-bottom:1px solid #d1d9e0; padding-bottom:.3em; margin-top:1em; }
+    h2 { font-size:1.25em; margin-top:1.8em; border-bottom:1px solid #d1d9e0; padding-bottom:.25em; }
+    code { background:#f6f8fa; border:1px solid #eaeef2; border-radius:4px; padding:.1em .35em; font-size:.88em; word-break:break-all; }
+    pre { background:#f6f8fa; border:1px solid #d1d9e0; border-radius:8px; padding:12px 14px; overflow-x:auto; font-size:.85em; line-height:1.5; }
+    pre code { background:none; border:none; padding:0; word-break:normal; }
+    table { border-collapse:collapse; width:100%; margin:1em 0; font-size:.9em; display:block; overflow-x:auto; }
+    th,td { border:1px solid #d1d9e0; padding:7px 10px; text-align:left; vertical-align:top; }
+    th { background:#f6f8fa; }
+    .step { border:1px solid #d1d9e0; border-left:5px solid #0969da; border-radius:8px; padding:10px 16px; margin:14px 0; }
+    .step b.n { color:#0969da; }
+    .warn { border-left-color:#d4a72c; background:#fffbea; }
+    .good { border-left-color:#1a7f37; background:#f2fcf5; }
+    .muted { color:#59636e; font-size:.9em; }
+    kbd { background:#f6f8fa; border:1px solid #d1d9e0; border-bottom-width:3px; border-radius:5px; padding:1px 6px; font-size:.85em; white-space:nowrap; }
+  </style>
+</head>
+<body>
+<main>
+
+<h1>🚀 Maiden Voyage — a brand-new project, from your phone</h1>
+<p class="muted">2026-07-26 · Phase A once, on the desktop browser (~5 min). Phase B on the phone — and every future project is Phase B only.</p>
+
+<h2>Phase A — one-time setup (desktop browser + terminal)</h2>
+
+<div class="step">
+<b class="n">A1.</b> <b>Get the three credential values.</b> In any desktop terminal:
+<pre><code>grep -E '^INFISICAL_(CLIENT_ID|CLIENT_SECRET|PROJECT_ID)=' ~/lrepos/universal_agent/.env</code></pre>
+Keep this terminal visible — you'll copy these three values in A3. <span class="muted">(Fast path: this reuses the existing machine identity. A dedicated least-privilege cloud identity is the better end-state — say the word after the maiden voyage and I'll walk the swap; it's a 2-minute edit of the same dialog.)</span>
+</div>
+
+<div class="step">
+<b class="n">A2.</b> <b>Open the environment dialog.</b> In the desktop browser: <a href="https://claude.ai/code">claude.ai/code</a> → where you'd start a new session, tap the <b>cloud / environment icon</b> (next to the repository selector) → <b>Create environment</b> (or Manage environments → Create). If this is your first time, it may first ask you to <b>connect GitHub</b> — authorize the Claude GitHub App and grant it <b>All repositories</b> (important: "selected repos only" would hide every future repo you stamp from the template).
+</div>
+
+<div class="step">
+<b class="n">A3.</b> <b>Fill the four fields exactly:</b>
+<table>
+<tr><th>Field</th><th>Value</th></tr>
+<tr><td>Name</td><td><code>kevin-standard</code></td></tr>
+<tr><td>Network access</td><td><b>Custom</b> → tick <b>"Also include default list of common package managers"</b> → add these domains:<br><code>app.infisical.com</code> · <code>api.z.ai</code> · <code>api.telegram.org</code></td></tr>
+<tr><td>Environment variables</td><td>Paste 4 lines — the first two values from your A1 terminal, no quotes:
+<pre><code>INFISICAL_CLIENT_ID=&lt;from terminal&gt;
+INFISICAL_CLIENT_SECRET=&lt;from terminal&gt;
+INFISICAL_PROJECT_ID=9970e5b7-d48a-4ed8-a8af-43e923e67572
+INFISICAL_ENVIRONMENT=production</code></pre></td></tr>
+<tr><td>Setup script</td><td>Leave empty.</td></tr>
+</table>
+Save. Done — you never touch this again.
+</div>
+
+<h2>Phase B — the run-through (phone only) 📱</h2>
+
+<div class="step">
+<b class="n">B1.</b> <b>Stamp the repo.</b> Phone Chrome → <a href="https://github.com/Kjdragan/greenfield_template">github.com/Kjdragan/greenfield_template</a> → tap <b>Use this template</b> → <b>Create a new repository</b> → name it <code>phone_maiden_voyage</code> (snake_case) → keep <b>Private</b> → <b>Create repository</b>.
+<br><span class="muted">If you don't see the button on mobile web: browser menu → "Request desktop site" and it appears top-right.</span>
+</div>
+
+<div class="step">
+<b class="n">B2.</b> <b>Start the cloud session.</b> Claude app → <b>Code</b> tab → new session → repository <code>phone_maiden_voyage</code>, branch <code>main</code> → make sure the environment is <b>kevin-standard</b> (cloud icon; it's the default if it's your only environment) → session visibility stays <b>Private</b>.
+<br><span class="muted">If the app shows no environment picker and the check in B3 fails, start the session from claude.ai/code in phone Chrome instead — the web UI always has the picker.</span>
+</div>
+
+<div class="step">
+<b class="n">B3.</b> <b>Paste this as the first prompt</b> (long-press → paste; I pushed it to your phone too):
+<pre><code>Run an environment self-check, then ship it:
+1. Confirm the SessionStart hook personalized this repo: the [project] name
+   in pyproject.toml should be phone_maiden_voyage, not greenfield_template.
+2. WITHOUT printing any secret values: tell me whether ANTHROPIC_API_KEY,
+   ZAI_API_KEY, and AGENTMAIL_API_KEY are present in your Bash environment
+   (e.g. test -n checks). Also report whether $CLAUDE_ENV_FILE is set and,
+   if so, how many lines it has.
+3. Run: uv run python check.py   — and report its output.
+4. Commit the personalization changes (pyproject.toml, README.md, CLAUDE.md,
+   scripts/vps_bootstrap.sh, uv.lock) on a branch named chore/personalize
+   and push it.
+Report each numbered result plainly, then stop.</code></pre>
+</div>
+
+<div class="step good">
+<b class="n">B4.</b> <b>What success looks like:</b> (1) name = <code>phone_maiden_voyage</code>; (2) all three keys present; (3) <code>check.py</code> prints <code>source=infisical … ok=True</code> and the ZAI routing lines; (4) branch pushed — tap <b>Create PR</b> in the session UI if it offers one; the repo's auto-merge workflow lands it. That's the whole capability proven: <b>repo born, environment loaded, secrets live, work shipped — no computer touched in Phase B.</b>
+</div>
+
+<div class="step warn">
+<b>If something fails, just tell me what step + what you saw.</b> Quick table:
+<table>
+<tr><th>Symptom</th><th>Likely cause</th></tr>
+<tr><td>Keys absent / CLAUDE_ENV_FILE empty</td><td>Session didn't use <b>kevin-standard</b> (re-start via web picker), a typo'd env var, or <code>app.infisical.com</code> missing from the network list.</td></tr>
+<tr><td>Name still <code>greenfield_template</code></td><td>Hook didn't run — tell me; I'll check the hook output with you.</td></tr>
+<tr><td><code>uv</code>/venv errors</td><td>Tell me the exact message — worst case I add a one-line setup script.</td></tr>
+<tr><td>Repo not listed in the Claude app</td><td>GitHub App is scoped to selected repos — set it to All repositories (A2).</td></tr>
+</table>
+</div>
+
+<p class="muted">This was probe-tested end-to-end on the desktop yesterday (template stamp → personalize → cold venv build → 350 secrets exported, no credential re-emission). The only genuinely new ground today is the real Anthropic VM honoring $CLAUDE_ENV_FILE — which is exactly what B3 step 2 measures. Design exhibit: <a href="https://uaonvps.taildcc090.ts.net/scratch/phone-code-access-eval/phone_code_access_eval.html">phone-code-access-eval</a>.</p>
+
+</main>
+</body>
+</html>
