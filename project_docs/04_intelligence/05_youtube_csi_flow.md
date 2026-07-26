@@ -17,7 +17,7 @@ code_paths:
   - src/universal_agent/services/scratch_publish.py
   - src/universal_agent/services/proactive_tutorial_builds.py
   - src/universal_agent/systemd_migrated_jobs.py
-last_verified: 2026-06-22
+last_verified: 2026-07-26
 ---
 
 # YouTube CSI Flow
