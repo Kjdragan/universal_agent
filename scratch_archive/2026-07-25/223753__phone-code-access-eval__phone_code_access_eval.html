@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Working From Phone/Tablet — Greenfield Design + Plan Evaluation</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      background: #ffffff; color: #1f2328;
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      margin: 0; padding: 0 16px 80px;
+    }
+    main { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 1.7em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; margin-top: 1.2em; }
+    h2 { font-size: 1.35em; border-bottom: 1px solid #d1d9e0; padding-bottom: .25em; margin-top: 2em; }
+    h3 { font-size: 1.1em; margin-top: 1.6em; }
+    a { color: #0969da; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { background: #f6f8fa; border: 1px solid #eaeef2; border-radius: 4px; padding: .1em .35em; font-size: .88em; }
+    pre { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: .85em; line-height: 1.5; }
+    pre code { background: none; border: none; padding: 0; }
+    table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .92em; display: block; overflow-x: auto; }
+    th, td { border: 1px solid #d1d9e0; padding: 7px 11px; text-align: left; vertical-align: top; }
+    th { background: #f6f8fa; }
+    .toc { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 14px 22px; margin: 1.4em 0; }
+    .toc ol { margin: .4em 0; padding-left: 1.3em; }
+    .badge { display: inline-block; border-radius: 12px; padding: 1px 10px; font-size: .78em; font-weight: 600; white-space: nowrap; }
+    .ok   { background: #dafbe1; color: #116329; }
+    .warn { background: #fff8c5; color: #7d4e00; }
+    .bad  { background: #ffebe9; color: #a40e26; }
+    .info { background: #ddf4ff; color: #0550ae; }
+    .callout { border-left: 4px solid #0969da; background: #ddf4ff; border-radius: 0 6px 6px 0; padding: 10px 16px; margin: 1.2em 0; }
+    .callout.warn-c { border-color: #d4a72c; background: #fff8c5; }
+    .callout.good-c { border-color: #1a7f37; background: #dafbe1; }
+    .tier { border: 1px solid #d1d9e0; border-radius: 8px; padding: 4px 20px 14px; margin: 1.2em 0; }
+    .tier h3 { margin-top: .8em; }
+    .muted { color: #59636e; font-size: .9em; }
+    kbd { background: #f6f8fa; border: 1px solid #d1d9e0; border-bottom-width: 3px; border-radius: 5px; padding: 1px 6px; font-size: .85em; }
+  </style>
+</head>
+<body>
+<main>
+
+<h1>Working on Projects from Phone/Tablet — Greenfield-First Design + Plan Evaluation</h1>
+<p class="muted">rev 3 · 2026-07-25 · Scope per Kevin: a GENERAL capability — any project, especially brand-new ones, workable from phone/tablet. rev 3 promotes the template-repo creation path to primary per Kevin's fork-a-template idea (with the fork→template correction). Claims verified against live official docs; scaffold assets read at source; VPS checked over SSH.</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#verdict">Verdict</a></li>
+  <li><a href="#scopes">The organizing principle: exactly two scopes carry into a cloud session</a></li>
+  <li><a href="#layers">The general design — three layers</a></li>
+  <li><a href="#decision">Which mode for which job</a></li>
+  <li><a href="#factcheck">Appendix A — fact-check of the original plan</a></li>
+  <li><a href="#ua">Appendix B — universal_agent-specific findings</a></li>
+  <li><a href="#next">Next steps (split: you / me)</a></li>
+</ol>
+</div>
+
+<h2 id="verdict">1. Verdict</h2>
+<div class="callout good-c">
+<p><strong>The pasted plan's diagnosis is right</strong> (two features on one UI; "empty default environment" = you were in cloud sessions; Infisical machine-identity is the correct secrets pattern — it's the same universal-auth flow your repos already use). Full fact-check in Appendix A.</p>
+<p><strong>But for the real goal — greenfield projects workable from your phone — the answer is a system, not a per-project fix:</strong> one reusable account-level environment created once, a cloud bootstrap baked into <code>/dragan:new-repo</code> so every future repo is born cloud-ready, and a Remote Control server for the one thing cloud sessions can't do (create a new repo). The good news: your scaffold's secret loader already works in the cloud unchanged — verified in its source.</p>
+</div>
+
+<h2 id="scopes">2. The organizing principle: exactly two scopes carry into a cloud session</h2>
+<p>A cloud session is a fresh Anthropic VM. Everything it has comes from precisely two places — nothing else on any of your machines exists there:</p>
+<table>
+<tr><th>Scope</th><th>What it carries</th><th>Where you control it</th></tr>
+<tr><td><strong>The repo clone</strong></td><td><code>CLAUDE.md</code>, <code>.claude/settings.json</code> hooks, <code>.claude/skills|agents|commands</code>, <code>.mcp.json</code>, all code</td><td>Committed per-repo → so it belongs in the <strong>scaffolder</strong>, generated once for every new project</td></tr>
+<tr><td><strong>The environment</strong></td><td>Env vars + setup script + network allowlist</td><td>Account-level at claude.ai/code, and <strong>repo-agnostic</strong> — verified: repo choice and environment choice are independent steps, the Name field is described as for "multiple environments for different projects or access levels", and <code>/remote-env</code> sets a default (docs scope that command to CLI <code>--cloud</code> starts; first/only environment acts as default generally)</td></tr>
+</table>
+<p>Everything user-level — your global <code>~/.claude/CLAUDE.md</code>, ~97 user-only skills, dragan plugin marketplaces, <code>settings.local.json</code>, <code>claude mcp add</code> servers — stays home by design. And the VM is not on your tailnet: no scratchpad, no <code>ssh uaonvps</code>, no SSHFS.</p>
+<div class="callout warn-c"><strong>Security caveat that follows directly:</strong> any secret placed in an environment is visible to <em>every</em> repo and session that uses that environment — and a single cloud session can attach <em>multiple repos at once</em>. So the shared environment must hold only low-blast-radius bootstrap credentials (a least-privilege machine identity), never real project secrets. If you ever have repos of very different sensitivity, give them separate environments.</div>
+
+<h2 id="layers">3. The general design — three layers</h2>
+
+<div class="tier">
+<h3>Layer 1 — one-time, account level: a single reusable "kevin-standard" environment</h3>
+<p>Created once in the claude.ai/code web UI; serves every project forever after.</p>
+<ul>
+  <li><strong>Mint a NEW Infisical machine identity for cloud use only</strong> — universal-auth, read-only, scoped as tightly as practical. It sits in Anthropic's environment config in plaintext-to-you; keep its blast radius small and revocable independently of the identities your desktop/VPS use.</li>
+  <li><strong>Env vars</strong> (the only four lines it ever needs):
+<pre><code>INFISICAL_CLIENT_ID=&lt;cloud identity id&gt;
+INFISICAL_CLIENT_SECRET=&lt;cloud identity secret&gt;
+INFISICAL_PROJECT_ID=&lt;project id&gt;
+INFISICAL_ENVIRONMENT=production</code></pre></li>
+  <li><strong>Network: Custom</strong> + the "common package managers" checkbox + <code>app.infisical.com</code> + <code>api.z.ai</code> (scaffolded repos run their own inference on GLM) + optionally <code>api.telegram.org</code> — a nice discovery: <code>notify-phone</code>-style pushes CAN work from cloud sessions, because the bot token comes from Infisical, not the tailnet.</li>
+  <li><strong>Setup script: probably none.</strong> The estate fetches secrets via plain HTTPS from Python (<code>httpx</code>), so the Infisical CLI + its apt repo are unnecessary. Only if the VM lacks <code>uv</code>: a one-line <code>pip install uv</code>.</li>
+  <li>Optionally <code>/remote-env</code> once in a terminal to pin it as the default for CLI-started cloud sessions.</li>
+</ul>
+</div>
+
+<div class="tier">
+<h3>Layer 2 — per-repo, automatic: extend <code>/dragan:new-repo</code> so every new repo is born cloud-ready</h3>
+<p><strong>Key verification:</strong> the scaffold's <code>lab_common/secrets.py</code> already reads <code>INFISICAL_*</code> from <code>os.environ</code> and its dotenv load is a no-op when <code>.env</code> is absent — so in a cloud VM, Layer 1's env vars flow straight into <code>load_secrets()</code> <em>with zero changes to the loader</em>. Desktop (<code>.env</code> file) and cloud (env config) share one mechanism; no drift.</p>
+<p>What the scaffold is missing is the <code>.claude/</code> layer — it ships none today. Add three small committed assets:</p>
+<ol>
+  <li><code>.claude/settings.json</code> — registers a SessionStart hook.</li>
+  <li><code>.claude/hooks/session-start.sh</code> — gated on <code>CLAUDE_CODE_REMOTE=true</code> (exact pattern already proven in universal_agent's committed hook): run <code>uv sync</code> to build the venv, then append secrets to <code>$CLAUDE_ENV_FILE</code> so every subsequent Bash command in the session has them. Fail-soft, never blocks a session.</li>
+  <li><code>lab_common/cloud_env.py</code> — ~20 lines: call the existing <code>load_secrets()</code>, print <code>KEY=value</code> lines for the fetched secrets (values never logged). The hook pipes this into <code>$CLAUDE_ENV_FILE</code>.</li>
+</ol>
+<p>Result: <em>every future <code>/dragan:new-repo</code> project works in a cloud session out of the box</em> — venv built, full secret set loaded, GLM inference routable. The same three files can be dropped into any existing repo to retrofit it (universal_agent only needs the <code>$CLAUDE_ENV_FILE</code> exporter added to its existing hook).</p>
+<p class="muted">One caveat inherited from the docs: <code>$CLAUDE_ENV_FILE</code> is referenced by the web docs but thinly documented — the first scaffolded repo doubles as the empirical test.</p>
+</div>
+
+<div class="tier">
+<h3>Layer 3 — the creation step: starting a brand-new project FROM the phone</h3>
+<p>The one thing a cloud session cannot do by default is <em>create</em> a new GitHub repo: its git push is proxy-restricted to the cloned repo's session branch, <code>gh</code> isn't installed, and tokens are proxy placeholders. Kevin's instinct — keep a fully-loaded source repo and stamp copies of it — is right, with one correction:</p>
+<div class="callout"><strong>Use a GitHub <em>template repository</em>, not a fork.</strong> GitHub won't fork a repo into the same account that owns it, and a fork carries a permanent parent link you can't cleanly disconnect. A repo flagged as a <em>template</em> does exactly what you want in one step: "Use this template" (web/phone) or <code>gh repo create &lt;name&gt; --template Kjdragan/greenfield_template --private</code> creates a <strong>standalone, unlinked, GitHub-backed new repo with fresh history</strong> — rename, disconnect, and "brand new project" are all inherent, no automation needed to sever anything.</div>
+<p><strong>Primary — phone-only, no computer involved:</strong></p>
+<ol>
+  <li>Once: build <code>Kjdragan/greenfield_template</code> from the new-repo scaffold assets + the Layer 2 <code>.claude/</code> cloud bootstrap, flag it as a template. It ships no <code>.env</code> — cloud-native by construction (secrets arrive via the kevin-standard environment).</li>
+  <li>Per new project, from Chrome on the phone: github.com → greenfield_template → <strong>Use this template</strong> → type the new name → Create. ~30 seconds, server-side.</li>
+  <li>claude.ai/code (same browser or the app) → new session on the new repo, kevin-standard environment → the SessionStart hook builds the venv, loads secrets into <code>$CLAUDE_ENV_FILE</code>, and personalizes the placeholder project name to the repo's name (small idempotent first-boot step in the hook).</li>
+</ol>
+<p><strong>Alternatives:</strong></p>
+<ul>
+  <li><strong>RC server on the VPS</strong> (always-on; needs the one-time <code>claude auth login</code> as <code>ua</code>): connect from the phone and say "<code>/dragan:new-repo</code> for X" — full estate scaffold, richer than the template (VPS deploy, source-env copy). Best when you want the project on the estate machines too, and the fallback whenever the template drifts behind the scaffold.</li>
+  <li><strong>Conversational upgrade (optional, later):</strong> put a narrowly-scoped GitHub PAT in Infisical and allowlist <code>api.github.com</code> in the environment — then any cloud session can itself run the template-generate API call, so from the Claude app you'd just say "spin up a new project called X" with no GitHub UI visit at all.</li>
+</ul>
+<p class="muted">Sync duty: the template repo is a second consumer of the new-repo assets — regenerate it whenever those assets change (small script/CI in dragan-plugins; drift here would silently ship stale scaffolding).</p>
+</div>
+
+<h2 id="decision">4. Which mode for which job</h2>
+<table>
+<tr><th>From the phone/tablet, you want to…</th><th>Use</th><th>Why</th></tr>
+<tr><td>Start a brand-new project</td><td><strong>"Use this template" on <code>greenfield_template</code></strong> → cloud session on the new repo (RC + <code>/dragan:new-repo</code> when you want the full estate scaffold)</td><td>Template creation is server-side, standalone, and works from any phone browser; the committed bootstrap does the rest.</td></tr>
+<tr><td>Work on any existing repo, full estate (tailnet, scratchpad, all skills, GPU)</td><td><strong>Remote Control</strong> (desktop or VPS)</td><td>It's literally your machine.</td></tr>
+<tr><td>Fire-and-forget task on a scaffolded repo, laptop closed, parallel lanes</td><td><strong>Cloud session</strong> (kevin-standard environment)</td><td>Isolated VM, venv + secrets auto-bootstrapped by the committed hook; finish via PR or <code>--teleport</code> to the desk later.</td></tr>
+<tr><td>Recurring / scheduled / bulk autonomous work</td><td><strong>Neither</strong> — VPS systemd + GLM, as today</td><td>Cloud burns shared Max rate limits and loses the tailnet.</td></tr>
+</table>
+
+<h2 id="factcheck">5. Appendix A — fact-check of the original plan</h2>
+<p>Every claim checked against live official docs (<code>remote-control</code>, <code>claude-code-on-the-web</code>, <code>web-quickstart</code>, <code>hooks</code>, <code>mobile</code>, <code>env-vars</code>).</p>
+<table>
+<tr><th>Claim in the plan</th><th>Verdict</th><th>Correction / nuance</th></tr>
+<tr><td>Remote Control = relay to your local session; nothing runs in the cloud; no environment selector</td><td><span class="badge ok">Confirmed</span></td><td>Verbatim in the docs.</td></tr>
+<tr><td>Enable via <code>/remote-control</code> or a <code>/config</code> setting</td><td><span class="badge warn">Incomplete</span></td><td>Four ways, and the plan omits the best one for this use case: <strong><code>claude remote-control</code> server mode</strong> — a persistent multi-session server the phone can start <em>new</em> sessions against. Also <code>claude --rc</code>, in-session <code>/rc</code>, and <kbd>/config</kbd> "Enable Remote Control for all sessions".</td></tr>
+<tr><td>Sessions show in the app with a green indicator</td><td><span class="badge ok">Confirmed</span></td><td>Computer icon + green dot; connect via list, URL, or QR. Phone: <strong>Code</strong> tab.</td></tr>
+<tr><td>Requires OAuth; fails if <code>ANTHROPIC_API_KEY</code> is set</td><td><span class="badge warn">Incomplete</span></td><td>Second documented blocker (v2.1.196+): <strong><code>ANTHROPIC_BASE_URL</code> pointing anywhere but <code>api.anthropic.com</code> also disables RC</strong>. Estate impact: <code>zai</code>/GLM-launched sessions can never RC; <code>claudereal</code> strips <code>ANTHROPIC_*</code> so desktop sessions are already compatible.</td></tr>
+<tr><td>Cloud: fresh Anthropic VM, repo cloned; env vars + setup script (root, Ubuntu 24.04)</td><td><span class="badge ok">Confirmed</span></td><td>4 vCPU / 16 GB / 30 GB. Snapshot reuse (~7-day expiry; invalidated by setup-script/network changes; script should finish &lt; 5 min). Config has four fields (name + network level too).</td></tr>
+<tr><td>Repo-committed config works in cloud; user-level doesn't</td><td><span class="badge ok">Confirmed</span></td><td>Docs table confirms. Also not carried: user plugins, <code>claude mcp add</code> servers, transport vars, static creds.</td></tr>
+<tr><td>Env-config vars resolve <code>${VAR}</code> in <code>.mcp.json</code></td><td><span class="badge bad">Undocumented</span></td><td>Plausible, stated nowhere. Test empirically before relying on it. (Greenfield scaffolds ship no <code>.mcp.json</code>, so this only matters for repos like universal_agent.)</td></tr>
+<tr><td>No dedicated secrets store; env config visible to anyone who can edit it</td><td><span class="badge ok">Confirmed</span></td><td>Near-verbatim. Sharper corollary: one session can attach multiple repos, all seeing that environment's vars.</td></tr>
+<tr><td>Network: Trusted default; Custom + package-manager checkbox</td><td><span class="badge warn">Incomplete</span></td><td>Four levels: <strong>None, Trusted, Full, Custom</strong>. GitHub traffic bypasses via a dedicated proxy at every level.</td></tr>
+<tr><td>Persist env via <code>$CLAUDE_ENV_FILE</code> (SessionStart)</td><td><span class="badge warn">Thin docs</span></td><td>The web page says it and points at SessionStart hooks, but the mechanism isn't documented on the hooks/env-vars pages. Persists env for <em>Bash commands</em>; don't assume MCP spawn env.</td></tr>
+<tr><td><code>CLAUDE_CODE_REMOTE=true</code> in cloud sessions</td><td><span class="badge ok">Confirmed</span></td><td>Cloud only; unset locally. RC's analog is <code>CLAUDE_CODE_BRIDGE_SESSION_ID</code> while a phone is connected.</td></tr>
+<tr><td>Infisical machine-identity setup steps</td><td><span class="badge ok">Sound</span></td><td>Right architecture; refinements shipped in §3: least-privilege cloud-only identity, and skip the CLI entirely (the estate already does universal-auth over REST).</td></tr>
+</table>
+<p class="muted">Also confirmed: cloud usage shares your Max rate limits (parallel sessions consume proportionally; no separate compute charge) · mobile can start cloud sessions, steer them, and join RC sessions; no Bypass permission mode from the phone; <code>/plugin</code>/<code>/resume</code> unavailable · <code>--teleport</code>/<code>/tp</code> pulls a cloud session + branch down to the desktop · Max sharing is Private/Public — keep Private · non-GitHub repos can be bundled up (100 MB cap) but can't push back.</p>
+
+<h2 id="ua">6. Appendix B — universal_agent-specific findings (from rev 1)</h2>
+<ul>
+  <li><strong>The repo is already half-wired for cloud:</strong> origin/main commits 95 skills, 25 agents, 11 commands, <code>CLAUDE.md</code>, <code>.mcp.json</code>, and a SessionStart hook <em>already gated on</em> <code>CLAUDE_CODE_REMOTE=true</code> that runs <code>uv sync --frozen</code>. The gap is only secrets: <code>.mcp.json</code> needs <code>AGENTMAIL_API_KEY</code> + <code>ZAI_API_KEY</code>, and no committed path loads Infisical without the gitignored <code>.env</code>. Retrofit = Layer 2's exporter added to the existing hook.</li>
+  <li><strong>ZAI MCPs in cloud burn ZAI quota from an Anthropic-side context</strong> — prefer built-in WebFetch/WebSearch there, same rule as interactive sessions. Mind the ZAI single-concurrent-session plan if cloud scripts run GLM while VPS agents are active.</li>
+  <li><strong>VPS RC server readiness (checked live):</strong> claude v2.1.220 + tmux 3.4 present; login shell has no <code>ANTHROPIC_*</code> vars; user <code>ua</code> has no OAuth creds yet → one-time <code>claude auth login</code>, then <code>claude remote-control</code> in tmux. Phone permission modes for RC exclude Bypass — naturally safer on the prod box.</li>
+  <li>Working-tree-only MCP servers (discord ×2, one with a hardcoded desktop path) aren't at origin/main; don't commit them as-is.</li>
+</ul>
+
+<h2 id="next">7. Next steps</h2>
+<p><span class="badge ok">Built 2026-07-25</span> Steps 2 and 2b are <strong>done and verified</strong>: dragan-plugins PR #189 merged (plugin 0.1.46 in the cache), and <a href="https://github.com/Kjdragan/greenfield_template">github.com/Kjdragan/greenfield_template</a> is live, private, flagged as a template. End-to-end probe passed: a repo stamped from the template personalized itself, built its venv cold, and exported 350 secrets to <code>$CLAUDE_ENV_FILE</code> (bootstrap creds correctly not re-emitted). What remains needs your two console visits first.</p>
+<table>
+<tr><th>#</th><th>Who</th><th>What</th><th>Status</th></tr>
+<tr><td>1</td><td><strong>You</strong></td><td>Infisical web console: mint the cloud-only machine identity (universal-auth, least privilege). claude.ai/code: create the <strong>kevin-standard</strong> environment — 4 env vars (<code>INFISICAL_CLIENT_ID/SECRET/PROJECT_ID</code>, <code>INFISICAL_ENVIRONMENT=production</code>), Custom network (+ package managers, <code>app.infisical.com</code>, <code>api.z.ai</code>, optionally <code>api.telegram.org</code>).</td><td><span class="badge warn">Pending — blocks 3</span></td></tr>
+<tr><td>2</td><td>Me</td><td>new-repo scaffold cloud bootstrap (hook + cloud_env.py + CLAUDE.md seed + remote-name guard).</td><td><span class="badge ok">Done — PR #189 merged, plugin 0.1.46</span></td></tr>
+<tr><td>2b</td><td>Me</td><td><code>greenfield_template</code> repo + <code>generate_template_repo.sh</code> regeneration script.</td><td><span class="badge ok">Done — live + probe-verified</span></td></tr>
+<tr><td>3</td><td>You (+ me watching)</td><td>Real phone test: github.com → greenfield_template → Use this template → new repo → cloud session with kevin-standard → confirm secrets load. The real-VM <code>$CLAUDE_ENV_FILE</code> proof.</td><td><span class="badge warn">Pending — after 1</span></td></tr>
+<tr><td>4</td><td>Me (+ one login from you)</td><td>VPS RC server: you run the one-time <code>claude auth login</code> as <code>ua</code>; I wire the tmux keep-alive.</td><td><span class="badge warn">Pending</span></td></tr>
+<tr><td>5</td><td>Me</td><td>Retrofit universal_agent's hook with the same exporter; settle the <code>.mcp.json</code> <code>${VAR}</code> question empirically.</td><td><span class="badge warn">Pending — after 3 validates the mechanism</span></td></tr>
+</table>
+
+<p class="muted">Sources: official docs fetched live 2026-07-25 (remote-control, claude-code-on-the-web, web-quickstart, hooks, mobile, env-vars) · <code>git show origin/main</code> inventory of Kjdragan/universal_agent · dragan-plugins new-repo SKILL.md + assets read at canonical source · live SSH check of uaonvps.</p>
+
+</main>
+</body>
+</html>
