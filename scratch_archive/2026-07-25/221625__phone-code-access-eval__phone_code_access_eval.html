@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Running Projects from Phone/Tablet — Plan Evaluation</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      background: #ffffff; color: #1f2328;
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      margin: 0; padding: 0 16px 80px;
+    }
+    main { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 1.7em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; margin-top: 1.2em; }
+    h2 { font-size: 1.35em; border-bottom: 1px solid #d1d9e0; padding-bottom: .25em; margin-top: 2em; }
+    h3 { font-size: 1.1em; margin-top: 1.6em; }
+    a { color: #0969da; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { background: #f6f8fa; border: 1px solid #eaeef2; border-radius: 4px; padding: .1em .35em; font-size: .88em; }
+    pre { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: .85em; line-height: 1.5; }
+    pre code { background: none; border: none; padding: 0; }
+    table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .92em; display: block; overflow-x: auto; }
+    th, td { border: 1px solid #d1d9e0; padding: 7px 11px; text-align: left; vertical-align: top; }
+    th { background: #f6f8fa; }
+    .toc { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 14px 22px; margin: 1.4em 0; }
+    .toc ol { margin: .4em 0; padding-left: 1.3em; }
+    .badge { display: inline-block; border-radius: 12px; padding: 1px 10px; font-size: .78em; font-weight: 600; white-space: nowrap; }
+    .ok   { background: #dafbe1; color: #116329; }
+    .warn { background: #fff8c5; color: #7d4e00; }
+    .bad  { background: #ffebe9; color: #a40e26; }
+    .info { background: #ddf4ff; color: #0550ae; }
+    .callout { border-left: 4px solid #0969da; background: #ddf4ff; border-radius: 0 6px 6px 0; padding: 10px 16px; margin: 1.2em 0; }
+    .callout.warn-c { border-color: #d4a72c; background: #fff8c5; }
+    .callout.good-c { border-color: #1a7f37; background: #dafbe1; }
+    .tier { border: 1px solid #d1d9e0; border-radius: 8px; padding: 4px 20px 14px; margin: 1.2em 0; }
+    .tier h3 { margin-top: .8em; }
+    .muted { color: #59636e; font-size: .9em; }
+    kbd { background: #f6f8fa; border: 1px solid #d1d9e0; border-bottom-width: 3px; border-radius: 5px; padding: 1px 6px; font-size: .85em; }
+  </style>
+</head>
+<body>
+<main>
+
+<h1>Running Projects from Phone/Tablet — Evaluation of the Remote Control / Cloud / Infisical Plan</h1>
+<p class="muted">2026-07-25 · Claims verified against official docs (code.claude.com, fetched live) + an inventory of what <code>universal_agent</code>@origin/main actually ships · VPS state checked over SSH</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#verdict">Verdict in three sentences</a></li>
+  <li><a href="#factcheck">Fact-check of the plan's claims</a></li>
+  <li><a href="#missed">What the plan missed (estate-specific)</a></li>
+  <li><a href="#ready">Surprise: the repo is already half-wired for cloud</a></li>
+  <li><a href="#rec">Recommendation — three tiers</a></li>
+  <li><a href="#decision">Which mode for which job</a></li>
+  <li><a href="#next">Concrete next steps</a></li>
+</ol>
+</div>
+
+<h2 id="verdict">1. Verdict in three sentences</h2>
+<div class="callout good-c">
+<p><strong>The core diagnosis is correct and confirmed by the docs:</strong> Remote Control and cloud sessions are two different features sharing one UI, "empty default environment" means you were landing in cloud sessions, and Infisical machine-identity is the right secrets pattern for cloud — it is literally the same universal-auth pattern <code>scripts/_claude_launcher.py</code> already uses locally.</p>
+<p><strong>But the plan is generic, and your estate changes the answer:</strong> the cloud VM is <em>not on your tailnet</em> (no scratchpad, no <code>notify-phone</code>, no <code>ssh uaonvps</code>), the repo already commits 95 skills / 25 agents / <code>.mcp.json</code> / a cloud-gated SessionStart hook, and the one machine that is always on — the VPS — is a better Remote Control host than your desktop.</p>
+<p><strong>Recommended order:</strong> Remote Control first (desktop now, VPS as the always-on target), cloud sessions second as the fire-and-forget lane — the remaining cloud gap is just two MCP secrets plus a small committed bootstrap hook.</p>
+</div>
+
+<h2 id="factcheck">2. Fact-check of the plan's claims</h2>
+<p>Every claim was checked against the live official docs (<code>remote-control</code>, <code>claude-code-on-the-web</code>, <code>hooks</code>, <code>mobile</code>, <code>env-vars</code> pages). Summary:</p>
+
+<table>
+<tr><th>Claim in the plan</th><th>Verdict</th><th>Correction / nuance</th></tr>
+<tr><td>Remote Control = relay to your local session; nothing runs in the cloud; no environment selector</td><td><span class="badge ok">Confirmed</span></td><td>Verbatim in the docs.</td></tr>
+<tr><td>Enable via <code>/remote-control</code> or a <code>/config</code> setting</td><td><span class="badge warn">Incomplete</span></td><td>There are four ways, and the plan omits the best one for your use case: <strong><code>claude remote-control</code> server mode</strong> — a persistent multi-session server you can start <em>new</em> sessions against from the phone. Also <code>claude --rc</code>, in-session <code>/rc</code>, and the <code>/config</code> setting "Enable Remote Control for all sessions".</td></tr>
+<tr><td>Sessions show in the app list with a green indicator</td><td><span class="badge ok">Confirmed</span></td><td>Computer icon + green dot; connect via list, URL, or QR code. Phone: <strong>Code</strong> tab.</td></tr>
+<tr><td>Requires OAuth; fails if <code>ANTHROPIC_API_KEY</code> is set</td><td><span class="badge warn">Incomplete</span></td><td>True, but there's a second documented blocker (v2.1.196+): <strong><code>ANTHROPIC_BASE_URL</code> pointing anywhere other than <code>api.anthropic.com</code> also disables Remote Control</strong>. Estate impact: any session launched through <code>zai</code>/GLM can never be remote-controlled. Your <code>claudereal</code> wrapper strips the whole <code>ANTHROPIC_*</code> namespace, so desktop interactive sessions are already fully compatible.</td></tr>
+<tr><td>Cloud sessions: fresh Anthropic VM, repo cloned; <code>claude --cloud</code></td><td><span class="badge ok">Confirmed</span></td><td>4 vCPU / 16 GB RAM / 30 GB disk. Filesystem snapshot reused across sessions (~7-day expiry; invalidated when setup script or allowed hosts change; setup script must finish in ~5 min for caching).</td></tr>
+<tr><td>Environment config = env vars + setup script (root, Ubuntu 24.04)</td><td><span class="badge ok">Confirmed</span></td><td>Plus name and network-access level — four fields, not two. Env var format (one KEY=value per line, no quotes) verbatim.</td></tr>
+<tr><td>Repo-committed <code>.claude/</code>, <code>.mcp.json</code>, CLAUDE.md work in cloud; user-level config doesn't</td><td><span class="badge ok">Confirmed</span></td><td>Docs table confirms all of it. Also NOT carried: user-scoped plugins, <code>claude mcp add</code> servers, transport vars, static credentials.</td></tr>
+<tr><td>Env-config vars will resolve <code>${VAR}</code> placeholders in <code>.mcp.json</code></td><td><span class="badge bad">Undocumented</span></td><td>The plan assumes this; <strong>no doc states it</strong>. It's plausible but must be tested before you rely on it for <code>AGENTMAIL_API_KEY</code> / <code>ZAI_API_KEY</code>. Treat as an experiment, not a fact.</td></tr>
+<tr><td>No dedicated secrets store yet; env config visible to anyone who can edit it</td><td><span class="badge ok">Confirmed</span></td><td>Near-verbatim from the docs.</td></tr>
+<tr><td>Network levels: Trusted (default) and Custom</td><td><span class="badge warn">Incomplete</span></td><td>Four levels: <strong>None, Trusted, Full, Custom</strong> (Custom has the "also include package managers" checkbox). GitHub traffic bypasses this via a dedicated proxy at every level.</td></tr>
+<tr><td>Hooks persist env via <code>$CLAUDE_ENV_FILE</code> (SessionStart)</td><td><span class="badge warn">Thin docs</span></td><td>The web page says exactly that and links to SessionStart hooks — but the hooks/env-vars pages never actually document the mechanism. It exists; expect to verify behavior empirically. Note it persists env for <em>Bash commands</em>, not necessarily for MCP server spawn.</td></tr>
+<tr><td><code>CLAUDE_CODE_REMOTE=true</code> in cloud sessions</td><td><span class="badge ok">Confirmed</span></td><td>Set to <code>"true"</code> in cloud, unset locally. Remote Control's analog is <code>CLAUDE_CODE_BRIDGE_SESSION_ID</code> (a session id present while a phone is connected).</td></tr>
+<tr><td>Infisical setup steps (machine identity, CLI install, custom network domains)</td><td><span class="badge ok">Sound</span></td><td>Architecturally right and matches how the estate already authenticates headless (universal-auth). Two refinements below: least-privilege identity, and you may not need the CLI at all.</td></tr>
+</table>
+
+<h2 id="missed">3. What the plan missed (estate-specific)</h2>
+
+<h3>3.1 The cloud VM is not on your tailnet — a big slice of your workflow can't run there</h3>
+<p>The sandbox has no Tailscale. From a cloud session there is <strong>no scratchpad publishing</strong> (<code>uaonvps.taildcc090.ts.net</code> unreachable), <strong>no <code>ssh uaonvps</code></strong>, <strong>no SSHFS path guarantee</strong>, and <strong>no <code>notify-phone</code></strong> unless you allowlist <code>api.telegram.org</code> and supply the bot token. Much of the global-CLAUDE.md operating doctrine physically cannot execute in that VM. This is the single biggest reason cloud sessions will always feel like a different, thinner machine than Remote Control.</p>
+
+<h3>3.2 Your user-level layer doesn't carry — and mostly shouldn't</h3>
+<p>The ~30 KB global <code>~/.claude/CLAUDE.md</code>, ~97 user-level-only skills (hyperframes, dragan plugins, efficient-fable, visual-explainer, …), 10 user commands, and 16 plugin marketplaces stay home. The plan's advice — "commit user config into the repo" — is <em>already done</em> for the parts that matter (see §4), and the rest shouldn't move: most of those skills depend on tailnet, local binaries, or other repos via symlinks, and the global doctrine file contains estate-private operational detail that doesn't belong in more repos than necessary.</p>
+
+<h3>3.3 Cloud usage burns your Max rate limits</h3>
+<p>Confirmed by docs: cloud sessions share rate limits with all other Claude usage on the account; parallel sessions consume proportionally (no separate compute charge). So the "fire lots of parallel cloud tasks" pattern competes directly with your interactive Fable/Opus budget. The estate doctrine (bulk background → ZAI/GLM on the VPS) still stands; cloud sessions are a convenience lane, not a bulk lane.</p>
+
+<h3>3.4 Odds and ends that will bite</h3>
+<ul>
+  <li><strong>ZAI MCPs in cloud sessions burn ZAI quota from an Anthropic-side context</strong> — the committed <code>.mcp.json</code> ships <code>web-reader</code> / <code>web-search-prime</code>. In cloud, prefer built-in WebFetch/WebSearch (same rule as interactive sessions today).</li>
+  <li><strong><code>gh</code> is not preinstalled</strong> in the VM; git push is proxy-mediated and restricted to the session's branch. PR flow still works (auto-merge lives GitHub-side), but scripts that shell out to <code>gh</code> won't.</li>
+  <li><strong>Teleport exists and is useful glue:</strong> <code>claude --teleport</code> / <code>/tp</code> pulls a cloud session + its branch down to the desktop to finish with the full estate. Cloud-from-phone → teleport-at-desk is a legitimate workflow.</li>
+  <li><strong>Keep cloud sessions Private.</strong> On Max, visibility is Private/Public — Public means any signed-in claude.ai user.</li>
+  <li><strong>Mobile app limits:</strong> can start cloud sessions, steer/answer/interrupt, and join Remote Control sessions (QR or list). No <code>/plugin</code>/<code>/resume</code>; no Bypass permission mode from the phone (cloud: Accept edits/Plan/Auto; RC: Manual/Accept edits/Plan).</li>
+  <li><strong>The two uncommitted working-tree MCP servers</strong> (discord, discord-intelligence-bridge with a hardcoded <code>/home/kjdragan/...</code> path) aren't at origin/main; if ever committed as-is, the absolute path breaks everywhere but the desktop.</li>
+</ul>
+
+<h2 id="ready">4. Surprise: the repo is already half-wired for cloud</h2>
+<p>An inventory of <code>origin/main</code> (not the stale local checkout) shows the "move config into the repo" migration the plan prescribes is <strong>largely already shipped</strong>:</p>
+<table>
+<tr><th>What a fresh cloud clone gets</th><th>Status</th></tr>
+<tr><td><code>.claude/settings.json</code> with a <strong>SessionStart hook already gated on <code>CLAUDE_CODE_REMOTE=true</code></strong> that runs <code>uv sync --frozen</code> — its own header says it exists to populate the venv in a fresh web-session container</td><td><span class="badge ok">Committed</span></td></tr>
+<tr><td>95 skills, 25 agents, 11 commands, 6 knowledge files under <code>.claude/</code> (643 files; the 10 skill symlinks all resolve inside the repo clone)</td><td><span class="badge ok">Committed</span></td></tr>
+<tr><td><code>CLAUDE.md</code> + <code>AGENTS.md</code> at repo root</td><td><span class="badge ok">Committed</span></td></tr>
+<tr><td><code>.mcp.json</code> — 4 servers needing exactly <strong>two secrets</strong>: <code>AGENTMAIL_API_KEY</code>, <code>ZAI_API_KEY</code></td><td><span class="badge warn">Committed, creds won't resolve</span></td></tr>
+<tr><td>Any Infisical bootstrap usable in a sandbox — every committed path (launcher, devup, deploy scripts) requires the gitignored <code>.env</code> machine-identity file</td><td><span class="badge bad">Missing — this is the whole gap</span></td></tr>
+<tr><td><code>settings.local.json</code> (branch guards, timer guard, 73 allow rules)</td><td><span class="badge info">Gitignored — intentionally desktop-only, fine</span></td></tr>
+</table>
+<p>So "cloud enablement" for universal_agent is not a migration project. It's: <em>one least-privilege Infisical identity + a few env-config lines + one small committed hook extension</em>.</p>
+
+<h2 id="rec">5. Recommendation — three tiers</h2>
+
+<div class="tier">
+<h3>Tier 1 — Today, zero setup: Remote Control on the desktop</h3>
+<p>Your <code>claudereal</code> wrapper already strips <code>ANTHROPIC_*</code>, so desktop sessions are fully RC-compatible right now. Either flip <kbd>/config</kbd> → "Enable Remote Control for all sessions", or run <code>claude remote-control</code> (server mode) in tmux so the phone can start <em>new</em> sessions against the desktop, not just join existing ones. Full estate: Infisical secrets, tailnet, scratchpad, all 100+ user skills, GPU.</p>
+<p class="muted">Limits: desktop must be awake; anything launched via <code>zai</code> (GLM base URL) can never RC.</p>
+</div>
+
+<div class="tier">
+<h3>Tier 2 — The always-on answer: Remote Control server on the VPS</h3>
+<p>This is the option the plan couldn't know about. <strong>Verified today:</strong> the VPS has <code>claude</code> v2.1.220 and tmux 3.4, no <code>ANTHROPIC_*</code> vars in the login shell, but user <code>ua</code> has <strong>no OAuth credentials yet</strong>. One-time setup: <code>claude auth login</code> as <code>ua</code>, then keep <code>claude remote-control</code> alive in tmux. Your phone then always has a green session to connect to — against the production box, with <code>/opt/universal_agent/.env</code> present so the full secret bootstrap works, tailnet-native (scratchpad and <code>notify-phone</code> work <em>from inside</em> the session), and independent of whether the desktop is on.</p>
+<p class="muted">Decide which account's Max limits it spends (it must be OAuth — the ZAI plan can't drive RC). Phone permission modes for RC exclude Bypass, so it's naturally safer on a prod box.</p>
+</div>
+
+<div class="tier">
+<h3>Tier 3 — Fire-and-forget lane: finish cloud enablement (small PR + one-time console work)</h3>
+<p>Adopt the plan's Infisical architecture with three corrections:</p>
+<ol>
+  <li><strong>Mint a NEW machine identity for cloud only</strong> — least-privilege, read-only, scoped to the handful of secrets a sandbox should ever see (not the full production set, and not the identity the desktop/VPS use). It sits in Anthropic's env config in plaintext-to-you; keep its blast radius small and revoke it independently.</li>
+  <li><strong>You probably don't need the Infisical CLI or its apt repo at all.</strong> The estate already authenticates headless via universal-auth REST calls with <code>httpx</code> (<code>_claude_launcher.py</code> pattern) — and the SessionStart hook runs <em>after</em> <code>uv sync</code>, so httpx is available. A ~30-line committed script, gated on <code>CLAUDE_CODE_REMOTE=true</code>, fetches secrets and appends exports to <code>$CLAUDE_ENV_FILE</code>. Fewer moving parts, one less network domain, no root installs.</li>
+  <li><strong>Test the undocumented bit before trusting it:</strong> whether env-config vars reach <code>.mcp.json</code> <code>${VAR}</code> expansion. If yes, put <code>AGENTMAIL_API_KEY</code>/<code>ZAI_API_KEY</code> directly in the env config and MCP works. If no, MCP servers stay dead in cloud (hook-written env likely lands after MCP spawn) — acceptable, since built-in tools cover web needs there.</li>
+</ol>
+<p>Network access: Custom + the package-manager defaults + <code>app.infisical.com</code> (drop <code>artifacts-cli.infisical.com</code> if you skip the CLI). Keep sessions Private.</p>
+</div>
+
+<h2 id="decision">6. Which mode for which job</h2>
+<table>
+<tr><th>You're on the phone and want to…</th><th>Use</th><th>Why</th></tr>
+<tr><td>Steer real work with the full estate (secrets, tailnet, scratchpad, skills, VPS/desktop files)</td><td><strong>Remote Control</strong> (desktop or VPS server)</td><td>It's literally your machine; nothing to migrate.</td></tr>
+<tr><td>Kick off a disposable, parallel task on the repo while away, laptop closed</td><td><strong>Cloud session</strong></td><td>Isolated VM, repo clone, venv auto-built by the committed hook; finish via PR or teleport to the desk later.</td></tr>
+<tr><td>Recurring/scheduled/bulk autonomous work</td><td><strong>Neither</strong> — VPS systemd + GLM, as today</td><td>Cloud sessions burn Max limits and lose the tailnet; this lane already exists and is cheaper.</td></tr>
+</table>
+
+<h2 id="next">7. Concrete next steps</h2>
+<ol>
+  <li><strong>Tier 1 (you, 1 min):</strong> on the desktop, <kbd>/config</kbd> → enable Remote Control for all sessions; open the Code tab on your phone and connect.</li>
+  <li><strong>Tier 2 (mostly me, one interactive auth from you):</strong> I can prep the tmux service wrapper on the VPS; the one step only you can do is the OAuth login as <code>ua</code> (it mutates account auth — say the word and I'll stage it and hand you the exact login command).</li>
+  <li><strong>Tier 3 (me, one small PR + you in two web consoles):</strong> I write the <code>CLAUDE_ENV_FILE</code> bootstrap + extend the committed SessionStart hook and ship the PR; you mint the least-privilege machine identity in Infisical and paste its three vars + network domains into the environment config at claude.ai/code. Then we run one throwaway cloud session to test the <code>${VAR}</code>/.mcp.json question empirically.</li>
+</ol>
+
+<p class="muted">Sources: official docs fetched live 2026-07-25 (remote-control, claude-code-on-the-web, hooks, mobile, env-vars pages at code.claude.com/docs); <code>git show origin/main</code> inventory of Kjdragan/universal_agent; live SSH check of uaonvps.</p>
+
+</main>
+</body>
+</html>
