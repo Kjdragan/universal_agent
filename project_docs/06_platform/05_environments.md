@@ -10,6 +10,8 @@ code_paths:
   - src/universal_agent/tools/vp_orchestration.py
   - scripts/claude_with_mcp_env.sh
   - scripts/_claude_launcher.py
+  - .claude/hooks/session-start.sh
+  - scripts/cloud_env_export.py
   - src/universal_agent/infisical_loader.py
   - src/universal_agent/loop_control.py
   - src/universal_agent/feature_flags.py
@@ -139,6 +141,34 @@ arrow-key prompt; the lazy machine-identity loader fixed both speed and headless
 correctness.)
 
 ---
+
+### Claude Code on the web — cloud-session bootstrap
+
+A session on Claude Code on the web (`CLAUDE_CODE_REMOTE=true`) runs in a fresh
+Anthropic-managed VM: repo cloned, no `.venv`, no `/opt/universal_agent/.env`.
+The committed SessionStart hook (`.claude/hooks/session-start.sh`) closes both
+gaps, fail-soft (it never blocks a session):
+
+1. **venv** — `uv sync --frozen` (skipped when the container cache is warm).
+2. **secrets** — when the claude.ai environment config supplies the Infisical
+   machine-identity vars (`INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` /
+   `INFISICAL_PROJECT_ID` / `INFISICAL_ENVIRONMENT`), the hook runs
+   `scripts/cloud_env_export.py::main`, which calls
+   `src/universal_agent/infisical_loader.py::initialize_runtime_secrets` and
+   appends shell-quoted `export KEY=...` lines to `$CLAUDE_ENV_FILE` — a file
+   the web harness sources before each subsequent Bash command. The format
+   matters: bare `KEY=value` lines silently fail (verified empirically
+   2026-07-26 on the greenfield scaffold, where this mechanism was proven
+   end-to-end in a real VM).
+
+Exclusions mirror the interactive-launcher rules: `ANTHROPIC_*` is never
+exported (the Max OAuth path must win on interactive surfaces — same rule as
+`scripts/_claude_launcher.py`), and `GH_TOKEN`/`GITHUB_TOKEN` stay untouched
+(the cloud harness injects proxy placeholders deliberately). Multi-line
+secrets (PEM/JSON) are skipped; fetch those in-process via
+`initialize_runtime_secrets()`. The environment's network allowlist must
+include `app.infisical.com`. On the VPS and desktop the hook exits
+immediately (`CLAUDE_CODE_REMOTE` unset), so nothing changes for Profiles 1–3.
 
 ## Profile 2 — Autonomous principals (ZAI / GLM)
 
