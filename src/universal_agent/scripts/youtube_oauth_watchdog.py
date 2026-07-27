@@ -58,8 +58,17 @@ def _digest_recipient() -> str:
     ).strip()
 
 
-def _build_warning_email(state: str, age_days: float | None, detail: str) -> tuple[str, str, str]:
+def _build_warning_email(
+    state: str,
+    age_days: float | None,
+    detail: str,
+    *,
+    observed_title: str = "",
+    expected_title: str = "",
+) -> tuple[str, str, str]:
     """Return ``(subject, html, text)`` for the warning email."""
+    import html as _html
+
     from universal_agent.services import youtube_oauth_health as yoh
 
     base = yoh.public_base_url()
@@ -68,7 +77,22 @@ def _build_warning_email(state: str, age_days: float | None, detail: str) -> tup
     token = yoh.mint_signed_param("start", 14 * 86400)
     start_url = f"{base}{yoh.START_PATH}?t={token}" if token else ""
 
-    if state == "dead":
+    if state == "wrong_channel":
+        # The failure liveness can't see: the token WORKS but acts as the
+        # wrong channel, so every playlist read 404s while the watchdog
+        # keeps saying "healthy". Ate two days of digests on 2026-07-25/26.
+        ob = _html.escape(observed_title or "an unexpected channel")
+        ex = _html.escape(expected_title or "the channel that owns the day-Digest playlists")
+        subject = "YouTube OAuth token is for the WRONG channel — re-auth needed"
+        headline = "Your YouTube token belongs to the wrong channel"
+        lead = (
+            f"The token is alive, but it acts as <b>{ob}</b> — not <b>{ex}</b>, "
+            "which owns the digest playlists. Every playlist read is failing "
+            "with playlistNotFound, so digests are silently dead. Re-authorize "
+            f"and at Google's account picker choose <b>{ex}</b>."
+        )
+        color = "#cf222e"
+    elif state == "dead":
         subject = "YouTube OAuth token EXPIRED — re-auth needed"
         headline = "Your YouTube OAuth token has expired"
         lead = (
@@ -165,13 +189,44 @@ def main() -> int:
     client_secret = (os.getenv("YOUTUBE_OAUTH_CLIENT_SECRET") or "").strip()
     refresh_token = (os.getenv(yoh.REFRESH_TOKEN_KEY) or "").strip()
 
-    alive, detail = yoh.test_refresh_token(client_id, client_secret, refresh_token)
+    access_token, detail = yoh.refresh_access_token(client_id, client_secret, refresh_token)
+    alive = access_token is not None or detail.startswith("inconclusive")
     minted_at = yoh.read_minted_at()
     age = yoh.token_age_days(minted_at)
     threshold = yoh.warn_age_days()
 
+    # CHANNEL IDENTITY — the check liveness cannot make. A token for the
+    # wrong channel (wrong profile picked at Google's account chooser)
+    # passes liveness forever while every playlist read 404s: exactly how
+    # the 2026-07-24 re-auth silently killed two days of digests. Expected
+    # identity is adopted from the current token on first run (trust on
+    # first use) and asserted every day after.
+    observed_id, observed_title = "", ""
+    expected = (os.getenv(yoh.EXPECTED_CHANNEL_KEY) or "").strip()
+    expected_title = (os.getenv(yoh.EXPECTED_CHANNEL_TITLE_KEY) or "").strip()
+    wrong_channel = False
+    if access_token:
+        observed = yoh.fetch_token_channel(access_token)
+        if observed is None:
+            logger.warning("Channel identity check inconclusive — skipping (never alarm on a fetch error).")
+        else:
+            observed_id, observed_title = observed
+            if not expected and observed_id:
+                from universal_agent.infisical_loader import upsert_infisical_secret
+
+                ok_id = upsert_infisical_secret(yoh.EXPECTED_CHANNEL_KEY, observed_id)
+                upsert_infisical_secret(yoh.EXPECTED_CHANNEL_TITLE_KEY, observed_title)
+                logger.info(
+                    "Adopted expected channel (trust on first use): %s (%s) saved=%s",
+                    observed_title, observed_id, ok_id,
+                )
+            elif expected and observed_id != expected:
+                wrong_channel = True
+
     if not alive:
         state = "dead"
+    elif wrong_channel:
+        state = "wrong_channel"
     elif age is not None and age >= threshold:
         state = "expiring"
     else:
@@ -179,18 +234,27 @@ def main() -> int:
 
     age_str = f"{age:.2f}d" if age is not None else "unknown (no minted-at stamp)"
     logger.info(
-        "OAuth watchdog: alive=%s state=%s age=%s threshold=%.1fd detail=%s",
-        alive, state, age_str, threshold, detail,
+        "OAuth watchdog: alive=%s state=%s age=%s threshold=%.1fd channel=%s(%s) expected=%s detail=%s",
+        alive, state, age_str, threshold, observed_title or "?", observed_id or "?",
+        expected or "unset", detail,
     )
 
-    should_email = state in {"dead", "expiring"} or args.force_email
+    should_email = state in {"dead", "expiring", "wrong_channel"} or args.force_email
     if not should_email:
         logger.info("Token healthy — no warning email sent.")
         return 0
 
     # When forcing on a healthy token, present it as the proactive variant.
     effective_state = state if state != "healthy" else "expiring"
-    subject, html, text = _build_warning_email(effective_state, age, detail)
+    if state == "wrong_channel":
+        detail = (
+            f"token acts as '{observed_title}' ({observed_id}); "
+            f"expected '{expected_title}' ({expected})"
+        )
+    subject, html, text = _build_warning_email(
+        effective_state, age, detail,
+        observed_title=observed_title, expected_title=expected_title,
+    )
     recipient = _digest_recipient()
     logger.info("Sending OAuth %s warning to %s...", effective_state, recipient)
     try:

@@ -46,6 +46,17 @@ YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube"
 REFRESH_TOKEN_KEY = "YOUTUBE_OAUTH_REFRESH_TOKEN"
 MINTED_AT_KEY = "YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT"
 
+# The channel identity contract. A YouTube OAuth grant is for ONE channel,
+# chosen at Google's account picker — and picking the wrong profile there
+# yields a token that passes every liveness check while every playlist read
+# fails with playlistNotFound (private playlists of the right channel are
+# simply invisible to it). That exact miss killed two days of digests on
+# 2026-07-24..26. These keys pin which channel the token is SUPPOSED to be:
+# adopted from the current healthy token on first watchdog run (trust on
+# first use), then asserted daily and at every re-auth callback.
+EXPECTED_CHANNEL_KEY = "YOUTUBE_OAUTH_EXPECTED_CHANNEL_ID"
+EXPECTED_CHANNEL_TITLE_KEY = "YOUTUBE_OAUTH_EXPECTED_CHANNEL_TITLE"
+
 # Gateway route paths (kept here so the watchdog email and the endpoints
 # agree on a single source of truth).
 START_PATH = "/api/v1/youtube-oauth/start"
@@ -182,6 +193,44 @@ def exchange_code(
     return resp.json()
 
 
+def refresh_access_token(
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    *,
+    timeout: float = 15.0,
+) -> tuple[str | None, str]:
+    """Exchange the refresh token for an access token.
+
+    Returns ``(access_token, detail)``.  ``(None, "inconclusive ...")`` on a
+    network error — the caller decides whether that counts as alive.  The
+    access token is what the channel-identity check needs; discarding it
+    (as the old liveness-only check did) is how a wrong-channel token
+    passed the watchdog for two days.
+    """
+    import httpx
+
+    if not (client_id and client_secret and refresh_token):
+        return None, "missing client_id / client_secret / refresh_token"
+    try:
+        resp = httpx.post(
+            OAUTH2_TOKEN_URL,
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+            timeout=timeout,
+        )
+    except Exception as exc:  # network error — inconclusive, not dead
+        return None, f"inconclusive (network error: {exc})"
+    token = resp.json().get("access_token") if resp.status_code == 200 else None
+    if token:
+        return token, "ok"
+    return None, f"{resp.status_code}: {resp.text[:200]}"
+
+
 def test_refresh_token(
     client_id: str,
     client_secret: str,
@@ -195,26 +244,44 @@ def test_refresh_token(
     a fresh access token.  An ``invalid_grant`` (the expired-token case)
     returns ``(False, "invalid_grant: ...")``.
     """
+    token, detail = refresh_access_token(
+        client_id, client_secret, refresh_token, timeout=timeout)
+    if token:
+        return True, "ok"
+    if detail.startswith("inconclusive"):
+        return True, f"liveness check {detail}"
+    return False, detail
+
+
+def fetch_token_channel(access_token: str, *, timeout: float = 15.0) -> tuple[str, str] | None:
+    """The channel identity this token acts as: ``(channel_id, title)``.
+
+    ``channels?mine=true`` returns the channel selected at Google's account
+    picker during consent — the one identity all YouTube API calls act as.
+    Returns ``("", "")`` when the token is valid but has NO channel, and
+    ``None`` when the answer could not be determined (network/API error) —
+    callers must treat ``None`` as inconclusive, never as a mismatch.
+    """
     import httpx
 
-    if not (client_id and client_secret and refresh_token):
-        return False, "missing client_id / client_secret / refresh_token"
     try:
-        resp = httpx.post(
-            OAUTH2_TOKEN_URL,
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-            },
+        resp = httpx.get(
+            "https://www.googleapis.com/youtube/v3/channels",
+            params={"part": "snippet", "mine": "true"},
+            headers={"Authorization": f"Bearer {access_token}"},
             timeout=timeout,
         )
-    except Exception as exc:  # network error — inconclusive, treat as alive
-        return True, f"liveness check inconclusive (network error: {exc})"
-    if resp.status_code == 200 and resp.json().get("access_token"):
-        return True, "ok"
-    return False, f"{resp.status_code}: {resp.text[:200]}"
+    except Exception as exc:
+        logger.warning("fetch_token_channel: network error: %s", exc)
+        return None
+    if resp.status_code != 200:
+        logger.warning("fetch_token_channel: HTTP %s: %s", resp.status_code, resp.text[:150])
+        return None
+    items = resp.json().get("items") or []
+    if not items:
+        return ("", "")
+    snippet = items[0].get("snippet") or {}
+    return (items[0].get("id") or "", snippet.get("title") or "")
 
 
 def read_minted_at() -> datetime | None:

@@ -22699,9 +22699,61 @@ async def youtube_oauth_callback(code: str = "", state: str = "", error: str = "
             status_code=400,
         )
 
+    # CHANNEL IDENTITY GATE — refuse the wrong profile at the door. A grant
+    # made with the wrong choice at Google's account picker is a live token
+    # that can see none of the digest playlists; saving it replaces a WORKING
+    # token with a useless one (2026-07-24: two days of digests died this
+    # way, with the watchdog reporting "healthy" throughout). Check BEFORE
+    # persisting; an inconclusive check (None) never blocks — only a
+    # positive mismatch does.
+    import html as _html
+
+    access_token = (token_data.get("access_token") or "").strip()
+    expected_id = (os.getenv(yoh.EXPECTED_CHANNEL_KEY) or "").strip()
+    expected_title = (os.getenv(yoh.EXPECTED_CHANNEL_TITLE_KEY) or "").strip()
+    observed = None
+    if access_token:
+        observed = await _asyncio.to_thread(yoh.fetch_token_channel, access_token)
+    if expected_id and observed is not None and observed[0] and observed[0] != expected_id:
+        ob = _html.escape(observed[1] or observed[0])
+        ex = _html.escape(expected_title or "the profile that owns the day-Digest playlists")
+        retry = yoh.mint_signed_param("start", 3600)
+        retry_html = (
+            f'<p><a href="{yoh.public_base_url()}{yoh.START_PATH}?t={retry}" '
+            'style="display:inline-block;padding:12px 22px;background:#cf222e;'
+            "color:#ffffff;text-decoration:none;font-weight:600;border-radius:8px;"
+            f'font-size:15px;">🔁 Try again — pick {ex}</a></p>'
+        ) if retry else ""
+        logger.warning(
+            "youtube_oauth_callback: REFUSED wrong-channel grant: observed=%s(%s) expected=%s(%s)",
+            observed[1], observed[0], expected_title, expected_id,
+        )
+        return HTMLResponse(
+            _brief_chrome(
+                "Wrong YouTube profile — token NOT saved",
+                f"<p>You authorized <b>{ob}</b>, but the digest playlists live on "
+                f"<b>{ex}</b>. The previous token was left untouched, so nothing "
+                "got worse.</p>"
+                f"{retry_html}"
+                "<p style='font-size:12px;color:#6b7280;'>At Google's account "
+                f"picker, choose <b>{ex}</b> — the profile with your "
+                "subscriptions and the Monday–Sunday Digest playlists.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=409,
+        )
+
     minted_at = yoh.current_iso()
     ok_token = upsert_infisical_secret(yoh.REFRESH_TOKEN_KEY, refresh_token)
     ok_stamp = upsert_infisical_secret(yoh.MINTED_AT_KEY, minted_at)
+    if not expected_id and observed is not None and observed[0]:
+        # First grant with no contract yet: adopt this identity as expected.
+        upsert_infisical_secret(yoh.EXPECTED_CHANNEL_KEY, observed[0])
+        upsert_infisical_secret(yoh.EXPECTED_CHANNEL_TITLE_KEY, observed[1])
+        logger.info(
+            "youtube_oauth_callback: adopted expected channel %s (%s)",
+            observed[1], observed[0],
+        )
     logger.info(
         "youtube_oauth_callback: re-auth complete token_saved=%s stamp_saved=%s minted_at=%s",
         ok_token, ok_stamp, minted_at,

@@ -98,3 +98,113 @@ def test_public_base_url_default(monkeypatch):
     assert yoh.public_base_url() == "https://app.clearspringcg.com"
     monkeypatch.setenv("UA_PUBLIC_BASE_URL", "https://custom.example/")
     assert yoh.public_base_url() == "https://custom.example"
+
+
+# ---------------------------------------------------------------------------
+# Channel-identity helpers — the check liveness cannot make. A token for the
+# wrong channel (wrong profile at Google's account picker) passes liveness
+# forever while every playlist read 404s; these pin the machinery that
+# turned that silent failure (2026-07-24..26, two dead digests) into an alarm.
+# ---------------------------------------------------------------------------
+
+
+class _Resp:
+    def __init__(self, status_code=200, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+def test_fetch_token_channel_returns_identity(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp(
+        payload={"items": [{"id": "UCabc123", "snippet": {"title": "My Channel"}}]}))
+    assert yoh.fetch_token_channel("tok") == ("UCabc123", "My Channel")
+
+
+def test_fetch_token_channel_no_channel_is_empty_not_none(monkeypatch):
+    # A valid token with NO channel is an observed identity (the brand-account
+    # edge), distinct from "could not determine" — it must not read as None.
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp(payload={"items": []}))
+    assert yoh.fetch_token_channel("tok") == ("", "")
+
+
+def test_fetch_token_channel_http_error_is_inconclusive(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp(status_code=403, text="quota"))
+    assert yoh.fetch_token_channel("tok") is None
+
+
+def test_fetch_token_channel_network_error_is_inconclusive(monkeypatch):
+    import httpx
+
+    def _boom(*a, **k):
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(httpx, "get", _boom)
+    assert yoh.fetch_token_channel("tok") is None
+
+
+def test_refresh_access_token_returns_token(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp(
+        payload={"access_token": "ya29.fresh"}))
+    token, detail = yoh.refresh_access_token("cid", "sec", "rt")
+    assert token == "ya29.fresh" and detail == "ok"
+
+
+def test_refresh_access_token_dead_token(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp(
+        status_code=400, text='{"error": "invalid_grant"}'))
+    token, detail = yoh.refresh_access_token("cid", "sec", "rt")
+    assert token is None and "invalid_grant" in detail
+
+
+def test_refresh_access_token_network_error_inconclusive(monkeypatch):
+    import httpx
+
+    def _boom(*a, **k):
+        raise OSError("timeout")
+
+    monkeypatch.setattr(httpx, "post", _boom)
+    token, detail = yoh.refresh_access_token("cid", "sec", "rt")
+    assert token is None and detail.startswith("inconclusive")
+
+
+def test_test_refresh_token_compat_alive_on_ok_and_network_error(monkeypatch):
+    # test_refresh_token now delegates to refresh_access_token; its contract
+    # (alive on success AND on inconclusive network errors) must not drift.
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp(
+        payload={"access_token": "t"}))
+    assert yoh.test_refresh_token("cid", "sec", "rt") == (True, "ok")
+
+    def _boom(*a, **k):
+        raise OSError("net down")
+
+    monkeypatch.setattr(httpx, "post", _boom)
+    alive, detail = yoh.test_refresh_token("cid", "sec", "rt")
+    assert alive is True and "inconclusive" in detail
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp(
+        status_code=400, text="invalid_grant"))
+    alive, detail = yoh.test_refresh_token("cid", "sec", "rt")
+    assert alive is False and "invalid_grant" in detail
+
+
+def test_expected_channel_keys_are_stable():
+    # These names are the Infisical contract; renaming them would orphan the
+    # stored identity and silently disable the assertion.
+    assert yoh.EXPECTED_CHANNEL_KEY == "YOUTUBE_OAUTH_EXPECTED_CHANNEL_ID"
+    assert yoh.EXPECTED_CHANNEL_TITLE_KEY == "YOUTUBE_OAUTH_EXPECTED_CHANNEL_TITLE"
