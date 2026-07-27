@@ -191,6 +191,7 @@ The decision tree below was originally written for Cody. It applies equally to A
   with a (relatively) fresh context.
 ## Novelty Policy
 - Do NOT repeat an investigation topic that appears in the RECENT INVESTIGATIONS list provided in the prompt.
+- Do NOT re-investigate an issue that already has an open fix task in Task Hub. Before deep-diving any anomaly, spend ONE query checking for an existing task covering it: `sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db "SELECT task_id, status, title FROM task_hub_items WHERE status IN ('open','in_progress','blocked','needs_review','delegated','pending_review');"` — scan the titles for the subsystem in question. If a match exists: write findings referencing that task_id and STOP — the diagnosis budget belongs to the assignee (usually Cody), not the heartbeat. A 20-minute re-diagnosis of an already-queued fix is how a heartbeat self-inflicts an exec-timeout (2026-07-26, cron-wedge task_3773b30ae294).
 - Each heartbeat cycle should advance a DIFFERENT item from the Active Monitors list or explore a genuinely new angle.
 - If all checklist items have been investigated recently, focus on operational hygiene, brainstorm advancement, or simply skip proactively.
 - Vary your approach: if the last cycle did research, this cycle do execution/delivery.
