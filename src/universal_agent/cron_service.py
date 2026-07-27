@@ -1286,6 +1286,17 @@ class CronService:
         self.running_job_scheduled_at: dict[str, float] = {}
         self.max_concurrency = int(os.getenv("UA_CRON_MAX_CONCURRENCY", "2"))
         self._semaphore = asyncio.Semaphore(self.max_concurrency)
+        # Separate lane for lightweight `!script` crons. UA_CRON_MAX_CONCURRENCY
+        # is 1 in prod to serialize heavy LLM crons (single-session ZAI plan), so
+        # the per-minute stdlib-only simone_chat_auto_complete starved ~25 min
+        # behind paper_to_podcast_daily nightly at 02:00 UTC, tripping the
+        # cron_loop_liveness invariant (CRONDIAG 2026-07-27: sem_wait=1456.6s,
+        # sem_free_before=0). Subprocess housekeeping must not queue behind
+        # LLM sessions; it is already bounded by _spawn_script_with_timeout.
+        self.lightweight_max_concurrency = int(
+            os.getenv("UA_CRON_LIGHTWEIGHT_MAX_CONCURRENCY", "2")
+        )
+        self._lightweight_semaphore = asyncio.Semaphore(self.lightweight_max_concurrency)
         self.event_sink = event_sink
         self.wake_callback = wake_callback
         self.system_event_callback = system_event_callback
@@ -2080,8 +2091,13 @@ class CronService:
         # CRONDIAG (2026-07-25, temporary): time blocked here separates
         # "queued behind a full semaphore" (a) from "the loop never ran us" (b).
         _diag_wait_t0 = time.time()
-        _diag_sem_free_before = getattr(self._semaphore, "_value", "?")
-        async with self._semaphore:
+        _sem = (
+            self._lightweight_semaphore
+            if (getattr(job, "metadata", None) or {}).get("lightweight")
+            else self._semaphore
+        )
+        _diag_sem_free_before = getattr(_sem, "_value", "?")
+        async with _sem:
             _diag_waited = time.time() - _diag_wait_t0
             if _diag_waited > 5.0:
                 logger.warning(
