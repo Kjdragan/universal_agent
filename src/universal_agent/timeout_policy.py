@@ -118,6 +118,26 @@ def cron_script_idle_kill_seconds(default: float = 60.0) -> float:
     return _read_float("UA_CRON_SCRIPT_IDLE_KILL_SECONDS", default, minimum=0.0)
 
 
+def cron_pre_spawn_timeout_seconds(default: float = 30.0) -> float:
+    """Bound on the lightweight cron claim→spawn window (the residual wedge).
+
+    Covers the work between the scheduler's ``running_jobs`` claim and the
+    ``_spawn_script_with_timeout`` call — dominated by the
+    ``workflow_admission.mark_running`` synchronous sqlite write (15 s
+    ``busy_timeout`` + workspace-scaffold FS I/O). Run unbounded on the
+    event loop, a lock-contended write holds the claim with NO watchdog
+    armed: the spawn idle-kill never starts, the scheduler skips the
+    claimed job every tick, and the ``cron_scheduler_dispatching``
+    invariant flaps (task_3773b30ae294, 2026-07-27 — "timeouts never arm
+    if dispatch never starts"). Default 30 s = 2× the sqlite busy_timeout:
+    a healthy write finishes in milliseconds, a contended one gets one
+    full busy-wait plus headroom, and a truly stuck one strands the
+    schedule for ONE tick (``next_run_at`` already advanced at claim)
+    instead of indefinitely.
+    """
+    return _read_float("UA_CRON_PRE_SPAWN_TIMEOUT_SECONDS", default, minimum=1.0)
+
+
 class LivenessWatchdog:
     """Canonical idle / no-progress kill policy for UA agent-execution lanes.
 
