@@ -23,6 +23,7 @@ from universal_agent.gateway import GatewayRequest, InProcessGateway
 from universal_agent.heartbeat_service import _parse_duration_seconds
 from universal_agent.timeout_policy import (
     LivenessWatchdog,
+    cron_pre_spawn_timeout_seconds,
     cron_script_idle_kill_seconds,
 )
 from universal_agent.workflow_admission import WorkflowAdmissionService, WorkflowTrigger
@@ -2265,17 +2266,47 @@ class CronService:
                     )
 
                     if workflow_run_id and workflow_attempt_id:
-                        self._workflow_admission_service().mark_running(
-                            workflow_run_id,
-                            attempt_id=workflow_attempt_id,
-                            provider_session_id=None,
-                            summary={
-                                "job_id": job.job_id,
-                                "reason": reason,
-                                "workspace_dir": job.workspace_dir,
-                                "lightweight": True,
-                            },
-                        )
+                        # Residual-wedge fix (task_3773b30ae294): mark_running
+                        # is a synchronous sqlite write (15s busy_timeout +
+                        # workspace-scaffold FS I/O). Inline on the event loop
+                        # it sat in the claim→spawn window with NO watchdog
+                        # armed — a lock-contended write held the running_jobs
+                        # claim while the scheduler skipped the job every tick
+                        # (the flapping cron_scheduler_dispatching invariant:
+                        # "timeouts never arm if dispatch never starts").
+                        # Off-loop via to_thread (the scheduler keeps ticking)
+                        # and bounded via wait_for: on timeout the RuntimeError
+                        # lands in the generic error path below, the finally
+                        # releases the claim, and next_run_at — already
+                        # advanced at claim — strands the schedule ONE tick,
+                        # not indefinitely. RuntimeError, not TimeoutError, so
+                        # the record says what actually stalled instead of the
+                        # execution-timeout handler's canned message.
+                        _lw_pre_spawn_bound = cron_pre_spawn_timeout_seconds()
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    self._workflow_admission_service().mark_running,
+                                    workflow_run_id,
+                                    attempt_id=workflow_attempt_id,
+                                    provider_session_id=None,
+                                    summary={
+                                        "job_id": job.job_id,
+                                        "reason": reason,
+                                        "workspace_dir": job.workspace_dir,
+                                        "lightweight": True,
+                                    },
+                                ),
+                                timeout=_lw_pre_spawn_bound,
+                            )
+                        except asyncio.TimeoutError:
+                            raise RuntimeError(
+                                "claim→spawn window stalled: mark_running "
+                                f"(workflow_admission sqlite write) exceeded "
+                                f"{_lw_pre_spawn_bound:.0f}s pre-spawn bound "
+                                "(likely DB lock contention); claim released, "
+                                "job resumes next tick"
+                            ) from None
 
                     # ONE timeout covering spawn + communicate (the 60-minute
                     # wedge fix — see _spawn_script_with_timeout). This
