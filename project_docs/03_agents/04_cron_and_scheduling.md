@@ -243,6 +243,14 @@ by the caller; absent that it is UTC.
 
 Concurrency is bounded by an `asyncio.Semaphore(self.max_concurrency)` where
 `max_concurrency` comes from `UA_CRON_MAX_CONCURRENCY` (default **2**).
+Jobs with `metadata.lightweight=True` acquire a **separate**
+`_lightweight_semaphore` (`UA_CRON_LIGHTWEIGHT_MAX_CONCURRENCY`, default
+**2**) instead — prod serializes heavy LLM crons at concurrency 1
+(single-session ZAI plan), and the per-minute stdlib-only
+`simone_chat_auto_complete` starved ~25 min behind
+`paper_to_podcast_daily`'s nightly run, tripping the
+`cron_loop_liveness` proactive-health invariant (2026-07-27 incident;
+CRONDIAG `sem_wait=1456.6s`).
 
 ## `_run_job`: the execution body
 
@@ -788,7 +796,8 @@ view the transcript; the gateway's session reaper cleans them up later.
 
 | Var | Default | Effect |
 |---|---|---|
-| `UA_CRON_MAX_CONCURRENCY` | `2` | Max concurrent cron runs (semaphore). |
+| `UA_CRON_MAX_CONCURRENCY` | `2` | Max concurrent cron runs (heavy-lane semaphore). |
+| `UA_CRON_LIGHTWEIGHT_MAX_CONCURRENCY` | `2` | Separate semaphore for `metadata.lightweight=True` `!script` crons so they never queue behind heavy LLM crons. |
 | `UA_CRON_BACKFILL_ON_RESTART` | off | If truthy, fire queued backfills at startup (see incident note — leave off). In-flight marker recovery for `catch_up_on_restart` jobs runs regardless of this gate. |
 | `UA_CRON_REGISTRATION_ENABLED` / `should_run_loop("cron_registration")` | prod on, dev off | Master gate for registering system crons. |
 | `UA_CRON_DB_LOCK_RETRIES` | `2` | Retries on "database is locked" inside an LLM-cron attempt (clamped 0–5). |
