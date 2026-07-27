@@ -42,9 +42,8 @@ import re
 import sqlite3
 from typing import Any, Optional
 
-from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
-
 from universal_agent import task_hub
+from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 from universal_agent.utils.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)

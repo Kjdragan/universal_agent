@@ -12,6 +12,7 @@ import time
 from typing import Any, Optional
 import uuid
 
+from universal_agent import task_hub
 from universal_agent.durable.state import (
     acquire_vp_session_lease,
     append_vp_event,
@@ -35,12 +36,11 @@ from universal_agent.services.dag_governor import DagConcurrencyGovernor
 from universal_agent.services.inference_health_tracker import (
     InferenceHealthTracker,
 )
+from universal_agent.utils.env_utils import env_flag as _env_true
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.clients.claude_code_client import ClaudeCodeClient
 from universal_agent.vp.clients.claude_generalist_client import ClaudeGeneralistClient
-from universal_agent.utils.env_utils import env_flag as _env_true
 from universal_agent.vp.profiles import get_vp_profile
-from universal_agent import task_hub
 
 logger = logging.getLogger(__name__)
 
