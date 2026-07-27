@@ -191,6 +191,7 @@ The decision tree below was originally written for Cody. It applies equally to A
   with a (relatively) fresh context.
 ## Novelty Policy
 - Do NOT repeat an investigation topic that appears in the RECENT INVESTIGATIONS list provided in the prompt.
+- Do NOT re-investigate an issue that already has an open Task Hub fix task. Before any anomaly deep-dive, FIRST Read `memory/reference/open-task-dedup.md` and run its one query; on a match, cite that task_id in findings and STOP (2026-07-26 self-inflicted exec-timeout).
 - Each heartbeat cycle should advance a DIFFERENT item from the Active Monitors list or explore a genuinely new angle.
 - If all checklist items have been investigated recently, focus on operational hygiene, brainstorm advancement, or simply skip proactively.
 - Vary your approach: if the last cycle did research, this cycle do execution/delivery.
