@@ -21,7 +21,9 @@ from datetime import datetime, timedelta, timezone
 import logging
 import os
 from pathlib import Path
+import shutil
 import sqlite3
+import subprocess
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
@@ -1293,4 +1295,176 @@ def vp_rescue_chain_storm(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "threshold_text": (
             f"< {ceiling} failures per rescue_chain per {RUNAWAY_ANOMALY_WINDOW_HOURS}h"
         ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Infisical CLI machine-identity auth freshness (added 2026-07-28)
+# ---------------------------------------------------------------------------
+#
+# WHY THIS PROBE EXISTS (the invisible-failure class it closes):
+# UA services bootstrap secrets at startup via the in-process SDK path
+# (`infisical_loader._fetch_infisical_secrets` -> REST `universal-auth/login`),
+# which re-mints a fresh access token on EVERY call (no local cache) and so
+# stays green even when the Infisical *CLI's* own cached machine-identity token
+# has expired. The CLI is a SEPARATE credential store (its local token cache,
+# populated by `infisical login`) used by deploy-time env rendering
+# (`render_service_env_from_infisical.py`), the threads-token-sync script, and
+# ad-hoc agent `infisical secrets get` calls. When that cached token expires
+# the CLI returns 403 "token has expired" — but because the SDK boot path is
+# green, the whole fleet LOOKS healthy (gateway /healthz green, services up)
+# while every CLI-based secret fetch is quietly broken. On 2026-07-28 this
+# silently blinded the heartbeat's own proactive_health step (couldn't fetch
+# UA_OPS_TOKEN to mint a bearer). No existing invariant surfaces this decay.
+#
+# WHY THE PROBE MUST HIT THE CLI PATH, NOT THE SDK MINT:
+# A "token-mint via the SDK's universal-auth creds" would exercise the GREEN
+# path and miss the decay entirely. Only a real `infisical` CLI invocation
+# reproduces the failure mode the operator needs paged on.
+#
+# WHY A NONEXISTENT KEY: we fetch a deliberately-absent key so NO secret value
+# ever enters the probe output. On the green path the CLI exits non-zero with
+# "secret not found" (which we treat as healthy — it reached the API and got a
+# semantic answer); on the red path it 403s before key-existence matters.
+
+INFISICAL_CLI_AUTH_PROBE_KEY = "__ua_infisical_auth_probe__"
+INFISICAL_CLI_AUTH_TIMEOUT_SECONDS = 15
+# Signatures that unambiguously mean the CLI's machine identity is expired /
+# unauthenticated. Kept narrow so a transient network blip, a "secret not
+# found", or an unknown CLI error does NOT page — only the exact silent-decay
+# class does. Extend this tuple if a new expiry wording appears in the wild.
+INFISICAL_CLI_AUTH_EXPIRY_SIGNATURES = (
+    "token has expired",
+    "token is expired",
+    "expired token",
+    "unauthenticated",
+    "unauthorized",
+    "not authenticated",
+    "authentication required",
+    "invalid token",
+    "401",
+    "403",
+)
+
+
+def _infisical_cli_auth_enabled() -> bool:
+    """Kill-switch for the probe. Default on; set UA_INVARIANT_INFISICAL_CLI_AUTH=0."""
+    raw = os.getenv("UA_INVARIANT_INFISICAL_CLI_AUTH", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _infisical_cli_auth_applicable() -> bool:
+    """True only on the production VPS, where the proactive_health timer and
+    the configured Infisical CLI live. Mirrors `infisical_loader._on_production_vps`
+    (the `/opt/universal_agent` deploy-root signal) without importing a private
+    helper. Desktop / CI return False so the probe stays quiet off-prod."""
+    try:
+        return Path("/opt/universal_agent").is_dir()
+    except OSError:
+        return False
+
+
+@invariant(
+    id="infisical_cli_auth_fresh",
+    title="Infisical CLI machine identity is valid (not silently expired)",
+    description=(
+        "Exercises the Infisical CLI's own cached machine-identity token — the "
+        "auth store used by deploy-time env rendering, the threads-token-sync "
+        "script, and ad-hoc agent secret fetches — which is SEPARATE from the "
+        "SDK universal-auth path services use at boot. The SDK path re-mints a "
+        "token every call and stays green, masking a 403 'token has expired' on "
+        "the CLI until a deploy or agent fetch silently breaks. Fires critical on "
+        "any expired/unauthenticated response so it pages via the critical-digest "
+        "email before it breaks env rendering."
+    ),
+    severity="critical",
+    runbook_command=(
+        "infisical secrets get __ua_infisical_auth_probe__ --env=production --plain 2>&1 | head -5; "
+        "echo '--- re-auth the CLI machine identity ---'; "
+        "infisical login 2>&1 | head -10"
+    ),
+    metadata={
+        "pipeline": "infisical_cli_auth",
+        "subsystem": "secrets",
+        "failure_class": "invisible_auth_decay",
+        "probe": "subprocess: infisical secrets get (nonexistent key, auth-only)",
+        "kill_switch": "UA_INVARIANT_INFISICAL_CLI_AUTH=0",
+        "design_note": (
+            "Probe MUST hit the CLI path, not the SDK universal-auth mint — the "
+            "SDK path stays green and masks the decay. Nonexistent key ensures "
+            "no secret value reaches probe output."
+        ),
+    },
+)
+def infisical_cli_auth_fresh(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire critical when the Infisical CLI's machine-identity token is expired.
+
+    Returns None (healthy / not-applicable) when the probe is disabled, the host
+    is not the prod VPS, the ``infisical`` binary is absent, the CLI call
+    succeeds, OR the call fails for any NON-auth reason (network blip, secret
+    not found, timeout) — matching this module's fail-open philosophy so only
+    the exact silent-decay signature pages the operator.
+    """
+    if not _infisical_cli_auth_enabled() or not _infisical_cli_auth_applicable():
+        return None
+    infisical_bin = shutil.which("infisical")
+    if not infisical_bin:
+        return None
+    cli_env = (
+        str(os.getenv("UA_INFISICAL_PROBE_ENV") or "").strip()
+        or str(os.getenv("INFISICAL_ENVIRONMENT") or "").strip()
+        or "production"
+    )
+    try:
+        result = subprocess.run(
+            [
+                infisical_bin,
+                "secrets",
+                "get",
+                INFISICAL_CLI_AUTH_PROBE_KEY,
+                "--env",
+                cli_env,
+                "--plain",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=INFISICAL_CLI_AUTH_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        # Transient hang / spawn failure — fail open. The runner would otherwise
+        # emit a noisy probe_error on every tick; revisit only if this repeats.
+        return None
+    # exit 0 = CLI reached the API authenticated (green). A nonexistent key
+    # returns non-zero WITHOUT an auth signature -> also green (auth is fine,
+    # the key just isn't there). Only an auth-expiry signature is critical.
+    if result.returncode == 0:
+        return None
+    combined = f"{result.stdout}\n{result.stderr}".lower()
+    matched = [sig for sig in INFISICAL_CLI_AUTH_EXPIRY_SIGNATURES if sig in combined]
+    if not matched:
+        # Non-auth failure (network, not-found, unknown) — fail open.
+        return None
+    snippet_lines = (result.stderr or result.stdout or "").strip().splitlines()
+    snippet_tail = "\n".join(snippet_lines[-6:])[:600]
+    return {
+        "observed_value": {
+            "returncode": result.returncode,
+            "matched_signatures": matched,
+            "cli_env": cli_env,
+            "stderr_tail": snippet_tail,
+        },
+        "message": (
+            "Infisical CLI machine identity is expired/unauthenticated (403 "
+            "'token has expired'). The SDK boot path is still green so the fleet "
+            "looks healthy, but every CLI-based secret fetch is broken: deploy-"
+            "time env rendering, the threads-token-sync script, and agent secret "
+            "fetches will fail silently. Re-auth the CLI (`infisical login`) now."
+        ),
+        "threshold_text": "CLI auth probe returns no expired/unauthenticated signature",
+        "metadata": {
+            "cli_bin": infisical_bin,
+            "probe_key": INFISICAL_CLI_AUTH_PROBE_KEY,
+            "timeout_seconds": INFISICAL_CLI_AUTH_TIMEOUT_SECONDS,
+        },
     }
