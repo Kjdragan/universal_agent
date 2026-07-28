@@ -74,6 +74,10 @@ were invoked zero times in 90 days</strong>. Meanwhile a GLM-class reader <em>is
 file, so Anthropic's 80% cut does not apply: realistic safe trim on the global is
 <strong>29–42%</strong>. The VPS global is a separate and worse story — 65% of it describes two
 screenshot mechanisms, <strong>both of which are dead right now</strong>.
+<br><br>
+One finding is operational rather than editorial and shouldn't wait for the rest:
+<strong>the <code>daily-eight-brief</code> timer is disabled and dead</strong> — the daily brief has not
+run since 2026-07-27.
 </div>
 
 <div class="toc">
@@ -215,13 +219,50 @@ on that box (only <code>notebooklm-mcp</code> is configured).</p>
 </div>
 
 <div class="card t1">
-<h3><span class="tag tag-1">T1-3</span>Plugin manifest drift: two skills on disk, undeclared</h3>
-<p><code>bb-help</code> and <code>graph-triage</code> exist in the dragan plugin cache
-(<code>0.1.55/skills/</code>) but are not in <code>plugin.json</code>'s <code>skills</code> array
-(95 declared, 97 on disk). Claude Code directory-scans, so they load anyway and appear as
-<code>/dragan:bb-help</code> and <code>/dragan:graph-triage</code> — but the manifest no longer
-describes what ships. <code>bb-help</code> is <em>also</em> a symlink skill, so it is now deployed
-by both paths at once.</p>
+<h3><span class="tag tag-1">T1-3</span>The worked example of a recurring GLM job is switched off</h3>
+<p><strong>Line 143.</strong> The file closes its VPS section with a concrete template:
+<em>"Concrete example (built 2026-07-03): <code>/dragan:daily-eight-research-loop</code> runs daily
+10:00 CT as user timer <code>daily-eight-brief</code>… the template for any 'recurring GLM job that
+emails me.'"</em></p>
+<p>Verified on the box:</p>
+<pre><code>$ systemctl --user is-enabled daily-eight-brief.timer  →  disabled
+$ systemctl --user is-active  daily-eight-brief.timer  →  inactive
+  Active: inactive (dead)
+  Trigger: n/a</code></pre>
+<p>The unit files are present and correct (dated 2026-07-03), and the last service run recorded
+<code>Result=success</code> — so it worked and was then stopped, on 2026-07-27. The daily brief is
+not running. Two distinct problems: <strong>an operational one</strong> (a job you presumably still
+want is off) and <strong>a documentation one</strong> (the file's single worked example of the
+house pattern points at something an agent cannot inspect as a working reference).</p>
+</div>
+
+<div class="card t1">
+<h3><span class="tag tag-1">T1-4</span>Three more references that don't resolve</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>Line</th><th>Reference</th><th>Verified state</th></tr></thead>
+<tbody>
+<tr><td>135</td><td><code>universal_agent/docs/06_Deployment_And_Environments/<wbr>14_VPS_Scheduled_Jobs_And_Inference_Plans.md</code></td><td><strong>Does not exist</strong> on <code>origin/main</code>. That directory stops at <code>13_Claude_Max_OAuth_Credentials.md</code> / <code>13_Infisical_Dev_Env_Hygiene.md</code>. Cited as one of two canonical inventories.</td></tr>
+<tr><td>135</td><td>"45 recurring jobs"</td><td><strong>Wrong by ~80%.</strong> Live count is <strong>81</strong> (22 user + 59 system). The doc it points at says 77. A number that drifts every time a job is added — and nothing keeps it honest.</td></tr>
+<tr><td>7</td><td>Cache path <code>…/dragan-plugins/dragan/&lt;commit&gt;/skills/</code></td><td><strong>Version-keyed, not commit-keyed.</strong> Real path is <code>…/dragan/0.1.55/</code>. The commit SHA is recorded inside <code>installed_plugins.json</code> but is never the directory name — so an agent following this constructs a path that doesn't exist.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="kbd">Also worth a one-word fix: lines 44/46 refer to <code>aod-factory</code>. That is the correct
+GitHub repo name, but there is no <code>~/lrepos/aod-factory</code> — the local clone is
+<code>~/lrepos/clearspring_agent_factory</code>. A navigation trap rather than a broken reference.</p>
+</div>
+
+<div class="card t1">
+<h3><span class="tag tag-1">T1-5</span>Two skills ship by both deployment paths at once</h3>
+<p><code>bb-help</code> and <code>graph-triage</code> are deployed as symlinks — deliberately, and they are
+correctly absent from <code>plugin.json</code> (which has 95 entries and, verified, <strong>zero dangling
+paths</strong>). But the plugin cache is a checkout of the whole <code>skills/</code> tree, so both
+directories ship in it anyway (97 on disk vs 95 declared) and Claude Code's directory scan surfaces
+them a second time as <code>/dragan:bb-help</code> and <code>/dragan:graph-triage</code>.</p>
+<p>This is not manifest rot — it's the two-path design leaking. It is the same mechanism behind the
+twelve double-loaded skills in <a href="#tier4">T4-2</a>, and it is why line 7's rule is load-bearing
+enough to be worth fixing rather than deleting.</p>
 </div>
 
 <div class="card ok">
@@ -238,14 +279,23 @@ didn't is itself a finding:</p>
     <code>plugins tree is canonical — both accounts safe</code>. This session runs on acct2, so
     mid-session drift followed by self-heal is exactly the documented design. The guard works.</li>
 </ul>
-<p>Everything else concrete in the file verified OK: <code>notify-phone</code>,
-<code>skill-symlink-doctor</code> (plus its 07:35 CT timer — confirmed armed, last run today),
-<code>claude-plugins-normalize</code>, the <code>~/.gitconfig</code> <code>includeIf</code> rules for
-both HTTPS and SSH BlackBox remotes, <code>~/.claude-acct2/plugins</code> → symlink,
-<code>email_send.py</code>, <code>VPS_OPERATIONS_REFERENCE.md</code>,
-<code>release-preflight.sh</code>, <code>capability_frontier_lab</code>,
-<code>systems_development_forge</code>, the Ollama install, and the OpenWhispr DB.
-<strong>Mechanically, this file is in good shape</strong> — the debt is structural, not broken links.</p>
+<p><strong>52 references were checked in total; 44 verified clean.</strong> Among them:
+<code>notify-phone</code>, <code>skill-symlink-doctor</code> (plus its 07:35 CT timer — armed, ran
+today, and reports all live-skill symlinks healthy), <code>claude-plugins-normalize</code> and its
+wiring at <code>claudereal</code> entry and <code>claude2</code> entry/exit, the
+<code>~/.gitconfig</code> <code>includeIf</code> rules for both HTTPS and SSH BlackBox remotes,
+<code>~/.claude-acct2/plugins</code> → symlink, <code>email_send.py</code>,
+<code>VPS_OPERATIONS_REFERENCE.md</code>, <code>release-preflight.sh</code>,
+<code>publish_scratch.sh</code>, <code>TWILIO_TRIAL_NOTES.md</code>,
+<code>capability_frontier_lab</code>, <code>systems_development_forge</code>, the GLM tier map in
+<code>lab_common/zai.py</code> (matches the documented <code>opus→glm-5.2</code> mapping exactly), the
+GPU spec (GTX 1660 Ti / 6144 MiB / driver 580.173.02 / CUDA 13.0 — matches line 71 verbatim), the
+Ollama install and its ≤3-model guard, all four Twilio credentials in Infisical, and both scratchpad
+URLs returning HTTP 200.</p>
+<p><strong>So the file's factual accuracy is ~85%, and its failures cluster</strong> — in the two
+sections that describe fast-moving infrastructure (plugin deployment, VPS jobs) rather than being
+spread evenly. That is the useful signal: the stable content is stable, and the debt is concentrated
+where reality changes faster than the prose.</p>
 </div>
 
 <h2 id="tier2">4. Tier 2 — Safe trims for all models</h2>
@@ -495,9 +545,19 @@ target is a repo operation. Run <code>skill-symlink-doctor</code> afterward.</p>
     template for the 203 cold globals: a skill that serves one project should live in that project,
     not in every session on the machine.</li>
 </ul>
-<p>Two mechanisms fix this without deleting any capability — <strong>disable unused plugins</strong>
-(four are already <code>false</code> in <code>settings.json</code>, so the pattern is established) and
-<strong>demote single-project skills to their project</strong>. Both are reversible in one line.</p>
+<p>Three mechanisms fix this without deleting any capability, and <strong>all three already exist on
+this machine</strong> — which is the point: nothing new has to be built.</p>
+<ul>
+<li><strong>Disable unused plugins.</strong> Four are already <code>false</code> in
+    <code>settings.json</code>.</li>
+<li><strong>Demote single-project skills to their project.</strong> The heavily-used
+    <code>morning_edition</code> / <code>daily_muse</code> / <code>kin_keeper</code> family already
+    works this way.</li>
+<li><strong>Retire outright.</strong> <code>~/.claude/_retired_skills/</code> exists and holds one
+    entry (<code>demo</code>, retired in favour of the plugin). The convention is established; it has
+    simply never been used at scale.</li>
+</ul>
+<p>All three are reversible in one line, which matters given <a href="#governance">§8</a>.</p>
 </div>
 
 <h2 id="vps">7. The VPS global — a separate, worse case</h2>
@@ -558,7 +618,8 @@ local-only converts every future edit from irreversible to trivially revertable.
 <tbody>
 <tr><td class="num">1</td><td><code>git init</code> in <code>~/.claude/</code> with an allowlist</td><td>Governance</td><td class="num">—</td><td>None — makes everything below revertable. <strong>Do this first.</strong></td></tr>
 <tr><td class="num">2</td><td>Fix the VPS global: pick one screenshot mechanism, delete the dead one, keep the sudo warning</td><td>VPS</td><td class="num">~400</td><td>Low — currently broken either way</td></tr>
-<tr><td class="num">3</td><td>Fix line 7's symlink examples (T1-1)</td><td>Desktop</td><td class="num">—</td><td>None — correctness</td></tr>
+<tr><td class="num">2b</td><td><strong>Decide whether <code>daily-eight-brief</code> should be running</strong>, then either re-enable it or stop citing it as the template (T1-3)</td><td>VPS ops</td><td class="num">—</td><td>Operational, not editorial — <strong>this one is a live job being off, not a doc bug</strong></td></tr>
+<tr><td class="num">3</td><td>Fix line 7's symlink examples and the <code>&lt;commit&gt;</code>→version cache path; drop the "45 recurring jobs" count; remove or restore the missing <code>14_VPS_…</code> doc reference (T1-1, T1-4)</td><td>Desktop</td><td class="num">—</td><td>None — correctness</td></tr>
 <tr><td class="num">4</td><td>Drop the 12 duplicate local skill symlinks (T4-2)</td><td>Skills</td><td class="num"><strong>~1,556</strong></td><td>Low — run <code>skill-symlink-doctor</code> after</td></tr>
 <tr><td class="num">5</td><td>Cap dragan skill descriptions at ~350 chars (T4-1)</td><td>Skills</td><td class="num"><strong>~8,000–10,000</strong></td><td>Medium — needs a triggering-accuracy check per skill; biggest single win</td></tr>
 <tr><td class="num">5b</td><td>Demote the 203 cold skills — project-scope the single-project ones, disable unused plugins (T4-0/T4-3)</td><td>Skills</td><td class="num">up to <strong>~27,959</strong></td><td>Medium — reversible per skill; go incrementally, verify nothing regresses</td></tr>
@@ -595,9 +656,15 @@ for plausibility. Sizes were measured, not estimated:</p>
 </ul>
 <p>Token figures are chars ÷ 4 and are approximate; relative magnitudes are what carry the argument.</p>
 
-<p>Two claims that first read as defects were withdrawn after checking against
-<code>origin/main</code> and re-running the normalizer — both recorded above, because "the rule caught
-it" is evidence about which rules deserve their tokens.</p>
+<p>The reference sweep was run twice by independent agents and the results reconciled. That mattered:
+each pass caught defects the other missed (the second found the disabled timer, the missing
+<code>14_VPS_…</code> doc, and the version-vs-commit cache path), and <strong>one claim from the
+second pass did not survive checking</strong> — <code>TWILIO_TRIAL_NOTES.md</code> was reported absent
+from <code>origin/main</code>, but it is present at exactly the documented path. It is recorded above as
+verified, not broken. Nothing in this report rests on an unverified agent claim.</p>
+<p>Three claims that first read as defects were withdrawn after checking against
+<code>origin/main</code>, re-running the normalizer, and re-querying the repo — all recorded above,
+because "the rule caught it" is evidence about which rules deserve their tokens.</p>
 
 <p class="foot">Nothing was modified. Every change proposed here to <code>~/.claude/</code> awaits explicit
 approval, per the constraint that the directory has no version control and no rollback.
