@@ -1,0 +1,726 @@
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Global Context-Engineering Debt Audit — mint-desktop + VPS</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    background: #ffffff; color: #1f2328;
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0; padding: 0 20px 80px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 34px 0 6px; letter-spacing: -.02em; }
+  h2 { font-size: 23px; margin: 44px 0 10px; padding-bottom: 7px; border-bottom: 2px solid #d8dee4; letter-spacing: -.01em; }
+  h3 { font-size: 17px; margin: 26px 0 6px; }
+  .sub { color: #59636e; font-size: 14.5px; margin: 0 0 4px; }
+  code { background: #f0f1f3; padding: 1.5px 5px; border-radius: 4px; font-size: 13px;
+         font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; }
+  pre { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 6px; padding: 12px 14px;
+        overflow-x: auto; font-size: 12.5px; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14.5px; }
+  th, td { border: 1px solid #d8dee4; padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 14px 0; }
+  .scroll table { margin: 0; }
+  a { color: #0550ae; }
+  .toc { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 8px; padding: 14px 20px; margin: 22px 0 8px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 3px 0; }
+  .card { border: 1px solid #d8dee4; border-left-width: 5px; border-radius: 7px;
+          padding: 13px 17px; margin: 15px 0; background: #fff; }
+  .t1 { border-left-color: #cf222e; }
+  .t2 { border-left-color: #bf8700; }
+  .t3 { border-left-color: #1a7f37; }
+  .t4 { border-left-color: #8250df; }
+  .ok { border-left-color: #57606a; }
+  .card h3 { margin-top: 0; }
+  .tag { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .04em;
+         padding: 2px 8px; border-radius: 20px; vertical-align: 2px; margin-right: 8px; }
+  .tag-1 { background: #ffebe9; color: #cf222e; }
+  .tag-2 { background: #fff8c5; color: #7d4e00; }
+  .tag-3 { background: #dafbe1; color: #116329; }
+  .tag-4 { background: #fbefff; color: #6639ba; }
+  .tag-ok { background: #eaeef2; color: #424a53; }
+  .lede { font-size: 17.5px; line-height: 1.6; background: #f6f8fa; border: 1px solid #d8dee4;
+          border-radius: 8px; padding: 16px 20px; margin: 20px 0; }
+  .big { font-size: 15px; }
+  .bar { display: flex; height: 30px; border-radius: 5px; overflow: hidden; margin: 12px 0 5px; border: 1px solid #d8dee4; }
+  .bar div { display: flex; align-items: center; justify-content: center; color: #fff;
+             font-size: 12px; font-weight: 600; overflow: hidden; white-space: nowrap; }
+  .legend { font-size: 13px; color: #59636e; margin-bottom: 18px; }
+  .legend span { margin-right: 16px; white-space: nowrap; }
+  .sw { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+  hr { border: 0; border-top: 1px solid #d8dee4; margin: 34px 0; }
+  .foot { color: #59636e; font-size: 13.5px; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 5px 0; }
+  .kbd { font-size: 13px; color: #59636e; }
+</style>
+
+<div class="wrap">
+
+<h1>Global context-engineering debt audit</h1>
+<p class="sub">Machine-wide agent context surfaces — <code>mint-desktop</code> global + VPS global + the skill estate · 2026-07-28</p>
+
+<div class="lede">
+<strong>The file everyone audits is 17% of the problem.</strong> <code>~/.claude/CLAUDE.md</code> costs
+~8,000 tokens per session. The <strong>skill-description surface costs ~36,400</strong> — four and a half
+times more, loaded into every session, never trimmed. <strong>80% of it sits in skills not invoked in
+the last 90 days — which is the intended shape, not waste</strong> (see <a href="#frontier">§0</a>);
+the savings below come from duplication and inflation, not from pruning the estate.
+Meanwhile a GLM-class reader <em>is</em> confirmed on this
+file, so Anthropic's 80% cut does not apply: realistic safe trim on the global is
+<strong>29–42%</strong>. The VPS global is a separate and worse story — 65% of it describes two
+screenshot mechanisms, <strong>both of which are dead right now</strong>.
+<br><br>
+One finding is operational rather than editorial and shouldn't wait for the rest:
+<strong>the <code>daily-eight-brief</code> timer is disabled and dead</strong> — the daily brief has not
+run since 2026-07-27.
+</div>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#frontier">Read this first: an unused skill is not a wasted skill</a></li>
+  <li><a href="#constraint">The constraint: which model actually reads this</a></li>
+  <li><a href="#budget">Measured surface — where the tokens actually go</a></li>
+  <li><a href="#tier1">Tier 1 — Mechanical fixes (correctness)</a></li>
+  <li><a href="#tier2">Tier 2 — Safe trims for all models</a></li>
+  <li><a href="#tier3">Tier 3 — Keep for the weak reader</a></li>
+  <li><a href="#tier4">Tier 4 — The surface nobody audits</a></li>
+  <li><a href="#vps">The VPS global — a separate, worse case</a></li>
+  <li><a href="#governance">Governance finding: none of this is version-controlled</a></li>
+  <li><a href="#order">Recommended order of work</a></li>
+  <li><a href="#method">Method &amp; what was verified</a></li>
+</ol>
+</div>
+
+<h2 id="frontier">0. Read this before the numbers: an unused skill is not a wasted skill</h2>
+
+<div class="card t3">
+<p><strong>This audit originally recommended pruning the 203 skills that showed zero invocations. That
+recommendation was wrong and has been withdrawn.</strong> It measured the estate against the wrong
+objective, and the correction matters more than any number below.</p>
+
+<p>The skill estate is a deliberate <strong>capability frontier</strong> — outposts placed so that
+combinations become available later. Most are created <em>as a by-product of doing work</em>: a demo
+factory run, a build, an SDF run leaves a reusable skill behind. Under that model, "not invoked in 90
+days" describes <strong>surveyed territory that hasn't been built on yet</strong>, not dead weight.
+The operator's own standing doctrine says so — <em>"treat Claude Code skills as composable outposts;
+look for emergent capabilities from combining them"</em> — and an audit that recommends deleting them
+is arguing against the strategy that produced them.</p>
+
+<p>So the cold-skill census below is kept as <strong>inventory</strong>, not as an indictment. It is
+genuinely useful: it tells you how much the frontier costs to carry, and it will eventually help
+separate outposts worth keeping from remnants that were never meant to persist. That separation is a
+judgment call about intent, which is exactly why it belongs to the operator and not to a token count.</p>
+
+<p><strong>What this changes about the recommendations.</strong> Every remaining lever here is one
+that costs you no capability at all:</p>
+<ul>
+<li><strong>Duplication</strong> — the same skill loaded twice, and rules stated in two or three places
+    at once. Pure overhead with nothing on the other side of the ledger.</li>
+<li><strong>Inflation</strong> — descriptions that grew into documentation. A description's job is
+    routing; past a few hundred characters the extra text demonstrably doesn't buy invocation
+    (see <a href="#tier4">T4-1</a>).</li>
+<li><strong>Misplacement</strong> — rarely-fired procedures sitting in a file every session pays for,
+    when a skill would load them exactly when needed. Relocation, not deletion.</li>
+<li><strong>Generic content</strong> — engineering philosophy injected by a plugin hook on every
+    session, which the article's central argument says newer models no longer need.</li>
+</ul>
+<p>None of those touch a single outpost. They are the difference between <em>carrying a frontier</em>
+and <em>carrying it inefficiently</em>.</p>
+</div>
+
+<h2 id="constraint">1. The constraint: which model actually reads this</h2>
+
+<p>Before any trim recommendation, the question the article's 80% figure hides: <em>who is on the
+other end?</em> The floor of explicitness is set by the weakest reader, not the best one.</p>
+
+<p><strong>Verified, not assumed.</strong> <code>~/.bashrc:240–300</code> defines <code>claudezai</code>.
+It launches <code>claude</code> with <code>$HOME</code> intact and <strong>no <code>CLAUDE_CONFIG_DIR</code>
+override</strong>, exporting only the ZAI base URL and tier map:</p>
+
+<pre><code>export ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="glm-5.2"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="glm-5-turbo"
+exec claude "$@"</code></pre>
+
+<p>So a <strong>GLM-class reader loads this exact file</strong>, interactively, today. That single fact
+caps the entire audit:</p>
+
+<ul>
+<li><strong>Deletion is capped.</strong> Hard-won postmortem rules and non-obvious gotchas must survive
+    verbatim — the weak reader can't re-derive them.</li>
+<li><strong>Relocation is not capped.</strong> This is the lever the repo audit under-used. A skill body is
+    read by whichever model <em>invokes</em> the skill — so moving a rarely-fired procedure out of the
+    global costs the weak reader <em>nothing</em> at the moment it needs it, while refunding every
+    session that doesn't. Most of the savings below are relocation, not deletion.</li>
+</ul>
+
+<p>Both accounts share one file (<code>~/.claude-acct2/CLAUDE.md</code> → symlink, verified), so there
+is no per-lane variant to hide weak-reader content in — short of moving it into the launcher.</p>
+
+<h2 id="budget">2. Measured surface — where the tokens actually go</h2>
+
+<p>Standing cost of a desktop session, before the user types a word:</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Surface</th><th class="num">Bytes / chars</th><th class="num">≈ Tokens</th><th class="num">Share</th><th>Audited before?</th></tr></thead>
+<tbody>
+<tr><td><strong>Skill descriptions</strong> — 256 unique skills, plus 12 loaded twice</td><td class="num">145,481</td><td class="num"><strong>36,370</strong></td><td class="num">76%</td><td>No</td></tr>
+<tr><td><code>~/.claude/CLAUDE.md</code></td><td class="num">32,100</td><td class="num">8,025</td><td class="num">17%</td><td>Yes — this is the file people look at</td></tr>
+<tr><td>SessionStart hook injections (3 plugins)</td><td class="num">14,651</td><td class="num">3,663</td><td class="num">8%</td><td>No</td></tr>
+<tr><th>Total standing context</th><th class="num">192,232</th><th class="num">48,058</th><th class="num">100%</th><td></td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="bar">
+  <div style="width:75.7%;background:#8250df">skill descriptions — 36,370 tok</div>
+  <div style="width:16.7%;background:#bf8700">CLAUDE.md — 8,025</div>
+  <div style="width:7.6%;background:#57606a">hooks — 3,663</div>
+</div>
+<p class="legend">
+<span><i class="sw" style="background:#8250df"></i>Never audited</span>
+<span><i class="sw" style="background:#bf8700"></i>The file everyone trims</span>
+<span><i class="sw" style="background:#57606a"></i>Never audited</span>
+</p>
+
+<p><strong>The handoff predicted Tier 4 would be the biggest line item. It is — by 4.5×.</strong>
+Every hour spent shaving prose off <code>CLAUDE.md</code> is competing for a 17% slice while the 76%
+slice grows unmeasured with each new skill.</p>
+
+<p class="kbd">An earlier pass of this measurement reported 302 skills / ~40,000 tokens. That
+over-counted: three plugins from the <code>anthropic-agent-skills</code> marketplace each check out
+the full 17-skill tree while surfacing only their own subset. The corrected figure — unique
+skills actually surfaced, plus the 12 genuinely double-loaded ones — is above.</p>
+
+<h3>Hook injections — the surface not even on the handoff's target list</h3>
+
+<p>Three enabled plugins inject text at <code>SessionStart</code>. Measured by executing each hook:</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Hook</th><th class="num">Bytes</th><th class="num">≈ Tok</th><th>What it injects</th></tr></thead>
+<tbody>
+<tr><td><code>agent-skills</code> → <code>session-start.sh</code></td><td class="num">8,728</td><td class="num">2,182</td><td>The entire <code>using-agent-skills</code> meta-skill — a discovery flowchart, 6 "core operating behaviors", 10 failure modes, a lifecycle sequence, and a 18-row quick-reference table</td></tr>
+<tr><td><code>ponytail</code> → <code>ponytail-activate.js</code></td><td class="num">4,039</td><td class="num">1,010</td><td>Full Ponytail persona: the ladder, rules, output format, intensity table, boundaries</td></tr>
+<tr><td><code>dragan</code> → <code>session-start.sh</code></td><td class="num">1,884</td><td class="num">471</td><td>Mandatory-skill elevation + look-alike disambiguation</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The <code>agent-skills</code> injection alone is <strong>27% the size of the whole global CLAUDE.md</strong>,
+and it is generic engineering philosophy — "surface assumptions", "don't be sycophantic",
+"prefer the boring solution", "verify, don't assume". This is precisely the category the
+article says newer models no longer need, and it is being injected fresh every session
+<em>in addition to</em> the 21 skill descriptions that plugin already contributes.</p>
+
+<h2 id="tier1">3. Tier 1 — Mechanical fixes</h2>
+<p class="sub">Correctness work. Do these regardless of model, regardless of any trim decision.</p>
+
+<div class="card t1">
+<h3><span class="tag tag-1">T1-1</span>Two of the three named symlink skills are wrong — in the section whose whole job is getting this right</h3>
+<p><strong><code>~/.claude/CLAUDE.md</code> line 7.</strong> The section opens with
+<em>"Two deployment paths — know which one a skill uses BEFORE you edit it"</em> and then names its
+canonical examples: <code>(crosstalk, sendit, bb-help)</code>. Verified against the filesystem:</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Named example</th><th>Claimed</th><th>Actual</th></tr></thead>
+<tbody>
+<tr><td><code>crosstalk</code></td><td>Symlink skill</td><td><strong>Wrong.</strong> Not in <code>~/.claude/skills/</code>, not in <code>dragan-plugins/skills/</code>. It is a <em>marketplace plugin</em> — <code>crosstalk@blackbox-ai-labs</code>, cache <code>1.3.1</code>. It uses the <strong>other</strong> deployment path.</td></tr>
+<tr><td><code>sendit</code></td><td>Symlink skill</td><td><strong>Does not exist.</strong> Absent from <code>~/.claude/skills/</code>, from all 97 skills in <code>dragan-plugins/skills/</code>, and from <code>dev/</code>.</td></tr>
+<tr><td><code>bb-help</code></td><td>Symlink skill</td><td>Correct — but also present in the dragan plugin cache, so it is now <em>both</em> (see T4-2).</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Why it matters more than a typo:</strong> this is the one rule that prevents an agent from
+editing a throwaway cache and losing the work — the failure the section itself calls
+"the trap that silently broke the self-learning skills". An agent that trusts the example list
+reaches for the wrong tree on 2 of 3 names. The rule is sound; its examples have rotted.</p>
+<p><strong>Fix:</strong> replace the parenthetical with the current symlink set, or drop the names entirely
+and point at <code>ls -la ~/.claude/skills | grep '^l'</code> — which is derivable, always current,
+and cannot rot.</p>
+</div>
+
+<div class="card t1">
+<h3><span class="tag tag-1">T1-2</span>VPS global: both documented screenshot mechanisms are dead</h3>
+<p><strong><code>/home/ua/.claude/CLAUDE.md</code>.</strong> Detailed in <a href="#vps">§7</a> — the file is
+37 lines, ~65% of it screenshot instructions, in two mutually contradictory sections, and
+<em>neither works</em>. Verified: <code>findmnt /home/kjdragan</code> returns empty (SSHFS bridge down,
+target directory absent), and the Google-Drive MCP tool the second section names does not exist
+on that box (only <code>notebooklm-mcp</code> is configured).</p>
+</div>
+
+<div class="card t1">
+<h3><span class="tag tag-1">T1-3</span>The worked example of a recurring GLM job is switched off</h3>
+<p><strong>Line 143.</strong> The file closes its VPS section with a concrete template:
+<em>"Concrete example (built 2026-07-03): <code>/dragan:daily-eight-research-loop</code> runs daily
+10:00 CT as user timer <code>daily-eight-brief</code>… the template for any 'recurring GLM job that
+emails me.'"</em></p>
+<p>Verified on the box:</p>
+<pre><code>$ systemctl --user is-enabled daily-eight-brief.timer  →  disabled
+$ systemctl --user is-active  daily-eight-brief.timer  →  inactive
+  Active: inactive (dead)
+  Trigger: n/a</code></pre>
+<p>The unit files are present and correct (dated 2026-07-03), and the last service run recorded
+<code>Result=success</code> — so it worked and was then stopped, on 2026-07-27. The daily brief is
+not running. Two distinct problems: <strong>an operational one</strong> (a job you presumably still
+want is off) and <strong>a documentation one</strong> (the file's single worked example of the
+house pattern points at something an agent cannot inspect as a working reference).</p>
+</div>
+
+<div class="card t1">
+<h3><span class="tag tag-1">T1-4</span>Three more references that don't resolve</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>Line</th><th>Reference</th><th>Verified state</th></tr></thead>
+<tbody>
+<tr><td>135</td><td><code>universal_agent/docs/06_Deployment_And_Environments/<wbr>14_VPS_Scheduled_Jobs_And_Inference_Plans.md</code></td><td><strong>Does not exist</strong> on <code>origin/main</code>. That directory stops at <code>13_Claude_Max_OAuth_Credentials.md</code> / <code>13_Infisical_Dev_Env_Hygiene.md</code>. Cited as one of two canonical inventories.</td></tr>
+<tr><td>135</td><td>"45 recurring jobs"</td><td><strong>Wrong by ~80%.</strong> Live count is <strong>81</strong> (22 user + 59 system). The doc it points at says 77. A number that drifts every time a job is added — and nothing keeps it honest.</td></tr>
+<tr><td>7</td><td>Cache path <code>…/dragan-plugins/dragan/&lt;commit&gt;/skills/</code></td><td><strong>Version-keyed, not commit-keyed.</strong> Real path is <code>…/dragan/0.1.55/</code>. The commit SHA is recorded inside <code>installed_plugins.json</code> but is never the directory name — so an agent following this constructs a path that doesn't exist.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="kbd">Also worth a one-word fix: lines 44/46 refer to <code>aod-factory</code>. That is the correct
+GitHub repo name, but there is no <code>~/lrepos/aod-factory</code> — the local clone is
+<code>~/lrepos/clearspring_agent_factory</code>. A navigation trap rather than a broken reference.</p>
+</div>
+
+<div class="card t1">
+<h3><span class="tag tag-1">T1-5</span>Two skills ship by both deployment paths at once</h3>
+<p><code>bb-help</code> and <code>graph-triage</code> are deployed as symlinks — deliberately, and they are
+correctly absent from <code>plugin.json</code> (which has 95 entries and, verified, <strong>zero dangling
+paths</strong>). But the plugin cache is a checkout of the whole <code>skills/</code> tree, so both
+directories ship in it anyway (97 on disk vs 95 declared) and Claude Code's directory scan surfaces
+them a second time as <code>/dragan:bb-help</code> and <code>/dragan:graph-triage</code>.</p>
+<p>This is not manifest rot — it's the two-path design leaking. It is the same mechanism behind the
+twelve double-loaded skills in <a href="#tier4">T4-2</a>, and it is why line 7's rule is load-bearing
+enough to be worth fixing rather than deleting.</p>
+</div>
+
+<div class="card ok">
+<h3><span class="tag tag-ok">NOT A DEFECT</span>Two claims that looked broken and are not</h3>
+<p>Recording these because both nearly went into the backlog as Tier 1, and the reason they
+didn't is itself a finding:</p>
+<ul>
+<li><strong><code>provision-local-gpu-ollama</code> (line 75).</strong> Absent from
+    <code>~/lrepos/universal_agent/.claude/skills/</code> in the working tree — but present on
+    <code>origin/main</code>. The local checkout is parked on <code>fix/scratch-index-dir-links</code>.
+    <em>The file's own "Git-state honesty" rule caught this.</em> That section pays for its tokens.</li>
+<li><strong><code>claude-plugins-normalize</code>.</strong> First check reported
+    <code>DRIFTED: 5 foreign path(s)</code>; a later check reported
+    <code>plugins tree is canonical — both accounts safe</code>. This session runs on acct2, so
+    mid-session drift followed by self-heal is exactly the documented design. The guard works.</li>
+</ul>
+<p><strong>52 references were checked in total; 44 verified clean.</strong> Among them:
+<code>notify-phone</code>, <code>skill-symlink-doctor</code> (plus its 07:35 CT timer — armed, ran
+today, and reports all live-skill symlinks healthy), <code>claude-plugins-normalize</code> and its
+wiring at <code>claudereal</code> entry and <code>claude2</code> entry/exit, the
+<code>~/.gitconfig</code> <code>includeIf</code> rules for both HTTPS and SSH BlackBox remotes,
+<code>~/.claude-acct2/plugins</code> → symlink, <code>email_send.py</code>,
+<code>VPS_OPERATIONS_REFERENCE.md</code>, <code>release-preflight.sh</code>,
+<code>publish_scratch.sh</code>, <code>TWILIO_TRIAL_NOTES.md</code>,
+<code>capability_frontier_lab</code>, <code>systems_development_forge</code>, the GLM tier map in
+<code>lab_common/zai.py</code> (matches the documented <code>opus→glm-5.2</code> mapping exactly), the
+GPU spec (GTX 1660 Ti / 6144 MiB / driver 580.173.02 / CUDA 13.0 — matches line 71 verbatim), the
+Ollama install and its ≤3-model guard, all four Twilio credentials in Infisical, and both scratchpad
+URLs returning HTTP 200.</p>
+<p><strong>So the file's factual accuracy is ~85%, and its failures cluster</strong> — in the two
+sections that describe fast-moving infrastructure (plugin deployment, VPS jobs) rather than being
+spread evenly. That is the useful signal: the stable content is stable, and the debt is concentrated
+where reality changes faster than the prose.</p>
+</div>
+
+<h2 id="tier2">4. Tier 2 — Safe trims for all models</h2>
+
+<p>Section-by-section budget. Five sections are 61% of the file:</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Section</th><th class="num">Chars</th><th class="num">% file</th><th>How often does it fire?</th></tr></thead>
+<tbody>
+<tr><td>Publishing a repo publicly — the standing exposure sweep</td><td class="num">7,661</td><td class="num">24%</td><td>Only when publishing a repo</td></tr>
+<tr><td>Skill development home: dragan-plugins</td><td class="num">3,869</td><td class="num">12%</td><td>When editing a skill</td></tr>
+<tr><td>VPS, scheduling &amp; inference plans</td><td class="num">3,523</td><td class="num">11%</td><td>Often — routing table</td></tr>
+<tr><td>Git-state honesty</td><td class="num">2,399</td><td class="num">8%</td><td>Every git claim — <em>keep</em></td></tr>
+<tr><td>Commit author identity</td><td class="num">2,072</td><td class="num">7%</td><td>Brand repos only</td></tr>
+<tr><td colspan="4" class="kbd">…12 further sections, 12,339 chars</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card t2">
+<h3><span class="tag tag-2">T2-1</span>The exposure sweep is 24% of the file for a procedure that fires on publish day</h3>
+<p><strong>Lines 111–127, 7,661 chars (~1,915 tok).</strong> Eleven numbered checks, each with its own
+postmortem. Every session on this machine pays for it; a vanishing fraction of sessions publish a
+repo. This is the single largest progressive-disclosure candidate in the estate.</p>
+<p>It also already names its own automation — <code>scripts/release-preflight.sh</code>, verified present
+at <code>~/lrepos/BlackBox-ai-lab-plugins/scripts/release-preflight.sh</code>, which the text says
+covers checks 1–6 and 8.</p>
+<p><strong>Fix:</strong> move the eleven checks into a skill (<code>repo-exposure-sweep</code>). Leave ~3 lines:
+the trigger condition, the script path, and the fact that checks 7/9/10/11 are manual and the
+answer must state which were run. <strong>Saves ~7,300 chars (~1,825 tok) — 23% of the file in one move</strong>,
+with zero loss to the weak reader, which reads the full skill at the moment it publishes.</p>
+</div>
+
+<div class="card t2">
+<h3><span class="tag tag-2">T2-2</span>Four instructions duplicated verbatim by a hook that fires every session</h3>
+<p><strong>Lines 145–150</strong> (the <code>@agent-native/skills</code> block) say to always use
+<code>/efficient-fable</code>, <code>/efficient-frontier</code>, <code>/quick-recap</code>,
+<code>/stay-within-limits</code>. The <strong>dragan SessionStart hook injects the same four rules</strong>
+— plus a fifth for <code>publish-to-scratchpad</code> — into every session. Verified by executing the hook.</p>
+<p>So each rule arrives twice, from two places that must now be kept in sync. The hook is the better
+single home: it is version-controlled in <code>dragan-plugins</code>, it already carries the
+disambiguation table, and it cannot drift from the skills it names. <strong>Delete lines 145–150.
+Saves ~370 chars.</strong></p>
+</div>
+
+<div class="card t2">
+<h3><span class="tag tag-2">T2-3</span>The graphify block restates the skill mechanism itself</h3>
+<p><strong>Lines 151–153.</strong> Three lines whose content is: when the user types
+<code>/graphify</code>, use the graphify skill. That is what the Skill tool does, and the skill's own
+description already says what it's for. Nothing here is machine-specific or non-obvious.
+<strong>Delete. Saves ~200 chars.</strong></p>
+</div>
+
+<div class="card t2">
+<h3><span class="tag tag-2">T2-4</span>Changelog archaeology — 11 dated markers, one now provably superseded</h3>
+<p>Eleven <code>(Bit us 2026-07-…)</code> / <code>(fixed 2026-07-24)</code> markers; seven of them inside the
+exposure sweep alone. The <em>rule</em> is the payload — the date is provenance, and one date per rule
+is fine. The problem is the paragraph that explains a constraint <strong>that no longer exists</strong>:</p>
+<pre><code>The old restriction existed because known_marketplaces.json (installLocation)
+and installed_plugins.json (cache paths) bake in whichever CLAUDE_CONFIG_DIR
+wrote them, so an acct2 run stamped ~/.claude-acct2/... into the shared files
+and the primary called it a corrupted installLocation. Both prefixes point at
+the same real dirs …, so the acct2 form was never wrong — only non-canonical.</code></pre>
+<p>Diffing against <code>CLAUDE.md.bak-215941</code> (2026-07-24) confirms it: the backup contains the
+<em>old</em> rule ("run it ONLY from the primary account"), and the current file keeps a ~600-char
+explanation of why that former rule is gone. Nobody needs the repealed rule's rationale — they need
+the current rule and the normalizer. <strong>Saves ~600 chars.</strong></p>
+</div>
+
+<div class="card t2">
+<h3><span class="tag tag-2">T2-5</span>Three-way duplication on scratchpad and phone hand-over</h3>
+<ul>
+<li><strong>"Phone push + on-screen print always travel together"</strong> appears at line 61 as a bolded
+    paragraph and again at line 67 as a parenthetical.</li>
+<li>The <strong>Scratchpad section</strong> (945 chars) restates what the
+    <code>publish-to-scratchpad</code> skill description already says — and that description is
+    <strong>1,683 chars, the second-longest in the entire estate</strong> — <em>and</em> what the dragan hook
+    says. Three homes for one instruction.</li>
+</ul>
+<p><strong>Fix:</strong> keep the scratchpad section down to what the skill description can't carry — the URL,
+the <code>[scratch-review &lt;slug&gt;]</code> protocol, and "default to it proactively". Delete the
+mechanism recap. <strong>Saves ~850 chars.</strong></p>
+</div>
+
+<div class="card t2">
+<h3><span class="tag tag-2">T2-6</span>Rarely-fired operational sections that should be skills or pointers</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>Section</th><th class="num">Chars</th><th>Assessment</th><th class="num">Save</th></tr></thead>
+<tbody>
+<tr><td>Phone calls / voice (Twilio)</td><td class="num">1,392</td><td>Trial-tier API gotchas, fires only when placing a call, and already names its canonical writeup (<code>TWILIO_TRIAL_NOTES.md</code>). The text itself says the TwiML host used was ephemeral — so the procedure can't be run as written anyway.</td><td class="num">~1,140</td></tr>
+<tr><td>Local GPU (desktop only)</td><td class="num">1,913</td><td>Keep the model standard and the two hard 6GB guards — those are judgment-shaping. Drop "driver 580 / CUDA 13" (derivable from <code>nvidia-smi</code>, and will go stale) and the GPU-demo approval-flow paragraph (behind <code>UA_GPU_DEMO_DESKTOP_APPROVAL_ENABLED</code>, default off).</td><td class="num">~1,300</td></tr>
+<tr><td>Speech-to-text / dictation</td><td class="num">714</td><td>Keep one line: transcription is not local, ground truth is the <code>transcriptions.db</code> columns. The mic model and the "don't propose switching" note almost never change a coding decision.</td><td class="num">~500</td></tr>
+<tr><td>Commit author identity</td><td class="num">2,072</td><td>The <code>includeIf</code> guard is verified working, so the mechanism prose is redundant with the machine. Keep the pre-remote reflex (the gap the guard can't cover) and the verify command.</td><td class="num">~1,170</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<h3>What the trim adds up to</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>Scope</th><th class="num">Chars saved</th><th class="num">Tokens</th><th class="num">% of file</th></tr></thead>
+<tbody>
+<tr><td><strong>Conservative</strong> — pure duplication + relocating the exposure sweep (T2-1…T2-5). No judgment calls.</td><td class="num">9,320</td><td class="num">2,330</td><td class="num"><strong>29%</strong></td></tr>
+<tr><td><strong>Full</strong> — adds the four rarely-fired sections (T2-6)</td><td class="num">13,430</td><td class="num">3,358</td><td class="num"><strong>42%</strong></td></tr>
+</tbody>
+</table>
+</div>
+<p>This lands in the same band as the <a href="https://uaonvps.taildcc090.ts.net/scratch/ua-context-debt-audit/ua-context-debt-audit.html">universal_agent audit</a>'s
+35–45%, and for the same reason: a GLM lane shares the file. <strong>Not 80%</strong> — and the gap is not
+timidity, it's the measured reader.</p>
+
+<h2 id="tier3">5. Tier 3 — Keep for the weak reader</h2>
+<p class="sub">Do not apply the article's advice to these. Each is a postmortem, a machine-specific fact, or a routing table — none is derivable.</p>
+
+<div class="card t3">
+<ul class="big">
+<li><strong>Email default recipient.</strong> Actively counteracts injected metadata: this very session's
+    system prompt asserts a <code>userEmail</code>, and the rule exists because the <em>account</em> address
+    is a hard-bouncing one that must never be used as a send target. A model without this rule follows
+    the injected field. Also carries the per-recipient send rule from the 2026-07-18 403.</li>
+<li><strong>Git-state honesty.</strong> <em>Validated during this audit</em> — it stopped a false "broken
+    reference" report (see T1 §not-a-defect). The branching half prevented a 10-commit PR contamination.
+    Highest evidence-per-token in the file.</li>
+<li><strong>Shipping autonomy.</strong> A behavioral grant. No model can derive permission to merge
+    without asking.</li>
+<li><strong>Spawning subprocesses — least privilege.</strong> Non-obvious security reflex with an explicit
+    scope limit ("only at the trust boundary") that stops it from over-firing. Well-written; leave it.</li>
+<li><strong>VPS / inference routing.</strong> "Never pay raw API prices", GLM for background, systemd
+    timers not Routines, AgentMail not the Gmail connector. This is "rich references" done correctly —
+    a routing table into canonical docs, and the most weak-reader-critical content in the file.</li>
+<li><strong>notify-phone mechanics + "print the link on screen too."</strong> Machine-specific and a
+    repeated real-world failure.</li>
+<li><strong>Commit author identity — the pre-remote reflex only.</strong> The <code>includeIf</code> guard
+    cannot cover the moment before a remote exists. That's the keeper; the rest is explanation.</li>
+</ul>
+</div>
+
+<h2 id="tier4">6. Tier 4 — The surface nobody audits</h2>
+<p class="sub">76% of standing context. 256 unique skills. Never trimmed — and mostly not <em>to be</em> trimmed (<a href="#frontier">§0</a>).</p>
+
+<div class="card t4">
+<h3><span class="tag tag-4">T4-0</span>Frontier inventory: what carrying 256 skills actually costs</h3>
+<p class="kbd"><strong>Read as inventory, not indictment</strong> — see <a href="#frontier">§0</a>.
+The point of this census is to price the frontier, not to argue for pruning it.</p>
+<p>Measured directly from source — a scan of every session transcript across both accounts
+(4.9 GB, 90-day window), counting actual <code>Skill</code> tool invocations: <strong>846 invocations
+across 109 distinct skill names.</strong> Intersected with the current standing inventory:</p>
+<div class="scroll">
+<table>
+<thead><tr><th></th><th class="num">Skills</th><th class="num">Desc. chars</th><th class="num">≈ Tok</th><th class="num">Share of skill tokens</th></tr></thead>
+<tbody>
+<tr><td><strong>Exercised</strong> — ≥1 invocation in 90 days</td><td class="num">53</td><td class="num">27,421</td><td class="num">6,855</td><td class="num">20%</td></tr>
+<tr><td><strong>Standing frontier</strong> — placed, not yet drawn on</td><td class="num"><strong>203</strong></td><td class="num">111,836</td><td class="num"><strong>27,959</strong></td><td class="num"><strong>80%</strong></td></tr>
+</tbody>
+</table>
+</div>
+<p>This <strong>confirms and extends the carry-over finding</strong> from 2026-07-27 (143 cold, ~79% of
+tokens). The ratio is identical; the absolute count grew from 143 to 203 as the estate expanded —
+which is the frontier working as designed, each run laying track the next one might ride.</p>
+<p><strong>What the number is actually for:</strong> it prices the frontier at roughly
+<strong>28,000 tokens per session</strong>, and it makes the growth rate visible. That is the figure
+to weigh against the option value of having an outpost already built when a task arrives — a
+trade the operator makes deliberately, not one a token count settles. It also gives a future
+reader the one genuinely useful cut: separating <em>outposts</em> (placed on purpose, worth
+carrying) from <em>remnants</em> (fell out of a build, never meant to persist). That distinction
+is about intent, so it can't be read off this table.</p>
+<p>The prior assessment itself could not be re-read — it is <strong>not on the scratchpad</strong> under
+any slug, so it appears never to have been published or to have been lost. That is its own small
+lesson about where findings go to die; this one is published.</p>
+</div>
+
+<div class="card t4">
+<h3><span class="tag tag-4">T4-1</span>Length is anti-correlated with use: the most expensive descriptions buy the least</h3>
+<p>Of the <strong>15 longest descriptions in the estate, 13 are cold</strong> — zero invocations in 90 days:</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Skill</th><th class="num">Chars</th><th class="num">90-day pulls</th><th>Skill</th><th class="num">Chars</th><th class="num">90-day pulls</th></tr></thead>
+<tbody>
+<tr><td><code>stream-forge</code></td><td class="num">1,690</td><td class="num">0</td><td><code>auth-web-operator</code></td><td class="num">1,443</td><td class="num">0</td></tr>
+<tr><td><code>publish-to-scratchpad</code></td><td class="num">1,683</td><td class="num">62</td><td><code>summon-audio</code></td><td class="num">1,438</td><td class="num">0</td></tr>
+<tr><td><code>agentic-control-plane</code></td><td class="num">1,648</td><td class="num">0</td><td><code>soundscape-loom</code></td><td class="num">1,355</td><td class="num">0</td></tr>
+<tr><td><code>mood-conductor</code></td><td class="num">1,618</td><td class="num">0</td><td><code>sdf-capabilities</code></td><td class="num">1,353</td><td class="num">5</td></tr>
+<tr><td><code>chime-smith</code></td><td class="num">1,549</td><td class="num">0</td><td><code>herald-cast</code></td><td class="num">1,330</td><td class="num">0</td></tr>
+<tr><td><code>workshop-bell</code></td><td class="num">1,497</td><td class="num">0</td><td><code>audio-scene</code></td><td class="num">1,315</td><td class="num">0</td></tr>
+<tr><td><code>morning-cast</code></td><td class="num">1,477</td><td class="num">0</td><td><code>stdlib-songsmith</code></td><td class="num">1,275</td><td class="num">0</td></tr>
+<tr><td colspan="6" class="kbd"><code>converge</code> — 1,266 chars, 0 pulls</td></tr>
+</tbody>
+</table>
+</div>
+<p>A skill description's only job is <em>routing</em> — helping the model decide whether to open the
+skill. These 15 cost ~20,700 chars (~5,175 tok), <strong>two-thirds the size of the entire global
+CLAUDE.md spent on 15 routing hints, 13 of which have never routed anything.</strong> Average cold
+description (551 chars) is essentially the same length as the average warm one (517) — <strong>writing a
+longer description does not make a skill get used.</strong> It is pure standing cost.</p>
+<p><strong>Fix:</strong> cap descriptions at ~350 chars across the dragan estate. Recovers roughly
+<strong>8,000–10,000 tokens</strong> — three to four times the best case for trimming CLAUDE.md itself.</p>
+</div>
+
+<h3>Where the skill tokens come from</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>Source</th><th class="num">Skills</th><th class="num">Desc. chars</th><th class="num">≈ Tok</th><th class="num">Share of skill surface</th></tr></thead>
+<tbody>
+<tr><td><code>dragan@dragan-plugins</code></td><td class="num">95</td><td class="num">87,552</td><td class="num">21,888</td><td class="num">60%</td></tr>
+<tr><td><code>~/.claude/skills/</code> (local)</td><td class="num">102</td><td class="num">36,359</td><td class="num">9,089</td><td class="num">25%</td></tr>
+<tr><td><code>anthropic-agent-skills</code> (3 plugins, shared tree)</td><td class="num">16</td><td class="num">7,430</td><td class="num">1,858</td><td class="num">5%</td></tr>
+<tr><td><code>agent-skills@addy</code></td><td class="num">21</td><td class="num">4,665</td><td class="num">1,166</td><td class="num">3%</td></tr>
+<tr><td><code>crosstalk</code>, <code>ponytail</code>, <code>session-atlas</code>, others</td><td class="num">33</td><td class="num">9,062</td><td class="num">2,265</td><td class="num">6%</td></tr>
+<tr><th>Total (deduped)</th><th class="num">256</th><th class="num">145,481</th><th class="num">36,370</th><th class="num">100%</th></tr>
+</tbody>
+</table>
+</div>
+<p><code>dragan</code> is 60% of the skill surface and therefore the only place worth starting.</p>
+
+<div class="card t4">
+<h3><span class="tag tag-4">T4-2</span>Twelve skills are loaded twice — once as <code>foo</code>, once as <code>dragan:foo</code></h3>
+<p>Each of these exists <em>both</em> as a symlink in <code>~/.claude/skills/</code> and as a plugin skill in
+the dragan cache, so both appear in the skill listing every session:</p>
+<pre><code>bb-help  data-resolve  explainer-script  frame-judge  google-calendar
+graph-triage  instant-topic-research-for-kevin  pocock-flow-help
+scroll-world-gemini  thumbnail-generator  topic-to-video  youtube-upload</code></pre>
+<p><strong>Cost: 6,224 chars (~1,556 tokens) of pure duplication, every session</strong> — plus a real
+selection cost, because the model must choose between two identical entries with different
+invocation names and no stated difference. This is the cleanest deletion in the whole audit: it
+requires no judgment about what a rule is worth, only removing the redundant local symlink for
+skills already served by the plugin.</p>
+<p class="kbd"><strong>Care required:</strong> these are symlinks into live working trees
+(<code>dragan-plugins</code>, <code>demo_factory</code>). Removing the <em>symlink</em> is safe; removing the
+target is a repo operation. Run <code>skill-symlink-doctor</code> afterward.</p>
+</div>
+
+<div class="card t4">
+<h3><span class="tag tag-4">T4-3</span>What actually gets used — and what that implies</h3>
+<p>The warm list is short and concentrated. Top skills by 90-day invocations:</p>
+<pre><code>126  quick-recap              21  handoff                 8  visual-explainer
+114  efficient-fable          19  efficient-frontier      8  dragan:demo
+ 62  dragan:publish-to-scratchpad  18  skill-creator      7  grill-with-docs
+ 60  provision-local-gpu-ollama    17  update-config      6  timed-spoken-script
+ 53  morning_edition          14  vps-ssh-remote-diagnostic
+ 35  stay-within-limits       12  daily_muse
+ 29  claude-api               11  dragan:new-repo
+ 24  grilling                 10  gemini-api-dev</code></pre>
+<p>Two observations worth acting on:</p>
+<ul>
+<li><strong>The top four are the ones the hooks and CLAUDE.md nag about</strong> —
+    <code>quick-recap</code>, <code>efficient-fable</code>, <code>publish-to-scratchpad</code>,
+    <code>stay-within-limits</code>. The elevation mechanism works. That is an argument for keeping
+    <em>one</em> copy of those rules (the hook), not three (<a href="#tier2">T2-2</a>).</li>
+<li><strong>Several heavily-used names are not in the standing global inventory at all</strong> —
+    <code>morning_edition</code>, <code>daily_muse</code>, <code>kin_keeper</code>,
+    <code>blackbox-episode</code>, <code>vps-ssh-remote-diagnostic</code>. These are project-scoped
+    skills, loaded only where they're relevant. <em>That is the pattern that works</em>, and it is the
+    template for the 203 cold globals: a skill that serves one project should live in that project,
+    not in every session on the machine.</li>
+</ul>
+<p>Three mechanisms fix this without deleting any capability, and <strong>all three already exist on
+this machine</strong> — which is the point: nothing new has to be built.</p>
+<ul>
+<li><strong>Disable unused plugins.</strong> Four are already <code>false</code> in
+    <code>settings.json</code>.</li>
+<li><strong>Demote single-project skills to their project.</strong> The heavily-used
+    <code>morning_edition</code> / <code>daily_muse</code> / <code>kin_keeper</code> family already
+    works this way.</li>
+<li><strong>Retire outright.</strong> <code>~/.claude/_retired_skills/</code> exists and holds one
+    entry (<code>demo</code>, retired in favour of the plugin). The convention is established; it has
+    simply never been used at scale.</li>
+</ul>
+<p>All three are reversible in one line, which matters given <a href="#governance">§8</a>.</p>
+</div>
+
+<h2 id="vps">7. The VPS global — a separate, worse case</h2>
+
+<p><code>/home/ua/.claude/CLAUDE.md</code> — 37 lines, 2,438 bytes. Read by every VPS session,
+including the autonomous GLM agents, where weakest-reader logic applies hardest. It contains
+<strong>two sections both titled around screenshots</strong>, giving contradictory answers, and both are
+currently non-functional:</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th></th><th>Section 1 — "Screenshot Access via SSHFS"</th><th>Section 2 — "Screenshots"</th></tr></thead>
+<tbody>
+<tr><th>Says screenshots live</th><td><code>/home/kjdragan/Downloads/awesome_screenshots/</code> via SSHFS bridge</td><td>Google Drive folder <code>1PM22v6FK…</code></td></tr>
+<tr><th>Access method</th><td><code>ls -t … | head -1</code> then <code>Read</code></td><td><code>mcp__33c2a029-…__search_files</code></td></tr>
+<tr><th>Verified state</th><td><strong>DEAD.</strong> <code>findmnt /home/kjdragan</code> → empty; directory does not exist. (<code>/etc/fstab</code> entry is present, so it is unmounted, not unconfigured.)</td><td><strong>DEAD.</strong> That MCP server is not configured on the VPS — the only global MCP server is <code>notebooklm-mcp</code>.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Roughly <strong>65% of the VPS global is instructions for two broken, mutually contradictory paths to
+the same thing</strong>. An agent reading it will attempt a dead mount, then call a tool that does not
+exist. The remaining ~35% (the "don't suggest <code>sudo</code>, <code>ua</code> is not in sudoers, three
+failures lock him out" warning) is genuinely valuable weak-reader content and should survive.</p>
+
+<p><strong>Recommendation:</strong> resolve which mechanism is intended, fix or remove it, delete the other
+outright, and keep the sudo warning. Realistic outcome: 37 lines → ~12, with the file becoming
+<em>more</em> useful rather than less. This is the highest-value-per-byte fix in the audit.</p>
+
+<h2 id="governance">8. Governance finding: none of this is version-controlled</h2>
+
+<div class="card t1">
+<p><code>~/.claude/</code> is <strong>not a git repository</strong>. There is no PR gate, no CI, no rollback,
+no history of who changed a global rule or when. What exists instead is <strong>ten ad-hoc backup
+files</strong> accumulated by hand:</p>
+<pre><code>CLAUDE.md.bak-215941                       settings.json.bak-20260724-233707
+settings.json.bak                          settings.json.bak2-20260724-235015
+settings.json.bak-20260724-123446          settings.json.bak-crosstalk
+settings.json.bak-doctor-20260728-103948   settings.json.bak.loopwire
+settings.json.bak-xtalk                    settings.json.preinversion.20260506-233230.bak</code></pre>
+<p>Ten backups is not a backup strategy — it is the symptom of needing one. The
+<code>CLAUDE.md</code> backup is 4 days stale, and it was only by diffing against it that the superseded
+account-fungibility rule in T2-4 became visible.</p>
+<p>This is sharper than a nice-to-have: the estate has a standing "ship without review" autonomy grant
+that explicitly excludes anything unrevertable — and the global instruction file that <em>contains that
+grant</em> is itself unrevertable. <strong>Recommendation:</strong> <code>git init</code> in
+<code>~/.claude/</code> with a tight allowlist (<code>CLAUDE.md</code>, <code>settings.json</code>,
+<code>hooks/</code>, <code>agents/</code>) and everything else ignored — credentials, <code>projects/</code>
+(4.9 GB), <code>plugins/cache/</code>, <code>skills/</code> symlinks. Private remote, or local-only; even
+local-only converts every future edit from irreversible to trivially revertable.</p>
+</div>
+
+<h2 id="order">9. Recommended order of work</h2>
+
+<div class="scroll">
+<table>
+<thead><tr><th class="num">#</th><th>Action</th><th>Surface</th><th class="num">Tokens/session</th><th>Risk</th></tr></thead>
+<tbody>
+<tr><td class="num">1</td><td><code>git init</code> in <code>~/.claude/</code> with an allowlist</td><td>Governance</td><td class="num">—</td><td>None — makes everything below revertable. <strong>Do this first.</strong></td></tr>
+<tr><td class="num">2</td><td>Fix the VPS global: pick one screenshot mechanism, delete the dead one, keep the sudo warning</td><td>VPS</td><td class="num">~400</td><td>Low — currently broken either way</td></tr>
+<tr><td class="num">2b</td><td><strong>Decide whether <code>daily-eight-brief</code> should be running</strong>, then either re-enable it or stop citing it as the template (T1-3)</td><td>VPS ops</td><td class="num">—</td><td>Operational, not editorial — <strong>this one is a live job being off, not a doc bug</strong></td></tr>
+<tr><td class="num">3</td><td>Fix line 7's symlink examples and the <code>&lt;commit&gt;</code>→version cache path; drop the "45 recurring jobs" count; remove or restore the missing <code>14_VPS_…</code> doc reference (T1-1, T1-4)</td><td>Desktop</td><td class="num">—</td><td>None — correctness</td></tr>
+<tr><td class="num">4</td><td>Drop the 12 duplicate local skill symlinks (T4-2)</td><td>Skills</td><td class="num"><strong>~1,556</strong></td><td>Low — run <code>skill-symlink-doctor</code> after</td></tr>
+<tr><td class="num">5</td><td>Cap dragan skill descriptions at ~350 chars (T4-1)</td><td>Skills</td><td class="num"><strong>~8,000–10,000</strong></td><td>Medium — needs a triggering-accuracy check per skill; biggest single win</td></tr>
+<tr><td class="num">5b</td><td><s>Demote the 203 cold skills</s> — <strong>withdrawn</strong>. They are the capability frontier, not waste (<a href="#frontier">§0</a>). The narrower version that survives: scope genuinely single-project skills to their project, the way <code>morning_edition</code> / <code>daily_muse</code> already work.</td><td>Skills</td><td class="num">n/a</td><td>Operator judgment about intent — not a token decision</td></tr>
+<tr><td class="num">6</td><td>Relocate the exposure sweep into a skill (T2-1)</td><td>Desktop</td><td class="num"><strong>~1,825</strong></td><td>Low — relocation, not deletion</td></tr>
+<tr><td class="num">7</td><td>Delete hook-duplicated blocks: <code>@agent-native</code>, graphify, scratchpad recap, phone dup (T2-2/3/5)</td><td>Desktop</td><td class="num">~1,420</td><td>None — stated elsewhere already</td></tr>
+<tr><td class="num">8</td><td>Cut the superseded account-fungibility rationale (T2-4)</td><td>Desktop</td><td class="num">~150</td><td>None — describes a repealed rule</td></tr>
+<tr><td class="num">9</td><td>Reconsider the <code>agent-skills</code> plugin's 8.7 KB session injection</td><td>Hooks</td><td class="num">~2,182</td><td>Judgment — generic engineering philosophy, the article's clearest "cut this" category</td></tr>
+<tr><td class="num">10</td><td>Condense the four rarely-fired sections (T2-6)</td><td>Desktop</td><td class="num">~1,030</td><td>Medium — weak-reader judgment per section</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>Total addressable: roughly 16,500–18,500 tokens per session (~35–38% of standing context),
+with no capability removed.</strong> Note the shape: steps 4, 5 and 9 — <strong>none of which touch
+<code>CLAUDE.md</code></strong> — account for the large majority of it. The file that gets audited is
+not the file that costs.</p>
+<p>The earlier draft claimed up to ~35,000 by demoting the cold skills. That figure is withdrawn: it
+was arithmetic on the frontier itself, which the operator carries on purpose. What remains is
+duplication, inflation, misplacement, and generic hook content — all of it overhead with nothing on
+the other side of the ledger.</p>
+
+<h2 id="method">10. Method &amp; what was verified</h2>
+
+<p>Every concrete reference in the desktop global was checked against the filesystem rather than read
+for plausibility. Sizes were measured, not estimated:</p>
+<ul>
+<li><strong>Skill descriptions</strong> — parsed from each <code>SKILL.md</code> frontmatter, restricted to
+    enabled plugins and deduplicated by name. Two earlier passes were discarded as wrong: one swept the
+    plugin cache and counted 3,652 files across stale version directories; a second counted 302 skills
+    by including three plugins that each check out a shared 17-skill tree while surfacing only their
+    own subset.</li>
+<li><strong>Hook injections</strong> — by <em>executing</em> each <code>SessionStart</code> hook and
+    measuring stdout, not by reading the scripts.</li>
+<li><strong>Skill usage</strong> — a 90-day scan of every session transcript in both accounts' project
+    directories (4.9 GB), extracting <code>Skill</code> tool invocations. A first attempt using
+    per-line JSON parsing was killed at its timeout and replaced with a parallel regex pass.</li>
+</ul>
+<p>Token figures are chars ÷ 4 and are approximate; relative magnitudes are what carry the argument.</p>
+
+<p>The reference sweep was run twice by independent agents and the results reconciled. That mattered:
+each pass caught defects the other missed (the second found the disabled timer, the missing
+<code>14_VPS_…</code> doc, and the version-vs-commit cache path), and <strong>one claim from the
+second pass did not survive checking</strong> — <code>TWILIO_TRIAL_NOTES.md</code> was reported absent
+from <code>origin/main</code>, but it is present at exactly the documented path. It is recorded above as
+verified, not broken. Nothing in this report rests on an unverified agent claim.</p>
+<p>Three claims that first read as defects were withdrawn after checking against
+<code>origin/main</code>, re-running the normalizer, and re-querying the repo — all recorded above,
+because "the rule caught it" is evidence about which rules deserve their tokens.</p>
+
+<p class="foot">Nothing was modified. Every change proposed here to <code>~/.claude/</code> awaits explicit
+approval, per the constraint that the directory has no version control and no rollback.
+Companion audit (same method, one repo):
+<a href="https://uaonvps.taildcc090.ts.net/scratch/ua-context-debt-audit/ua-context-debt-audit.html">universal_agent context-debt audit</a>.</p>
+
+</div>
