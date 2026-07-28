@@ -72,7 +72,29 @@ _INTERACTIVE_STRIP_PREFIX: str = "ANTHROPIC_"
 # OAuth (~/.config/gh/hosts.yml); a stale Infisical GH_TOKEN was breaking
 # every interactive `gh` call (and therefore /ship's in-script deploy
 # watching). Crons/services still see these via the normal Infisical load.
-_INTERACTIVE_STRIP_NAMES: tuple[str, ...] = ("GH_TOKEN", "GITHUB_TOKEN")
+#
+# CLAUDE_CODE_OAUTH_TOKEN (added 2026-07-28): Infisical stores this, and
+# initialize_runtime_secrets() injects it with overwrite=True, so it landed in
+# every interactive session no matter what the shell did. It is a `claude
+# setup-token` credential — a PROGRAMMATIC one — and it OVERRIDES the stored
+# subscription login at runtime, so Claude Code presented the session as
+# "Claude API" instead of "Claude Max". Visible consequences: Fable 5 was
+# offered on separately-purchased usage credits and silently downgraded
+# ("Switched to Sonnet 5 for this session · Fable 5 requires usage credits")
+# while the Max plan sat at 10% weekly usage. Claude Code's own /login screen
+# names it: "CLAUDE_CODE_OAUTH_TOKEN is set in your environment and will
+# override this login token at runtime."
+#
+# Only the BARE name is stripped. The suffixed variants in Infisical
+# (…_CLAUDEREAL, …_CLAUDE2, …_ACCT2) are how lab_common/inference.py resolves
+# per-account Max tokens for spawned agents under LAB_MAX_ACCOUNT — stripping
+# those would break max-mode subagents. Crons/services are unaffected: they
+# never go through this interactive launcher.
+_INTERACTIVE_STRIP_NAMES: tuple[str, ...] = (
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+)
 
 # The Telegram channel token is claim-gated, not vault-gated, so it gets its
 # own rule rather than a slot in _INTERACTIVE_STRIP_NAMES.

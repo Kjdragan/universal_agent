@@ -119,12 +119,47 @@ def test_strip_is_prefix_match_not_substring():
     assert env == {"MY_ANTHROPIC_NOTE": "keep-this"}
 
 
-# ─── Named-var strip (GH_TOKEN / GITHUB_TOKEN) ─────────────────────────────
+# ─── Named-var strip (GH_TOKEN / GITHUB_TOKEN / CLAUDE_CODE_OAUTH_TOKEN) ───
 
 
-def test_strip_named_targets_gh_tokens_only():
-    """The named-strip target list covers exactly the gh-CLI env vars."""
-    assert set(_INTERACTIVE_STRIP_NAMES) == {"GH_TOKEN", "GITHUB_TOKEN"}
+def test_strip_named_targets_exact_set():
+    """The named-strip list covers the gh-CLI env vars plus the bare Claude Code
+    OAuth token. Each entry is a vault credential that shadows a *file-stored*
+    login, which is why prefix matching is too broad for them."""
+    assert set(_INTERACTIVE_STRIP_NAMES) == {
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    }
+
+
+def test_strip_named_removes_bare_oauth_token_but_keeps_account_variants():
+    """CLAUDE_CODE_OAUTH_TOKEN must go: Infisical injects it with overwrite=True,
+    it is a `claude setup-token` (programmatic) credential, and it overrides the
+    stored subscription login at runtime — presenting the session as "Claude API"
+    instead of "Claude Max", which silently downgrades Fable 5 to Sonnet 5 with
+    "Fable 5 requires usage credits".
+
+    The suffixed per-account variants MUST survive: lab_common/inference.py
+    resolves them via LAB_MAX_ACCOUNT to authenticate spawned max-mode agents.
+    Stripping those would break subagent auth."""
+    env = {
+        "CLAUDE_CODE_OAUTH_TOKEN": "setup-token-that-forces-api-auth",
+        "CLAUDE_CODE_OAUTH_TOKEN_CLAUDEREAL": "keep-for-lab_common",
+        "CLAUDE_CODE_OAUTH_TOKEN_CLAUDE2": "keep-for-lab_common",
+        "CLAUDE_CODE_OAUTH_TOKEN_ACCT2": "keep-for-lab_common",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "keep-unrelated-setting",
+    }
+
+    stripped = _strip_named_interactive_vars(env)
+
+    assert stripped == ["CLAUDE_CODE_OAUTH_TOKEN"]
+    assert env == {
+        "CLAUDE_CODE_OAUTH_TOKEN_CLAUDEREAL": "keep-for-lab_common",
+        "CLAUDE_CODE_OAUTH_TOKEN_CLAUDE2": "keep-for-lab_common",
+        "CLAUDE_CODE_OAUTH_TOKEN_ACCT2": "keep-for-lab_common",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "keep-unrelated-setting",
+    }
 
 
 def test_strip_named_removes_gh_tokens_and_preserves_other_creds():
