@@ -52,12 +52,3 @@ scripts/publish_scratch.sh --status                    # verify mappings
 - **Mechanism:** a `tailscale serve` path-mount of `/home/ua/ua_scratch` (daemon-managed, reboot-safe; survives deploys). Don't disturb the other serve mappings (`/` → :3000 dashboard, etc.).
 - Canonical reference: `project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md` § 1.6.
 
-## Public Static Hosting — here.now (Public Alternative)
-
-When you produce a static artifact (landing page, report, prototype, portfolio, one-pager) that needs to be **publicly shareable** (where Tailscale/private scratchpad is not possible/desired), use the `here-now` skill.
-
-- **Best for:** Agent-generated static artifacts that need to be publicly shareable — reports, landing pages, prototypes, portfolios, one-pagers, file sharing.
-- **Not for:** Anything we currently run on the VPS — the dashboard, the agent runtime, API endpoints, databases, WebSocket connections, authentication flows.
-- **Overlaps with:** Our Tailscale scratchpad (`publish_scratch.sh`), but `here.now` is public while the scratchpad is tailnet-private. They serve different visibility needs.
-- **Default Posture:** The private Tailnet scratchpad is the preferred and default choice for internal/private operator reports. Only use `here.now` when public sharing is explicitly requested or required.
-
