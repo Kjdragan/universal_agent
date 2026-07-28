@@ -22484,9 +22484,12 @@ def briefs_viewer_get(artifact_id: str):
 
     Serves the file at ``proactive_artifacts.artifact_path`` if present;
     falls back to a header+summary card rendered from the DB row when the
-    file is missing.  Always wraps the inner content in the dashboard
-    chrome with thumbs-up/down links (fresh HMAC tokens minted per
-    request).
+    file is missing.  A full HTML document (authored briefs are standalone
+    pages, often dark-themed) is served as-is with the thumbs-up/down
+    widget injected before ``</body>`` — wrapping it in the light dashboard
+    chrome kept the artifact's <style> block but replaced its dark body
+    background, leaving pale text on white.  Only fragment content gets
+    wrapped in the chrome.
     """
     from fastapi.responses import HTMLResponse
 
@@ -22548,6 +22551,19 @@ def briefs_viewer_get(artifact_id: str):
 
     title = str(artifact.get("title") or "Intel brief")
     if inner_html:
+        head = inner_html[:512].lstrip().lower()
+        if head.startswith("<!doctype") or head.startswith("<html"):
+            widget_block = (
+                f'<div style="max-width:820px;margin:0 auto;padding:0 24px;">'
+                f"{feedback_widget}</div>"
+            )
+            lower = inner_html.lower()
+            idx = lower.rfind("</body>")
+            if idx != -1:
+                body = inner_html[:idx] + widget_block + inner_html[idx:]
+            else:
+                body = inner_html + widget_block
+            return HTMLResponse(content=body, status_code=200)
         body_html = inner_html + feedback_widget
         body = _brief_chrome(title, body_html)
     else:
