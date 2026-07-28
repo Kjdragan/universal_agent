@@ -40,7 +40,7 @@ There are two axes to keep separate:
 
 | Profile | Who | Backend / auth | Transport | Selected by |
 |---|---|---|---|---|
-| **Interactive coding** | Operator at a terminal (`claude`, Antigravity) | Anthropic Max via OAuth (`~/.claude/.credentials.json`) | Interactive TTY | `scripts/claude_with_mcp_env.sh` → `_claude_launcher.py` strips `ANTHROPIC_*` so OAuth wins |
+| **Interactive coding** | Operator at a terminal (`claude`, Antigravity) | Anthropic Max via OAuth (`~/.claude/.credentials.json`) | Interactive TTY | `scripts/claude_with_mcp_env.sh` → `_claude_launcher.py` strips `ANTHROPIC_*` **and `CLAUDE_CODE_OAUTH_TOKEN`** so the stored subscription OAuth wins |
 | **Autonomous principals** | Simone heartbeats, Atlas, dispatch sweep, intel crons | ZAI proxy / GLM | In-process Claude Agent SDK | `initialize_runtime_secrets()` injects `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` from Infisical (no exclude) |
 | **Cody per-task** | VP-dispatched coding/demo missions | **ZAI / GLM by default** (since 2026-06-07); Anthropic Max on per-task/per-VP override | SDK / autonomous in-process (zai) or `claude --print` CLI subprocess (anthropic) | `services/cody_mode.resolve_cody_mode` → `vp_orchestration` forces `execution_mode="cli"` for anthropic |
 
@@ -100,6 +100,26 @@ OAuth) *and* have UA's MCP servers and Infisical-backed secrets available so the
    (`_strip_named_interactive_vars`) because a stale Infisical `GH_TOKEN`
    shadowed the file-stored OAuth (`~/.config/gh/hosts.yml`) and broke every
    interactive `gh` call (and therefore `/ship`'s deploy watching).
+
+   `_strip_named_interactive_vars` also removes **`CLAUDE_CODE_OAUTH_TOKEN`**
+   (added 2026-07-28). Infisical stores it and `initialize_runtime_secrets()`
+   injects it with `overwrite=True`, so it reached every interactive session
+   regardless of the shell. It is a `claude setup-token` credential — a
+   *programmatic* one — and it **overrides the stored subscription login at
+   runtime**, so Claude Code presented the session as **"Claude API"** rather
+   than **"Claude Max"**. Symptom: Fable 5 was offered on separately-purchased
+   usage credits and silently downgraded (`Switched to Sonnet 5 for this
+   session · Fable 5 requires usage credits`) while the Max plan sat at 10%
+   weekly usage. Claude Code's `/login` screen states the rule directly:
+   *"CLAUDE_CODE_OAUTH_TOKEN is set in your environment and will override this
+   login token at runtime."*
+
+   Only the **bare** name is stripped. The suffixed Infisical variants
+   (`…_CLAUDEREAL`, `…_CLAUDE2`, `…_ACCT2`) are how
+   `lab_common/inference.py` resolves per-account Max tokens for spawned agents
+   under `LAB_MAX_ACCOUNT`; stripping those would break max-mode subagents.
+   Crons and services never pass through this interactive launcher, so they are
+   unaffected.
 5. It `os.chdir(UA_ORIGINAL_CWD)` so Claude Code opens in the directory the
    operator was actually in (not UA's repo), runs an optional
    `claude_session_baseline` git baseline check, then `os.execvp("claude", …)`
