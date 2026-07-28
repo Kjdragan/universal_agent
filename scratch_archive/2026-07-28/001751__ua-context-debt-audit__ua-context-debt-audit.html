@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<title>UA Context-Engineering Debt Audit — 2026-07-28</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #ffffff; color: #1f2328;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.6;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 32px 24px 72px; }
+  .eyebrow {
+    display: inline-block; font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: #0969da; font-weight: 700; border: 1px solid #0969da; padding: 4px 10px;
+    border-radius: 4px; margin-bottom: 14px;
+  }
+  h1 { font-size: 28px; line-height: 1.25; margin: 0 0 10px; }
+  .sub { color: #59636e; font-size: 14px; margin-bottom: 24px; }
+  h2 { font-size: 20px; margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #d1d9e0; }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 14px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  code {
+    background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 4px; padding: 1px 6px;
+    font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; color: #953800;
+  }
+  .toc {
+    background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 16px 20px; margin: 20px 0 8px;
+  }
+  .toc a { color: #0969da; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc ol { margin: 6px 0 0; }
+  .callout {
+    background: #fff8f0; border: 1px solid #f0d0a8; border-left: 4px solid #d97757;
+    border-radius: 6px; padding: 14px 18px; margin: 16px 0;
+  }
+  .callout.blue { background: #f0f7ff; border-color: #b6d4f5; border-left-color: #0969da; }
+  .callout.green { background: #f2fbf4; border-color: #b4dfc0; border-left-color: #1a7f37; }
+  .stat-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 18px 0; }
+  .stat { flex: 1 1 160px; background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 14px; }
+  .stat .n { font-size: 24px; font-weight: 700; color: #0969da; line-height: 1.15; }
+  .stat .l { font-size: 12px; color: #59636e; margin-top: 4px; }
+  .tablewrap { overflow-x: auto; margin: 14px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { border: 1px solid #d1d9e0; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+  .tag.cut  { background: #dafbe1; color: #1a7f37; }
+  .tag.keep { background: #ffebe9; color: #cf222e; }
+  .tag.move { background: #fff1c2; color: #7a5901; }
+  .tag.fix  { background: #ddf4ff; color: #0757ba; }
+  .small { font-size: 13px; color: #59636e; }
+  .footer { margin-top: 40px; border-top: 1px solid #d1d9e0; padding-top: 14px; font-size: 12px; color: #59636e; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">UA Ops · Context Engineering</div>
+  <h1>Context-Engineering Debt Audit — universal_agent</h1>
+  <div class="sub">2026-07-28 · repo @ <code>3b2dd1ad</code> (origin/main) · follow-up to the "Anthropic deleted 80% of the Claude Code system prompt" intel brief · mechanical sweep by subagent + manual classification</div>
+
+  <div class="toc">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#verdict">TL;DR verdict</a></li>
+      <li><a href="#doctor">What /doctor could and couldn't do</a></li>
+      <li><a href="#glm">The governing constraint: GLM shares this context</a></li>
+      <li><a href="#inventory">Standing-context inventory</a></li>
+      <li><a href="#backlog">The debt backlog (segmented)</a></li>
+      <li><a href="#savings">Estimated savings</a></li>
+      <li><a href="#order">Recommended execution order</a></li>
+    </ol>
+  </div>
+
+  <h2 id="verdict">1 · TL;DR verdict</h2>
+  <div class="callout green">
+    <p><strong>CLAUDE.md is mechanically healthy but rhetorically bloated, and it is not the biggest line-item.</strong>
+    Of ~75 concrete references checked, only 3 are dead or misleading — unusually good. The real debt is
+    (a) one capability documented that no longer exists (<code>here-now</code>, 13% of AGENTS.md),
+    (b) the scratchpad mechanism stated <strong>three times</strong> across the two files,
+    (c) changelog archaeology baked into rules, and
+    (d) <strong>95 project skills + 25 agent definitions</strong> whose descriptions load into every session — the estate-wide
+    usage assessment (Mon 2026-07-27) found ~79% of standing skill tokens earn zero pulls.</p>
+    <p style="margin:0"><strong>Anthropic's 80% cut does not transfer here.</strong> Because GLM lanes consume the same files,
+    the realistic safe trim on CLAUDE.md is ~35–45% by weight — dedupe, de-archaeology, and single-homing — while keeping
+    every judgment-dependent rule GLM still needs spelled out.</p>
+  </div>
+
+  <h2 id="doctor">2 · What /doctor could and couldn't do</h2>
+  <ul>
+    <li><strong>VPS CLI <code>claude doctor</code></strong> (v2.1.220, in <code>/opt/universal_agent</code>): installation clean. Three "invalid settings" warnings on <code>.mcp.json</code> (missing <code>AGENTMAIL_API_KEY</code>, <code>ZAI_API_KEY</code>×2) are <strong>false positives</strong> — those <code>${VAR}</code> placeholders resolve at runtime via the Infisical bootstrap, by design. Remote Control not signed in (expected; headless box).</li>
+    <li><strong>Full in-session <code>/doctor</code></strong> (the one with the CLAUDE.md trim check, v2.1.206+) is <strong>interactive-only</strong> — it draws a checkup screen and waits for confirmation. Headless <code>-p</code> runs hung until killed on both VPS (also blocked by no OAuth login for print mode) and desktop. Docs confirm the design.</li>
+    <li>So this page is the <strong>hand-built equivalent</strong>: a mechanical reference sweep (subagent, ~75 refs verified against the checkout) plus a manual derivability classification of every CLAUDE.md section. To get the native trim check, run <code>/doctor</code> in an interactive <code>claudereal</code> session in the repo — it will propose fixes you confirm one by one.</li>
+  </ul>
+
+  <h2 id="glm">3 · The governing constraint: GLM shares this context</h2>
+  <div class="callout">
+    <p><strong>Kevin's point, confirmed in code:</strong> the "delete the rules, trust the model's judgment" thesis assumes a Claude 5-class model on the other end. UA's autonomous lanes don't have one:</p>
+    <ul style="margin-bottom:8px">
+      <li><code>agent_setup.py::setting_sources=["project"]</code> and <code>main.py</code> — Agent SDK sessions load the project CLAUDE.md, all 95 skill descriptions, and <code>.claude/agents</code>; in-process principals (Simone, Atlas) run on <strong>ZAI/GLM</strong>.</li>
+      <li>Cody / all VP per-task CLI subprocesses default to <strong>ZAI</strong> (<code>cody_mode.py::_HARDCODED_FALLBACK_MODE = "zai"</code>) and load the same files from <code>/opt/universal_agent</code>.</li>
+    </ul>
+    <p style="margin:0"><strong>Consequence:</strong> the floor of explicitness is set by the weakest model reading the file. Trim what is <em>derivable by any competent model</em> (duplication, archaeology, generic philosophy) and what is <em>mechanically dead</em>; keep every explicit behavioral rule the GLM lanes rely on. If a rule is only needed for GLM, the alternative to deletion is relocation — inject it via the SDK <code>system_prompt</code> in the GLM lanes (<code>agent_setup.py</code> owns this) rather than taxing Claude sessions with it. That relocation lever is UA-specific and the article doesn't cover it.</p>
+  </div>
+
+  <h2 id="inventory">4 · Standing-context inventory</h2>
+  <div class="stat-row">
+    <div class="stat"><div class="n">38.6 KB</div><div class="l">CLAUDE.md (259 lines, 20 sections) ≈ 9–10k tokens, every session</div></div>
+    <div class="stat"><div class="n">5.1 KB</div><div class="l">AGENTS.md (63 lines) ≈ 1.3k tokens</div></div>
+    <div class="stat"><div class="n">95</div><div class="l">project skills in .claude/skills (descriptions always loaded; bodies lazy)</div></div>
+    <div class="stat"><div class="n">25</div><div class="l">agent definitions in .claude/agents</div></div>
+  </div>
+  <p class="small">Caveat from the sweep: line counts understate two sections — "Claude Execution Environments" is 4 unwrapped 400–900-char lines (by weight it rivals the largest section), and the Pre-Implementation table rows run 300–700 chars each. Also: 7 of 20 headings shout <code>MUST READ / DO NOT SKIP / MANDATORY</code> — when a third of the headings are imperative, none are.</p>
+
+  <h2 id="backlog">5 · The debt backlog (segmented)</h2>
+
+  <h3>Tier 1 — Mechanical fixes (correctness; do these regardless of model)</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Item</th><th>Where</th><th>Action</th></tr>
+    <tr><td><span class="tag fix">FIX</span> <code>here-now</code> skill section — documents a skill that <strong>does not exist anywhere</strong> (not in repo, user dir, or any plugin marketplace). 8 lines ≈ 13% of AGENTS.md instructing agents to invoke a dead capability.</td><td>AGENTS.md:55–62 (+ <code>project_docs/06_platform/06_networking…md</code> §1.7)</td><td>Delete the section, or restore/re-point the skill if the capability was renamed.</td></tr>
+    <tr><td><span class="tag fix">FIX</span> Desktop timer-install guard described as active, but it's wired from gitignored <code>settings.local.json</code> — inert in every fresh checkout.</td><td>CLAUDE.md:73</td><td>Add one parenthetical: guard exists only on provisioned desktops; the rule itself is the protection elsewhere.</td></tr>
+    <tr><td><span class="tag fix">FIX</span> <code>templates/ua_demos_scaffold/</code> reads as repo-root; real path is <code>src/universal_agent/templates/…</code>.</td><td>CLAUDE.md:137</td><td>Write the full path.</td></tr>
+  </table></div>
+
+  <h3>Tier 2 — Safe trims for ALL models (derivable or duplicated; GLM loses nothing)</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Item</th><th>Where</th><th>Est. weight</th></tr>
+    <tr><td><span class="tag cut">CUT</span> Scratchpad mechanism stated <strong>3×</strong>: CLAUDE.md §"Tailnet HTML Scratchpad" (85–92), again inside §"VPS sudo…" (117–122), and AGENTS.md:38–53. The skill + project_docs §1.6 are the canonical homes ("single-home" shift).</td><td>both files</td><td>~30 lines → ~4</td></tr>
+    <tr><td><span class="tag cut">CUT</span> AGENTS.md restatements of CLAUDE.md (docs canon, symbol citations, branch model, Infisical, deploy-doc rule) — AGENTS.md:3 already says "all CLAUDE.md rules apply"; keep only the Codex-specific delta (browser-debug rules).</td><td>AGENTS.md</td><td>~15 lines</td></tr>
+    <tr><td><span class="tag cut">CUT</span> Changelog archaeology inside rules: "re-flip from the 2026-05-11 PM default", "develop retired 2026-05-10", "feature/latest2 retired 2026-05-13", "any older note saying X is obsolete", the 2026-06-07 mistake-window narration. Keep the current fact; the history lives in git/project_docs.</td><td>CLAUDE.md §§ Git Workflow, Execution Environments, VPS sudo</td><td>~20–25% of those sections</td></tr>
+    <tr><td><span class="tag cut">CUT</span> "Key Commands" (uv sync / pytest / ruff) — derivable from <code>pyproject.toml</code>/justfile by any model; the article's textbook trim example.</td><td>CLAUDE.md:99–103</td><td>5 lines</td></tr>
+    <tr><td><span class="tag cut">CUT</span> Generic engineering philosophy (Problem-Solving Philosophy; most of LLM-Native Intelligence Design's argumentation). Keep the one non-obvious UA pattern line (<code>raw records → knowledge blocks → bounded retrieval → LLM synthesis → gated candidates</code>); drop the persuasion.</td><td>CLAUDE.md:23–31, 47–65</td><td>~20 lines</td></tr>
+    <tr><td><span class="tag cut">CUT</span> Repeated pointers: <code>project_docs/README.md</code> linked ~8×, <code>05_environments.md</code> 5×, <code>04_deployment_and_cicd.md</code> 4×. Once each, in the section that owns the topic.</td><td>throughout</td><td>diffuse</td></tr>
+    <tr><td><span class="tag move">DEMOTE</span> Heading-imperative inflation: 7 of 20 headings carry MUST READ/DO NOT SKIP. Reserve for the two that earn it (Production Verification, Pre-Implementation Reading).</td><td>headings</td><td>signal, not tokens</td></tr>
+  </table></div>
+
+  <h3>Tier 3 — KEEP for GLM (judgment-dependent; do NOT apply the article's advice here)</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Item</th><th>Why it stays</th></tr>
+    <tr><td><span class="tag keep">KEEP</span> Production Verification Rules (8 rules)</td><td>Hard-won postmortem rules ("skill deployed ≠ skill invoked", branch-vs-deploy honesty). Exactly the non-obvious-gotcha content the article says to keep even for Claude 5; GLM certainly needs it.</td></tr>
+    <tr><td><span class="tag keep">KEEP</span> Pre-Implementation Reading table</td><td>This is the article's "rich references" shift already implemented — a routing table into canonical modules, progressive disclosure done right. Compress row prose, keep every row.</td></tr>
+    <tr><td><span class="tag keep">KEEP</span> VPS Autonomy, Dormancy windows, Git workflow specifics (branch names, auto-merge allowlist, PAT), Execution-environment facts (3 profiles, cody_mode resolution)</td><td>Repo-specific facts + behavioral defaults not derivable from code by a weaker model at session start. Trim their archaeology (Tier 2), keep their substance.</td></tr>
+    <tr><td><span class="tag keep">KEEP</span> Code-Verified Answers section</td><td>Claude 5 does this natively; GLM lanes demonstrably benefit from "read the code before asserting". Candidate for <em>relocation</em> into the GLM lanes' SDK system_prompt later, not deletion.</td></tr>
+  </table></div>
+
+  <h3>Tier 4 — The actual big fish: skills &amp; agents dead weight</h3>
+  <p>CLAUDE.md is ~10k tokens; the skill/agent surface is comparable or larger and grows unaudited. The Monday estate-wide usage assessment (2026-07-27, 90-day window, 187 skills desktop-side) found <strong>143 cold skills and ~79% of ~28.7k standing skill-description tokens earning zero pulls</strong>. That assessment covered the desktop estate — <strong>the repo's own 95 project skills haven't had the same per-skill usage audit</strong>, and they load into every VPS session (Claude and GLM).</p>
+  <ul>
+    <li><span class="tag move">DO</span> Run the same usage assessment against the repo's 95 <code>.claude/skills</code> (invocation grep across <code>memory/HEARTBEAT.md</code>, <code>.claude/agents/*.md</code>, and Task Hub handlers — the repo's own Rule 1 defines the check). Skills with no invoker are dead code by UA's own standard.</li>
+    <li><span class="tag move">DO</span> Archive dead skills out of <code>.claude/skills</code> (git keeps them recoverable); consider <code>disable-model-invocation: true</code> for user-only utilities to shrink their trigger surface.</li>
+    <li><span class="tag move">DO</span> Same pass over the 25 <code>.claude/agents</code> definitions (are all reachable from any live pipeline?).</li>
+  </ul>
+
+  <h2 id="savings">6 · Estimated savings</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Lever</th><th>Standing cost today (per session)</th><th>Realistic after</th><th>Saved</th></tr>
+    <tr><td>CLAUDE.md dedupe + de-archaeology + Tier-2 cuts</td><td>~9–10k tokens</td><td>~5.5–6.5k</td><td><strong>~3–4k</strong></td></tr>
+    <tr><td>AGENTS.md dead section + restatements</td><td>~1.3k</td><td>~0.6k</td><td>~0.7k</td></tr>
+    <tr><td>Project skills audit (95 → live set)</td><td>unmeasured; estate pattern says ~⅔+ cold</td><td>—</td><td>potentially the largest single lever</td></tr>
+  </table></div>
+  <p class="small">Multiply per-session savings by every heartbeat, every Cody task, every cron-spawned CLI subprocess, on both inference plans. The GLM lanes benefit twice: fewer tokens <em>and</em> less rule-dilution (a shorter file gets better adherence from weaker models — the docs' own "adherence drops when the file has grown long" point).</p>
+
+  <h2 id="order">7 · Recommended execution order</h2>
+  <ol>
+    <li><strong>PR 1 (mechanical, no judgment):</strong> Tier 1 fixes + delete the triple-stated scratchpad copies + AGENTS.md restatements. Zero behavioral risk.</li>
+    <li><strong>PR 2 (editorial):</strong> de-archaeology + Key Commands + philosophy compression + pointer dedupe + heading demotion. Behavior-preserving rewrite; diff reviewed against the keep-list in Tier 3.</li>
+    <li><strong>PR 3 (measured):</strong> project-skill usage audit → archive the dead set. Gate on the repo's own Rule 1 invoker checks, not intuition.</li>
+    <li><strong>Later / optional:</strong> relocate GLM-only behavioral rules (e.g. Code-Verified Answers) from CLAUDE.md into the GLM lanes' SDK <code>system_prompt</code>, letting Claude-lane sessions run leaner. Requires an eval pass on a few GLM heartbeats before/after.</li>
+    <li><strong>Interactive check:</strong> run native <code>/doctor</code> in a <code>claudereal</code> session in the repo once, to catch anything the trim check flags that this audit missed.</li>
+  </ol>
+
+  <div class="footer">
+    Sources: subagent staleness sweep @ <code>3b2dd1ad</code> (~75 refs verified) · CLAUDE.md/AGENTS.md full read · <code>claude doctor</code> v2.1.220 on VPS · code.claude.com/docs debug-your-config · Monday Skill Usage Assessment email (2026-07-27) · intel brief <code>pa_context_engineering_claude5_20260727</code>.<br>
+    Authored by Claude (Fable) · 2026-07-28.
+  </div>
+</div>
+</body>
+</html>
