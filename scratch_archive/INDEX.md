@@ -2,8 +2,12 @@
 
 > Durable, dated copy of every artifact published to the tailnet scratchpad.
 > Newest first. Auto-generated from `index.jsonl` — do not edit by hand.
-> 57 artifact(s) archived.
+> 58 artifact(s) archived.
 
+
+## 2026-07-28
+
+- **00:17:51** — [UA Context-Engineering Debt Audit — 2026-07-28](2026-07-28/001751__ua-context-debt-audit__ua-context-debt-audit.html) · slug `ua-context-debt-audit` · [live](https://uaonvps.taildcc090.ts.net/scratch/ua-context-debt-audit/ua-context-debt-audit.html)
 
 ## 2026-07-23
 
