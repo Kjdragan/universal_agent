@@ -18,12 +18,22 @@
 # is given; when omitted, git would branch off the current HEAD, which the same
 # behind-origin/main check covers.
 #
-# Scope: wired only from the gitignored .claude/settings.local.json — desktop-only,
-# never deployed to the VPS fleet.
+# Scope: wired from the TRACKED .claude/settings.json, so it is present in every
+# clone AND every `git worktree add` tree. It used to be wired from the gitignored
+# .claude/settings.local.json, which git never copies into a worktree — so the guard
+# was silently absent in exactly the workflow CLAUDE.md tells agents to use. The
+# desktop-only scoping now comes from the runtime-host short-circuit below instead
+# of from the file's git status.
 
 set -uo pipefail
 
 allow() { exit 0; }  # emit nothing + exit 0 => tool call proceeds normally
+
+# Runtime-host short-circuit: /opt/universal_agent exists only on the VPS (the
+# runtime host), never on a dev desktop. This guard encodes a desktop-development
+# invariant, so on the runtime host it must not fire. Checked before reading stdin
+# so the VPS cost is one stat.
+[ -d /opt/universal_agent ] && allow
 deny()  { printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' "$1"; exit 0; }
 
 PAYLOAD="$(cat)"

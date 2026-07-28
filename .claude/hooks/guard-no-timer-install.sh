@@ -17,12 +17,21 @@
 # ALLOWS the canonical VPS root installers (install_vps_*), which are the CORRECT
 # place these units belong.
 #
-# Scope: wired only from the gitignored .claude/settings.local.json — desktop-only,
-# never deployed to the VPS fleet (where installing these units is exactly right).
+# Scope: wired from the TRACKED .claude/settings.json, so it is present in every
+# clone AND every `git worktree add` tree. It used to be wired from the gitignored
+# .claude/settings.local.json, which git never copies into a worktree — so the guard
+# was silently absent in exactly the workflow CLAUDE.md tells agents to use. The
+# desktop-only scoping now comes from the runtime-host short-circuit below instead
+# of from the file's git status.
 
 set -uo pipefail
 
 allow() { exit 0; }  # emit nothing + exit 0 => tool call proceeds normally
+
+# Runtime-host short-circuit: /opt/universal_agent exists only on the VPS (the
+# runtime host), where installing these units is exactly right. Checked before
+# reading stdin so the VPS cost is one stat.
+[ -d /opt/universal_agent ] && allow
 deny()  { printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' "$1"; exit 0; }
 
 PAYLOAD="$(cat)"
