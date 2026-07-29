@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from typing import Any
 
 import logfire
 
@@ -9,7 +10,7 @@ from .db import LosslessDB
 # A global fallback instance if someone forgets to pass a DB
 _GLOBAL_DB = None
 
-def get_global_db():
+def get_global_db() -> LosslessDB:
     global _GLOBAL_DB
     if not _GLOBAL_DB:
         path = os.getenv("UA_LOSSLESS_DB_PATH", os.path.expanduser("~/.universal_agent/lcm.db"))
@@ -35,7 +36,7 @@ class LosslessMessageHistory:
         self._system_prompt_tokens = system_prompt_tokens
         self._truncation_count = 0
         
-    def add_message(self, role: str, content, usage=None) -> None:
+    def add_message(self, role: str, content: str | list, usage: Any = None) -> None:
         """
         Overrides the standard add_message.
         Instead of appending to an in-memory list, we serialize the blocks and persist to SQLite.

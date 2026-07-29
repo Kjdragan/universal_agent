@@ -4,6 +4,8 @@ import json
 import os
 import uuid
 
+from .db import LosslessDB
+
 
 # Stub for the actual LLM call. In a full implementation, this uses ClaudeSDKClient
 # to send chunks of messages and receive a summary.
@@ -13,7 +15,7 @@ async def _generate_summary(messages_chunk: list, depth: int) -> str:
     count = len(messages_chunk)
     return f"[Depth {depth} Summary of {count} previous interactions. Replaces messages from temporal context to save tokens.]"
 
-async def run_compaction_sweep(db, conversation_id: str, threshold_tokens: int = 10000) -> bool:
+async def run_compaction_sweep(db: LosslessDB, conversation_id: str, threshold_tokens: int = 10000) -> bool:
     """
     Checks if the conversation context is too large.
     If so, takes oldest raw messages outside the fresh tail, and creates a Depth 0 summary.
