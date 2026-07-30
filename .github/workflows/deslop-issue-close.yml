@@ -1,0 +1,57 @@
+# Auto-closes deslop tracking issues when their remediation PR merges.
+#
+# The remediation dispatcher (deslop_remediation_dispatch.py) creates fix
+# branches whose names deterministically encode the tracking issue number:
+#   deslop/observe-fix-issue-<N>   (observe mode, human-merged)
+#   claude/deslop-fix-issue-<N>    (auto mode, auto-merges on green)
+# Until now the only close path was the Cody mission brief instructing the
+# agent to write "Closes #N" in the PR body — a soft guarantee that routinely
+# failed, so tracking issues accumulated after their fixes merged (8 open on
+# 2026-07-30, every parent PR long merged). This closes them mechanically
+# from the branch name: no body parsing, no API search, no LLM memory.
+#
+# Deliberately its own workflow file: adding `types: [closed]` to
+# deslop-advisory.yml's shared `on:` block would re-fire the expensive LLM
+# advisory job on every PR close (its job-level `if:` filters on head ref
+# only, never on action type).
+name: Deslop Issue Auto-Close
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  close-tracking-issue:
+    if: >
+      github.event.pull_request.merged == true &&
+      (startsWith(github.event.pull_request.head.ref, 'deslop/observe-fix-issue-') ||
+       startsWith(github.event.pull_request.head.ref, 'claude/deslop-fix-issue-'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Close the tracking issue encoded in the branch name
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$HEAD_REF" =~ ^(deslop/observe-fix-issue-|claude/deslop-fix-issue-)([0-9]+)$ ]]; then
+            N="${BASH_REMATCH[2]}"
+          else
+            # startsWith matched but the suffix isn't purely numeric (e.g. a
+            # human-renamed branch). Not an error; the stale sweep covers it.
+            echo "Branch '$HEAD_REF' does not cleanly encode an issue number; skipping."
+            exit 0
+          fi
+          STATE=$(gh issue view "$N" --repo "$REPO" --json state -q .state 2>/dev/null || echo "MISSING")
+          if [ "$STATE" != "OPEN" ]; then
+            echo "Issue #$N is $STATE; nothing to do."
+            exit 0
+          fi
+          gh issue close "$N" --repo "$REPO" \
+            --comment "Auto-closed: remediation PR #${PR_NUMBER} (branch \`${HEAD_REF}\`) merged."
