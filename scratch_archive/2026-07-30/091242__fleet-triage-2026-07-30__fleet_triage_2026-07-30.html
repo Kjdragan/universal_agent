@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Fleet email triage — 2026-07-30</title>
+<style>
+  :root { color-scheme: light; }
+  body { background:#ffffff; color:#1f2328; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; line-height:1.55; max-width:880px; margin:0 auto; padding:24px 18px 64px; }
+  h1 { font-size:1.5rem; border-bottom:2px solid #d0d7de; padding-bottom:8px; }
+  h2 { font-size:1.15rem; margin-top:2em; border-bottom:1px solid #d8dee4; padding-bottom:4px; }
+  code { background:#f6f8fa; border:1px solid #d8dee4; border-radius:4px; padding:1px 5px; font-size:0.88em; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; font-size:0.92rem; }
+  th, td { border:1px solid #d0d7de; padding:7px 10px; text-align:left; vertical-align:top; }
+  th { background:#f6f8fa; }
+  .p0 { background:#ffebe9; font-weight:600; }
+  .p1 { background:#fff8c5; font-weight:600; }
+  .p2 { background:#ddf4ff; }
+  .p3 { background:#f6f8fa; }
+  .done { color:#1a7f37; font-weight:600; }
+  .pend { color:#9a6700; font-weight:600; }
+  .info { color:#57606a; }
+  .toc a { display:block; padding:2px 0; }
+  .small { font-size:0.85rem; color:#57606a; }
+  blockquote { border-left:4px solid #d0d7de; margin:10px 0; padding:4px 14px; color:#57606a; background:#f6f8fa; }
+</style>
+</head>
+<body>
+<h1>Fleet email triage — 2026-07-30</h1>
+<p class="small">Source: <code>Firehose/Fleet</code> Gmail label (Simone / Cody / Atlas stream), Jul 17 → Jul 30 · Every claim below re-verified <b>live</b> against the VPS and GitHub at ~9:10 AM CDT — not taken from the emails.</p>
+
+<nav class="toc">
+  <a href="#summary">1 · Ranked summary</a>
+  <a href="#reboot">2 · Root cause of today's noise: the 8:10 AM reboot (fixed live)</a>
+  <a href="#decision">3 · P1 — Threads CSI lane: your one-word decision is pending</a>
+  <a href="#quickwins">4 · P2 — Quick wins ready to ship</a>
+  <a href="#fyi">5 · P3 / FYI — noted, no urgency</a>
+  <a href="#resolved">6 · Already resolved (verified, no action)</a>
+</nav>
+
+<h2 id="summary">1 · Ranked summary</h2>
+<table>
+  <tr><th>#</th><th>Item</th><th>From email</th><th>Live status</th><th>Action</th></tr>
+  <tr class="p0"><td>1</td><td>VPS rebooted 8:10→8:39 AM CDT (kernel upgrade); SSHFS bridge <code>/home/kjdragan</code> silently DOWN, paths resolving to a stale local shadow</td><td>Indirect — the csi-ingester WARNING at 8:44 AM was the only symptom that emailed</td><td class="done">FIXED — remounted, verified live</td><td>Harden mount for next reboot (see §2)</td></tr>
+  <tr class="p1"><td>2</td><td>Threads CSI lane: <code>csi-threads-token-refresh-sync</code> fails daily, produces zero data</td><td>Simone "Decision: retire?" Jul 28 — unanswered</td><td class="pend">Timer still enabled; will go red again</td><td><b>Your call: retire / revive / defer</b> (Simone recommends retire)</td></tr>
+  <tr class="p2"><td>3</td><td>Corrupted <code>send_digest_email.py</code> at repo root — 11 syntax errors, zero references, dead code</td><td>Cody VP status Jul 28</td><td class="pend">Still on origin/main (verified)</td><td>Trivial <code>git rm</code> PR — I can ship now</td></tr>
+  <tr class="p2"><td>4</td><td>8 stale deslop tracking issues open (#1293→#1481), all referencing already-merged PRs</td><td>Backlog triage Jul 28/29/30 (3 reminders)</td><td class="pend">All 8 verified still OPEN</td><td>Close all 8 + fix tracker to auto-close on PR merge</td></tr>
+  <tr class="p2"><td>5</td><td>Skill-gap backlog #1438: 8 candidates from Jul 16, zero follow-up PRs</td><td>Backlog triage Jul 28/29/30</td><td class="pend">Verified still OPEN</td><td>Dispatch the ready-made Cody mission, or park explicitly</td></tr>
+  <tr class="p3"><td>6</td><td>Headless-vs-interactive Claude credential separation</td><td>Proposal Jul 28 ("for later")</td><td class="info">Parked by design</td><td>None now — matches the known lane-leak trap</td></tr>
+  <tr class="p3"><td>7</td><td>Duplicate skill-promotion email (dithered-hero sent 2× within 26 min)</td><td>Jul 29</td><td class="info">Minor notifier dedup bug</td><td>Note only</td></tr>
+  <tr class="p3"><td>8</td><td>Black Box channel plateau — queue empty, nothing building since Jul 26</td><td>Morning reviews Jul 28/29/30</td><td class="info">Different project (channel ops)</td><td>Your call, separate session</td></tr>
+  <tr class="p3"><td>9</td><td>Ideation backlog growing: 25 → 29 → 32 proposals</td><td>Morning ideation Jul 28/29/30</td><td class="info">A 137→20 triage exhibit already exists</td><td>Periodic triage pass</td></tr>
+</table>
+
+<h2 id="reboot">2 · Root cause of today's noise: the 8:10 AM reboot (fixed live)</h2>
+<p>The VPS did a <b>clean, planned poweroff at 8:10 AM CDT</b> and came back at 8:39 AM on a <b>new kernel</b> (6.8.0-111 → 6.8.0-136, after 74 days of uptime). Everything alarming in this morning's mail is fallout from that one event:</p>
+<table>
+  <tr><th>Symptom</th><th>What actually happened</th><th>Status</th></tr>
+  <tr><td><code>[WARNING] Watchdog restarted: csi-ingester</code> (8:44 AM)</td><td>Service raced its dependencies at boot, failed first healthcheck (<code>healthcheck:000</code>); watchdog restarted it — working as designed</td><td class="done">active, no action</td></tr>
+  <tr><td><code>home-kjdragan.mount</code> failed</td><td>SSHFS mount timed out at boot <i>before Tailscale was up</i>. Paths under <code>/home/kjdragan/…</code> silently resolved to a <b>stale local shadow on the VPS disk</b> (nothing newer than Jul 2) — the worst failure mode: no error, wrong data</td><td class="done">remounted, verified fuse.sshfs live</td></tr>
+  <tr><td><code>universal-agent-proactive-demo-build-sweep</code> failed</td><td>Ran at 8:40 AM in the boot storm, hit <code>database is locked</code> on <code>csi.db</code></td><td class="done">re-run cleanly after boot settled</td></tr>
+  <tr><td>2 failed session scopes</td><td>Reboot debris</td><td class="done">reset</td></tr>
+</table>
+<blockquote><b>The one durable fix worth shipping:</b> the fstab-generated SSHFS mount has no ordering on Tailscale and no retry — any future reboot re-creates the silent-stale-shadow hazard. Recommended: convert to <code>x-systemd.automount</code> + <code>_netdev</code> + after <code>tailscaled</code>, so it mounts lazily on first access once the tailnet is up. Small <code>/etc/fstab</code> edit on the VPS.</blockquote>
+
+<h2 id="decision">3 · P1 — Threads CSI lane: your one-word decision is pending</h2>
+<p>Simone's Jul 28 memo: <code>csi-threads-token-refresh-sync.service</code> fails with HTTP-500 every day since Jul 26, and Threads isn't even in the CSI data layer — the only real CSI source is <code>youtube_channel_rss</code> (~1,400 events/week). The permanently-red unit trains everyone to ignore <code>systemctl --failed</code> — which is exactly how today's <i>real</i> failed units nearly hid.</p>
+<p>Live check: the service is currently <code>inactive</code> (not red this minute) but the timer is <b>still enabled</b> — it will fail again on its next daily run.</p>
+<p><b>Options</b> (Simone recommends <b>retire</b>, I concur — fully reversible, no data exists to lose): <b>retire</b> · <b>revive</b> (root-cause the OAuth 500 first) · <b>defer</b>.</p>
+
+<h2 id="quickwins">4 · P2 — Quick wins ready to ship</h2>
+<p><b>4a. Delete corrupted <code>send_digest_email.py</code>.</b> Cody verified: 11 syntax errors, fails <code>py_compile</code>, zero references anywhere (no import, no systemd unit, no cron), swept in accidentally in <code>eb639ba7</code>. Still on origin/main. One-line <code>git rm</code> PR.</p>
+<p><b>4b. Close the 8 stale deslop tracking issues</b> — #1293, #1303, #1322, #1334, #1364, #1407, #1416, #1481. All reference PRs that already merged; all verified still OPEN. They're pure triage noise.</p>
+<p><b>4c. Root-cause fix:</b> make the deslop tracker auto-close its tracking issue when the parent PR merges — otherwise the pileup regrows.</p>
+<p><b>4d. Skill-gap #1438:</b> 8 candidates identified Jul 16, no PRs cut (the June batch was fully actioned). Simone drafted a ready-to-dispatch Cody mission prompt. Decide: dispatch or park.</p>
+
+<h2 id="fyi">5 · P3 / FYI — noted, no urgency</h2>
+<ul>
+  <li><b>Headless credential proposal</b> (Jul 28): separate <code>claude setup-token</code> credential from the interactive OAuth one — directly addresses the known "leaked <code>CLAUDE_CODE_OAUTH_TOKEN</code> downgrades a Max lane" trap. Good idea, explicitly parked "for later".</li>
+  <li><b>Duplicate promotion email</b>: <code>dithered-hero</code> auto-promotion notice sent twice, 26 min apart (Jul 29). Suggests the demo-skill promotion notifier lacks a sent-guard. Cosmetic.</li>
+  <li><b>Black Box plateau</b>: EP05 fully live, drip finished, publish queue empty, board stale since Jul 26. Channel-ops decision, not a UA defect.</li>
+  <li><b>Ideation backlog</b> 25→29→32 proposals across three mornings — the recent 137→20 ranked-initiatives exhibit is the model for the next triage pass.</li>
+</ul>
+
+<h2 id="resolved">6 · Already resolved (verified live, no action)</h2>
+<ul>
+  <li><b>Cron-loop liveness criticals</b> (Jul 24–26, <code>simone_chat_auto_complete</code> wedged): scheduler verified healthy right now — zero enabled crons overdue.</li>
+  <li><b>ZAI inference health criticals</b> (Jul 17–24): none since Jul 24.</li>
+  <li><b>AOD payments health check</b> 🔴 (Jul 20–21): no failures since Jul 21.</li>
+  <li><b>ClearSpring capability-sync failures</b> (Jul 17, Jul 22): Jul 28 email confirms HyperFrames 0.7.70→0.7.78 applied and merged on green (PR #246).</li>
+  <li><b>Paper-to-podcast email delivery critical</b> (Jul 18): pipeline delivering daily since (Jul 29, Jul 30 podcasts arrived).</li>
+</ul>
+
+<p class="small">Prepared by Claude (Fable) · interactive triage session · all "Live status" cells verified against uaonvps + GitHub on 2026-07-30 ~14:10 UTC.</p>
+</body>
+</html>
