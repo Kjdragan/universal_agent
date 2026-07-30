@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
 import time
 
 import pytest
@@ -145,8 +146,8 @@ def test_mine_collects_signals(transcripts_dir: Path) -> None:
     assert mined["bash"]["git push origin"] == 1
 
     # The error signature recurs 3x; ANSI + tool_use_error wrappers stripped to
-    # the same cleaned text.
-    assert mined["errors"]["Error: File has not been read yet"] == 3
+    # the same cleaned text, then normalized to a lowercase tally key.
+    assert mined["errors"]["error: file has not been read yet"] == 3
 
     # Real human prompt counted twice; synthetic wrapper excluded.
     assert mined["prompts"]["Please fix the failing worktree guard"] == 2
@@ -175,9 +176,89 @@ def test_build_corpus_includes_signals_and_dedup_list(transcripts_dir: Path) -> 
     mined = sgf._mine(records)
     corpus = sgf._build_corpus(mined, ["alpha", "beta"], window_days=7, transcript_count=2)
     assert "uv sync --frozen" in corpus
-    assert "Error: File has not been read yet" in corpus
+    assert "error: file has not been read yet" in corpus
     assert "alpha, beta" in corpus
     assert "2 transcripts" in corpus
+
+
+def test_normalize_error_key_collapses_case_and_whitespace() -> None:
+    canonical = sgf._normalize_error_key("Error: File has not been read yet")
+    assert canonical == "error: file has not been read yet"
+    assert sgf._normalize_error_key(
+        "ERROR:  File  has not   been read yet ") == canonical
+    assert sgf._normalize_error_key("") == ""
+
+
+def test_mine_tallies_reworded_guard_denial_as_one_variant(tmp_path: Path) -> None:
+    # A guard's denial text edited mid-window (spacing/capitalisation only) must
+    # not split one recurring error into two sub-threshold variants, which would
+    # drop both below the corpus's "count >= 2" cut.
+    proj = tmp_path / "-guard"
+    proj.mkdir(parents=True)
+    _write_jsonl(proj / "s.jsonl", [
+        _error_result("Denied: install a --user timer on the desktop"),
+        _error_result("DENIED:  install a --user timer  on the desktop"),
+    ])
+    mined = sgf._mine(sgf._read_jsonl(proj / "s.jsonl"))
+    assert mined["errors"]["denied: install a --user timer on the desktop"] == 2
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Remediation-awareness: work merged INSIDE the mining window reaches the
+# corpus, so the synthesis step can retire candidates whose fix already shipped.
+# ──────────────────────────────────────────────────────────────────────────
+def test_recent_merges_collects_subjects_and_reaches_corpus(monkeypatch) -> None:
+    captured: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs.get("cwd")
+        return subprocess.CompletedProcess(
+            cmd, 0,
+            stdout=("fix(guard): teach the denial its alternative (#1415)\n"
+                    "\n"
+                    "  fix(scratch): index links to dir URL (#1384)  \n"),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    merged = sgf._recent_merges(7)
+    assert merged == [
+        "fix(guard): teach the denial its alternative (#1415)",
+        "fix(scratch): index links to dir URL (#1384)",
+    ]
+    # Window-scoped, squash-merge-shaped, read from the repo checkout.
+    assert "--since=7 days ago" in captured["cmd"]
+    assert "--grep=(#" in captured["cmd"]
+    assert captured["cwd"] == sgf.REPO_ROOT
+
+    corpus = sgf._build_corpus({}, ["alpha"], window_days=7, transcript_count=2,
+                               merged_changes=merged)
+    assert "RECENTLY MERGED CHANGES" in corpus
+    assert "(#1415)" in corpus
+    assert "(#1384)" in corpus
+
+
+def test_recent_merges_degrades_when_git_fails(monkeypatch) -> None:
+    def _boom(cmd, **kwargs):
+        raise FileNotFoundError("git: command not found")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    assert sgf._recent_merges(7) == []
+
+    # The section still renders (empty) so the SYSTEM prompt's reference to it
+    # never dangles, and no git problem can break the weekly run.
+    corpus = sgf._build_corpus({}, [], window_days=7, transcript_count=0,
+                               merged_changes=[])
+    assert "RECENTLY MERGED CHANGES" in corpus
+    assert corpus.count("(none found)") == 2  # merged changes + existing skills
+
+
+def test_system_prompt_ties_merged_changes_to_already_automated() -> None:
+    # The prompt names the corpus section verbatim; if either side is renamed
+    # without the other, the instruction dangles and the section is ignored.
+    assert "RECENTLY MERGED CHANGES" in sgf.SYSTEM
+    assert "already-automated' and score it near 0" in sgf.SYSTEM
 
 
 def test_build_report_empty() -> None:

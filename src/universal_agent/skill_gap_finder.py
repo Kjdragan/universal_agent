@@ -54,6 +54,7 @@ MAX_CORPUS_CHARS = 60_000   # cap the corpus fed to the LLM
 MAX_PROMPT_CHARS = 280      # cap any single mined human prompt
 MAX_ERR_CHARS = 200         # cap any single mined error signature
 TOP_CANDIDATES = 8          # candidates requested from the synthesis step
+MAX_MERGED_CHANGES = 100    # cap merged-commit subjects fed to the LLM
 
 # Synthetic (non-human) user-line wrappers to ignore when mining real prompts.
 _SYNTHETIC_PREFIXES = ("<task-notification>", "<task-id>", "<command-name>",
@@ -225,6 +226,18 @@ def _clean_err(text: str) -> str:
     return text[:MAX_ERR_CHARS]
 
 
+def _normalize_error_key(text: str) -> str:
+    """Canonicalize a cleaned error signature for frequency tallying.
+
+    Collapses whitespace runs and lowercases so the SAME guard denial reworded
+    only in spacing or capitalisation — e.g. a hook's rejection text edited
+    mid-window — tallies as one variant instead of splitting into two that each
+    fall under the ``count >= 2`` corpus threshold. Runs after ``_clean_err``,
+    i.e. after redaction, so it can never expose a secret the redactor caught.
+    """
+    return re.sub(r"\s+", " ", text or "").strip().lower()
+
+
 def _content_text(content) -> str:
     """Best-effort extract text from a tool_result content (str or list)."""
     if isinstance(content, str):
@@ -288,7 +301,8 @@ def _mine(records: list[dict]) -> dict:
                     if not isinstance(blk, dict):
                         continue
                     if blk.get("type") == "tool_result" and blk.get("is_error") is True:
-                        err = _clean_err(_content_text(blk.get("content")))
+                        err = _normalize_error_key(
+                            _clean_err(_content_text(blk.get("content"))))
                         if err:
                             errors[err] += 1
 
@@ -313,9 +327,41 @@ def _existing_skill_names(skills_dir: Path) -> list[str]:
     return names
 
 
+def _recent_merges(window_days: int, limit: int = MAX_MERGED_CHANGES) -> list[str]:
+    """Return subjects of changes merged INSIDE the mining window.
+
+    Remediation-awareness. The finder mines a rolling window of transcripts and
+    dedupes only against ``.claude/skills/*``, so friction whose fix shipped
+    during that same window still reads as an open gap: issue #1438 proposed 8
+    candidates, 5 of which PRs merged inside the window had already remediated.
+    Reading merged work back in lets the synthesis step retire those.
+
+    Uses local ``git log`` (no network, no ``gh`` auth). ``main`` takes
+    squash-merges, which carry the PR number in the subject, so ``--grep '(#'``
+    selects them. Any failure — no repo, no git, timeout — degrades to an empty
+    list: a git problem must never break the weekly cron.
+    """
+    try:
+        res = subprocess.run(
+            ["git", "log", f"--since={max(0, int(window_days))} days ago",
+             f"--max-count={limit}", "--fixed-strings", "--grep=(#", "--format=%s"],
+            check=True, cwd=REPO_ROOT, capture_output=True, text=True, timeout=30,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] could not read recently-merged changes: {exc}", file=sys.stderr)
+        return []
+    subjects = [ln.strip() for ln in (res.stdout or "").splitlines() if ln.strip()]
+    return subjects[:limit]
+
+
 def _build_corpus(mined: dict, existing_skills: list[str], window_days: int,
-                  transcript_count: int) -> str:
-    """Render the mined signals + existing-skill list into an LLM corpus string."""
+                  transcript_count: int,
+                  merged_changes: list[str] | None = None) -> str:
+    """Render the mined signals + existing-skill list into an LLM corpus string.
+
+    ``merged_changes`` (see ``_recent_merges``) renders as its own section so the
+    model can retire candidates whose fix already shipped this window.
+    """
     bash: Counter = mined.get("bash", Counter())
     errors: Counter = mined.get("errors", Counter())
     prompts: Counter = mined.get("prompts", Counter())
@@ -338,6 +384,16 @@ def _build_corpus(mined: dict, existing_skills: list[str], window_days: int,
     lines.append("## Repeated human prompt themes")
     for prm, n in prompts.most_common(30):
         lines.append(f"- ({n}x) {_redact(prm)}")
+    lines.append("")
+    lines.append("## RECENTLY MERGED CHANGES (mining window)")
+    lines.append("These fixes shipped WHILE the transcripts above were being recorded, "
+                 "so their pain is still visible in the evidence. A candidate whose fix "
+                 "appears here is ALREADY REMEDIATED — do not propose it.")
+    merged = list(merged_changes or [])[:MAX_MERGED_CHANGES]
+    for subj in merged:
+        lines.append(f"- {_redact(subj)}")
+    if not merged:
+        lines.append("(none found)")
     lines.append("")
     lines.append("## Existing skills (DEDUP against these — do not re-propose)")
     lines.append(", ".join(existing_skills) if existing_skills else "(none found)")
@@ -423,6 +479,11 @@ SYSTEM = (
     "machine-templated prompts emitted by an existing automation loop — a false positive; "
     "score it near 0). Identically-phrased prompts that differ only by a counter (e.g. "
     "'Run research pass N now') are automation output, not operator toil. "
+    "The corpus also carries a RECENTLY MERGED CHANGES section: work that landed "
+    "DURING the mining window, so the friction it fixed is still present in the "
+    "transcript evidence. If a candidate's fix appears there it is already "
+    "remediated — classify it 'already-automated' and score it near 0 instead of "
+    "re-proposing shipped work. "
     "Respond with ONLY a JSON object: "
     '{"candidates":[{"title":"...","problem":"...","evidence":"...","frequency":N,'
     '"skill_fit":"new|update <existing-skill>",'
@@ -524,11 +585,14 @@ def main(argv: list[str] | None = None) -> int:
         records.extend(_read_jsonl(p))
     mined = _mine(records)
     existing_skills = _existing_skill_names(skills_dir)
-    corpus = _build_corpus(mined, existing_skills, args.window_days, len(transcripts))
+    merged_changes = _recent_merges(args.window_days)
+    corpus = _build_corpus(mined, existing_skills, args.window_days, len(transcripts),
+                           merged_changes=merged_changes)
 
     if args.dry_run:
         print(f"transcripts={len(transcripts)} corpus_chars={len(corpus)} "
-              f"records={len(records)} existing_skills={len(existing_skills)}")
+              f"records={len(records)} existing_skills={len(existing_skills)} "
+              f"merged_changes={len(merged_changes)}")
         return 0
 
     _load_zai_env()
