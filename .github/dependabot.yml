@@ -60,3 +60,27 @@ updates:
     open-pull-requests-limit: 3
     commit-message:
       prefix: "chore(ci)"
+
+  # web-ui (Next.js dashboard) npm dependencies. Added 2026-07-30: the JS tree
+  # previously got NO version-update PRs (only GitHub's automatic
+  # security-update path), which is why it drifted until Dependabot alerts
+  # fired (postcss/sharp/brace-expansion, 2026-07).
+  - package-ecosystem: "npm"
+    directory: "/web-ui"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "12:00"
+      timezone: "America/Chicago"
+    labels:
+      - "dependencies"
+      - "web-ui"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      npm-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
