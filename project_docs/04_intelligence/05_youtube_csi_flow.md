@@ -82,13 +82,12 @@ all. Full inventory + the two-scheduler reality:
 [Platform Status Registry §4](../00_PLATFORM_STATUS_REGISTRY.md).
 
 > The experimental **Threads CSI lanes** (`threads_owned`,
-> `threads_trends_seeded`, `threads_trends_broad`) are **PARKED**, not live —
-> their adapters are `enabled: false` in the ingester config, they no-op without
-> Threads creds, and they are excluded from
-> `csi_source_liveness.py::effective_source_thresholds` until
-> `UA_CSI_THREADS_LANES_ENABLED=1`. A **removal** of these lanes is in flight on
-> a separate branch (not yet on `origin/main`); treat them as PARKED today. Live
-> per-source status: [Platform Status Registry §5](../00_PLATFORM_STATUS_REGISTRY.md).
+> `threads_trends_seeded`, `threads_trends_broad`) are **RETIRED** — UA-side
+> monitoring was decommissioned 2026-06-22 (PR #1140: gate + helpers deleted),
+> the ingester config blocks are `enabled: false`, and the last ingester-side
+> systemd units (`csi-threads-token-refresh-sync`, `csi-threads-semantic-enrich`)
+> were retired 2026-07-30. Live per-source status:
+> [Platform Status Registry §5](../00_PLATFORM_STATUS_REGISTRY.md).
 
 ---
 

@@ -55,6 +55,14 @@ enable_timer_if_installed() {
 # WAL write lock → SQLITE_BUSY every run). Removed from this list AND deleted from
 # deployment/systemd/ so the orphan sweep disables+removes it on deploy. Do not
 # re-add — the in-process task supersedes it.
+# RETIRED 2026-07-30: csi-threads-token-refresh-sync and csi-threads-semantic-enrich
+# (.service + .timer) — the Threads sources were decommissioned 2026-06-22 (PR #1140,
+# all config blocks enabled:false, zero data ever produced); the token-refresh unit
+# had failed daily since Jul 26 (Threads keys never provisioned in Infisical). Removed
+# from this list AND deleted from deployment/systemd/, so the orphan sweep below
+# disables+removes them on deploy. Do not re-add. Operator decision 2026-07-30
+# (Simone retire/revive/defer memo -> retire). Backing scripts retained in-tree for
+# a possible future revival. See project_docs/04_intelligence/01_csi_architecture.md.
 CANONICAL_UNITS=(
   csi-daily-summary.service
   csi-daily-summary.timer
@@ -65,10 +73,6 @@ CANONICAL_UNITS=(
   csi-replay-dlq.timer
   csi-rss-semantic-enrich.service
   csi-rss-semantic-enrich.timer
-  csi-threads-semantic-enrich.service
-  csi-threads-semantic-enrich.timer
-  csi-threads-token-refresh-sync.service
-  csi-threads-token-refresh-sync.timer
   csi-youtube-transcript-canary.service
   csi-youtube-transcript-canary.timer
 )
