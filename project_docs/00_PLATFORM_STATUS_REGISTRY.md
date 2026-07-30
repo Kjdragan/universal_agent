@@ -184,9 +184,10 @@ verified `active waiting`, none failed, 2026-06-22.
 Plus host/infra + CSI-ingester timers not in the frozenset but live on the box: `service-watchdog`
 (30s), `oom-alert` (1m), `proactive-health` (10m), `session-reaper`, `uv-cache-prune`, `arxiv-index-harvest` (04:40 CT OAI-PMH metadata sync feeding paper_to_podcast discovery),
 `proactive-signal-card-sync`, `proactive-demo-build-sweep`, `proactive-demo-nuggets` (23:50 America/Chicago end-of-day golden-nuggets demo judge; `UA_PROACTIVE_DEMO_NUGGETS_ENABLED` code-default OFF, **set `1` in prod 2026-07-01**), `backlog-triage`, `skill-gap-finder`,
-`csi-rss-semantic-enrich` (4h), `csi-threads-semantic-enrich` (4h), `csi-youtube-transcript-canary`
-(hourly), `csi-replay-dlq` (4h), `csi-daily-summary`, `csi-db-backup`, `csi-threads-token-refresh-sync`,
-`m3-token-delta` (weekly, never-fired-yet). Global rollback: `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1`.
+`csi-rss-semantic-enrich` (4h), `csi-youtube-transcript-canary`
+(hourly), `csi-replay-dlq` (4h), `csi-daily-summary`, `csi-db-backup`,
+`m3-token-delta` (weekly, never-fired-yet). (`csi-threads-semantic-enrich` and
+`csi-threads-token-refresh-sync` retired 2026-07-30 — units deleted + swept on deploy.) Global rollback: `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1`.
 
 ### 4b. Still in-process (LIVE — 4 jobs)
 
@@ -222,7 +223,7 @@ drops parked sources whose flag is off). **YouTube is the only live ingestion fe
 | Source | Status | Gate (default) | Code anchor | Notes |
 |---|---|---|---|---|
 | `youtube_channel_rss` | LIVE ✅ | none | `csi_source_liveness.py::SOURCE_THRESHOLDS_HOURS` | Sole convergence feed; 444-channel watchlist; 12h threshold. |
-| `threads_owned` / `threads_trends_seeded` / `threads_trends_broad` | RETIRED 🌑 | n/a — gate + helper deleted | `csi_source_liveness.py::effective_source_thresholds` docstring | Decommissioned 2026-06-22 (PR #1140): never had a live ingestion adapter, X-API-dependent, redundant with the @ClaudeDevs/@bcherny lane. Removed from UA-side monitoring (`UA_CSI_THREADS_LANES_ENABLED` flag + `_THREADS_SOURCES` helper deleted). The CSI-ingester-side `csi-threads-*` timers persist but are inert pending an ingester redeploy. |
+| `threads_owned` / `threads_trends_seeded` / `threads_trends_broad` | RETIRED 🌑 | n/a — gate + helper deleted | `csi_source_liveness.py::effective_source_thresholds` docstring | Decommissioned 2026-06-22 (PR #1140): never had a live ingestion adapter, X-API-dependent, redundant with the @ClaudeDevs/@bcherny lane. Removed from UA-side monitoring (`UA_CSI_THREADS_LANES_ENABLED` flag + `_THREADS_SOURCES` helper deleted). The last CSI-ingester-side `csi-threads-*` timers were retired 2026-07-30 (unit files deleted + removed from `CANONICAL_UNITS`, orphan sweep disables+removes on deploy). |
 | `hackernews` | PARKED ⏸️ | `UA_HACKERNEWS_SNAPSHOT_ENABLED`=0 | `csi_source_liveness.py::_hackernews_snapshot_enabled` | No auto producer exists; re-parked 2026-06-21 (#1116). |
 | `claude_code_intel` (X `@ClaudeDevs`/`@bcherny`) | PAUSED ⏸️ | `UA_CLAUDE_CODE_INTEL_CRON_ENABLED` default 1→0 (#1136) | `gateway_server.py::_claude_code_intel_cron_enabled` | X API HTTP 402 CreditsDepleted. |
 | `csi_analytics` | RETIRED 🌑 | n/a | `csi_source_liveness.py` docstring | PR #990; superseded by the convergence pipeline; model glm-5.1 → **glm-5.2**. |
