@@ -23,6 +23,7 @@ async def consume_adapter_events_with_idle_timeout(
     prompt: str,
     *,
     idle_timeout_seconds: int,
+    error_context: Optional[dict[str, Any]] = None,
 ) -> tuple[str, Optional[str], Optional[str]]:
     """Drive ``adapter.execute(prompt)`` and extract ``(final_text, error_text,
     trace_id)``, killing the run if it goes idle.
@@ -49,6 +50,7 @@ async def consume_adapter_events_with_idle_timeout(
     from universal_agent.timeout_policy import LivenessWatchdog
 
     final_text = ""
+    streamed_text = ""  # last assistant text seen, even w/o the final marker
     error_text: Optional[str] = None
     trace_id: Optional[str] = None
 
@@ -86,14 +88,31 @@ async def consume_adapter_events_with_idle_timeout(
             )
 
             if event.type == EventType.TEXT and isinstance(event.data, dict):
+                text = str(event.data.get("text") or "")
+                if text:
+                    # Track the last streamed assistant text so a finalize
+                    # crash that loses the final=True marker can still
+                    # salvage final_text on the failure path.
+                    streamed_text = text
                 if event.data.get("final") is True:
-                    final_text = str(event.data.get("text") or "")
+                    final_text = text
             elif event.type == EventType.ERROR and isinstance(event.data, dict):
                 error_text = str(
                     event.data.get("message")
                     or event.data.get("error")
                     or "mission failed"
                 ).strip()
+                # The engine propagates the gateway span trace_id on the
+                # error path too (ITERATION_END only fires on success);
+                # capture it here so a failed run no longer records null.
+                err_trace = str(event.data.get("trace_id") or "") or None
+                if err_trace:
+                    trace_id = err_trace
+                if error_context is not None:
+                    error_context["message"] = error_text
+                    error_context["detail"] = event.data.get("detail")
+                    error_context["log_tail"] = event.data.get("log_tail")
+                    error_context["trace_id"] = err_trace
             elif event.type == EventType.ITERATION_END and isinstance(event.data, dict):
                 trace_id = str(event.data.get("trace_id") or "") or None
     finally:
@@ -101,6 +120,13 @@ async def consume_adapter_events_with_idle_timeout(
             await agen.aclose()
         except Exception:
             pass
+
+    # Salvage the finish path's final text ONLY on the failure path: a
+    # finalize-step crash can lose the final=True marker even though the
+    # agent streamed its response first. Gated on error_text so the
+    # zero-output success path (no final marker + no error) is unchanged.
+    if not final_text and streamed_text and error_text:
+        final_text = streamed_text
 
     return final_text, error_text, trace_id
 

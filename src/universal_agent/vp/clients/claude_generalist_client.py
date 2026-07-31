@@ -11,6 +11,9 @@ from universal_agent.vp.clients.base import (
     VpClient,
     consume_adapter_events_with_idle_timeout,
 )
+from universal_agent.vp.finalize_failure_context import (
+    maybe_work_done_finalize_failed_payload,
+)
 
 
 class ClaudeGeneralistClient(VpClient):
@@ -36,6 +39,8 @@ class ClaudeGeneralistClient(VpClient):
         trace_id: Optional[str] = None
         final_text = ""
         error_text: Optional[str] = None
+        # Populated by the adapter consumer when an ERROR event arrives.
+        error_context: dict[str, Any] = {}
 
         try:
             await adapter.initialize()
@@ -51,6 +56,7 @@ class ClaudeGeneralistClient(VpClient):
                 await consume_adapter_events_with_idle_timeout(
                     adapter, prompt,
                     idle_timeout_seconds=vp_no_progress_kill_seconds(),
+                    error_context=error_context,
                 )
             )
         finally:
@@ -85,6 +91,20 @@ class ClaudeGeneralistClient(VpClient):
                     reset_sdk_timeout_counter(task_id=_task_id, mission_id=_mission_id)
             except Exception:
                 pass
+            # Diagnosability: if real work ran before the finalize-step
+            # crash, record the recoverable work_done_finalize_failed
+            # disposition instead of the bare error.
+            _work_done_payload = maybe_work_done_finalize_failed_payload(
+                workspace_dir=workspace_dir,
+                final_text=final_text,
+                trace_id=trace_id,
+                error_message=error_text,
+                error_detail=error_context.get("detail"),
+                log_tail=error_context.get("log_tail"),
+                prior_payload=outcome_payload,
+            )
+            if _work_done_payload is not None:
+                outcome_payload = _work_done_payload
             return MissionOutcome(
                 status="failed",
                 result_ref=f"workspace://{workspace_dir}",
