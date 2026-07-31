@@ -56,6 +56,21 @@ class ClaudeCodeClient(VpClient):
         if not objective:
             return MissionOutcome(status="failed", message="missing objective")
 
+        # Crash-recovery apply discipline (same directive the CLI client puts
+        # in _build_cli_prompt): a repo-mutation session must run its
+        # ``apply_*.py`` through the blessed idempotent runner so a finalize
+        # crash leaves a durable ``apply_checkpoint.json`` — the marker
+        # ``maybe_work_done_finalize_failed_payload`` below keys off (via
+        # ``has_validated_apply``) to route done-but-unfinalized work as
+        # recoverable instead of a destructive re-run candidate.
+        from universal_agent.vp.apply_checkpoint import (
+            APPLY_DISCIPLINE_SECTION,
+            apply_discipline_requested,
+        )
+
+        if apply_discipline_requested(payload, constraints):
+            objective = f"{objective}\n\n{APPLY_DISCIPLINE_SECTION}"
+
         adapter = ProcessTurnAdapter(EngineConfig(workspace_dir=str(workspace_dir), user_id="vp.coder.worker"))
         trace_id: Optional[str] = None
         final_text = ""
