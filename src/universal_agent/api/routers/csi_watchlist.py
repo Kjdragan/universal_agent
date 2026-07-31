@@ -176,7 +176,7 @@ async def get_watchlist() -> dict[str, Any]:
                 
         return {"channels": channels, "categories": categories}
     except Exception as e:
-        logger.error(f"Error reading watchlist: {e}")
+        logger.exception("Error reading watchlist from %s", path)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -189,8 +189,8 @@ def _purge_channel_from_db(channel_id: str) -> None:
         with sqlite3.connect(db_path) as conn:
             conn.execute("DELETE FROM rss_event_analysis WHERE channel_id = ?", (channel_id,))
             conn.commit()
-    except Exception as e:
-        logger.error(f"Error purging DB for channel {channel_id}: {e}")
+    except Exception:
+        logger.exception("Error purging DB for channel %s", channel_id)
 
 @router.delete("/{channel_id}")
 async def delete_channel(channel_id: str) -> dict[str, Any]:
@@ -217,7 +217,7 @@ async def delete_channel(channel_id: str) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error removing from watchlist: {e}")
+        logger.exception("Error removing channel %s from watchlist", channel_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -368,7 +368,7 @@ async def add_channel(request: AddChannelRequest) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error adding to watchlist: {e}")
+        logger.exception("Error adding channel to watchlist (url=%s, channel_id=%s)", url, channel_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -399,7 +399,7 @@ async def add_category(request: CategoryRequest) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error adding category: {e}")
+        logger.exception("Error adding category %r", request.name)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -431,7 +431,7 @@ async def rename_category(old_name: str, request: CategoryRequest) -> dict[str, 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error renaming category: {e}")
+        logger.exception("Error renaming category %r to %r", old_name, request.name)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -459,7 +459,7 @@ async def delete_category(name: str) -> dict[str, Any]:
             
         return {"success": True, "categories": data.get("categories", []), "channels": data["channels"]}
     except Exception as e:
-        logger.error(f"Error deleting category: {e}")
+        logger.exception("Error deleting category %r", name)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -491,7 +491,7 @@ async def patch_channel(channel_id: str, request: ChannelPatchRequest) -> dict[s
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error patching channel: {e}")
+        logger.exception("Error patching channel %s (domain=%s)", channel_id, request.domain)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -563,7 +563,7 @@ async def reclassify_channel(request: ReclassifyRequest) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error reclassifying channel: {e}")
+        logger.exception("Error reclassifying channel %s", request.channel_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -584,8 +584,8 @@ async def get_recent_videos(limit: int = 50, category: Optional[str] = None) -> 
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 target_channel_ids = {ch["channel_id"] for ch in data.get("channels", []) if ch.get("domain") == category}
-            except Exception as e:
-                logger.error(f"Error reading watchlist for category filter: {e}")
+            except Exception:
+                logger.exception("Error reading watchlist for category filter %r", category)
                 target_channel_ids = set()
 
     try:
@@ -615,6 +615,7 @@ async def get_recent_videos(limit: int = 50, category: Optional[str] = None) -> 
             try:
                 subject = json.loads(row["subject_json"])
             except Exception:
+                logger.debug("Skipping CSI event with unparseable subject_json: %s", row["event_id"])
                 continue
 
             channel_id = subject.get("channel_id") or ""
@@ -655,5 +656,5 @@ async def get_recent_videos(limit: int = 50, category: Optional[str] = None) -> 
 
         return {"videos": videos}
     except Exception as e:
-        logger.error("Error fetching recent videos: %s", e)
+        logger.exception("Error fetching recent videos (limit=%s, category=%s)", limit, category)
         raise HTTPException(status_code=500, detail=str(e))
