@@ -2,8 +2,12 @@
 
 > Durable, dated copy of every artifact published to the tailnet scratchpad.
 > Newest first. Auto-generated from `index.jsonl` — do not edit by hand.
-> 58 artifact(s) archived.
+> 59 artifact(s) archived.
 
+
+## 2026-07-31
+
+- **13:10:35** — [Nextdoor campaign — final report (Agents On Demand)](2026-07-31/131035__nextdoor-campaign-1dad3c/report.html) · slug `nextdoor-campaign-1dad3c` · [live](https://uaonvps.taildcc090.ts.net/scratch/nextdoor-campaign-1dad3c/)
 
 ## 2026-07-28
 
