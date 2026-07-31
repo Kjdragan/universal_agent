@@ -156,3 +156,15 @@ src/universal_agent/services/invariants/disk_usage_health.py
 # worker PID to classify. Same shape as prune_scratch.py (filesystem GC sweep) and
 # disk_usage_health.py (`du` measurement) above. (merged-worktree auto-prune, 2026-07-24)
 src/universal_agent/scripts/vp_coder_workspace_pruner.py
+
+# finalize_failure_context.py [rationale (a) — not a task unit]: the VP-coder
+# finalize-crash diagnosability module. Its ONLY subprocess use (`_run_git`) is
+# two ephemeral, bounded (timeout=5), argv-only, READ-ONLY calls —
+# `git rev-parse HEAD` and `git status --porcelain` — used to build a pre-crash
+# WorkSnapshot for the mission-outcome payload. It spawns no long-running
+# worker PID and owns no task_hub_items row, so there is no exit status for
+# worker_exit_classifier to classify and no task row for the PID protocol to
+# attach to: it is a forensic git read, not a tracked unit of work. Same shape
+# as vp_coder_workspace_pruner.py and prune_scratch.py above.
+# (vp-finalize-diagnosability, allowlisted 2026-07-31)
+src/universal_agent/vp/finalize_failure_context.py
