@@ -974,7 +974,8 @@ implicit signals without understanding this loop.
 `services/invariants/proactive_pipeline_invariants.py` is the Layer-2 watchdog
 for proactive crons whose silent failure is operator-visible. Each probe is fast,
 read-only, and **fails open** (returns `None` on a fresh/undeployed box rather
-than screaming). Probes (all consume `activity_conn` and/or `artifacts_dir`):
+than screaming). Most probes consume `activity_conn` and/or `artifacts_dir`;
+`infisical_cli_auth_fresh` is the exception — it shells out to the Infisical CLI.
 
 | Probe | What it checks | Severity |
 |---|---|---|
@@ -988,6 +989,18 @@ than screaming). Probes (all consume `activity_conn` and/or `artifacts_dir`):
 | `paper_to_podcast_email_delivery` | podcast bundle emailed in last 30h | critical |
 | `vault_lint_contradictions_monthly` | contradiction report for current month | warn |
 | `proactive_brief_task_funnel` | artifacts produce matching `task_hub_items` | warn |
+| `infisical_cli_auth_fresh` | Infisical **CLI** machine identity not expired — the SDK boot path stays green and masks a 403 "token has expired" on the CLI (shells out via `infisical secrets get` on a nonexistent key) | critical |
+
+> **Probe (2026-07-28).** `infisical_cli_auth_fresh` closes an invisible-failure
+> class: UA services bootstrap via the in-process SDK path
+> (`infisical_loader._fetch_infisical_secrets` → REST `universal-auth/login`),
+> which re-mints a token every call and stays green, while the Infisical **CLI**
+> caches its own machine-identity token (used by deploy-time env rendering and the
+> threads-token-sync script). When that cached token expires the CLI 403s but the
+> fleet still *looks* healthy. The probe exercises the CLI path specifically (an
+> SDK token-mint would test the green path and miss the decay), fires `critical`
+> only on an auth-expiry signature, and fails open on network blips / not-found /
+> timeout. Kill-switch: `UA_INVARIANT_INFISICAL_CLI_AUTH=0`.
 
 The `proactive_brief_task_funnel` probe is the direct guard against the
 implicit-poison failure mode: if a proactive `source_kind` produces ≥5
