@@ -266,3 +266,41 @@ def test_retired_csi_source_is_omitted_not_dark(monkeypatch, tmp_path):
     # No retired source appears as a dark entry anywhere.
     dark_names = [a["name"] for a in acts if a["status"] == par.STATUS_DARK]
     assert not any("csi_analytics" in n or "threads" in n for n in dark_names)
+
+
+def test_expected_period_table_pins_exact_second_counts():
+    """Pin the exact integer second-count of every cadence class in the systemd
+    expected-period table. Guards the time-constant refactor (60 / 60*60 /
+    24*60*60 -> named _SECONDS_PER_{MINUTE,HOUR,DAY}) against accidental value
+    drift: each entry must remain the exact number of seconds it was before.
+    """
+    secs = par._SYSTEMD_EXPECTED_PERIOD_SECONDS
+    # minute cadences
+    assert secs["service-watchdog"] == 60
+    assert secs["oom-alert"] == 60
+    assert secs["proactive-health"] == 5 * 60
+    assert secs["artifact-reminders-sweep"] == 30 * 60
+    # hourly cadences
+    assert secs["proactive-signal-card-sync"] == 60 * 60
+    assert secs["hourly-intel-digest"] == 60 * 60
+    # daily cadences
+    assert secs["morning-briefing"] == 24 * 60 * 60
+    assert secs["nightly-wiki"] == 24 * 60 * 60
+    assert secs["session-reaper"] == 24 * 60 * 60
+    # weekly cadences
+    assert secs["skill-gap-finder"] == 7 * 24 * 60 * 60
+    assert secs["vp-coder-workspace-pruning"] == 7 * 24 * 60 * 60
+    # monthly-ish cadences
+    assert secs["vault-lint-contradictions"] == 30 * 24 * 60 * 60
+    # Every entry is a positive whole number of seconds (sanity).
+    assert all(isinstance(v, int) and v > 0 for v in secs.values())
+
+
+def test_fmt_period_boundaries_pins_unit_thresholds():
+    """``_fmt_period`` switches units at the same thresholds (90 min, 36 h); pin
+    its output so the time-constant refactor cannot shift a boundary."""
+    assert par._fmt_period(5 * 60) == "5m"
+    assert par._fmt_period(89 * 60) == "89m"  # just under the 90-min minute boundary
+    assert par._fmt_period(2 * 3600) == "2h"
+    assert par._fmt_period(35 * 3600) == "35h"  # just under the 36-h hour boundary
+    assert par._fmt_period(2 * 86400) == "2d"
