@@ -41,8 +41,22 @@ else
   swapon "$SWAPFILE_PATH"
 fi
 
-if ! grep -Eq "^[^#]*[[:space:]]$SWAPFILE_PATH[[:space:]]+none[[:space:]]+swap[[:space:]]" /etc/fstab; then
+# fstab entry, exactly once. The old guard pattern required whitespace BEFORE
+# the swapfile path, so it never matched the very line this script writes
+# (which starts at column 0) — every deploy appended a fresh duplicate. 159
+# duplicates accumulated and made systemd's fstab-generator grind every
+# `daemon-reload` to minutes, timing out the 2026-07-31 deploy (#1569 rerun).
+# Guard fixed to anchor at line start; self-heal collapses any duplicates a
+# prior run left behind.
+_SWAP_LINE_RE="^[[:space:]]*$SWAPFILE_PATH[[:space:]]+none[[:space:]]+swap([[:space:]]|\$)"
+_swap_entries=$(grep -Ec "$_SWAP_LINE_RE" /etc/fstab || true)
+if [[ "$_swap_entries" -eq 0 ]]; then
   echo "$SWAPFILE_PATH none swap sw 0 0" >> /etc/fstab
+elif [[ "$_swap_entries" -gt 1 ]]; then
+  echo "Deduplicating $_swap_entries swap entries in /etc/fstab"
+  cp -a /etc/fstab "/etc/fstab.bak-swap-dedupe"
+  awk -v re="$_SWAP_LINE_RE" '!($0 ~ re && seen++)' /etc/fstab > /etc/fstab.tmp
+  mv /etc/fstab.tmp /etc/fstab
 fi
 
 cat >/etc/sysctl.d/99-universal-agent-swap.conf <<EOF
