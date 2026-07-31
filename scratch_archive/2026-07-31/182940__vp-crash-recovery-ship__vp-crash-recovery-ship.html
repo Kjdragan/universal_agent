@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Codie Crash Repair — ship + incident report (2026-07-31)</title>
+<style>
+  :root { color-scheme: light; }
+  body { background:#ffffff; color:#1f2328; font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; margin:0; }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 20px 80px; }
+  h1 { font-size: 1.6em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h2 { font-size: 1.25em; margin-top: 1.8em; border-bottom: 1px solid #eaeef2; padding-bottom: .2em; }
+  code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size: .88em; background:#f6f8fa; border-radius:6px; }
+  code { padding: .15em .35em; }
+  pre { padding: 12px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size:.93em; }
+  th, td { border: 1px solid #d1d9e0; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  .ok { color: #1a7f37; font-weight: 600; }
+  .warn { color: #9a6700; font-weight: 600; }
+  .bad { color: #cf222e; font-weight: 600; }
+  .tldr { background:#f0f6ff; border:1px solid #b6d4fe; border-radius:8px; padding: 14px 18px; }
+  .toc a { display:block; padding:2px 0; }
+  blockquote { margin: 1em 0; padding: .5em 1em; border-left: 4px solid #d1d9e0; color:#57606a; background:#fafbfc; }
+  .mermaid { background:#ffffff; }
+</style>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "neutral" });
+</script>
+</head>
+<body>
+<main>
+<h1 id="top">Codie Crash Repair — ship + incident report</h1>
+<p><em>2026-07-31 · session "Codie Crash Repair" · PRs <a href="https://github.com/Kjdragan/universal_agent/pull/1569">#1569</a> (merged + deployed) and <a href="https://github.com/Kjdragan/universal_agent/pull/1571">#1571</a> (follow-up, auto-merge armed)</em></p>
+
+<div class="tldr">
+<strong>TL;DR.</strong> The vp.coder.primary crash-recovery build (a fresh rebuild of closed PR #1324) is <span class="ok">merged and live on prod</span>: a crashed-mid-finalize mission can no longer re-execute its apply-script on retry, the observability gate passes <em>on its merits</em>, and the module that #1328's diagnosability lane was already lazy-importing now exists. The deploy itself hit a 30-minute timeout — root-caused to <strong>159 duplicate swap lines in /etc/fstab</strong> (a broken installer guard, +1 per deploy) plus a <strong>wedged SSHFS mount</strong> stalling systemd's generator sandbox. Both fixed; <code>daemon-reload</code> went from 3 minutes to 0.4 s; deploy rerun green in normal time. Production never flapped.
+</div>
+
+<div class="toc">
+<h2 id="toc">Contents</h2>
+<a href="#evidence">1 · STEP 0 evidence — the failure class, verified and corrected</a>
+<a href="#design">2 · What shipped (PR #1569)</a>
+<a href="#gate">3 · The observability gate, passed on merit</a>
+<a href="#review">4 · Adversarial review — what it caught</a>
+<a href="#incident">5 · Deploy incident — root cause and remediation</a>
+<a href="#verify">6 · Verification ledger</a>
+</div>
+
+<h2 id="evidence">1 · STEP 0 evidence — verified, with two corrections</h2>
+<p>Seven vp.coder.primary missions between <strong>2026-07-08 and 2026-07-15</strong> carry the exact crash signature (<code>message="Unknown error"</code>, empty <code>final_text</code>, <code>trace_id=null</code>) in <code>vp_state.db</code>. The proven in-gap instance: <code>vp-mission-d51ed9c8…</code> wrote its apply-script, ran it ("ALL EDITS APPLIED"), validated (<code>ruff-exit=0</code> plus a regression test), staged the work with <code>git add</code> — and was killed <strong>0.25 seconds after staging</strong>. The identical fix was then redone by hand 17 minutes later (commit <code>ef424272</code>, #1417). That redo cost is exactly what this build eliminates.</p>
+<p>Two corrections to the inherited premise, folded into the design:</p>
+<table>
+<tr><th>Inherited belief</th><th>What prod actually showed</th></tr>
+<tr><td>Opaque CLI-session death in <code>claude_cli_client</code></td><td>The July cluster rode the <strong>in-process SDK lane</strong> (<code>claude_code_client</code> → ProcessTurnAdapter); "Unknown error" is what an absolute-backstop kill collapses into</td></tr>
+<tr><td>Actively bleeding failure class</td><td><strong>Dormant since 2026-07-15</strong> — the 1800s backstop pin was fixed; the collapse path still exists at 7200s, so the machinery is insurance plus a landed dependency, not a live fire</td></tr>
+</table>
+<p>Main was literally waiting for this module: #1328 (merged the same day) lazy-imports <code>vp.apply_checkpoint.has_validated_apply</code> and silently degraded to heuristics until this PR landed.</p>
+
+<h2 id="design">2 · What shipped (PR #1569)</h2>
+<pre class="mermaid">
+flowchart TD
+  A["Mission applies repo edits via apply_*.py"] --> B["Blessed runner: vp_apply_and_checkpoint"]
+  B --> C{"apply, then ruff, then pytest all green?"}
+  C -->|"yes"| D["Atomic checkpoint written<br/>apply_checkpoint.json"]
+  C -->|"no"| E["Non-zero exit, NO checkpoint<br/>retry correctly re-applies"]
+  D --> F{"CLI session crashes at finalize?"}
+  F -->|"yes"| G["Retry re-enters SAME workspace"]
+  G --> H["_build_retry_prompt reads checkpoint"]
+  H --> I["RESUME directive: do not re-apply,<br/>git diff to verify, commit, push, PR"]
+  G --> J["Runner invoked again? Idempotent NO-OP, exit 0"]
+</pre>
+<table>
+<tr><th>Piece</th><th>What it does</th></tr>
+<tr><td><code>vp/apply_checkpoint.py</code></td><td>Durable checkpoint: tmp + <code>os.replace</code> + fsync (a crash mid-write cannot leave a half-marker); corrupt JSON reads as "no checkpoint" so re-apply stays safe. Also home of the shared discipline prompt text and its gate.</td></tr>
+<tr><td><code>scripts/vp_apply_and_checkpoint.py</code></td><td>The ONE blessed owner of apply → ruff → pytest → checkpoint. Idempotent: validated checkpoint present → NO-OP exit 0. That idempotence — not the prompt — is the structural guarantee.</td></tr>
+<tr><td>CLI lane wiring</td><td>RESUME directive on retry when validated; <strong>CAUTION verify-first net</strong> when leftover <code>apply_*.py</code> exist with no checkpoint (review finding). Discipline section in <code>_build_cli_prompt</code>.</td></tr>
+<tr><td>SDK lane wiring</td><td>The lane the July cluster actually rode: same shared discipline section appended to the objective, closing the loop with #1328's <code>work_done_finalize_failed</code>.</td></tr>
+<tr><td>28 tests</td><td>Including the invariant test (apply-runner invoked at most once across crash + retry) and an end-to-end <code>run_mission</code> wiring test capturing the second attempt's actual prompt.</td></tr>
+</table>
+
+<h2 id="gate">3 · The observability gate, passed on merit</h2>
+<p>The gate that killed the prior attempt (<code>test_subprocess_spawns_use_observability_protocol</code>) passes with <strong>no allowlist entry</strong>: the runner classifies every pipeline child's termination with <code>classify_worker_exit</code> — nonzero, signaled (negative rc, e.g. OOM-kill), timeout-killed (per-step backstop, rc 124) — echoes it to stderr (landing in the turn's <code>run.log</code>) and records it durably in the checkpoint's <code>extra["worker_exit_by_step"]</code>.</p>
+<blockquote>Deliberate non-wiring: the runner does NOT open or close task-hub run rows. It is a nested child inside a turn the parent CLI client already tracks end-to-end; a child calling <code>_close_run</code> would steal the parent's close mid-turn and double-book the ledger. This "nested-child spawn pattern" is now documented in the Task Hub doc.</blockquote>
+
+<h2 id="review">4 · Adversarial review — what it caught</h2>
+<p>13-agent workflow: 3 dimension reviewers, then per-finding refutation verifiers. <strong>10 findings raised, 7 refuted, 3 upheld</strong> — all three addressed before merge:</p>
+<table>
+<tr><th>Upheld finding</th><th>Resolution</th></tr>
+<tr><td>Invariant was prompt-only if the agent bypasses the blessed runner entirely</td><td>Retry-time CAUTION net: leftover <code>apply_*.py</code> with no checkpoint → verify-first directive. Residual (no deterministic block) accepted and documented; PreToolUse-hook enforcement noted as follow-up if bypasses appear.</td></tr>
+<tr><td>The gate-widening fix existed only unstaged relative to the reviewed diff</td><td>Process flag — everything staged and committed together; commit-count verified at exactly 1.</td></tr>
+<tr><td>No test that <code>run_mission</code> actually threads the workspace into the retry prompt</td><td>Added: end-to-end test patches the session seam and asserts the second attempt's real prompt carries the RESUME directive.</td></tr>
+</table>
+
+<h2 id="incident">5 · Deploy incident — root cause and remediation</h2>
+<pre class="mermaid">
+flowchart TD
+  S["install_vps_swap.sh guard requires whitespace<br/>BEFORE /swapfile — never matches its own line"] --> T["+1 duplicate fstab swap entry per deploy<br/>159 accumulated"]
+  U["Desktop SSHFS mount wedged on the VPS"] --> V["systemd 255 generator sandbox stalls<br/>Protocol error, 90s timeout per reload"]
+  T --> W["daemon-reload takes 1.5 to 3 minutes"]
+  V --> W
+  W --> X["Deploy installers crawl, ~3 min each"]
+  X --> Y["30-min SSH command timeout, exit 124<br/>BEFORE the main service restarts"]
+  Y --> Z["Prod stays up on OLD code — stable, no flapping"]
+</pre>
+<p><strong>Remediation (all verified):</strong> fstab deduped 163 → 5 lines (backup <code>/etc/fstab.bak-20260731-dedupe</code>); wedged mount lazily detached and the automount re-armed — desktop bridge confirmed working again; <code>daemon-reload</code> measured <strong>0.4 s</strong> (was 2m59s); deploy rerun <span class="ok">green at 23:24 UTC in normal time</span>. The deploy-failure email fired normally. Fix-forward PR <a href="https://github.com/Kjdragan/universal_agent/pull/1571">#1571</a> makes the installer guard correct and self-healing (behaviorally tested: 4 dupes → 1, idempotent).</p>
+
+<h2 id="verify">6 · Verification ledger</h2>
+<table>
+<tr><th>Check</th><th>Result</th></tr>
+<tr><td>Invariant under test (<code>test_pipeline_crash_recovery_does_not_re_run_apply</code>)</td><td class="ok">PASS — apply-runner at most once across crash + retry</td></tr>
+<tr><td>Observability gate</td><td class="ok">PASS on merit, no allowlist entry</td></tr>
+<tr><td>Full targeted suites (apply_checkpoint + cli_client + observability + finalize_failure_context)</td><td class="ok">99 tests green; ruff, py_compile, doc audit 0 errors</td></tr>
+<tr><td>Validate PR</td><td class="ok">green (4m33s); squash-merged 22:39 UTC</td></tr>
+<tr><td>Deploy</td><td class="warn">first run timed out (incident above)</td> </tr>
+<tr><td>Deploy rerun</td><td class="ok">success 23:24 UTC, normal duration</td></tr>
+<tr><td>Rule A — live <code>/api/v1/version</code></td><td class="ok">75f0e892 (the merge commit); all five services active; prod imports OK via the units' <code>PYTHONPATH=src</code></td></tr>
+</table>
+
+<p><em>Docs updated in-PR: VP Workers &amp; Delegation (crash-recovery behavior, both lanes) and Task Hub (nested-child spawn pattern). Memories saved: the ship record and the deploy-slowness diagnostic path.</em></p>
+</main>
+</body>
+</html>
