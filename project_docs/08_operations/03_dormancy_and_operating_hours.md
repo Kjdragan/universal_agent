@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - tests/unit/test_cron_dormancy_defaults.py
   - tests/unit/test_dormancy_schedule_consistency.py
-last_verified: 2026-06-30
+last_verified: 2026-07-31
 ---
 
 # Dormancy & Operating Hours
@@ -178,8 +178,8 @@ expressed in UTC and accept ~1h DST drift.
   It is superseded by `gateway_server._ensure_hourly_intel_digest_cron_job`
   (`system_job=hourly_intel_digest`, same `0 6-21 * * *` slot), the
   LLM-independent delivery path. The `src/universal_agent/scripts/hourly_insight_email.py`
-  / `src/universal_agent/services/hourly_insight_email.py` modules remain (still
-  imported elsewhere); only the cron registration is gone.
+  / `src/universal_agent/services/hourly_insight_email.py` modules had no remaining
+  importers and were deleted as dead code.
 - **Heartbeat interval env** — `heartbeat_service._resolve_heartbeat_interval_env`
   now honors **only** `UA_HEARTBEAT_INTERVAL`. The deprecated `UA_HEARTBEAT_EVERY`
   alias (unset in production) was dropped from both the resolver and
