@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from universal_agent.services import mission_control_chief_of_staff as cos
-from universal_agent.services import mission_control_tier1 as tier1
+from universal_agent.services import (
+    mission_control_chief_of_staff as cos,
+    mission_control_tier1 as tier1,
+)
 
 PARSERS = [tier1._extract_json_object, cos._extract_json_object]
 

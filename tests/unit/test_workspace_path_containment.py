@@ -8,8 +8,8 @@ read. Both helpers now use `_resolve_path_under_root` (root in target.parents).
 
 from pathlib import Path
 
-import pytest
 from fastapi import HTTPException
+import pytest
 
 from universal_agent.api.server import (
     _list_workspace_files_payload,

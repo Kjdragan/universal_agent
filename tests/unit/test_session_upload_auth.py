@@ -11,8 +11,8 @@ token-injecting proxy.
 
 import asyncio
 
-import pytest
 from fastapi import HTTPException
+import pytest
 from starlette.requests import Request
 
 import universal_agent.gateway_server as gs

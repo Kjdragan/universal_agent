@@ -14,9 +14,15 @@ from __future__ import annotations
 import pytest
 
 from universal_agent.proactive_signals import _json_loads_obj as signals_alias
-from universal_agent.services.proactive_artifacts import _json_loads_obj as artifacts_alias
-from universal_agent.services.proactive_convergence import _json_loads_obj as convergence_alias
-from universal_agent.services.proactive_tutorial_builds import _json_loads_obj as tutorial_alias
+from universal_agent.services.proactive_artifacts import (
+    _json_loads_obj as artifacts_alias,
+)
+from universal_agent.services.proactive_convergence import (
+    _json_loads_obj as convergence_alias,
+)
+from universal_agent.services.proactive_tutorial_builds import (
+    _json_loads_obj as tutorial_alias,
+)
 from universal_agent.utils.json_utils import json_loads_obj
 
 ALL = [json_loads_obj, tutorial_alias, convergence_alias, artifacts_alias, signals_alias]
