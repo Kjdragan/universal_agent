@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Nextdoor campaign — final report (Agents On Demand)</title>
+<style>
+:root{color-scheme:light;--fg:#1f2328;--muted:#656d76;--bg:#ffffff;--soft:#f6f8fa;--border:#d0d7de;--accent:#0969da;--accent-soft:#ddf4ff}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:#ffffff;color:#1f2328;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6;font-size:16px}
+nav.docset{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--border);padding:.55rem 1rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+nav.docset .brand{font-weight:700;margin-right:.6rem;font-size:.9rem;color:var(--muted)}
+nav.docset a{font-size:.82rem;text-decoration:none;color:var(--accent);padding:.2rem .55rem;border-radius:6px;white-space:nowrap}
+nav.docset a:hover{background:var(--accent-soft)}
+nav.docset a.current{background:var(--fg);color:#fff;font-weight:600}
+nav.docset .sep{width:1px;height:1.1rem;background:var(--border);margin:0 .2rem}
+nav.docset a.file{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem}
+.scratch-back{padding:.5rem 1rem;font-size:.82rem;background:var(--soft);border-bottom:1px solid var(--border)}
+.scratch-back a{color:var(--accent);text-decoration:none}
+.scratch-back a:hover{text-decoration:underline}
+main{max-width:880px;margin:0 auto;padding:2.2rem 1.3rem 5rem}
+h1,h2,h3,h4{line-height:1.25;margin-top:1.8em;margin-bottom:.6em;font-weight:650}
+h1{font-size:1.9rem;border-bottom:1px solid var(--border);padding-bottom:.3em;margin-top:.2em}
+h2{font-size:1.45rem;border-bottom:1px solid var(--border);padding-bottom:.25em}
+h3{font-size:1.18rem}
+a{color:var(--accent)}
+p,li{overflow-wrap:break-word}
+code{background:var(--soft);padding:.15em .4em;border-radius:6px;font-size:.86em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--soft);border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;line-height:1.45}
+pre code{background:none;padding:0;font-size:.82rem}
+blockquote{margin:1em 0;padding:.2em 1em;color:var(--muted);border-left:4px solid var(--border)}
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:.92rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--border);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:650}
+tr:nth-child(even) td{background:#fbfcfd}
+hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+.srcmeta{color:var(--muted);font-size:.85rem;margin:.4rem 0 1rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+footer{max-width:880px;margin:0 auto;padding:1.5rem 1.3rem;color:var(--muted);font-size:.78rem;border-top:1px solid var(--border)}
+
+.sr-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#0969da;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer}
+.sr-fab:hover{background:#0a5fd0}
+.sr-panel{position:fixed;right:16px;bottom:64px;z-index:2147483000;width:340px;max-width:92vw;max-height:70vh;background:#fff;color:#1f2328;border:1px solid #d0d7de;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);display:none;flex-direction:column;overflow:hidden;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.sr-panel.sr-open{display:flex}
+.sr-head{display:flex;justify-content:space-between;align-items:center;padding:.6rem .8rem;border-bottom:1px solid #eaecef}
+.sr-x,.sr-del{background:none;border:none;color:#656d76;cursor:pointer;font-size:13px}
+.sr-headbtns{display:flex;gap:.4rem;align-items:center}
+.sr-clear{background:none;border:1px solid #d0d7de;border-radius:5px;color:#656d76;cursor:pointer;font-size:11px;padding:.1rem .45rem}
+.sr-clear:hover{background:#f6f8fa}
+.sr-hint{font-size:.74rem;line-height:1.45;color:#57606a;padding:.5rem .8rem;border-bottom:1px solid #eaecef;background:#f6f8fa}
+.sr-list{overflow:auto;padding:.5rem .8rem;flex:1}
+.sr-empty{color:#656d76;font-size:.85rem;padding:.5rem 0}
+.sr-item{border:1px solid #eaecef;border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem}
+.sr-loc{display:flex;justify-content:space-between;font-size:.72rem;color:#656d76;font-family:ui-monospace,Menlo,monospace;margin-bottom:.25rem}
+.sr-quote{font-size:.8rem;color:#3b4148;background:#f6f8fa;border-left:3px solid #d0d7de;padding:.2rem .5rem;margin-bottom:.3rem}
+.sr-body{width:100%;border:1px solid #d0d7de;border-radius:6px;padding:.35rem .45rem;font:inherit;resize:vertical}
+.sr-actions{display:flex;gap:.4rem;padding:.6rem .8rem;border-top:1px solid #eaecef}
+.sr-note{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:inherit}
+.sr-submit{flex:1;background:#1f883d;color:#fff;border:none;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:600 13px/1 inherit}
+.sr-submit:hover{background:#1a7332}
+.sr-chip{position:absolute;z-index:2147483001;background:#1f2328;color:#fff;border:none;border-radius:6px;padding:.25rem .5rem;font:600 12px/1 sans-serif;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sr-mark{background:#fff3c4;box-shadow:inset 0 -2px 0 #e3b341;border-radius:2px;cursor:pointer}
+.sr-mark:hover{background:#ffe98a}
+.sr-round{border:1px solid #eaecef;border-radius:8px;margin-bottom:.6rem;overflow:hidden}
+.sr-rhead{display:flex;justify-content:space-between;align-items:center;gap:.4rem;background:#f6f8fa;border-bottom:1px solid #eaecef;padding:.35rem .55rem;font-size:.72rem;color:#57606a;font-family:ui-monospace,Menlo,monospace}
+.sr-recopy{background:#fff;border:1px solid #d0d7de;border-radius:5px;padding:.1rem .4rem;cursor:pointer;font:inherit;color:#0969da;white-space:nowrap}
+.sr-hitem{padding:.35rem .55rem;border-top:1px solid #f0f1f3}
+.sr-hbody{font-size:.85rem;white-space:pre-wrap;color:#1f2328}
+.sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast{display:none!important}}
+</style>
+</head>
+<body><div class="scratch-back"><a href="/scratch/">← Scratchpad index</a></div><main><h1 id="nextdoor-marketing-campaign-agents-on-demand-houston-tx">Nextdoor Marketing Campaign — Agents On Demand (Houston, TX)</h1>
+<p><strong>Final research &amp; test-plan report · 2026-07-31</strong>
+Prepared autonomously; grounded in the four local repos (<code>agentsondemand</code>, <code>aod-landing</code>, <code>aod_mini_jarvis</code>, <code>clearspring_agent_factory/marketing</code>), live checks of agentsondemand.tech, and six live web-research briefs (2025–2026 sources). Every external claim is tagged <strong>[live-verified]</strong>, <strong>[assumed]</strong>, or <strong>[unverified]</strong>; vendor marketing is labeled as such. Estimates are labeled estimates.</p>
+<hr />
+<h2 id="0-executive-summary">0. Executive summary</h2>
+<ul>
+<li><strong>Nextdoor is worth testing, but organic-first and cheap.</strong> The 2026 platform reality updates your internal runbook's "no paid case" conclusion: self-serve Ads Manager now has native lead-gen forms, ZIP/radius targeting, homeowner/income/age targeting, a Pixel + Conversion API, and <strong>no enforced budget minimum</strong> (UI recommends $3–$10/day) [live-verified]. A ~$300 paid micro-test is now feasible and readable as a go/no-go screen — but not as a statistical A/B.</li>
+<li><strong>The consumer track leads; the business track is a cheap side-bet.</strong> Everything found says Nextdoor is a consumer-recommendation culture where home-services and "helpful local person" offers thrive. There is <strong>no documented precedent</strong> for a consumer AI companion sold by a solo founder on Nextdoor — you'd be first (opportunity and warning). SMB owners are a <em>targetable ad audience</em> there (Nextdoor claims 3.2M active), but no evidence exists that businesses <em>shop for B2B services</em> on Nextdoor.</li>
+<li><strong>Your funnel is not ready for dollar one.</strong> The site has <strong>zero analytics/tracking of any kind</strong>, no UTM capture, no per-offer landing pages, no thank-you/conversion pages, <strong>no privacy policy</strong> (required for lead-gen ads), Stripe is structurally test-mode, and the consumer product has no self-serve purchase path. Phase-0 organic can start almost immediately; paid spend must wait for the ~2-day build checklist in §7.</li>
+<li><strong>The single most important strategic call:</strong> do <strong>not</strong> lead with "install my AI companion." Lead with the named per-task hooks (insurance denial, medical bill) that match ask-a-neighbor culture, and sell Mini Jarvis/Jolt as a <strong>white-glove, founder-installed "founding neighbor" offer</strong> in the background — the proven playbook of your nearest analog (mobile computer repair / senior tech help businesses).</li>
+<li><strong>Total cash at risk through Phase 2: ≤ ~$1,800</strong>, gated at three explicit kill points. Phase 0 is $0.</li>
+</ul>
+<hr />
+<h2 id="1-ground-truth-what-is-actually-sellable-today">1. Ground truth: what is actually sellable today</h2>
+<h3 id="11-what-exists-verified-against-repos-live-site-2026-07-31">1.1 What exists (verified against repos + live site, 2026-07-31)</h3>
+<table>
+<thead>
+<tr>
+<th>Asset</th>
+<th>State</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>agentsondemand.tech</strong></td>
+<td>Live, HTTP 200, "Agents On Demand — Fixed-Price AI Agents"</td>
+<td>live fetch</td>
+</tr>
+<tr>
+<td><strong>B2B custom builds</strong> (<code>/build/</code>)</td>
+<td><strong>Sellable today.</strong> Scout $500 / Advisor $1,500 / System Engineer from $3,500; working Apply intake form → <code>clearspringcg.com/go/intake</code> gateway; operator alert + 48h proposal SLA process is live</td>
+<td><code>aod-landing/src/app/build/</code>, <code>processes/lead-intake/OPS.md</code></td>
+</tr>
+<tr>
+<td><strong>8-agent demo lineup</strong></td>
+<td><strong>Now live on the homepage</strong> (Insurance Denial Fighter, Medical Bill Auditor, Essay Coach, Diplomat, Lead Desk, Review Rescue et al. all present in live HTML). The internal runbook's "storefront gate" (don't post until demos are live) <strong>appears satisfied</strong> — it was written 2026-07-13 when the site still showed the old package list</td>
+<td>live fetch grep; <code>runbook-nextdoor.md:10-14</code></td>
+</tr>
+<tr>
+<td><strong>Lead Desk live demo</strong></td>
+<td>Genuinely live at <code>clearspringcg.com/go/demo/leaddesk/</code> (real model call, capped budget)</td>
+<td><code>campaign-kits.md:21-25</code></td>
+</tr>
+<tr>
+<td><strong>Consumer product page</strong> (<code>/own/</code>)</td>
+<td>Live, branded <strong>"Jolt — own an agent, from $99"</strong>, honestly discloses "~$20/month AI subscription you set up during install". <strong>Waitlist-only — cannot buy, cannot download</strong></td>
+<td>live fetch; <code>aod-landing/src/app/own/</code></td>
+</tr>
+<tr>
+<td><strong>Mini Jarvis (the product)</strong></td>
+<td>Real and well-tested (26/26 product gate green, Windows CI smoke test, 7 packs / ~30 channels, voice, daily heartbeat). But: <code>curl \| bash</code> terminal install, customer must supply their own AI-account credentials mid-install, <strong>no payment flow anywhere in the code</strong>, no demo video/screenshots exist (only a tailnet-private link), active architectural churn (113 commits in the last 10 days, 5 sibling repos being absorbed)</td>
+<td><code>aod_mini_jarvis</code> scan vs <code>origin/main</code></td>
+</tr>
+<tr>
+<td><strong>Payments</strong></td>
+<td><strong>Structurally test-mode.</strong> <code>aod_stripe.py</code> refuses non-test keys; <code>/pay/</code> is noindex with a "TEST MODE · no real charge" banner; go-live runbook says "NOT DONE, deliberately"</td>
+<td><code>infra/payments/</code>, <code>go-live.md</code></td>
+</tr>
+<tr>
+<td><strong>Marketing assets</strong></td>
+<td>Nextdoor runbook + 4 ready-written Nextdoor posts (A–D) + Meta variants + channel plan with decision gates already exist</td>
+<td><code>clearspring_agent_factory/marketing/</code></td>
+</tr>
+<tr>
+<td><strong>Brand/social proof</strong></td>
+<td>No logo files found in ops repo, <strong>zero testimonials/case studies</strong> (post-sale flow never run), no shipped Jolt installs yet</td>
+<td>ops repo scan</td>
+</tr>
+</tbody>
+</table>
+<h3 id="12-what-a-nextdoor-click-lands-on-today">1.2 What a Nextdoor click lands on today</h3>
+<ul>
+<li>A click to <code>/</code> or <code>/build/</code> reaches real demos and a working intake form — <strong>viable for the business track now</strong>.</li>
+<li>A click to <code>/own/</code> reaches an honest waitlist — it captures an email but <strong>cannot convert to money</strong>.</li>
+<li><strong>Nothing is measurable.</strong> No GA4/Plausible, no pixel of any kind, no UTM capture in any form handler, no thank-you URLs to fire conversions against. A campaign run today would be flying fully blind. (Repo-wide grep confirmed zero analytics snippets.)</li>
+<li><code>agentsondemand.tech/jarvis/install.sh</code> resolves (HTTP 200) but is linked from nowhere on the site — the installable product is invisible to visitors.</li>
+<li>Broken details a curious neighbor would hit: homepage Hero "Apply for a package →" anchors to <code>#apply</code> which doesn't exist on <code>/</code>; footer "GitHub ↗" is a dead <code>href="#"</code>.</li>
+</ul>
+<h3 id="13-contradictions-the-campaign-would-surface-fix-or-decide-before-ads-name-prices">1.3 Contradictions the campaign would surface (fix or decide before ads name prices)</h3>
+<ol>
+<li><strong>Business pricing:</strong> live site says Scout <strong>$500</strong> / Advisor <strong>$1,500</strong> / SysEng <strong>$3,500</strong>; the internal campaign kit and price ladder say Small <strong>$650</strong> / Medium <strong>$1,400</strong> / Large <strong>$2,400</strong> / Custom <strong>$3,500+</strong> (only Review Rescue $650 is operator-locked). Two different menus; pick one.</li>
+<li><strong>Consumer pricing:</strong> live site says Jolt "from <strong>$99</strong>"; ops repo models Unitasker $99 / Pairing $150 ($119 own-now, $29/mo rent); the product repo has a $50/$65/$75/$95 pack ladder plus a "$99 chassis" note. Three sources disagree; the runbook's WTP survey (~100 people) remains the cheapest de-risk.</li>
+<li><strong>Refund copy:</strong> the 2026-07-21 ruling is no-refunds-with-remedies; docs disagree on whether old "full refund" site copy was fully removed. My live grep found <strong>no "full refund" text</strong> on <code>/</code>, <code>/own/</code>, or <code>/build/</code> — consistent with fixed, but verify <code>/pay/</code> client-rendered copy by eye.</li>
+</ol>
+<hr />
+<h2 id="2-research-findings-six-briefs-condensed-full-citations-in-appendix">2. Research findings (six briefs, condensed; full citations in Appendix)</h2>
+<h3 id="21-nextdoor-ads-manager-today">2.1 Nextdoor Ads Manager today</h3>
+<ul>
+<li>Formats: image, video, carousel, <strong>native lead-gen ads</strong> (2–11 form fields incl. up to 3 custom questions) in the newsfeed [live-verified — creative-specs page].</li>
+<li>Targeting: <strong>ZIP codes (multiple, map preview) or radius</strong>, plus homeownership, income, age, gender, interests, custom/lookalike audiences [live-verified — official product page].</li>
+<li><strong>Minimum budget: no enforced floor found.</strong> Nextdoor's own budget guidance presents $3/$5/$10-day tiers with fully custom amounts allowed; UK Dec-2025 launch says "a few pounds" minimum. Exact US floor unverifiable from official pages — <strong>confirm by typing $3/day into ads.nextdoor.com</strong> (2-minute check) [live-verified guidance / unverified exact floor].</li>
+<li>Billing gotcha: charged upfront for daily budget × 31 days (or × duration if shorter) [live-verified vendor blog].</li>
+<li>Tracking: <strong>Nextdoor Pixel</strong> and <strong>Conversion API</strong> (online, offline, custom events) exist [live-verified]. UTM parameters pass through but aren't a documented first-party feature [unverified].</li>
+<li>Policy: no ban on AI products; <strong>AI-generated creative must be disclosed</strong> [live-verified]. Lead-gen advertisers <strong>must have a privacy policy</strong> [live-verified]. Insurance/financial-products ads carry strict disclosure rules; an insurance-<em>appeal drafting</em> service isn't literally in that category, but <strong>no policy category covers it — a manual reviewer could classify it as insurance-adjacent. Get a written category ruling from Nextdoor ad support before spending on those hooks</strong> [assumed risk, reasoned from adjacent policy text].</li>
+</ul>
+<h3 id="22-free-surfaces">2.2 Free surfaces</h3>
+<ul>
+<li>Business Page claim + verification (phone or EIN/business documents) is free; verified pages can post to the feed [live-verified/unverified mix — help center was TLS-unreachable to automation].</li>
+<li><strong>Post frequency conflict:</strong> marketing site says "unlimited free posts"; the help center (via snippets) says <strong>2 Business Posts/month</strong>; one practitioner blog says 3/week with suspensions. <strong>Plan on 2/month until you read the real cap in your dashboard</strong> [conflict, explicitly unresolved].</li>
+<li>Reach: roughly a 2-mile default radius, adjustable, neighborhoods addable/removable [radius mechanic live-verified; "2 miles" unverified].</li>
+<li>Local Deals moved to <strong>ZIP + daily-budget pricing</strong> (transition page live); no public rate card; third-party figures ($1–3/day starting) are vendor content [live-verified structure / unverified prices].</li>
+<li>Neighborhood Faves ran in 2025 (voting closed Oct 17, 2025); free to participate; no 2026 cycle announced yet [live-verified program / unverified date].</li>
+<li><strong>Hard rule:</strong> no business promotion from a personal account in resident feeds; sales content belongs in Business Posts / Local Deals / Events; ownership must be disclosed when commenting about your own business [consistent across sources, primary text unfetchable — verify in-app].</li>
+</ul>
+<h3 id="23-cost-benchmarks">2.3 Cost benchmarks</h3>
+<ul>
+<li>Practitioner CPC ~<strong>$2.50–$3.50</strong>, baseline CPM ~<strong>$20</strong> [agency-sourced, labeled as such]. Meta cross-industry lead-objective CPL <strong>$27.66</strong> (WordStream 2025, +21% YoY); Google LSA local-services CPL <strong>~$30–80</strong> [live-verified aggregator reports].</li>
+<li>The only hard small-dollar Nextdoor self-report is from <strong>2022</strong> ($33/30 days → 4 leads) — stale; don't extrapolate.</li>
+<li>At $5–10/day you buy ~2–4 clicks/day: delivery is visible fast, <strong>lead-level signal takes 2–4+ weeks</strong>. Complaints exist of ads "never appearing" at $450/mo (one-sided, unverifiable setup) — check delivery dashboards early.</li>
+<li>No Houston/Texas-specific Nextdoor cost data exists publicly.</li>
+</ul>
+<h3 id="24-audience-fit-the-honest-read">2.4 Audience fit (the honest read)</h3>
+<ul>
+<li>Platform health: <strong>WAU 22.3M, +1% YoY — an "all-time high" that is effectively flat</strong>; revenue +14% YoY with self-serve ads +28%; near-breakeven EBITDA; July-2025 "Nextdoor Next" redesign (AI recommendations, alerts, local news) is an admission the old format wasn't sticky [live-verified — May 2026 8-K, TechCrunch].</li>
+<li>The famous "75% homeowners, $90K income" demographics trace only to <strong>templated SEO content, not measurement</strong>; the last independent study (Pew) is from 2021 [live-verified absence].</li>
+<li><strong>Consumer AI headwind:</strong> consumers saying heavy AI use would <em>hurt</em> trust in a favorite brand doubled 20%→40% between 2025 and 2026 (Fractl survey) [live-verified]; Nextdoor culture measurably skews anxious/guarded (CU Boulder study, Mar 2026) [live-verified]. Counterweight: Nextdoor itself now pushes AI features in-feed, normalizing the word, and the per-task hooks map onto normal "ask neighbors for a specialist" behavior.</li>
+<li><strong>B2B verdict:</strong> SMB owners are on Nextdoor as <em>people</em> (Nextdoor claims 3.2M, 22% professional services, 66% with purchasing control — vendor stats, Jan 2026), but nobody documents B2B services being <em>bought</em> there. Targeting owners-as-residents with ads is untested-but-not-foreclosed; expecting plumber-style discovery for an AI agency is a conflation to avoid.</li>
+<li>Houston: <strong>1,664 Nextdoor neighborhoods</strong> [live-verified]; city runs official agency accounts; no public city-level usage data.</li>
+</ul>
+<h3 id="25-analog-campaigns">2.5 Analog campaigns</h3>
+<ul>
+<li><strong>No named case study exists of a solo tech/AI consultant winning (or failing) on Nextdoor, and no precedent at all for a consumer AI companion product</strong> — green-field, stated plainly.</li>
+<li>Nearest proven cousins: mobile computer repair / "tech help for seniors" businesses. Their observed playbook: <strong>house calls, patient personal manner, years of recommendation-thread accumulation and review stacking — not campaigns</strong> [live-verified page observations].</li>
+<li>Culture-fit patterns Nextdoor itself promotes (vendor content): founder-story posts, credential-led trust posts, <strong>"first N neighbors free/discounted"</strong> giveaways, community-safety/scam-alert posts, testimonial resharing.</li>
+<li>Spam pitfalls: "I built something, DM me" pattern-matches historical Nextdoor scam shapes (fake contractors, distress scams — 2019 reporting, old but instructive); moderation is peer-voted and reportedly inconsistent. Incentivized reviews are a ban risk.</li>
+</ul>
+<h3 id="26-tiny-budget-test-methodology">2.6 Tiny-budget test methodology</h3>
+<ul>
+<li>Houston metro: <strong>235 ZIPs, 2.66M households</strong> (city proper ~96–100 ZIPs) [live-verified]. At ≤$500 total, a matched multi-cell geo experiment is impossible — run <strong>at most 2 cells</strong> (treatment ZIP-cluster vs a similar comparison cluster).</li>
+<li>Floor for a directional read: <strong>$10–20/day for 2–3 weeks per cell</strong> (~$140–420/cell). Nextdoor's own guidance: review every 10 days; a UK practitioner case saw conversions start ~day 10 [live-verified].</li>
+<li><strong>Classical significance is categorically out of reach</strong>: detecting 2%→4% conversion needs ~1,140 clicks/arm ≈ $3,400/arm at $3 CPC [derived-math]. At $150–500/cell expect <strong>1–8 leads</strong>. So the micro-test is a <strong>binary go/no-go screen</strong>, never an A-vs-B percentage claim.</li>
+<li>Measurement plumbing that works at this scale: UTM-tagged dedicated landing pages (UTMs survive iOS/Safari stripping; click-IDs don't [live-verified]) + Nextdoor Pixel on a real thank-you URL + <strong>mandatory</strong> "how did you hear about us" intake field (self-report recovers only ~25–40% — supplementary, not primary [live-verified analog]) + one promo code per cell + Zapier/email export of lead forms (native CSV export unconfirmed).</li>
+<li><strong>The Nextdoor-specific blind spot: DM leakage.</strong> Nextdoor actively steers interested neighbors to in-app messages, which bypass pixel/UTM/forms entirely. Route paid CTAs to the landing page, and manually log every DM lead with a source question.</li>
+<li>Attribution window reportedly 7-day click / 1-day view [moderate confidence — help center unfetchable].</li>
+</ul>
+<hr />
+<h2 id="3-brainstorm-campaign-concepts">3. Brainstorm — campaign concepts</h2>
+<h3 id="personal-segment-residents">Personal segment (residents)</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Concept (one line)</th>
+<th>Why it fits Nextdoor culture</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P1</td>
+<td><strong>"Fight your insurance denial" named-hook post/ad</strong> (Post A exists)</td>
+<td>Money-pain + "69% don't know they can appeal" stat lands in a help-your-neighbor culture; maps to ask-for-a-specialist behavior</td>
+</tr>
+<tr>
+<td>P2</td>
+<td><strong>"That hospital bill might be wrong" hook</strong> (Post B exists)</td>
+<td>Same visceral money-pain; 74%-fixed stat; universal across ages</td>
+</tr>
+<tr>
+<td>P3</td>
+<td><strong>White-glove "founding neighbor" Jolt install</strong> — founder installs in person, first 5 neighbors at founder pricing</td>
+<td>Exactly the proven computer-help/senior-tech-help playbook: house call, patient local person, scarcity without hype</td>
+</tr>
+<tr>
+<td>P4</td>
+<td><strong>College Essay Coach seasonal push</strong> (Post C exists)</td>
+<td>Parent-heavy neighborhoods, Aug–Jan window; $60–150/essay matches existing market prices</td>
+</tr>
+<tr>
+<td>P5</td>
+<td><strong>"The Diplomat" light hook</strong> (Post D exists)</td>
+<td>Low-stakes, charming, zero scam-pattern risk; good relationship-builder, weak revenue</td>
+</tr>
+<tr>
+<td>P6</td>
+<td><strong>"How to spot AI scams" community-safety post series</strong></td>
+<td>Builds the "trustworthy neighborhood AI guy" identity in a scam-wary culture; credibility now, sales later</td>
+</tr>
+<tr>
+<td>P7</td>
+<td><strong>Free 30-min "AI for regular people" workshop</strong> (library/coffee shop, posted as an Event)</td>
+<td>Events are a sanctioned surface; in-person converts trust like nothing else; costs only time</td>
+</tr>
+<tr>
+<td>P8</td>
+<td><strong>Local Deal on a per-task helper</strong> (e.g., $49 denial-appeal draft)</td>
+<td>Cheap sanctioned promo surface; but pricing unpublished and product intake for one-off tasks doesn't exist yet</td>
+</tr>
+</tbody>
+</table>
+<h3 id="small-business-segment-local-owners">Small-business segment (local owners)</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Concept (one line)</th>
+<th>Why it fits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>B1</td>
+<td><strong>Review Rescue lead-gen ad at $650</strong> targeting SMB-owner audience</td>
+<td>The one operator-LOCKED price; pain (bad review) is universal for exactly the home-services businesses that live on Nextdoor; concrete deliverable</td>
+</tr>
+<tr>
+<td>B2</td>
+<td><strong>"Never miss another lead" (Lead Desk) ad → live demo</strong></td>
+<td>The only genuinely live try-it-now demo; speed-to-lead stat is brutal and true</td>
+</tr>
+<tr>
+<td>B3</td>
+<td><strong>Founder-story Business Post: "I'm the Houston guy who builds AI employees for small businesses"</strong></td>
+<td>Founder-story is a sanctioned, celebrated post type; zero cost</td>
+</tr>
+<tr>
+<td>B4</td>
+<td><strong>Free "AI receptionist audit" for 3 local businesses</strong> (case-study-for-discount trade)</td>
+<td>Buys the missing testimonials/case studies — the asset gap that blocks everything else</td>
+</tr>
+<tr>
+<td>B5</td>
+<td><strong>SMB workshop event: "What an AI agent can actually do for a Houston shop"</strong></td>
+<td>Events surface; owners attend as neighbors; pairs with B3</td>
+</tr>
+<tr>
+<td>B6</td>
+<td><strong>Target home-services advertisers specifically</strong> ("you're already paying for leads — an agent answers them in 5 minutes")</td>
+<td>Speaks to the category that provably lives on Nextdoor, in their language</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-picks-with-reasoning">The picks (with reasoning)</h3>
+<p><strong>Personal: P1+P2 (one combined "money-back helpers" test) and P3 (white-glove Jolt, organic-only).</strong>
+P1/P2 are the strongest hooks, the creative already exists, and they match recommendation culture — but they carry the insurance/medical policy-classification risk, so they run organic-first and go paid only after a written policy ruling. P3 is the only honest way to sell Mini Jarvis today (no self-serve purchase path, install needs the founder anyway) and it converts the product's weakness into the offer's charm. P6/P7 fold in as supporting content, not separate tests. P4 queues for September (season), P8 waits on pricing decisions.</p>
+<p><strong>Business: B1 (Review Rescue paid micro-test) with B3 as its organic warm-up.</strong>
+B1 is chosen over B2 because it has a locked price, a bounded deliverable, and a clean measurable action (lead form), whereas Lead Desk's tier price is an open decision and its value pitch is longer. B4 runs opportunistically from any Phase-0 conversation — testimonials are the scarcest asset. The business bet stays small: the evidence says Nextdoor B2B is unproven, and LinkedIn/Meta remain the designated business channels per the existing channel plan.</p>
+<hr />
+<h2 id="4-offer-design-the-three-chosen-tests">4. Offer design (the three chosen tests)</h2>
+<h3 id="offer-1-the-paperwork-fighters-personal-p1p2">Offer 1 — "The paperwork fighters" (personal, P1+P2)</h3>
+<ul>
+<li><strong>Hook:</strong> "Insurers deny 1 in 5 claims — fewer than 1% of people appeal. I built an AI helper that reads your denial and writes the appeal. Houston-local, real person, in reach." (Post A/B text exists in <code>campaign-kits.md</code>; keep the disclaimers: drafting help, not legal/medical advice; no outcome guarantees — both policy-required and culture-required.)</li>
+<li><strong>Landing experience:</strong> NEW page <code>agentsondemand.tech/neighbors/</code> (or <code>/helpers/</code>): the two named helpers with the demo cards, founder photo + "I live here" line, one intake form (name, email, which problem, "how did you hear about us" <strong>required</strong>), UTM capture into the intake payload, thank-you URL for the pixel. No checkout — the reply is a personal email/call from Kevin.</li>
+<li><strong>Measurable action:</strong> qualified intake submission (a real denial/bill described) or a DM that gets manually logged. Phase-1 paid version uses Nextdoor's native lead form with custom question "What did your insurer deny / what's on the bill?"</li>
+<li><strong>Price handling:</strong> organic posts may quote per-task founder pricing in DM (suggest $49–$149/denial per Ladder B; contingency-style for bills); no public price until the operator arms one.</li>
+</ul>
+<h3 id="offer-2-founding-neighbor-white-glove-joltmini-jarvis-personal-p3-organic-only">Offer 2 — "Founding neighbor" white-glove Jolt/Mini Jarvis (personal, P3, organic only)</h3>
+<ul>
+<li><strong>Hook:</strong> "I built a little AI helper that lives on your computer — it sorts your mail, watches your subscriptions, plans the week. I'm installing it personally for the <strong>first 5 Houston households</strong> at founding-neighbor pricing, and I don't leave until it's running and you like it."</li>
+<li><strong>Landing experience:</strong> <code>/own/</code> as-is (waitlist) <strong>plus</strong> the founder conversation — the real funnel is DM → 15-min call → in-home/remote install appointment. The waitlist page already honestly discloses the ~$20/mo AI-subscription cost; keep that honesty in every post.</li>
+<li><strong>Measurable action:</strong> booked install appointments (target: 5). Payment collected manually (invoice/Stripe payment link once live-mode exists; until then, invoice). Each install trades a small discount for a named testimonial + permission to write it up — this manufactures the missing social proof.</li>
+<li><strong>Why organic-only:</strong> no purchase path, no demo video, product still churning; paid spend against this would burn money to expose known gaps. The 5 installs ARE the test.</li>
+</ul>
+<h3 id="offer-3-the-650-bad-review-fix-business-b1">Offer 3 — "The $650 bad-review fix" (business, B1)</h3>
+<ul>
+<li><strong>Hook:</strong> "One bad review costs a Houston business real money — and 89% of readers judge you by the <em>response</em>. I build a one-time tool that drafts the reply that wins the next customer back. $650 flat, you own it. Built by a Houston founder."</li>
+<li><strong>Landing experience:</strong> NEW page <code>/reviews/</code> (or reuse <code>/build/</code> with UTM + anchor): the Review Rescue pitch, a before/after review-reply example, the Apply form pre-selecting the tier, thank-you URL. Paid version: native lead form, custom question "Paste or describe the review that's hurting you."</li>
+<li><strong>Measurable action:</strong> lead-form fill with a real review situation → Kevin's 48h proposal SLA takes over (that pipeline is verified live). Deposit via the existing marquee-code flow once Stripe go-live lands; until then, invoice.</li>
+</ul>
+<hr />
+<h2 id="5-the-test-ladder">5. The test ladder</h2>
+<blockquote>
+<p>Structure inherited from the existing <code>CHANNEL_PLAN.md</code> decision-gate design, updated with the 2026 paid-product findings. Budgets assume the ~$2.50–3.50 CPC / ~$20 CPM practitioner band; every lead count is an estimate at those rates.</p>
+</blockquote>
+<h3 id="phase-0-0-organic-surfaces-weeks-16">Phase 0 — $0, organic surfaces (weeks 1–6)</h3>
+<p><strong>Setup (one afternoon):</strong> claim + verify the Business Page (category: Professional Services, honest 2-mi+ service area), complete profile, confirm in-dashboard the real Business Post cap, Local Deals pricing, and the actual minimum ad budget (three numbers automation could not verify).
+<strong>Cadence:</strong> 2 Business Posts/month (the conservative cap): month 1 = founder-story (B3) + Post A; month 2 = Post B + community-safety post (P6). Personal-account participation = helpful comments and answering "anyone know someone who…" threads with disclosure, never pitching. Optional: one free workshop Event (P7/B5). Offer 2 (founding-neighbor Jolt) runs as DM-driven conversations off the founder-story post.
+<strong>Measure:</strong> post views, comments, DMs (manually logged with source), <code>/neighbors/</code> visits by UTM, intake submissions, booked Jolt installs.
+<strong>Gates (end of week 6):</strong>
+- <strong>SCALE</strong> (→ Phase 1) if: ≥1 real consumer DM/intake describing a specific denial/bill/situation, <strong>or</strong> ≥2 booked Jolt install conversations, <strong>or</strong> ≥1 business owner asking "what would this cost for me."
+- <strong>ITERATE</strong> if: reach but zero specific responses → rewrite hooks (stat-led vs identity-led), try the workshop, run 4 more weeks. Organic costs only time.
+- <strong>KILL the channel</strong> if: two full months of posting produces zero DMs, zero intake, zero comments with intent <strong>and</strong> the posts are being flagged/removed — then Nextdoor is hostile ground; take the hooks to Meta per the existing plan.</p>
+<h3 id="phase-1-first-paid-micro-test-315-weeks-79-gated-on-phase-0-scale-7-checklist-complete">Phase 1 — first paid micro-test (~$315, weeks 7–9, gated on Phase 0 SCALE + §7 checklist complete)</h3>
+<ul>
+<li><strong>What runs:</strong> ONE segment — whichever produced the Phase-0 signal. Default expectation: personal (P1/P2) <em>if</em> Nextdoor support gives a written OK on the insurance/medical category; otherwise business (B1), which has no policy risk.</li>
+<li><strong>Design:</strong> Nextdoor lead-gen ads, <strong>2 geo cells</strong> — Cell A: founder's home ZIP-cluster (3–5 adjacent ZIPs); Cell B: a demographically similar suburban cluster (e.g., a Katy/Cypress or Clear Lake cluster; pick by matching owner-occupancy and income from census quick-check). <strong>$15/day, 21 days ≈ $315 total</strong> ($157/cell). Two creative variants (stat-led vs identity-led), rotated evenly; judge creative only directionally.</li>
+<li><strong>Plumbing (all from §7):</strong> pixel live, UTM landing page, promo code per cell, mandatory source field, DM leads manually logged.</li>
+<li><strong>Expected signal quality (honest):</strong> ~90–125 clicks total, <strong>1–8 leads</strong>. This is a go/no-go screen, not an experiment. Delivery sanity-check at day 10 (Nextdoor's own cadence): if impressions are near-zero, pause and fix targeting/bids before burning the rest.</li>
+<li><strong>Gates (end of week 9):</strong></li>
+<li><strong>SCALE</strong> if ≥3 qualified leads total at ≤ ~$105/lead (business) or ≥3 qualified at ≤ ~$50/lead (personal) — "qualified" = a human read says the custom-question answer is a real situation.</li>
+<li><strong>ITERATE ONCE</strong> (new creative, same budget) if 1–2 qualified leads or good CTR (≥0.4%) with weak form completion.</li>
+<li><strong>KILL paid Nextdoor</strong> if 0 qualified leads after full duration with confirmed delivery — the channel stays organic-only (your original runbook's position, now evidence-backed), and the budget moves to Meta where CPL benchmarks are known.</li>
+</ul>
+<h3 id="phase-2-scale-test-12001500-6-weeks-gated-on-phase-1-scale">Phase 2 — scale test (~$1,200–1,500, 6 weeks, gated on Phase 1 SCALE)</h3>
+<ul>
+<li><strong>Design:</strong> winning segment + winning creative, <strong>$30/day across 4–6 ZIP-clusters</strong> covering the highest-fit Houston areas, 6 weeks (~$1,260). Add the Conversion API if lead volume justifies it; keep Meta running in parallel per the existing channel plan so Nextdoor CPL has a live in-house comparison, not just published benchmarks.</li>
+<li><strong>Read:</strong> now ~25–45 leads are plausible if Phase-1 rates hold — enough for a real CPL number and a first close-rate observation, still not enough for creative science.</li>
+<li><strong>Gates:</strong> keep Nextdoor in the standing mix if its cost-per-<strong>qualified</strong>-lead lands within ~1.5× your own Meta CPL and at least one lead has become revenue; otherwise retire paid Nextdoor to organic + Local Deals and concentrate paid dollars on the better channel.</li>
+</ul>
+<hr />
+<h2 id="6-full-rollout-projection-all-figures-are-estimates-labeled">6. Full-rollout projection (all figures are estimates, labeled)</h2>
+<p><strong>If a campaign proves out</strong>, a standing Houston program looks like:</p>
+<table>
+<thead>
+<tr>
+<th>Line</th>
+<th>Monthly</th>
+<th>Basis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Nextdoor paid (winning segment, metro-wide rotation over ~15–25 ZIP-clusters of the 235)</td>
+<td>$600–1,200</td>
+<td>$20–40/day sustained [estimate at practitioner CPC/CPM]</td>
+</tr>
+<tr>
+<td>Local Deals experiments</td>
+<td>$30–90</td>
+<td>unverified vendor pricing; confirm in-dashboard</td>
+</tr>
+<tr>
+<td>Organic (2 posts/mo + threads + quarterly workshop)</td>
+<td>$0 + ~4 hrs/mo</td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>CAC guesses (clearly estimates):</strong></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Business build (Review Rescue → expand)</td>
+<td><strong>$250–$750/customer</strong></td>
+<td>CPL $50–105 × 5–7 leads/close at a 15–20% proposal-to-close guess — no close-rate data exists yet; this is the number Phase 2 exists to replace</td>
+</tr>
+<tr>
+<td>Consumer per-task helper</td>
+<td><strong>$40–$120/customer</strong></td>
+<td>CPL $25–50, 40–60% show-up-to-paid guess; only viable at $49–149 tickets if fulfillment stays ~zero-marginal-cost</td>
+</tr>
+<tr>
+<td>Jolt/Mini Jarvis white-glove</td>
+<td><strong>CAC likely exceeds the $99 ticket</strong></td>
+<td>founder time (2–4 hrs/install) + any paid CPL; the consumer companion only pays as the top of land-and-expand (Pairing $150, retainers, a business build in the household's orbit) — consistent with Ladder B's "hooks, not products" finding</td>
+</tr>
+<tr>
+<td>Beyond Houston</td>
+<td>Nextdoor makes geographic expansion trivially cheap to <em>test</em> (swap ZIP lists — San Antonio/Austin/DFW), but the white-glove consumer motion does not travel without the founder; only the remote-installable per-task helpers and business builds expand</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>Break-even sanity check [estimate]: at $900/mo spend and business CAC $500, one Advisor-tier build/month roughly covers the program; the margin thesis stays land-and-expand, exactly as <code>PRICE_LADDER.md</code> argues.</p>
+<hr />
+<h2 id="7-funnel-prerequisites-build-checklist-before-dollar-one">7. Funnel prerequisites — build checklist before dollar one</h2>
+<p><strong>Blocking Phase 1 (paid). Phase 0 needs only items 1–3.</strong></p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Item</th>
+<th>Effort</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Claim + verify Nextdoor Business Page; read in-dashboard the real post cap, Local Deals pricing, min budget</td>
+<td>30–45 min (Kevin — identity)</td>
+<td>The three unverifiable numbers live here</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Fix homepage <code>#apply</code> dead anchor + footer GitHub dead link</td>
+<td>15 min (agent)</td>
+<td>First-impression hygiene</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Reconcile the two business price menus (site vs internal ladder); decide what organic DMs quote for per-task helpers</td>
+<td>operator decision</td>
+<td>Blocks any post that names a price</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>Analytics baseline:</strong> add Plausible or GA4 to <code>layout.tsx</code></td>
+<td>1–2 hrs (agent)</td>
+<td>Site currently has zero measurement</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>Landing pages</strong> <code>/neighbors/</code> and <code>/reviews/</code> with UTM capture wired into the intake POST, mandatory "how did you hear" field, and dedicated <code>/thanks/</code> conversion URLs</td>
+<td>0.5–1 day (agent)</td>
+<td>Next.js static export makes this cheap; deploy is the manual rsync script</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>Privacy policy page</strong></td>
+<td>2 hrs (agent draft, Kevin approves)</td>
+<td><strong>Required by Nextdoor lead-gen policy; site 404s today</strong></td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong>Nextdoor Pixel</strong> installed, firing on <code>/thanks/</code></td>
+<td>1 hr (agent, after #1 creates the ad account)</td>
+<td></td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong>Policy ruling:</strong> email Nextdoor ad support describing the insurance-appeal/medical-bill drafting service; get category treatment in writing</td>
+<td>20 min (Kevin) + wait</td>
+<td>Blocks paid P1/P2 only</td>
+</tr>
+<tr>
+<td>9</td>
+<td><strong>Demo assets:</strong> record 3–5 screenshots + one 30–60s screen video of the real Jolt deck and the two helper demos</td>
+<td>1–2 hrs (Kevin's machine; agent can script the capture)</td>
+<td>None exist; needed for posts and any paid creative. Disclose AI-generated media if any creative is AI-made</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Lead log: a simple sheet (or Zapier → sheet) for every DM/call with source + promo code</td>
+<td>30 min (agent)</td>
+<td>DM leakage countermeasure</td>
+</tr>
+<tr>
+<td>11</td>
+<td><em>(Phase 2, consumer self-serve only)</em> Stripe go-live runbook</td>
+<td>separate project</td>
+<td>NOT needed for Phases 0–1 — lead-gen + invoice covers them</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-risks-and-the-skeptical-case-stated-plainly">8. Risks and the skeptical case, stated plainly</h2>
+<ol>
+<li><strong>The platform is flat.</strong> 22.3M WAU growing 1%/yr; the redesign is a retention rescue. You'd be renting attention on a plateaued network — fine for a $300 test, a reason to cap long-term expectations.</li>
+<li><strong>AI distrust is rising into your launch window.</strong> The share of consumers saying heavy AI use would damage brand trust doubled year-over-year to 40%. On the most scam-primed social platform in America, "I built an AI" is as likely to pattern-match to threat as to magic. The mitigations — named non-AI-led hooks, founder-in-person, community-safety content — are the plan's spine, not decoration.</li>
+<li><strong>No precedent exists.</strong> Zero documented analogs for a consumer AI companion on Nextdoor. First-mover here may simply mean the market isn't there.</li>
+<li><strong>The consumer flagship can't take money.</strong> Jolt/Mini Jarvis has no purchase path, no demo video, terminal-only install, customer-supplied AI credentials, and heavy ongoing churn. Any campaign bigger than "5 white-glove installs" would expose this immediately. The product's honest sellable unit today is <em>Kevin's afternoon plus the software</em>, not the software.</li>
+<li><strong>Unit economics of the $99 ticket.</strong> White-glove CAC almost certainly exceeds $99. This is only rational as land-and-expand top-of-funnel — if expansion revenue doesn't materialize in the first cohort, the consumer track is a loss-maker and should be judged as marketing spend, not product revenue.</li>
+<li><strong>Policy/moderation tail risk.</strong> The insurance/medical hooks sit in an undefined ad category; a wrong self-classification can mean account suspension after spend. Peer moderation is inconsistent; one flagged post can chill the whole neighborhood presence. Mitigation: written ruling first, Business Posts not personal-feed promotion, disclaimers everywhere.</li>
+<li><strong>Measurement will be leaky no matter what.</strong> DMs bypass everything; self-report recovers a quarter to a fraction of true attribution; 1–8 leads per cell cannot support fine-grained conclusions. Every Phase-1/2 read is directional. The gates are written to need only counts (0 / 1–2 / 3+), which tiny samples can honestly support.</li>
+<li><strong>Solo-operator time is the real budget.</strong> Phase 0 costs ~2–4 hrs/week of Kevin-time (posts, replies within hours, DMs, installs). If that time isn't protected, the channel fails independent of everything above — on Nextdoor, the responsive local person <em>is</em> the product.</li>
+<li><strong>Internal docs disagree with the live site</strong> on pricing and naming (Jolt vs Mini Jarvis; two business menus). A campaign will surface these to strangers; reconcile before scale, or the brand reads as sloppy exactly where trust matters most.</li>
+</ol>
+<hr />
+<h2 id="9-ask-list-everything-that-needs-kevin-personally">9. Ask list — everything that needs Kevin personally</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Ask</th>
+<th>Cost</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Create/confirm personal Nextdoor account at real home address; claim + verify <strong>Agents On Demand</strong> Business Page (may need EIN letter — it's in <code>Legal/</code>)</td>
+<td>30–45 min, $0</td>
+<td>Phase 0 start</td>
+</tr>
+<tr>
+<td>2</td>
+<td>In-dashboard fact-check: Business Post cap, Local Deals pricing, minimum ad budget (try entering $3/day)</td>
+<td>15 min, $0</td>
+<td>Same sitting</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Decide: business menu = site's $500/$1,500/$3,500 or ladder's $650/$1,400/$2,400 (only Review Rescue $650 is locked); what DMs may quote for per-task helpers</td>
+<td>30 min decision</td>
+<td>Before first post naming a price</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Approve the two landing pages + privacy policy (agent drafts everything)</td>
+<td>30–60 min review</td>
+<td>Before Phase 1</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Email Nextdoor ad support for the insurance/medical category ruling (agent drafts)</td>
+<td>20 min, $0</td>
+<td>Before paid P1/P2</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Record demo screenshots/video (agent scripts the capture)</td>
+<td>1–2 hrs</td>
+<td>Before first posts ideally</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Post from your accounts and answer DMs/comments fast — ~2–4 hrs/week for 6 weeks</td>
+<td>time only</td>
+<td>Phase 0</td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong>Budget approval: Phase 1 ≈ $315</strong> (charged upfront as daily budget × duration)</td>
+<td>$315</td>
+<td>Week 7, only if Gate passes</td>
+</tr>
+<tr>
+<td>9</td>
+<td><strong>Budget approval: Phase 2 ≈ $1,260</strong></td>
+<td>$1,260</td>
+<td>Only if Phase 1 Gate passes</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Optional de-risk: 100-person consumer WTP survey (PickFu/Pollfish class) before arming personal prices</td>
+<td>$75–$300</td>
+<td>Anytime; cheapest de-risk in the plan (also flagged in <code>PRICE_LADDER.md</code>)</td>
+</tr>
+<tr>
+<td>11</td>
+<td>White-glove installs: 5 × ~2–4 hrs each as founding-neighbor cohort</td>
+<td>time; revenue-positive if priced ≥$99+setup</td>
+<td>Phase 0–1</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Maximum cash exposure through Phase 2: ~$1,875</strong> (items 8+9+10), every dollar behind an explicit gate.</p>
+<hr />
+<h2 id="appendix-key-sources">Appendix — key sources</h2>
+<p><strong>Platform (official/vendor):</strong> business.nextdoor.com — nextdoor-ads-manager (product + targeting), creative-specs (formats/lead forms), ad-policy, getting-started, business-post, localdealstransition, neighborhood-faves, budget-tips blog, conversion-measurement blog, get-more-messages blog; about.nextdoor.com UK self-serve launch PR (2025-12-18); blog.nextdoor.com SMB-owners report (2026-01-06); help.nextdoor.com articles (TLS-unreachable to automation — snippet-sourced, so tagged unverified; verify in-app).
+<strong>Platform health:</strong> Nextdoor Holdings 8-K, Q1 2026 results (via stocktitan, 2026-05-06); TechCrunch on the Nextdoor Next redesign (2025-07-15).
+<strong>Benchmarks:</strong> WordStream/LocaliQ Facebook Ads Benchmarks 2025; LocaliQ Search Benchmarks 2026; Google LSA CPL compilations (bluegridmedia, searchlightdigital, 2026); Power Digital &amp; other agency CPC claims (labeled vendor); Linda Xiong Medium self-report (2022, stale).
+<strong>Audience/trust:</strong> Pew "Americans' Social Media Use 2025" (2025-11-20; no Nextdoor demo breakout) and Pew 2021 Nextdoor chart (stale); Similarweb traffic panel (2026-06); Fractl AI-trust survey via contentgrip (2026); CU Boulder/Axios Nextdoor crime-fear study (2026-03-12); BuzzFeed News Nextdoor scams (2019, context only).
+<strong>Methodology:</strong> Torchbox Nextdoor case notes (~10-day ramp); Measured/Rockerbox/Funnel geo-testing guides (national-scale only); seresa/triplewhale on iOS 26 parameter stripping; cometly on self-report attribution; kameleoon/statsig on sequential testing; census/zip sources for Houston (235 metro ZIPs, 2.66M households).
+<strong>Internal:</strong> <code>clearspring_agent_factory/marketing/</code> (CHANNEL_PLAN, PRICE_LADDER, campaign-kits, runbook-nextdoor, DEMAND_RESEARCH), <code>agentsondemand</code> ops repo (DECISIONS.md, OPERATIONS.md, processes/), <code>aod-landing</code> source, <code>aod_mini_jarvis</code> at origin/main, live fetches of agentsondemand.tech (2026-07-31).</p></main>
+<footer>Rendered on the tailnet HTML scratchpad · private to your devices.</footer>
+<script>
+(function(){
+  "use strict";
+  var m = location.pathname.match(/\/scratch\/([^\/]+)\//);
+  var parts = location.pathname.split('/').filter(Boolean);
+  var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
+  var KEY = 'scratchReview:' + slug;
+  var comments = [];
+  var lastSel = null;  // most recent text selection inside <main>, kept so "+ Comment" works after the click clears it
+  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
+  var HKEY = 'scratchReviewHistory:' + slug;   // archive of all submitted rounds (never auto-cleared)
+  var history = [];
+  try { history = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch(e){}
+  function persistHistory(){ try{ localStorage.setItem(HKEY, JSON.stringify(history)); }catch(e){} }
+  var viewMode = 'review';  // 'review' (active round) | 'history' (Past comments)
+  function save(){ persist(); render(); applyMarks(); }
+
+  // In-page indicators: highlight the commented text so you can see what you've marked.
+  function clearMarks(){
+    var main=document.querySelector('main'); if(!main) return;
+    main.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+  }
+  function wrapQuote(quote, cid){
+    if(!quote) return; var main=document.querySelector('main'); if(!main) return;
+    var w=document.createTreeWalker(main, NodeFilter.SHOW_TEXT, null), n;
+    while((n=w.nextNode())){
+      if(n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark')) continue;
+      var idx=n.nodeValue.indexOf(quote);
+      if(idx>=0){ var r=document.createRange(); r.setStart(n,idx); r.setEnd(n,idx+quote.length); var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view'; try{ r.surroundContents(mk); }catch(e){} return; }
+    }
+  }
+  function applyMarks(){ clearMarks(); comments.forEach(function(c){ if(c.quote) wrapQuote(c.quote, c.id); }); }
+  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+
+  function headingFor(node){
+    var hs = document.querySelectorAll('main h1[id],main h2[id],main h3[id],main h4[id]');
+    var best=null;
+    for(var i=0;i<hs.length;i++){
+      if(hs[i]===node || (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING)) best=hs[i];
+    }
+    return best;
+  }
+
+  var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
+  var panel=document.createElement('div'); panel.className='sr-panel';
+  panel.innerHTML='<div class="sr-head"><b class="sr-title">Review</b><span class="sr-headbtns"><button type="button" class="sr-clear" data-act="clear">Clear</button><button type="button" class="sr-x" data-act="close">✕</button></span></div>'
+    +'<div class="sr-hint">Highlight text then <b>+ Comment</b>, or <b>+ Note</b> for a general remark. Comments save as you type — add as many as you want. <b>Submit → copy prompt</b> exports your round, archives it under <b>Past</b>, and clears the page for the next round.</div>'
+    +'<div class="sr-list"></div>'
+    +'<div class="sr-actions"></div>';
+  var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
+  var toast=document.createElement('div'); toast.className='sr-toast'; toast.style.display='none';
+  document.body.appendChild(btn); document.body.appendChild(panel); document.body.appendChild(chip); document.body.appendChild(toast);
+
+  function showToast(t){ toast.textContent=t; toast.style.display='block'; setTimeout(function(){toast.style.display='none';},4500); }
+  function openPanel(o){ panel.classList.toggle('sr-open', o!==false); }
+
+  function reviewActionsHTML(){
+    return '<button type="button" class="sr-note" data-act="comment">+ Comment</button>'
+      +'<button type="button" class="sr-note" data-act="note">+ Note</button>'
+      +'<button type="button" class="sr-note" data-act="history">Past'+(history.length?' ('+history.length+')':'')+'</button>'
+      +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button>';
+  }
+  function render(){
+    btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
+    var title=panel.querySelector('.sr-title'), list=panel.querySelector('.sr-list'),
+        actions=panel.querySelector('.sr-actions'), hint=panel.querySelector('.sr-hint');
+    var clr=panel.querySelector('.sr-clear');
+    if(viewMode==='history'){
+      title.textContent='Past comments'; hint.style.display='none'; if(clr) clr.style.display='none';
+      if(!history.length){ list.innerHTML='<div class="sr-empty">No submitted rounds yet.</div>'; }
+      else {
+        var html='';
+        for(var k=history.length-1;k>=0;k--){
+          var h=history[k]; var when=esc((h.submitted_at||'').replace('T',' ').slice(0,16));
+          html+='<div class="sr-round"><div class="sr-rhead"><span>Round '+(k+1)+' · '+when+' · '+h.comments.length+'</span>'
+            +'<button type="button" class="sr-recopy" data-r="'+k+'">copy prompt</button></div>'
+            +h.comments.map(function(c){
+              return '<div class="sr-hitem"><div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span></div>'
+                +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+                +'<div class="sr-hbody">'+esc(c.body||'(no text)')+'</div></div>';
+            }).join('')
+            +'</div>';
+        }
+        list.innerHTML=html;
+      }
+      actions.innerHTML='<button type="button" class="sr-note" data-act="back">← Back to review</button>';
+      return;
+    }
+    title.textContent='Review'; hint.style.display='';
+    if(clr) clr.style.display = comments.length ? '' : 'none';
+    actions.innerHTML=reviewActionsHTML();
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, or <b>+ Note</b>.</div>'; return; }
+    list.innerHTML='';
+    comments.forEach(function(c,i){
+      var row=document.createElement('div'); row.className='sr-item';
+      row.innerHTML='<div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
+        +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+        +'<textarea class="sr-body" data-i="'+i+'" rows="2" placeholder="Your comment…">'+esc(c.body||'')+'</textarea>';
+      list.appendChild(row);
+    });
+  }
+
+  function addComment(quote, heading){
+    comments.push({id:Date.now()+'-'+comments.length, quote:quote||'', heading:heading||'', body:''});
+    save(); openPanel(true);
+    var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus();
+  }
+
+  document.addEventListener('mouseup', function(){
+    setTimeout(function(){
+      var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var main=document.querySelector('main');
+      if(txt && txt.length>1 && sel.rangeCount && main && main.contains(sel.anchorNode)){
+        var r=sel.getRangeAt(0).getBoundingClientRect();
+        chip.style.top=(window.scrollY+r.bottom+6)+'px'; chip.style.left=(window.scrollX+r.left)+'px';
+        var h=headingFor(sel.anchorNode); var hd=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
+        chip.dataset.quote=txt.slice(0,280); chip.dataset.heading=hd;
+        lastSel={quote:txt.slice(0,280), heading:hd};
+        chip.style.display='block';
+      } else { chip.style.display='none'; }
+    },10);
+  });
+  chip.addEventListener('mousedown', function(e){ e.preventDefault(); addComment(chip.dataset.quote, chip.dataset.heading); chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); });
+  btn.addEventListener('click', function(){ openPanel(!panel.classList.contains('sr-open')); render(); });
+  panel.addEventListener('click', function(e){
+    var act=e.target.getAttribute('data-act');
+    if(act==='close') openPanel(false);
+    else if(act==='comment'){ if(lastSel && lastSel.quote){ addComment(lastSel.quote, lastSel.heading); lastSel=null; } else { showToast('Highlight some text on the page first, then “+ Comment”. (Use “+ Note” for a general remark.)'); } }
+    else if(act==='note') addComment('','');
+    else if(act==='submit') submit();
+    else if(act==='history'){ viewMode='history'; render(); }
+    else if(act==='back'){ viewMode='review'; render(); }
+    else if(act==='clear'){ if(comments.length && (typeof confirm!=='function' || confirm('Discard the '+comments.length+' unsubmitted comment(s)? Past history is kept.'))){ comments=[]; persist(); clearMarks(); render(); showToast('Cleared. Past history kept.'); } }
+    else if(e.target.classList.contains('sr-recopy')){ var r=+e.target.getAttribute('data-r'); if(history[r]) copyText(buildPrompt(history[r].comments)).then(function(){ showToast('Round '+(r+1)+' prompt re-copied to the clipboard.'); }).catch(function(){ showToast('Clipboard blocked.'); }); }
+    else if(e.target.classList.contains('sr-del')){ comments.splice(+e.target.getAttribute('data-i'),1); save(); }
+  });
+  panel.addEventListener('input', function(e){
+    if(e.target.classList.contains('sr-body')){ comments[+e.target.getAttribute('data-i')].body=e.target.value; persist(); btn.textContent='💬 Review ('+comments.length+')'; }
+  });
+
+  function buildPrompt(cs){
+    cs = cs || comments;
+    var title=document.title||slug; var L=[];
+    L.push('[scratch-review '+slug+']');
+    L.push('Review of "'+title+'"'); L.push(location.href);
+    L.push('I left '+cs.length+' comment(s); full JSON downloaded to ~/Downloads/scratch-comments-'+slug+'.json'); L.push('');
+    cs.forEach(function(c,i){
+      L.push((i+1)+'. ['+(c.heading?'§ '+c.heading:'note')+'] '+(c.body||'(no text)'));
+      if(c.quote) L.push('   ↳ re: "'+c.quote+'"');
+    });
+    L.push(''); L.push('Re-read the artifact and address each comment, then reply in our chat.');
+    return L.join('\n');
+  }
+  function downloadJSON(){
+    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='scratch-comments-'+slug+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},120);
+  }
+  function copyText(text){
+    if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function(res,rej){ try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res(); }catch(err){ rej(err); } });
+  }
+  function submit(){
+    if(!comments.length){ showToast('No comments yet — highlight text → + Comment, or + Note.'); return; }
+    var text=buildPrompt(comments); downloadJSON();
+    // Archive the round, then clean the slate so the next round starts fresh (no stale
+    // re-highlighting on a revised page). History is kept under "Past".
+    history.push({submitted_at:new Date().toISOString(), comments:comments.slice()}); persistHistory();
+    comments=[]; persist(); clearMarks(); viewMode='review'; render();
+    copyText(text).then(function(){ showToast('Copied — paste into Claude Code. Round archived under “Past”; page cleared for the next round.'); })
+                  .catch(function(){ showToast('JSON downloaded; round archived & cleared. Clipboard blocked — copy from the file.'); });
+  }
+
+  // Click a highlighted span on the page → open the panel and focus that comment.
+  var mainEl=document.querySelector('main');
+  if(mainEl) mainEl.addEventListener('click', function(e){
+    var mk=e.target.closest?e.target.closest('.sr-mark'):null; if(!mk) return;
+    openPanel(true); var idx=-1; comments.forEach(function(c,j){ if(c.id===mk.dataset.cid) idx=j; });
+    if(idx>=0){ var ta=panel.querySelectorAll('.sr-body')[idx]; if(ta){ ta.scrollIntoView({block:'center'}); ta.focus(); } }
+  });
+
+  render(); applyMarks();
+})();
+</script>
+</body></html>
