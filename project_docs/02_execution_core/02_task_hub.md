@@ -11,7 +11,8 @@ code_paths:
   - src/universal_agent/services/worker_exit_classifier.py
   - src/universal_agent/services/cron_task_hub_link.py
   - src/universal_agent/vp/clients/claude_cli_client.py
-last_verified: 2026-07-03
+  - src/universal_agent/scripts/vp_apply_and_checkpoint.py
+last_verified: 2026-07-31
 ---
 
 # Task Hub & Dispatch
@@ -587,6 +588,23 @@ into Task Hub rather than running invisibly. The canonical helpers:
 4. **Worker-exit classification** — `classify_worker_exit`.
 5. **Protocol-violation routing** — `park_task_for_protocol_violation`.
 6. **Standard recovery** — the B.1 unstick verbs, not hand-rolled SQL reapers.
+
+**Nested-child spawn pattern (spawns inside an already-tracked turn).** A
+subprocess spawned *inside* a unit of work that a protocol site already tracks
+end-to-end — e.g. `scripts/vp_apply_and_checkpoint.py`, the blessed VP-coder
+apply runner, which the agent invokes via Bash *during* a `vp_cli` CLI turn —
+must NOT open/close its own `task_hub` run rows or park tasks: `_close_run`
+closes the assignment's open run, so a nested child calling it would steal the
+parent's close mid-turn and double-book the ledger (the parent
+`claude_cli_client.py::_classify_and_route_cli_exit` already records the PID,
+classifies the exit, closes the run, and routes violations). The nested child's
+protocol participation is rule 4 alone: classify every spawn's termination with
+`classify_worker_exit` (nonzero / signaled / timeout-killed), echo the
+classification to stderr (landing in the turn's `run.log`), and record it
+durably in its own artifact (for the apply runner:
+`apply_checkpoint.json` → `extra["worker_exit_by_step"]`). Disposition flags
+stay `task_closed_normally=True` — a child must never manufacture a
+`clean_exit_zero_no_disposition` violation for a task it doesn't own.
 
 ## Maintenance: pruning & VACUUM
 

@@ -15,7 +15,8 @@ code_paths:
   - src/universal_agent/services/wiki_rescue_driver.py
   - src/universal_agent/scripts/vp_coder_workspace_pruner.py
   - src/universal_agent/scripts/vp_coder_regenerable_reaper.py
-last_verified: 2026-07-25
+  - src/universal_agent/scripts/vp_apply_and_checkpoint.py
+last_verified: 2026-07-31
 ---
 
 # VP Workers & Delegation
@@ -287,6 +288,44 @@ doesn't expose them. Key behaviors (`clients/claude_cli_client.py`):
   with a retry prompt that injects the prior error — except **auth failures
   short-circuit immediately** (`_is_auth_failure`), since the same env will
   re-401.
+- **Crash-recovery at finalize (apply checkpoint):** the retry loop reuses the
+  workspace per `mission_id`, so a mission that crashes *after* applying +
+  validating its repo edits but *before* success (the opaque "Unknown error" /
+  empty-`final_text` / `trace_id=null` CLI-session-death signature) must not
+  re-run its `apply_*.py` on retry — re-running an anchor-validated
+  apply-script is destructive (anchors are consumed on first run).
+  `claude_cli_client.py::_build_retry_prompt` reads
+  `apply_checkpoint.py::has_validated_apply` and, if a prior attempt already
+  wrote `apply_checkpoint.json` (atomic `apply_checkpoint.py::write_checkpoint`),
+  directs the retried session to RESUME from push/PR and skip the apply. The
+  checkpoint is produced by the one blessed idempotent runner
+  `scripts/vp_apply_and_checkpoint.py::run_apply_pipeline`
+  (apply -> `ruff` -> `pytest` -> checkpoint; no-ops and exits 0 if already
+  validated), advertised to repo-mutation sessions on BOTH client lanes via the
+  shared `apply_checkpoint.py::APPLY_DISCIPLINE_SECTION` — `_build_cli_prompt`
+  (CLI lane) and appended to the objective in
+  `claude_code_client.py::ClaudeCodeClient.run_mission` (SDK lane, the lane the
+  July 2026 finalize-crash cluster actually rode) — gated on
+  `apply_checkpoint.py::apply_discipline_requested` (checks
+  `repo_mutation_requested` over the payload top level AND
+  `payload["constraints"]`). The checkpoint read happens
+  BEFORE any apply attempt; re-running is prevented both structurally
+  (idempotent runner) and by prompt. Safety net for the runner-bypassed case:
+  when the retry finds NO validated checkpoint but the workspace contains
+  leftover `apply_*.py` script(s), `_build_retry_prompt` prepends a CAUTION
+  directive instead — the apply may have run without the blessed runner, so
+  verify repo state (`git status` / `git diff`) before any re-apply. The runner classifies every child exit
+  with `worker_exit_classifier.py::classify_worker_exit` (nonzero / signaled /
+  timeout-killed) and records the classifications in the checkpoint's
+  `extra["worker_exit_by_step"]` — it deliberately does NOT write Task Hub run
+  rows, because the parent CLI turn (`_classify_and_route_cli_exit`) owns the
+  mission task's ledger (see the Task Hub doc's nested-child spawn pattern).
+  `/goal`-eligible missions skip the outer retry loop (the `/goal` evaluator is
+  their retry mechanism), but the runner's idempotence equally guards a `/goal`
+  session that re-invokes it mid-loop. (Salvage of orphaned pre-checkpoint
+  apply-scripts is a separate lane; `apply_checkpoint.json` is the durable
+  marker it — and `vp/finalize_failure_context.py::capture_work_snapshot` —
+  keys off.)
 - **Stream buffer:** `limit=10 MiB` (`CLI_STREAM_BUFFER_LIMIT`) because
   stream-json lines (large tool_result blocks) legitimately exceed asyncio's
   64 KiB default and would otherwise crash the monitor.
