@@ -2,9 +2,9 @@
 
 > How `uaonvps` runs recurring jobs and how ALL projects route AI inference across
 > our subscription plans. Compiled 2026-07-03 from live inspection; companion to
-> [`10_Interactive_Coding_Environment.md`](10_Interactive_Coding_Environment.md)
-> (the two-backend inversion) and
-> [`13_Claude_Max_OAuth_Credentials.md`](13_Claude_Max_OAuth_Credentials.md).
+> [`07_claude_max_oauth_credentials.md`](07_claude_max_oauth_credentials.md).
+> (The two-backend-inversion companion lived in the archived `docs/` tree and
+> has no `project_docs/` successor yet.)
 > Rendered/browsable copy:
 > https://uaonvps.taildcc090.ts.net/scratch/vps-ops-reference/vps-ops-reference.html
 > A general-use sibling copy lives at `demo_factory/VPS_OPERATIONS_REFERENCE.md`.
@@ -185,7 +185,7 @@ monarx-update Tue 11:10 UTC.
 - `/home/ua/lrepos/*` — dev/demo repos (`demo_factory`, `claude_science`,
   `demo-autonomous-research-loop`, `clearspring-studio`, …).
 - `/home/ua/dev/universal_agent` — dev checkout (not the runtime).
-- Canonical docs: `universal_agent/docs/06_Deployment_And_Environments/` —
+- Canonical docs: `universal_agent/project_docs/06_platform/` —
   esp. `10_Interactive_Coding_Environment.md` (two-backend model) and
   `13_Claude_Max_OAuth_Credentials.md`.
 
