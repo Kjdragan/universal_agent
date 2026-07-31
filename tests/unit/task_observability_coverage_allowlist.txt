@@ -168,3 +168,15 @@ src/universal_agent/scripts/vp_coder_workspace_pruner.py
 # as vp_coder_workspace_pruner.py and prune_scratch.py above.
 # (vp-finalize-diagnosability, allowlisted 2026-07-31)
 src/universal_agent/vp/finalize_failure_context.py
+
+# proactive_pipeline_invariants.py [rationale (a) — not a task unit]: the
+# Infisical CLI auth-expiry invariant. Its subprocess use is a single bounded
+# (timeout), argv-only, check=False probe — `infisical secrets get <PROBE_KEY>
+# --env <env> --plain` — against a deliberately NONEXISTENT key, so it
+# exercises the CLI's auth path and can never return a real secret value. It
+# spawns no long-running worker PID and owns no task_hub_items row: there is
+# no exit status for worker_exit_classifier to interpret and nothing for the
+# PID protocol to attach to. Same shape and rationale as
+# finalize_failure_context.py and prune_scratch.py above.
+# (infisical-cli-auth-invariant, allowlisted 2026-07-31)
+src/universal_agent/services/invariants/proactive_pipeline_invariants.py
