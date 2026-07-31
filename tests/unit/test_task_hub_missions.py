@@ -168,3 +168,65 @@ def test_build_task_mission_summary_rolls_up_counts(monkeypatch):
         assert summary["current_phase_id"] in {"build", "demo_build"}
     finally:
         conn.close()
+
+
+def test_workstream_summary_child_counts_keyed_by_status_constants(monkeypatch):
+    """Drift guard aligned with tests/test_status_constants.py.
+
+    The workstream rollup must expose child_counts buckets keyed by the canonical
+    TASK_STATUS_* constant VALUES (not free-standing string literals), and the
+    mission_status priority chain must read those buckets via the constants. This
+    pins the contract so a future "magic-string refactor" that changes a constant
+    value cannot leave a stale literal copy in the rollup (the PR #141 class of
+    bug). Green before and after the refactor because the constant values equal
+    the literals they replaced.
+    """
+    monkeypatch.setenv("UA_TASK_HUB_MISSIONS_ENABLED", "1")
+    conn = _conn()
+    try:
+        ws = "mission:keys"
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": ws,
+                "source_kind": task_hub.MISSION_ENVELOPE_SOURCE_KIND,
+                "title": "Root",
+                "description": "",
+                "project_key": "immediate",
+                "priority": 2,
+                "status": task_hub.TASK_STATUS_OPEN,
+                "agent_ready": False,
+                "workstream_id": ws,
+            },
+        )
+        for role, status in (
+            ("a", task_hub.TASK_STATUS_COMPLETED),
+            ("b", task_hub.TASK_STATUS_BLOCKED),
+        ):
+            task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": f"{ws}:{role}",
+                    "source_kind": task_hub.MISSION_PHASE_SOURCE_KIND,
+                    "title": role,
+                    "description": "",
+                    "project_key": "immediate",
+                    "priority": 2,
+                    "status": status,
+                    "agent_ready": False,
+                    "workstream_id": ws,
+                    "parent_task_id": ws,
+                    "subtask_role": role,
+                },
+            )
+        summary = task_hub.build_workstream_summary(conn, ws)
+        assert summary is not None
+        counts = summary["child_counts"]
+        # Buckets surfaced under canonical constant VALUES, not literals.
+        assert counts[task_hub.TASK_STATUS_COMPLETED] == 1
+        assert counts[task_hub.TASK_STATUS_BLOCKED] == 1
+        assert counts["total"] == 2
+        # Blocked-priority branch of the mission_status rollup chain.
+        assert summary["mission_status"] == task_hub.TASK_STATUS_BLOCKED
+    finally:
+        conn.close()
