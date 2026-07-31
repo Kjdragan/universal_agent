@@ -13,8 +13,8 @@ import os
 import re
 from typing import Any, Optional
 
-from universal_agent.utils.model_resolution import resolve_opus, resolve_sonnet
 from universal_agent.utils.anthropic_client import build_anthropic_client
+from universal_agent.utils.model_resolution import resolve_opus, resolve_sonnet
 
 logger = logging.getLogger(__name__)
 

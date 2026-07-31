@@ -17,13 +17,13 @@ import yaml
 
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.memory.paths import resolve_shared_memory_workspace
+from universal_agent.utils.time_utils import now_iso as _now_iso
 from universal_agent.wiki.llm import (
     extract_concepts,
     extract_entities,
     generate_summary,
 )
 from universal_agent.workspace_catalog import list_workspace_summaries
-from universal_agent.utils.time_utils import now_iso as _now_iso
 
 
 def _candidate_lines(body: str) -> list[str]:

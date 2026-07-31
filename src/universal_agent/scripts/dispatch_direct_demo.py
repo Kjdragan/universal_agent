@@ -25,9 +25,9 @@ import re
 import sys
 
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
-from universal_agent.wiki.core import _slugify as _base_slugify
 from universal_agent.services.cody_dispatch import dispatch_cody_demo_task
 from universal_agent.services.demo_workspace import provision_demo_workspace
+from universal_agent.wiki.core import _slugify as _base_slugify
 
 
 def _slugify(text: str) -> str:
