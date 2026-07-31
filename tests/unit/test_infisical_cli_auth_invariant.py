@@ -43,8 +43,24 @@ class _FakeResult:
 
 
 @pytest.fixture(autouse=True)
-def _force_applicable(monkeypatch):
-    """Pretend we are on the prod VPS for every test."""
+def _force_applicable(_fresh_registry, monkeypatch):
+    """Pretend we are on the prod VPS for every test.
+
+    Depends on `_fresh_registry` EXPLICITLY, and that dependency is the whole
+    fix. Both fixtures are autouse and same-scope, so declaration order does
+    not determine run order -- pytest was running this one FIRST, and
+    `_fresh_registry`'s `importlib.reload(ppi)` then re-executed the module
+    body and rebound a brand-new `_infisical_cli_auth_applicable`, silently
+    discarding the monkeypatch below. The real check then ran, found no
+    `/opt/universal_agent` off the prod VPS, and short-circuited the invariant
+    to None -- surfacing as `assert None is not None`.
+
+    (The `shutil.which` patch survived because it targets the singleton
+    `shutil` module, which reload does not regenerate -- which is exactly why
+    half the fixture appeared to work and the failure looked mysterious.)
+
+    Naming the dependency forces reload-then-patch ordering.
+    """
     monkeypatch.setattr(ppi, "_infisical_cli_auth_applicable", lambda: True)
     monkeypatch.setattr(ppi.shutil, "which", lambda name: "/usr/bin/infisical")
 
