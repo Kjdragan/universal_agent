@@ -1,3 +1,15 @@
+---
+title: "VPS Operations Reference — Scheduled Jobs & Inference Plans"
+status: active
+canonical: true
+subsystem: plat-vps-scheduling-inference
+code_paths:
+  - src/universal_agent/systemd_migrated_jobs.py
+  - src/universal_agent/cron_service.py
+  - src/universal_agent/heartbeat_service.py
+last_verified: 2026-07-03
+---
+
 # VPS Operations Reference — Scheduling & Inference Plans
 
 > How `uaonvps` runs recurring jobs and how ALL projects route AI inference across
