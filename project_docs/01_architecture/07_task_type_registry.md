@@ -13,7 +13,7 @@ code_paths:
   - src/universal_agent/services/hourly_intel_digest.py
   - src/universal_agent/services/atlas_direct_dispatch.py
   - src/universal_agent/systemd_migrated_jobs.py
-last_verified: 2026-07-01
+last_verified: 2026-07-31
 ---
 
 # Task Type & Mission System Registry
@@ -178,7 +178,7 @@ and the scheduling-substrate ADR ([`06_platform/08_scheduling_substrate_adr.md`]
 | **Goal loop / completion attestation** | active_secondary | Gate on COMPLETION.md before a mission may finalize `completed` (Cody-only). | `services/self_briefing.py::check_completion_attestation` |
 | **VPS infra timers** | canonical | watchdog / OOM-alert / uv-cache-prune host timers. | `deployment/systemd/universal-agent-service-watchdog.timer` |
 | **`hourly_intel_digest`** | canonical | **The** delivery path for VP-authored intel briefs (see §5); migrated (batch 3) — runs as a systemd timer, gateway cron registered-but-`enabled=False`. | `scripts/hourly_intel_digest_cron.py::run_once` |
-| `hourly_insight_email` cron | **removed** | (see §6) gateway cron registration **fully removed** (no `_ensure_*` fn, absent from the startup block) — superseded by `hourly_intel_digest`. Only dead modules remain. | `scripts/hourly_insight_email.py` |
+| `hourly_insight_email` cron | **removed** | (see §6) gateway cron registration **fully removed** (no `_ensure_*` fn, absent from the startup block) — superseded by `hourly_intel_digest`. Dead modules were deleted. | — |
 
 **Getting the current migrated-vs-in-process split** — *do not hand-maintain a job list here.* Such a list drifts within a day; re-enumerating it is exactly how the prior scheduling snapshots went stale (see the ADR's own staleness notes). To get the live split:
 
@@ -186,7 +186,7 @@ and the scheduling-substrate ADR ([`06_platform/08_scheduling_substrate_adr.md`]
 - **Still in-process:** whatever is enabled in live `/api/v1/cron/jobs` and **not** in that frozenset, plus operator/dynamic crons. Some jobs stay in-process *by design* — e.g. `paper_to_podcast_daily` is a daily *prompt* that needs the agent runtime/skills/MCP, so it structurally cannot be a pure timer.
 - **Why a given job is on a timer vs left in-process:** ADR §Decision 1 (substrate policy + per-job target table).
 
-> **"Looks-off-but-intentional" anchor:** a migrated job's gateway cron shows `enabled=False` (e.g. `hourly_intel_digest`) — that is the **correct migrated state** (the systemd timer is the sole firer); do **not** "fix" it by re-enabling the gateway cron. Cross-reference `is_migrated_to_systemd(job)` to tell migrated-and-running from genuinely-off. (Contrast: `hourly_insight_email` is *fully removed*, not migrated — see §6.)
+> **"Looks-off-but-intentional" anchor:** a migrated job's gateway cron shows `enabled=False` (e.g. `hourly_intel_digest`) — that is the **correct migrated state** (the systemd timer is the sole firer); do **not** "fix" it by re-enabling the gateway cron. Cross-reference `is_migrated_to_systemd(job)` to tell migrated-and-running from genuinely-off. (Contrast: `hourly_insight_email` is *fully removed*, both registration and modules — see §6.)
 
 ---
 
@@ -244,7 +244,7 @@ subsystem, see the [Platform Status Registry](../00_PLATFORM_STATUS_REGISTRY.md)
 | **`youtube_playlist_watcher`** (CSI playlist poller) | YouTube daily digest + `youtube_channel_rss` adapter | Daily digest became the canonical YouTube trigger; poller redundant (orphan timer unit remains) | retired PR #438; dropped from liveness 2026-06-03 |
 | **Legacy regex vault entity extractor** | CSI Vault intelligence pass (LLM-native VaultDelta) | Code-side pattern matching produced ~50% junk; "code never decides what is meaningful" | superseded ~2026-06-01 |
 | **`develop` / `feature/latest2` branches** + legacy AgentBridge session path | main-only branching; InProcessGateway / ProcessTurnAdapter | Simplified to main-only; AgentBridge replaced by in-process execution | `develop` retired 2026-05-10 |
-| **`hourly_insight_email` cron** | `hourly_intel_digest` cron (+ `/hourly-intel-digest` skill) | Per-insight emails superseded by the batched convergence-brief digest. Gateway cron registration **fully removed** (no `_ensure_*` fn; absent from the startup block) — *not* a disabled-but-registered rollback lever. Only dead modules (`scripts/hourly_insight_email.py`, `services/hourly_insight_email.py`) remain as deletion candidates. | registration removed (post-#534); modules pending deletion |
+| **`hourly_insight_email` cron** | `hourly_intel_digest` cron (+ `/hourly-intel-digest` skill) | Per-insight emails superseded by the batched convergence-brief digest. Gateway cron registration **fully removed** (no `_ensure_*` fn; absent from the startup block) — *not* a disabled-but-registered rollback lever. Dead modules (`scripts/hourly_insight_email.py`, `services/hourly_insight_email.py`) were deleted (zero non-test importers). | registration removed (post-#534); modules deleted 2026-07-31 |
 | **`claude_code_demo_task`** source_kind | `cody_scaffold_request` | Replaced by the scaffold-request canonical path; emergency fallback only | — |
 | **Legacy CSI auto-queue** (`queue_follow_up_tasks` straight-to-Task-Hub) | Demo Triage pending→approve gate | Unconditional auto-queue flooded the hub with low-signal historical candidates | 2026-05 |
 | **Legacy tutorial feed** | `tutorial_build` proactive task | Replaced by the explicit tutorial-build pipeline | 2026-03-26 |
