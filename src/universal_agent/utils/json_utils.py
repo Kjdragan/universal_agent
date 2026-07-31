@@ -111,7 +111,8 @@ def json_loads_obj(raw: Any) -> Dict[str, Any]:
     """Strict best-effort "give me a dict" coercion for JSON-encoded fields.
 
     dict in -> shallow copy out; str in -> strict ``json.loads``; anything
-    else or any failure -> ``{}``. NEVER raises.
+    else, or a malformed JSON document, -> ``{}``. Does not raise on
+    malformed JSON input.
 
     Deliberately STRICT (plain ``json.loads``, not ``extract_json_payload``'s
     repair layers): its call sites parse DB/Task-Hub-stored JSON written by
@@ -125,6 +126,10 @@ def json_loads_obj(raw: Any) -> Dict[str, Any]:
         return {}
     try:
         parsed = json.loads(raw)
-    except Exception:
+    except json.JSONDecodeError:
+        # ``raw`` is a validated non-empty str here, so the only realistic
+        # ``json.loads`` failure is a malformed document. Catching anything
+        # broader would silently flatten genuinely unexpected errors (parser
+        # regressions, etc.) to ``{}`` and hide the bug.
         return {}
     return parsed if isinstance(parsed, dict) else {}
