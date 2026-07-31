@@ -75,18 +75,23 @@ CANONICAL_UNITS=(
   csi-rss-semantic-enrich.timer
   csi-youtube-transcript-canary.service
   csi-youtube-transcript-canary.timer
-)
-
-# Units managed elsewhere — never sweep them even if they aren't in the
-# canonical list above. `csi.target` is a pseudo-unit installed during initial
-# provisioning, not shipped as a file in deployment/systemd/.
-# NOTE: csi-ingester.service is now in CANONICAL_UNITS above. It used to be here
-# on the false premise that "a separate deploy step installs it" — in fact
-# nothing did, so edits to the unit (e.g. the csi_run.sh wrapper that gives
-# batch_brief its LLM key) never reached /etc and had to be cp'd by hand.
-EXEMPT_UNITS=(
   csi.target
 )
+
+# NOTE: csi-ingester.service is in CANONICAL_UNITS above. It used to sit in a
+# separate EXEMPT_UNITS list on the false premise that "a separate deploy step
+# installs it" — in fact nothing did, so edits to the unit never reached /etc
+# and had to be cp'd by hand.
+# NOTE 2026-07-31: csi.target fell into the SAME trap — the old comment claimed
+# it was "installed during initial provisioning, not shipped as a file", but the
+# file has lived in deployment/systemd/ all along and NOTHING ever installed or
+# enabled it. Both csi-rss-semantic-enrich.timer and csi-replay-dlq.timer are
+# WantedBy=csi.target, so after the 2026-07-31 reboot they came up
+# enabled-but-dead and the transcript pipeline silently stopped (found when the
+# episode_ideas screener measured MAX(fetched_at) frozen at 04:17Z). csi.target
+# is now canonical: installed and enabled below so boots pull the CSI timers in
+# via multi-user.target → csi.target → csi.target.wants/. EXEMPT_UNITS is gone —
+# everything we own ships from deployment/systemd/.
 
 # ── install ────────────────────────────────────────────────────────────────
 for unit in "${CANONICAL_UNITS[@]}"; do
@@ -101,13 +106,18 @@ for unit in "${CANONICAL_UNITS[@]}"; do
   enable_timer_if_installed "$unit"
 done
 
+# ── enable the grouping target (boot persistence) ──────────────────────────
+# multi-user.target → csi.target → csi.target.wants/{enrich,dlq timers}.
+# Without this enable, the WantedBy=csi.target timers die on every reboot.
+enable_timer_if_installed "csi.target"
+
 # ── orphan sweep ───────────────────────────────────────────────────────────
 # Disable + remove any csi-*.{service,timer} in /etc/systemd/system/ that
 # isn't in the canonical or exempt list. Without this, deleted units linger
 # and continue to fire (e.g. csi-rss-quality-gate.service was failing every
 # 15 min after its backing script was deleted in commit b4248fc7).
 keep_set=" "
-for u in "${CANONICAL_UNITS[@]}" "${EXEMPT_UNITS[@]}"; do
+for u in "${CANONICAL_UNITS[@]}"; do
   keep_set+="$u "
 done
 

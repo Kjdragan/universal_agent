@@ -9,7 +9,13 @@ WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
 Environment=PYTHONPATH=/opt/universal_agent/src
 EnvironmentFile=-/opt/universal_agent/.env
 EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
-ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_youtube_transcript_canary.py --db-path /var/lib/universal-agent/csi/csi.db --window-hours 24 --stale-after-hours 10
+# stale-after-hours: 6 (was 10, tightened 2026-07-31). The enrich pipeline runs
+# every 4h; a 10h gate meant a dead enrich timer stayed CANARY green for ~2.5
+# missed cycles (proven live during the 2026-07-31 PID1-wedge + reboot — the
+# timer was enabled-but-dead for 12h while the canary reported green, because
+# the oldest ELIGIBLE backlog was only 7.7h). 6h = one missed cycle + margin:
+# red within ~1.5 cycles, still quiet through a single slow window.
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_youtube_transcript_canary.py --db-path /var/lib/universal-agent/csi/csi.db --window-hours 24 --stale-after-hours 6
 
 [Install]
 WantedBy=multi-user.target
