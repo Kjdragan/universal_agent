@@ -37,6 +37,35 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = "glm-4.6"
 
+# ── Scoring contract ────────────────────────────────────────────────────
+# The rank prompt instructs the model to emit a 0–10 score to one decimal.
+# Every parsed score is clamped + rounded to these bounds so a misbehaving
+# model can never persist an out-of-range value.
+_MIN_SCORE = 0.0
+_MAX_SCORE = 10.0
+_SCORE_ROUND_DECIMALS = 1
+
+# ── Per-candidate message field caps ─────────────────────────────────────
+# Post text is rendered in full up to _MAX_POST_TEXT_CHARS; longer posts are
+# truncated so the rendered text (truncated body + ellipsis) never exceeds
+# the cap — the slice length is the cap minus the ellipsis width.
+_MAX_POST_TEXT_CHARS = 500
+_TRUNCATE_ELLIPSIS = "..."
+_MAX_RATIONALE_CHARS = 1000
+# Only ever surfaced in a warning log when a JSON line fails to parse.
+_MAX_LOG_PREVIEW_CHARS = 120
+
+# ── HTTP / Anthropic-compatible request shape ────────────────────────────
+_DEFAULT_BASE_URL = "https://api.z.ai/api/anthropic"
+_ANTHROPIC_VERSION = "2023-06-01"
+_DEFAULT_MAX_TOKENS = 4096
+
+# ── Run cadence & sizing defaults ────────────────────────────────────────
+_DEFAULT_RESCORE_AFTER_HOURS = 24.0
+_DEFAULT_MAX_CANDIDATES = 60
+_DEFAULT_LLM_TIMEOUT_SECONDS = 90.0
+_RUN_ID_HEX_LEN = 16
+
 
 _RANK_SYSTEM_PROMPT = """You are scoring potential Claude Code AND Claude Agent SDK demos and intelligence opportunities for an internal triage queue. Each candidate is a tweet from an Anthropic-adjacent account that an upstream classifier has flagged as worthy of further investment.
 
@@ -109,8 +138,8 @@ def _build_user_message(candidates: list[csi_demo_triage.TriageCandidate]) -> st
     lines: list[str] = ["Score the following candidates:", ""]
     for idx, cand in enumerate(candidates, start=1):
         text = (cand.post_text or "").strip().replace("\n", " ")
-        if len(text) > 500:
-            text = text[:497] + "..."
+        if len(text) > _MAX_POST_TEXT_CHARS:
+            text = text[: _MAX_POST_TEXT_CHARS - len(_TRUNCATE_ELLIPSIS)] + _TRUNCATE_ELLIPSIS
         links = list(cand.linked_sources or [])
         link_summary = f"{len(links)} link(s)"
         if links:
@@ -155,21 +184,21 @@ def _select_candidates(
     return [csi_demo_triage._row_to_candidate(r) for r in rows]
 
 
-def _call_llm(*, system: str, user: str, timeout: float = 90.0) -> str:
+def _call_llm(*, system: str, user: str, timeout: float = _DEFAULT_LLM_TIMEOUT_SECONDS) -> str:
     """POST to the configured Anthropic-compatible endpoint and return text."""
-    base_url = (os.getenv("ANTHROPIC_BASE_URL") or "https://api.z.ai/api/anthropic").rstrip("/")
+    base_url = (os.getenv("ANTHROPIC_BASE_URL") or _DEFAULT_BASE_URL).rstrip("/")
     auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY") or ""
     model = os.getenv("UA_CSI_DEMO_TRIAGE_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
     if not auth_token:
         raise RuntimeError("ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY not set")
     headers = {
         "x-api-key": auth_token,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": _ANTHROPIC_VERSION,
         "content-type": "application/json",
     }
     body = {
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": _DEFAULT_MAX_TOKENS,
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
@@ -197,7 +226,7 @@ def _parse_lines(raw: str) -> list[dict[str, Any]]:
         try:
             obj = json.loads(line)
         except json.JSONDecodeError:
-            logger.warning("triage_rank: skipping malformed line: %s", line[:120])
+            logger.warning("triage_rank: skipping malformed line: %s", line[:_MAX_LOG_PREVIEW_CHARS])
             continue
         if not isinstance(obj, dict):
             continue
@@ -211,11 +240,11 @@ def run_ranking(
     *,
     conn: sqlite3.Connection | None = None,
     artifacts_root: Path | None = None,
-    rescore_after_hours: float = 24.0,
-    max_candidates: int = 60,
+    rescore_after_hours: float = _DEFAULT_RESCORE_AFTER_HOURS,
+    max_candidates: int = _DEFAULT_MAX_CANDIDATES,
 ) -> RankingResult:
     """Score all unscored / stale-scored pending candidates in one LLM call."""
-    run_id = uuid.uuid4().hex[:16]
+    run_id = uuid.uuid4().hex[:_RUN_ID_HEX_LEN]
     started_at = _now_iso()
     own_conn = conn is None
     if conn is None:
@@ -269,8 +298,8 @@ def run_ranking(
             except (TypeError, ValueError):
                 skipped += 1
                 continue
-            score = max(0.0, min(10.0, round(score, 1)))
-            rationale = str(entry.get("rationale") or "").strip()[:1000]
+            score = max(_MIN_SCORE, min(_MAX_SCORE, round(score, _SCORE_ROUND_DECIMALS)))
+            rationale = str(entry.get("rationale") or "").strip()[:_MAX_RATIONALE_CHARS]
             conn.execute(
                 """
                 UPDATE demo_triage_candidates
