@@ -8,6 +8,7 @@ contract stays stable for the showrunner lane that consumes it.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 import json
 from pathlib import Path
 
@@ -33,7 +34,7 @@ def _report(**overrides):
                     "title": "Show HN: vulnerable MCP servers",
                     "url": "https://news.ycombinator.com/item?id=1",
                     "author": "hnuser",
-                    "published_at": "2026-07-30",
+                    "published_at": (date.today() - timedelta(days=2)).isoformat(),
                     "engagement": {"points": 220, "comments": 84},
                     "snippet": "OWASP agentic top-10 playground",
                 },
