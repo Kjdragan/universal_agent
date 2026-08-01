@@ -34,7 +34,12 @@ Environment=UA_INFISICAL_ENABLED=1
 Environment=INFISICAL_ENVIRONMENT=production
 EnvironmentFile=-/opt/universal_agent/.env
 ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.proactive_demo_nuggets_cron
-MemoryMax=1G
+# Memory: the judge + its claude CLI children peaked at exactly 1.0G (+1.1G
+# swap) on 2026-08-01 and died at the former MemoryMax=1G ceiling (same root
+# as the 2026-07-27 oom-kill; the ceiling dated from #1233 before #1414 made
+# nights 3-build heavy). 3G hard / 2G soft-throttle on a 16G box.
+MemoryHigh=2G
+MemoryMax=3G
 # One SQL scan + one bounded LLM judge call + up to nuggets_max (default 3) full
 # demo_factory land builds (Opus /goal, slow) + the end-of-day zero-backlog
 # swipe that runs AFTER the builds. Cap MUST exceed
@@ -42,6 +47,9 @@ MemoryMax=1G
 # 3-build night gets killed mid-build and the swipe (which runs last) never fires,
 # leaving the backlog un-reset. 3*3600 + 1200 slack = 12000.
 TimeoutStartSec=12000
+# Stop grace: on 2026-08-01 the claude children ignored SIGTERM through both
+# default 90s kill phases, painting the memory death as result=timeout.
+TimeoutStopSec=300
 
 [Install]
 WantedBy=multi-user.target

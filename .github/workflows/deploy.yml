@@ -198,14 +198,24 @@ jobs:
             --arg subject "$SUBJECT" \
             --arg text "$BODY" \
             '{to: [$to], subject: $subject, text: $text, labels: ["deploy-failed", "ops"]}')
-          curl -sS -o /tmp/agentmail_resp.json -w "AgentMail HTTP %{http_code}\n" \
+          HTTP_CODE=$(curl -sS -o /tmp/agentmail_resp.json -w "%{http_code}" \
             -X POST \
             -H "Authorization: Bearer ${AGENTMAIL_API_KEY}" \
             -H "Content-Type: application/json" \
             --max-time 15 \
             --data "$PAYLOAD" \
-            "https://api.agentmail.to/v0/inboxes/${DEPLOY_FAILURE_INBOX}/messages/send" \
-            || true
+            "https://api.agentmail.to/v0/inboxes/${DEPLOY_FAILURE_INBOX}/messages/send") || HTTP_CODE="000"
+          echo "AgentMail HTTP ${HTTP_CODE}"
           head -c 500 /tmp/agentmail_resp.json 2>/dev/null || true
           echo ""
+          # A dead notifier must be VISIBLE, never green: a stale key 403'd
+          # here while `|| true` + `exit 0` swallowed it, so the 2026-07-31
+          # deploy failure notified nobody (found 2026-08-01, key rotated
+          # same day). The job is already failing when this step runs, so
+          # exiting non-zero masks nothing — it adds the red annotation.
+          case "$HTTP_CODE" in
+            2*) echo "Deploy-failure email sent." ;;
+            *)  echo "::error::Deploy-failure email send FAILED (HTTP ${HTTP_CODE}) — the operator was NOT notified. Rotate the AGENTMAIL_API_KEY secret from Infisical prod and see the response body above."
+                exit 1 ;;
+          esac
           exit 0
