@@ -23,7 +23,6 @@ from universal_agent.api.events import (
     WebSocketEvent,
     create_connected_event,
     create_error_event,
-    create_status_event,
 )
 from universal_agent.identity import resolve_user_id
 from universal_agent.run_catalog import RunCatalogService
