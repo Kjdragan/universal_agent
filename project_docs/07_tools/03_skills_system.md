@@ -10,7 +10,8 @@ code_paths:
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/gateway_server.py
   - .claude/skills/**/SKILL.md
-last_verified: 2026-07-31
+  - src/universal_agent/scripts/last30days_sweep.py
+last_verified: 2026-08-01
 ---
 
 # Skills System
@@ -150,6 +151,43 @@ When `capabilities.md` shows a skill as `~~**name**~~ (Unavailable: Missing bina
 - After installing, re-run discovery (e.g. `verify_capabilities.py`, which builds `AgentSetup(enable_skills=True)` and checks the generated `capabilities.md`).
 
 > [VERIFY] The legacy `docs/03_Operations/13_Skill_Dependency_Setup_Guide.md` lists specific gated skills (1password→`op`, obsidian→`obsidian-cli`, tmux, spotify→`spogo`). Whether each is currently gated depends on what's installed on the host; the gating mechanism (`_check_skill_requirements`) is verified, the specific list is environment-dependent.
+
+## Headless wrappers around third-party skill engines
+
+A skill's `SKILL.md` is an *agent* contract; some skills also ship a Python
+engine that a deterministic caller (cron, another service, a sibling repo)
+wants as data. The pattern for that is a thin wrapper CLI in
+`src/universal_agent/scripts/` that invokes the engine headlessly and emits a
+small versioned JSON record — never a second copy of the engine's logic.
+
+Reference implementation: `scripts/last30days_sweep.py` over the
+`last30days` skill engine (`.claude/skills/last30days`, third-party/MIT).
+Its four load-bearing properties are the template:
+
+- **Deterministic + free by default** — no `--plan` is passed, so the engine
+  takes its own documented headless path (deterministic keyword planner, no
+  LLM, no key); the default source set is the zero-key trio
+  (`reddit,hackernews,polymarket`), so an unattended sweep cannot start
+  costing money by accident.
+- **Least privilege at the trust boundary** — the engine is code we did not
+  author, so it gets a minimal operational env plus ONLY secrets named in
+  `--grant` (validated against `GRANTABLE_SECRETS`; unknown names refused),
+  and `LAST30DAYS_CONFIG_DIR=""` puts it in no-config mode so a stray key in
+  the user's engine `.env` cannot enable a paid source.
+- **Wrapper owns the wall clock** — the engine has per-request timeouts but
+  no global one; the wrapper's `--timeout-seconds` bound turns a hang into a
+  classified record rather than a stuck caller.
+- **Nested-child observability** — every engine spawn is classified with
+  `worker_exit_classifier.py::classify_worker_exit` and the classification
+  rides in the output's `worker_exit` field; the wrapper opens/closes no
+  Task Hub run rows (see the nested-child pattern in
+  [`02_execution_core/02_task_hub.md`](../02_execution_core/02_task_hub.md)).
+
+Output contract (`schema_version: 1`): `topic`, `ok` (ran AND found
+evidence — a clean run with zero items is reportable, not success),
+`evidence[]` (engagement-ranked rows: source/title/url/author/container/
+published_at/engagement/snippet), `counts_by_source`, `sources_with_evidence`,
+`engine_errors`, `warnings`, `worker_exit`, `error`.
 
 ## Env vars / flags
 
