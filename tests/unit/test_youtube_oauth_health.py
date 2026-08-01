@@ -208,3 +208,69 @@ def test_expected_channel_keys_are_stable():
     # stored identity and silently disable the assertion.
     assert yoh.EXPECTED_CHANNEL_KEY == "YOUTUBE_OAUTH_EXPECTED_CHANNEL_ID"
     assert yoh.EXPECTED_CHANNEL_TITLE_KEY == "YOUTUBE_OAUTH_EXPECTED_CHANNEL_TITLE"
+
+
+# ── production-mode expiry gating (app published "In production" 2026-08-01) ──
+
+
+def test_testing_mode_expiry_defaults_off(monkeypatch):
+    monkeypatch.delenv(yoh.TESTING_MODE_KEY, raising=False)
+    assert yoh.testing_mode_expiry() is False
+
+
+def test_testing_mode_expiry_truthy_values(monkeypatch):
+    for raw in ("1", "true", "YES", "On"):
+        monkeypatch.setenv(yoh.TESTING_MODE_KEY, raw)
+        assert yoh.testing_mode_expiry() is True, raw
+    monkeypatch.setenv(yoh.TESTING_MODE_KEY, "0")
+    assert yoh.testing_mode_expiry() is False
+
+
+def test_resolve_watchdog_state_dead_beats_everything():
+    assert (
+        yoh.resolve_watchdog_state(
+            alive=False, wrong_channel=True, age_days=9.0, threshold=5.0,
+            testing_mode=True,
+        )
+        == "dead"
+    )
+
+
+def test_resolve_watchdog_state_wrong_channel_beats_age():
+    assert (
+        yoh.resolve_watchdog_state(
+            alive=True, wrong_channel=True, age_days=9.0, threshold=5.0,
+            testing_mode=True,
+        )
+        == "wrong_channel"
+    )
+
+
+def test_resolve_watchdog_state_age_warns_only_in_testing_mode():
+    # Production mode (the current state): an old token is HEALTHY — tokens
+    # no longer age out, and the July 2026 daily nag was a false alarm.
+    assert (
+        yoh.resolve_watchdog_state(
+            alive=True, wrong_channel=False, age_days=9.6, threshold=5.0,
+            testing_mode=False,
+        )
+        == "healthy"
+    )
+    # Testing mode: the same age correctly warns.
+    assert (
+        yoh.resolve_watchdog_state(
+            alive=True, wrong_channel=False, age_days=9.6, threshold=5.0,
+            testing_mode=True,
+        )
+        == "expiring"
+    )
+
+
+def test_resolve_watchdog_state_unknown_age_is_healthy_in_testing_mode():
+    assert (
+        yoh.resolve_watchdog_state(
+            alive=True, wrong_channel=False, age_days=None, threshold=5.0,
+            testing_mode=True,
+        )
+        == "healthy"
+    )

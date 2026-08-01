@@ -17,7 +17,7 @@ code_paths:
   - src/universal_agent/services/scratch_publish.py
   - src/universal_agent/services/proactive_tutorial_builds.py
   - src/universal_agent/systemd_migrated_jobs.py
-last_verified: 2026-07-26
+last_verified: 2026-08-01
 ---
 
 # YouTube CSI Flow
@@ -675,10 +675,12 @@ token on every call. Functions: `get_playlist_items` (paginated, returns
 
 ---
 
-## OAuth lifecycle (the recurring break)
+## OAuth lifecycle
 
-The Google OAuth app is in **"Testing" mode**, so the refresh token expires
-**~7 days** after minting. When it dies, both the digest and the gold poller
+The Google OAuth app is published **"In production"** (console-verified
+2026-08-01; while it was in "Testing" mode, refresh tokens expired ~7 days
+after minting and drove a weekly re-auth). Tokens no longer age out; when one
+DOES die or acts as the wrong channel, both the digest and the gold poller
 fail silently. Three components manage this (`services/youtube_oauth_health.py`):
 
 - **Watchdog** (`scripts/youtube_oauth_watchdog.py`, cron
@@ -687,10 +689,16 @@ fail silently. Three components manage this (`services/youtube_oauth_health.py`)
   `SYSTEMD_MIGRATED_SYSTEM_JOBS`, in-process row shows `enabled:false` as a
   migration artifact): actively tests the refresh token
   (`test_refresh_token`) and computes age from the
-  `YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT` stamp. State is `dead` (invalid_grant),
-  `expiring` (age ≥ `UA_YOUTUBE_OAUTH_WARN_AGE_DAYS`, default 5d), or `healthy`.
-  On `dead`/`expiring` it emails a one-tap re-auth button. A healthy token sends
+  `YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT` stamp. State is decided by
+  `youtube_oauth_health.py::resolve_watchdog_state`: `dead` (invalid_grant),
+  `wrong_channel`, `expiring` (age ≥ `UA_YOUTUBE_OAUTH_WARN_AGE_DAYS`, default
+  5d — **only when `UA_YOUTUBE_OAUTH_TESTING_MODE=1`**, i.e. only if the app
+  is ever moved back to Testing; see
+  `youtube_oauth_health.py::testing_mode_expiry`), or `healthy`. On any
+  non-healthy state it emails a one-tap re-auth button. A healthy token sends
   nothing. Exit code is always 0 (a noisy watchdog is worse than a quiet one).
+  (July 2026 false-alarm evidence for the gating: a token reached 9.6 days old
+  with digests green while the age warning nagged daily.)
 - **Gateway endpoints** `/api/v1/youtube-oauth/start` (HMAC-signed link with TTL)
   and `/api/v1/youtube-oauth/callback` (signed `state` for CSRF) drive the
   email-button re-mint; `callback` writes the fresh token + minted-at back to
@@ -698,10 +706,12 @@ fail silently. Three components manage this (`services/youtube_oauth_health.py`)
   `UA_OPS_TOKEN` → `UA_INTERNAL_API_TOKEN`.
 - **CLI mint** `scripts/youtube_oauth2_setup.py` (localhost) for terminal re-auth.
 
-Operator note (preserved from runbook + memory): Kevin defers publishing the
-OAuth app to "In production" by choice; the watchdog + one-tap email button is
-the accepted interim fix. The durable fix is publishing the app to remove the
-7-day expiry. Re-auth account is `kevinjdragan@gmail.com`.
+Operator note: the app was published "In production" (removing the 7-day
+expiry); the earlier "defer publishing, weekly one-tap re-auth" arrangement is
+history. The consent screen still shows the "unverified app" warning
+(sensitive scopes, unreviewed) on the rare occasions a re-consent is needed.
+Re-auth account is `kevinjdragan@gmail.com` — at Google's account picker the
+channel identity matters (see the wrong-channel state above).
 
 ---
 

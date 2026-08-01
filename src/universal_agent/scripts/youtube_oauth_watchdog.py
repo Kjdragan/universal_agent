@@ -10,11 +10,16 @@ It performs two independent checks:
 1. **Liveness** — actively exchanges the stored refresh token for a fresh
    access token.  A failure (``invalid_grant``) means the token is already
    dead and the digest/poller crons are silently broken right now.
-2. **Age** — reads the ``YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT`` stamp and
-   computes the token's age.  Because the OAuth app is in "Testing" mode,
-   refresh tokens expire ~7 days after minting; once the token is older
-   than ``UA_YOUTUBE_OAUTH_WARN_AGE_DAYS`` (default 5) we proactively warn
-   so the operator can re-auth before the morning digest breaks.
+2. **Age** (testing mode only) — reads the
+   ``YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT`` stamp and computes the token's
+   age.  While the OAuth app was in Google "Testing" mode, refresh tokens
+   expired ~7 days after minting, so an early warning at
+   ``UA_YOUTUBE_OAUTH_WARN_AGE_DAYS`` (default 5) was meaningful.  The app
+   is published "In production" (console-verified 2026-08-01), tokens no
+   longer age out, and this warning is OFF unless
+   ``UA_YOUTUBE_OAUTH_TESTING_MODE=1``.  (July 2026 false-alarm evidence: a
+   token reached 9.6 days old while digests stayed green, yet the watchdog
+   nagged daily.)
 
 When either check trips, the watchdog emails the operator a one-tap re-auth
 button (a signed link to ``/api/v1/youtube-oauth/start``) so the re-mint can
@@ -102,14 +107,15 @@ def _build_warning_email(
             "screen and you're done."
         )
         color = "#cf222e"
-    else:  # expiring
+    else:  # expiring — only reachable with UA_YOUTUBE_OAUTH_TESTING_MODE on
         age_txt = f"{age_days:.1f} days old" if age_days is not None else "approaching its 7-day limit"
         subject = "YouTube OAuth token expiring soon — re-auth recommended"
         headline = "Your YouTube OAuth token is about to expire"
         lead = (
-            f"The token is {age_txt}. Google expires it ~7 days after minting "
-            "(the OAuth app is still in Testing mode), so re-authorize now to "
-            "keep tomorrow's digest from breaking. One tap, one consent screen."
+            f"The token is {age_txt}. Testing-mode expiry warnings are enabled "
+            "(UA_YOUTUBE_OAUTH_TESTING_MODE), meaning Google expires the token "
+            "~7 days after minting — re-authorize now to keep tomorrow's digest "
+            "from breaking. One tap, one consent screen."
         )
         color = "#bf8700"
 
@@ -138,9 +144,7 @@ def _build_warning_email(
         f'<p style="margin:0 0 18px;">{button}</p>'
         f'<p style="font-size:12px;color:#6b7280;line-height:1.5;">Diagnostic: {detail}<br>'
         "After you approve, the fresh token is written to production automatically — "
-        "the next morning's digest picks it up with no further action.<br>"
-        "Permanent fix: publish the OAuth app to “In production” in Google "
-        "Cloud Console to remove the 7-day expiry entirely.</p>"
+        "the next morning's digest picks it up with no further action.</p>"
         "</div>"
     )
     text = f"{headline}\n\n{lead}\n\n{button_text}\n\nDiagnostic: {detail}\n"
@@ -223,20 +227,21 @@ def main() -> int:
             elif expected and observed_id != expected:
                 wrong_channel = True
 
-    if not alive:
-        state = "dead"
-    elif wrong_channel:
-        state = "wrong_channel"
-    elif age is not None and age >= threshold:
-        state = "expiring"
-    else:
-        state = "healthy"
+    testing_mode = yoh.testing_mode_expiry()
+    state = yoh.resolve_watchdog_state(
+        alive=alive,
+        wrong_channel=wrong_channel,
+        age_days=age,
+        threshold=threshold,
+        testing_mode=testing_mode,
+    )
 
     age_str = f"{age:.2f}d" if age is not None else "unknown (no minted-at stamp)"
     logger.info(
-        "OAuth watchdog: alive=%s state=%s age=%s threshold=%.1fd channel=%s(%s) expected=%s detail=%s",
-        alive, state, age_str, threshold, observed_title or "?", observed_id or "?",
-        expected or "unset", detail,
+        "OAuth watchdog: alive=%s state=%s age=%s threshold=%.1fd testing_mode=%s "
+        "channel=%s(%s) expected=%s detail=%s",
+        alive, state, age_str, threshold, testing_mode, observed_title or "?",
+        observed_id or "?", expected or "unset", detail,
     )
 
     should_email = state in {"dead", "expiring", "wrong_channel"} or args.force_email
