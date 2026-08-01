@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>last30days — how the estate should use it</title>
+<style>
+  :root { color-scheme: light; }
+  body { background:#ffffff; color:#1f2328; font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; margin:0; }
+  main { max-width: 940px; margin: 0 auto; padding: 24px 20px 80px; }
+  h1 { font-size: 1.5em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h2 { font-size: 1.2em; margin-top: 1.7em; border-bottom: 1px solid #eaeef2; padding-bottom: .2em; }
+  code { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size: .88em; background:#f6f8fa; border-radius:6px; padding:.15em .35em; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size:.9em; }
+  th, td { border: 1px solid #d1d9e0; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  .ok { color:#1a7f37; font-weight:600; } .no { color:#cf222e; font-weight:600; } .maybe { color:#9a6700; font-weight:600; }
+  .tldr { background:#f0f6ff; border:1px solid #b6d4fe; border-radius:8px; padding: 12px 16px; }
+  .rank { font-weight:700; color:#0969da; white-space:nowrap; }
+  blockquote { margin: 1em 0; padding: .5em 1em; border-left: 4px solid #d1d9e0; color:#57606a; background:#fafbfc; }
+</style>
+</head>
+<body>
+<main>
+<h1>last30days — how the estate should use it</h1>
+<p><em>2026-08-01 · source video: <a href="https://www.youtube.com/watch?v=mi1flmYaLAk">"Google Can't Search This" — Hyperautomation Labs</a> (digested by a cheap model per operator instruction) · skill inspected at <code>.claude/skills/last30days</code> v3.3.2 (mvanhorn, MIT)</em></p>
+
+<div class="tldr"><strong>TL;DR.</strong> We already have the skill — it lives inside universal_agent as a project skill, newer than the video's install flow. Its differentiator is <em>social relevancy</em>: ranking by upvotes/likes/real-money (Polymarket) across walled gardens Google can't index, with a designed <strong>headless/cron engine path</strong> and native HTML/JSON/markdown emitters. We hold 2 of its useful keys (OpenAI, XAI); its free tier (Reddit + HN + Polymarket + GitHub) needs zero keys. The highest-leverage first move: a <strong>weekly Discovery-Mode "topic radar"</strong> feeding the intel pipeline and the Black Box channel's topic selection — one timer, evidence flows into the existing LLM briefing layer, no new pseudo-reasoning code.</div>
+
+<h2>1 · What the video shows (compressed)</h2>
+<table>
+<tr><th>Capability</th><th>What it does (as demoed)</th></tr>
+<tr><td><b>Person recon</b></td><td>One command → ranked cited brief on a person: their posts, appearances (with transcripts, so it quotes what they said aloud), press — "30 seconds before any meeting."</td></tr>
+<tr><td><b>Discovery mode</b></td><td>No topic — asks "what's exploding," ranked by <em>velocity</em>, each result with evidence and a ready follow-up command. The weekly topic radar move.</td></tr>
+<tr><td><b>Topic brief</b></td><td>Full community read on a named topic: X + YouTube + HN + Reddit + Polymarket odds in one ranked, linked brief.</td></tr>
+<tr><td><b>Tool showdowns</b></td><td>"X vs Y vs Z" → comparison with live GitHub stars and real user complaints (COMPARISON query type in the contract).</td></tr>
+<tr><td><b>Buyer's truth / hiring signals</b></td><td>Upvote-ranked real opinions before purchases; job postings as evidence of where a company is going.</td></tr>
+<tr><td><b>Artifacts + self-repair</b></td><td>Cited brief, self-contained HTML report, ELI5 re-explain, and a <code>doctor</code> command that probes every source and prescribes fixes — "no silent gaps."</td></tr>
+</table>
+
+<h2>2 · Ground truth of OUR install (code-verified, not from the video)</h2>
+<table>
+<tr><th>Fact</th><th>State</th></tr>
+<tr><td>Skill present</td><td class="ok">Yes — project skill in universal_agent, v3.3.2, with engine (<code>scripts/last30days.py</code>), <code>briefing.py</code>, <code>store.py</code>, agents/, references/</td></tr>
+<tr><td>Free sources (Reddit, HN, Polymarket, GitHub, web)</td><td class="ok">Zero keys needed (free Reddit can rate-limit at rush hour; the skill reports it rather than hiding it)</td></tr>
+<tr><td>Engine LLM planner / X coverage keys</td><td class="ok">OPENAI_API_KEY and XAI_API_KEY both live in Infisical prod</td></tr>
+<tr><td>Premium social scrape (TikTok/IG/LinkedIn)</td><td class="no">SCRAPECREATORS_API_KEY not held — those sources simply stay off</td></tr>
+<tr><td>X via logged-in session on the VPS</td><td class="maybe">Needs AUTH_TOKEN/CT0 cookies as env — a decision (session cookies in Infisical are sensitive); desktop interactive runs sidestep this</td></tr>
+<tr><td>Headless / cron operation</td><td class="ok">Designed-in: the engine's internal planner + deterministic fallback are documented as "headless/cron paths"; emits <code>json</code> / <code>md</code> / <code>html</code>; interactive runs use the host model as planner (<code>--plan</code>)</td></tr>
+<tr><td>Output discipline</td><td class="ok">Hardened contract (badge + 8 LAWs) born from real public regressions — the skill polices its own output shape</td></tr>
+</table>
+
+<h2>3 · Where it plugs into OUR automations — ranked</h2>
+<table>
+<tr><th></th><th>Proposal</th><th>Wiring</th><th>Why / effort</th></tr>
+<tr><td class="rank">R1</td><td><b>Weekly topic radar → intel + Black Box</b><br>(Discovery mode)</td><td>One systemd timer (in the 6–21 CT window): headless discovery run → JSON evidence into the existing morning-briefing LLM context + HTML report published to the scratchpad. Black Box topic selection reads the same radar — the channel is in a 7-day plateau precisely for want of a next-topic signal.</td><td>Highest value/effort ratio. Follows the LLM-native rule: engine collects evidence, the EXISTING briefing LLM synthesizes. ~half-day build.</td></tr>
+<tr><td class="rank">R2</td><td><b>Signal-card triage enrichment</b></td><td>Before a CSI signal card is promoted (127 pending today, 0 promoted), run a bounded topic brief; community velocity + engagement becomes a ranking feature the promoter LLM sees.</td><td>Directly attacks the flagged card backlog; bounded per-card cost. ~1 day incl. promoter prompt change.</td></tr>
+<tr><td class="rank">R3</td><td><b>Freelance-scout demand sensing</b></td><td>Weekly "what clients want in &lt;niche&gt;" + hiring-signals runs on target companies; evidence lands in the scout's scoring context and the AoD campaign research.</td><td>The scout digest already surfaces demand (Make.com, Stripe) — this widens its eyes beyond job boards. ~half-day.</td></tr>
+<tr><td class="rank">R4</td><td><b>Meeting/person recon on demand</b></td><td>Interactive: <code>/last30days &lt;person&gt;</code> pre-meeting (desktop, host-model planning — full quality). Optionally wired to calendar events via the existing meeting-prep pipeline.</td><td>Zero build to use today by hand; calendar hook ~half-day later.</td></tr>
+<tr><td class="rank">R5</td><td><b>Tool showdowns in design flows</b></td><td>When plan-arbiter / design docs face an X-vs-Y choice, a COMPARISON run supplies community evidence beside our judge panels.</td><td>Convention, not code: add to the design-skill checklists.</td></tr>
+</table>
+
+<h2>4 · Decision points for Kevin</h2>
+<table>
+<tr><th>Decision</th><th>Recommendation</th></tr>
+<tr><td>Buy SCRAPECREATORS_API_KEY (TikTok/IG/LinkedIn coverage)?</td><td>Defer. Free tier + X + YouTube covers our use cases; revisit if R3 (scout) wants LinkedIn hiring signals badly.</td></tr>
+<tr><td>Put X session cookies (AUTH_TOKEN/CT0) into Infisical for VPS headless runs?</td><td>Defer initially — run R1's radar on free sources + XAI first; add X cookies only if the radar's X blind spot proves costly. Desktop interactive runs already have full X via your logged-in browser.</td></tr>
+<tr><td>Which proposal first?</td><td><b>R1 (weekly radar)</b> — one timer, dormancy-respecting, feeds two hungry consumers (intel briefing + Black Box topics), and exercises the headless path we'd reuse everywhere else. Say the word and I'll build it.</td></tr>
+</table>
+
+<blockquote>One resonance worth naming: the skill's <code>doctor</code> philosophy — "no silent gaps," probe every source, print the failure and the fix — is exactly the lesson today's fleet triage taught us twice (the age-proxy OAuth watchdog, the recency-proxy health tile). If we adopt one cultural thing from this codebase, it's that: alerts and health surfaces should test the condition, not a proxy, and say what they actually measured.</blockquote>
+</main>
+</body>
+</html>
