@@ -1,9 +1,15 @@
 """Shared helpers for YouTube OAuth token health + the email-button re-auth flow.
 
-The YouTube OAuth refresh token expires roughly every 7 days because the
-Google OAuth app is still in "Testing" mode.  When it dies, the morning
-digest cron and the gold-channel poller both fail silently.  This module
-backs three callers that together make the weekly re-mint painless:
+Publishing-status history: while the Google OAuth app was in "Testing" mode,
+refresh tokens expired ~7 days after minting, and this module's age-based
+proactive warning drove a weekly one-tap re-auth.  The app is now published
+"In production" (console-verified 2026-08-01; empirically a token survived to
+9.6 days old with digests green, 2026-07-21..24), so refresh tokens no longer
+age out and the age warning is OFF by default — see
+:func:`testing_mode_expiry`.  Liveness (``invalid_grant``) and wrong-channel
+detection remain the real failure alarms either way.  When a token dies, the
+morning digest cron and the gold-channel poller both fail silently.  This
+module backs three callers that together make a re-mint painless:
 
 - ``scripts/youtube_oauth_watchdog.py`` — a daily cron that tests the
   token's liveness and computes its age, then emails a one-tap re-auth
@@ -63,8 +69,51 @@ START_PATH = "/api/v1/youtube-oauth/start"
 CALLBACK_PATH = "/api/v1/youtube-oauth/callback"
 
 # Default: warn once the token is >= 5 days old (the 7-day expiry leaves a
-# ~2-day lead). Override with UA_YOUTUBE_OAUTH_WARN_AGE_DAYS.
+# ~2-day lead). Override with UA_YOUTUBE_OAUTH_WARN_AGE_DAYS. Only consulted
+# when testing-mode expiry is enabled (see ``testing_mode_expiry``).
 DEFAULT_WARN_AGE_DAYS = 5.0
+
+# Age-based expiry warnings only apply while the OAuth app is in Google
+# "Testing" mode. The app is published "In production" (verified in the
+# Cloud Console 2026-08-01), so this defaults OFF. Flip it back on with
+# UA_YOUTUBE_OAUTH_TESTING_MODE=1 if the app is ever returned to testing.
+TESTING_MODE_KEY = "UA_YOUTUBE_OAUTH_TESTING_MODE"
+
+
+def testing_mode_expiry() -> bool:
+    """True when the OAuth app is treated as being in Google "Testing" mode.
+
+    In testing mode Google expires refresh tokens ~7 days after minting, so
+    the watchdog's proactive age warning is meaningful.  In production mode
+    (the current, console-verified state) tokens do not age out and the age
+    warning would be a weekly false alarm — the July 2026 evidence: a token
+    reached 9.6 days old while the digests stayed green.
+    """
+    return (os.getenv(TESTING_MODE_KEY) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_watchdog_state(
+    *,
+    alive: bool,
+    wrong_channel: bool,
+    age_days: float | None,
+    threshold: float,
+    testing_mode: bool,
+) -> str:
+    """The watchdog's one decision, as a pure function.
+
+    Priority: a dead token beats everything (the crons are broken NOW); a
+    live-but-wrong-channel token is next (silently broken reads); the
+    age-based "expiring" warning fires only in testing mode, where tokens
+    actually age out. Everything else is healthy.
+    """
+    if not alive:
+        return "dead"
+    if wrong_channel:
+        return "wrong_channel"
+    if testing_mode and age_days is not None and age_days >= threshold:
+        return "expiring"
+    return "healthy"
 
 
 def current_iso() -> str:
