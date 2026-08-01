@@ -67,7 +67,6 @@ from universal_agent.services.youtube_playlist_manager import (
     delete_playlist,
     get_playlist_items,
     get_playlist_metadata,
-    remove_playlist_item,
 )
 from universal_agent.utils.model_resolution import resolve_model
 from universal_agent.youtube_ingest import ingest_youtube_transcript

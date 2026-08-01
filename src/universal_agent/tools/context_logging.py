@@ -8,7 +8,7 @@ from pathlib import Path
 import time
 from typing import Any, Dict, List, Optional
 
-from claude_agent_sdk import SdkMcpTool, tool
+from claude_agent_sdk import tool
 
 # Paths to persistent storage
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent

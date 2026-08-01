@@ -13,7 +13,6 @@ import json
 from pathlib import Path
 import sqlite3
 from typing import List, Optional
-from uuid import UUID
 
 from .plan_schema import AtomicTask, Phase, Plan, TaskStatus
 

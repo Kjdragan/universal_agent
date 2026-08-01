@@ -842,7 +842,6 @@ from claude_agent_sdk.types import (
     AssistantMessage,
     ClaudeAgentOptions,
     HookContext,
-    HookJSONOutput,
     # Hook types for SubagentStop pattern
     HookMatcher,
     ResultMessage,
@@ -885,7 +884,6 @@ def setup_log_bridge(agent: UniversalAgent):
 
 
 from universal_agent.durable.checkpointing import (
-    load_corpus_cache,
     load_last_checkpoint,
     save_checkpoint,
 )
@@ -4087,7 +4085,6 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
         if not workspace_dir:
             print("⚠️ Harness: No workspace_dir global, skipping verification.")
         else:
-            import glob as _glob
             import json as _json
 
             mission_path = os.path.join(workspace_dir, "mission.json")
@@ -8404,16 +8401,6 @@ async def setup_session(
 
     # NOTE: Git checkpoint pattern removed - causes nested repo issues
     # File-based state (macro_tasks.json, session_progress.md) used instead
-
-    # =========================================================================
-    # =========================================================================
-    # 2. NON-BLOCKING AUTH FIX
-    # (Removed to restore interactive input for /harness command)
-    # =========================================================================
-    import builtins
-
-    # original_input = builtins.input (Not needed, keeping standard input)
-    # print("✅ Non-blocking input handler REMOVED (Interactive Mode)")
 
     # =========================================================================
     # 3. Initialize Composio    # User Identity

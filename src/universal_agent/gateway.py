@@ -1889,8 +1889,6 @@ class InProcessGateway(Gateway):
                 excluded from the disk scan.  In-memory (live) sessions are
                 always included regardless of age.  Pass 0 to include all.
         """
-        import stat as _stat
-
         summaries: list[GatewaySessionSummary] = []
         cutoff_seconds = since_hours * 3600 if since_hours > 0 else 0
         now_ts = time.time()

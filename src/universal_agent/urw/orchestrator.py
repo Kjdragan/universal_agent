@@ -375,8 +375,6 @@ class URWOrchestrator:
         
         return "\n\n".join(sections) + "\n\n" + context_base
 
-        return "\n\n".join(sections) + "\n\n" + context_base
-
     async def _execute_phase(self, phase: Phase) -> IterationResult:
         """Execute a phase (multiple tasks) in a single agent iteration."""
         self.total_iterations += 1
