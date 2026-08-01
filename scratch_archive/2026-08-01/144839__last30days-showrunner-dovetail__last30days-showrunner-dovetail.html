@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>last30days × episode_ideas showrunner — the dovetail</title>
+<style>
+  :root { color-scheme: light; }
+  body { background:#ffffff; color:#1f2328; font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; margin:0; }
+  main { max-width: 940px; margin: 0 auto; padding: 24px 20px 80px; }
+  h1 { font-size: 1.5em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h2 { font-size: 1.2em; margin-top: 1.7em; border-bottom: 1px solid #eaeef2; padding-bottom: .2em; }
+  code { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size: .88em; background:#f6f8fa; border-radius:6px; padding:.15em .35em; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size:.9em; }
+  th, td { border: 1px solid #d1d9e0; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  .ok { color:#1a7f37; font-weight:600; } .no { color:#cf222e; font-weight:600; } .maybe { color:#9a6700; font-weight:600; }
+  .tldr { background:#f0f6ff; border:1px solid #b6d4fe; border-radius:8px; padding: 12px 16px; }
+  .p { font-weight:700; color:#0969da; white-space:nowrap; }
+  blockquote { margin: 1em 0; padding: .5em 1em; border-left: 4px solid #d1d9e0; color:#57606a; background:#fafbfc; }
+</style>
+</head>
+<body>
+<main>
+<h1>last30days × the episode_ideas showrunner — dovetail, not rival</h1>
+<p><em>2026-08-01 · after investigating session e786ecfc (transcript digest) + the showrunner seed spec + the live repo state. Written for the decision: does last30days supplement, replace, or stay out of the topic-ideas system?</em></p>
+
+<div class="tldr"><strong>TL;DR.</strong> Keep the custom build exactly as it is — it's excellent, live, and already <em>planned</em> for this: the showrunner's settled spec lists last30days as decision <b>D-sources #3, "the screener's per-candidate multi-source validation sweep."</b> The investigate session reserved the slot before I ever looked at the skill. You were also right to shoot down my weekly "zeitgeist radar" — <b>withdrawn</b>. What replaces it: two <b>on-demand, near-zero-cost adapters</b> that serve the showrunner's actual stages — (P1) a per-candidate community-evidence sweep that grounds scoring and puts conviction evidence on your greenlight cards, and (P2) your own idea: a discovery run diffed by a cheap model against what the screener already saw, surfacing only what the corpus + X pulse missed. Nothing changes in episode_ideas until you say so; I'd build the adapter on the universal_agent side (where the skill lives) behind a stable JSON contract, prove it on this week's real candidates, and the build session wires it in whenever ready.</div>
+
+<h2>1 · What the other session built (so you know I'm up to speed)</h2>
+<table>
+<tr><th>Stage</th><th>How it works today</th></tr>
+<tr><td>Ingest</td><td>Two lanes: the VPS transcript corpus (<code>csi.db::youtube_transcripts</code>, ~22 gold channels, read-only) + the X pulse (Grok <code>x_search</code>, 3 lanes: official handles / beat / discovery, ~$9–14/mo measured)</td></tr>
+<tr><td>Score</td><td>One <b>GLM</b> structured call per item → demoability / relatability / uniqueness + 2–3 angles + a <code>demo_seed</code>; your taste rubric encoded (agentic capabilities &gt; model releases; bare model launches score 0–3 demoability)</td></tr>
+<tr><td>Deliver + gate</td><td>Hot (≥7.5) → immediate phone card; rest → 06:25 digest. Pocket-approvals greenlight with voice angle-steering ("buttons decide, words steer")</td></tr>
+<tr><td>Build + bank</td><td>Greenlight → eager <code>build_demo.py</code> dispatch (ZAI, serialized, $0.004/build measured) → demo bank</td></tr>
+<tr><td>State</td><td>Five systemd timers live; all 13 PRs merged; first calibration: <b>247 screened → 72 kept → 16 hot → 12 cards → 0 greenlit</b> (7 expired, 4 passed)</td></tr>
+</table>
+<p>Verdict: keep it. It is exactly the "custom building" you like, the seams are clean (everything composed by CLI/file contract), and nothing I propose touches its internals.</p>
+
+<h2>2 · The coverage triangle — why a supplement adds anything at all</h2>
+<table>
+<tr><th>Source</th><th>Sees</th><th>Blind spot</th></tr>
+<tr><td>Gold-channel corpus</td><td>What good AI YouTubers already made videos about</td><td><b>Late by construction</b> — a topic appears only after someone else shipped a video on it (fast-follow signal, not early signal)</td></tr>
+<tr><td>X pulse (Grok)</td><td>Announcements + the curated-handle conversation</td><td>One garden; curated handles = your chosen bubble; metered $</td></tr>
+<tr><td><b>last30days</b></td><td>Reddit + Hacker News velocity, GitHub trending, Polymarket money, web — the gardens that move <em>before</em> YouTube does</td><td>No taste, no demoability sense — raw community heat only</td></tr>
+</table>
+<p>That's the dovetail: the showrunner has taste and orchestration but two YouTube/X-shaped eyes; last30days is a third eye on the community-first gardens, with zero marginal cost (free sources; X via the XAI key the showrunner already pays for; the engine's headless mode needs <b>no LLM at all</b> — evidence collection is deterministic Python).</p>
+
+<h2>3 · Proposals — on-demand, each serving a real showrunner stage</h2>
+<table>
+<tr><th></th><th>What</th><th>Wiring (their seams, untouched)</th><th>Cost</th></tr>
+<tr><td class="p">P1</td><td><b>Per-candidate validation sweep</b> — the spec's own D-sources #3. Given a candidate topic, an on-demand run returns evidence JSON: who's talking across gardens, engagement counts, GitHub stars, Polymarket odds, velocity.</td><td>Two consumption points, both additive: (a) an evidence excerpt joins the GLM <code>score_item</code> prompt so uniqueness ("are we actually early?") and relatability are grounded in community data instead of model priors; (b) hot cards carry 2–3 evidence bullets. Hypothesis worth testing: 12 cards → <b>0 greenlit</b> may partly be cards lacking conviction evidence — this is the cheapest way to find out.</td><td>~$0 (free sources + existing XAI key; GLM only if summarized). ~16 hot candidates/week ≈ nothing.</td></tr>
+<tr><td class="p">P2</td><td><b>Discovery gap-check</b> — your idea, verbatim: "screen with a low model and see if there's anything else from your runs that could add." A discovery-mode run (velocity-ranked "what's exploding"), then a <b>GLM</b> diff against the week's <code>screened</code> table; only topics the corpus + X pulse <em>missed</em> enter as a third lane.</td><td>Modeled on <code>xpulse.py</code>, the repo's own reference template for a new source lane: same item shape → <code>score_item</code> → <code>Store.add_candidate</code> → normal delivery. Dedup via synthetic uid (<code>l30d:&lt;hash&gt;</code>). On-demand first; 2–3×/week timer only if it earns it.</td><td>~$0 (free sources; GLM diff on flat plan).</td></tr>
+<tr><td class="p">P3</td><td><b>Fast-follow timing check</b> — D-fast-follow support. Before greenlighting a fast-follow, one on-demand brief answers "rising or peaked?" (HN points trajectory, Reddit velocity, Polymarket where applicable) — the same-day-demo decision aid.</td><td>P1's adapter invoked at a different moment; zero extra build.</td><td>~$0.</td></tr>
+</table>
+
+<h2>4 · Interface + build plan (compose, never absorb)</h2>
+<table>
+<tr><th>Piece</th><th>Where</th><th>Who</th></tr>
+<tr><td><code>last30days_sweep</code> CLI — topic in, evidence JSON out (stable contract, like <code>build_demo.py</code>'s <code>BUILD_DEMO: PASS|FAIL</code> pattern)</td><td><b>universal_agent</b>, beside the skill it wraps (<code>.claude/skills/last30days</code> engine invoked headless; free sources + XAI)</td><td>Me — buildable now without touching episode_ideas; I'd prove it by running it against real candidates from this week's screened list and showing you the evidence quality</td></tr>
+<tr><td>The episode_ideas lane (<code>l30d</code> source module + <code>[seams].last30days_cli</code> config)</td><td><b>episode_ideas</b> — their repo, their template</td><td>The build session, whenever you're ready — or me, later, with your word; <b>nothing changes there yet</b>, per your instruction</td></tr>
+</table>
+
+<h2>5 · Direct answers to your questions</h2>
+<table>
+<tr><th>Question</th><th>Answer</th></tr>
+<tr><td>Was the weekly radar just a zeitgeist digest?</td><td class="maybe">Yes — as scoped it was purposeless. Withdrawn. Your skepticism was correct.</td></tr>
+<tr><td>Dovetail / supplement / replace?</td><td class="ok">Supplement only. The showrunner owns taste, state, and orchestration; last30days is a stateless evidence tool it calls. Replacement is off the table — and the showrunner's own spec already agrees.</td></tr>
+<tr><td>Low-cost?</td><td class="ok">The engine's headless evidence collection uses <b>no LLM</b>; sources are free (Reddit/HN/Polymarket/GitHub/web) + the XAI key already funded; screening rides GLM's flat plan. Marginal cost of all three proposals ≈ $0.</td></tr>
+<tr><td>On-demand skills for processes like that session's?</td><td class="ok">That's the whole reshape: P1/P3 are per-candidate on-demand calls; P2 runs on demand until it proves worth a timer. No standing cron until a consumer demands one.</td></tr>
+</table>
+
+<blockquote><b>What I need from you:</b> one word on P1+P2 as the build order (the <code>last30days_sweep</code> CLI first, proven against this week's real candidates before anything touches episode_ideas) — or tell me to hold everything until the showrunner's greenlight→bank leg has fired live at least once, which is a perfectly reasonable sequencing too.</blockquote>
+</main>
+</body>
+</html>
