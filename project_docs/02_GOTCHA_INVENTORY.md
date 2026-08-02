@@ -4,7 +4,7 @@ status: active
 canonical: true
 subsystem: meta-documentation
 code_paths: []
-last_verified: 2026-05-30
+last_verified: 2026-08-02
 ---
 
 # Gotcha & Operational-Fact Inventory
@@ -17,11 +17,34 @@ last_verified: 2026-05-30
 > - **rationale** facts → carried as asserted context (the *why*), marked not-code-verified.
 > - `appears_still_valid: no/uncertain` items get extra scrutiny; genuinely-uncertain → flag to operator.
 
-**Counts:** 61 operational, 11 rationale. (68 code-behavior gotchas omitted here — those are re-derived directly from code.) *Harvest was 59 operational; +2 added 2026-05-30 (CSI category vocabulary, OMC worktree-cancel).*
+**Counts:** 70 operational, 11 rationale. (68 code-behavior gotchas omitted here — those are re-derived directly from code.) *Harvest was 59 operational; +2 added 2026-05-30 (CSI category vocabulary, OMC worktree-cancel); +9 added 2026-08-02 (golden-nuggets forensics diagnostic traps).*
 
 ## Operational / environmental facts
 
-### Still valid (preserve) — 55
+### Still valid (preserve) — 64
+
+<!-- 2026-08-02: diagnostic traps from the golden-nuggets forensics. Each one produced a
+     confidently WRONG conclusion before it was caught; they are recorded as read-the-evidence
+     rules, not as facts about that one job. -->
+
+- **`systemd` `MemoryPeak` is a CLAMP reading when the cgroup is pinned at `MemoryMax` — never read demand off a limit the job is sitting on.** Tell: the peak lands a few hundred KB *above* a round power of two (per-CPU `MEMCG_CHARGE_BATCH` slop, `nr_cpus × 64` pages) and is identical to the decimal across runs while `MemorySwapPeak` varies 10×. Real demand = resident + swapped; get it from the kernel memcg OOM dump in `/var/log/kern.log`, not from `systemctl show`.
+  - *source:* `project_docs/04_intelligence/15_demo_tutorial_pipeline_adr.md § UPDATE 2026-08-02`
+- **`systemctl show … -p Result` is NOT incident evidence — `systemctl reset-failed` clears it.** A diagnostic session that ran `reset-failed` will leave `Result=success` on a run that actually failed. `ExecMainCode` / `ExecMainStatus` / `ExecMain*Timestamp` are untouched by `reset-failed` and are the load-bearing fields; the journal's `Failed with result '…'` is the other source of truth.
+  - *source:* `project_docs/04_intelligence/15_demo_tutorial_pipeline_adr.md § UPDATE 2026-08-02`
+- **A `Type=oneshot` unit DESTROYS its cgroup on exit**, so `memory.events` (the `high`/`max`/`oom` counters) and `memory.pressure` are unreadable post-hoc — `systemd` retains only `MemoryPeak`/`MemorySwapPeak`. Capture them with `ExecStopPost=`, which runs *inside* the still-live cgroup and also fires on abnormal exits (verified empirically). Reference implementation: `scripts/nuggets_cgroup_postmortem.sh`.
+  - *source:* `scripts/nuggets_cgroup_postmortem.sh`
+- **`journalctl -u <unit>` as an unprivileged user returns the service's own stdout but NOT the `systemd[1]` lifecycle lines** (`Starting` / `Deactivated` / `Failed with result` / `Consumed`). Any tool that decides "did this run fire?" from a non-root journal read will report a healthy run as *never fired*. Escalate to `sudo -n journalctl` when the lifecycle lines are absent.
+  - *source:* `scripts/nuggets_health_report.py` (`_journal`)
+- **`subprocess.run(argv, timeout=N)` kills ONLY the direct child.** Grandchildren (e.g. a `claude` CLI and its MCP servers spawned via `uv run`) are orphaned, re-parent to PID 1, and — because cgroup membership is inherited at fork and does NOT change on re-parenting — **stay in the systemd unit's cgroup**, still charged against `MemoryMax` and outliving the main process. Spawn with `start_new_session=True` and reap with `os.killpg(SIGTERM→SIGKILL)`. See `services/proactive_demo_nuggets.py::_kill_build_process_group`.
+  - *source:* `src/universal_agent/services/proactive_demo_nuggets.py`
+- **The installer list in `scripts/deploy/remote_deploy.sh` is ENUMERATED, not auto-discovered.** A new `scripts/install_vps_*.sh` that isn't explicitly invoked there never runs — the unit silently never exists, which reads identically to "the timer isn't firing".
+  - *source:* `scripts/deploy/remote_deploy.sh`
+- **`demo_factory` on the VPS (`/home/ua/lrepos/demo_factory`) is pulled MANUALLY** — `remote_deploy.sh` has no `demo_factory` step. Its config can therefore change production behavior with no deploy, no CI, and no announcement; `git reflog` on that checkout is the change record that explains a behavior shift, not this repo's git log.
+  - *source:* `scripts/deploy/remote_deploy.sh`
+- **`demo_factory/lessons/build_stats.jsonl` is an INCOMPLETE ledger — do not use it to answer "when did we last land?"** It held 21 rows while the per-demo `eval_report.json` files showed many later passes; reading it produced a two-week false alarm. The authoritative per-build fidelity record is each workspace's `eval_report.json` (`verdict.status`, `verdict.votes`, `_vote.samples_requested` vs `_vote.samples_ok`).
+  - *source:* `scripts/nuggets_health_report.py` (`_land_history`)
+- **Claude Code reasoning effort defaults to `high`** on every model that supports it (except Opus 4.7, which defaults to `xhigh`) — it is *not* `medium`, so "raise it to high" is a no-op. Opus 5 / Sonnet 5 / Opus 4.8 / Opus 4.7 support `low|medium|high|xhigh|max`. Set it via the `CLAUDE_CODE_EFFORT_LEVEL` env var (the only lever available when you cannot change the spawning argv) or the `--effort` flag.
+  - *source:* `https://code.claude.com/docs/en/model-config` § Adjust effort level
 
 - Dual Claude environments on VPS: ZAI-mapped (default, cheap GLM models) vs Anthropic-native (/opt/ua_demos/, real Claude Max plan OAuth). Mistaking one for the other is the #1 source of confusion.
   - *source:* `docs/README.md § Dual Claude Environments on VPS`
