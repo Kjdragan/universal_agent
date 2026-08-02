@@ -25,11 +25,8 @@ from typing import Any, Optional
 
 from universal_agent import task_hub
 from universal_agent.services.proactive_budget import (
-    DEFAULT_DAILY_BUDGET,
     get_budget_remaining,
     get_daily_proactive_count,
-    has_daily_budget,
-    increment_daily_proactive_count,
 )
 
 logger = logging.getLogger(__name__)

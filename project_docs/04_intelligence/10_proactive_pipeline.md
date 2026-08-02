@@ -181,9 +181,11 @@ wiring differs — some run continuously, some ship scaffolding only.
 > **History (2026-06-20):** for its entire prior history, **zero** `source_kind='reflection'`
 > rows were ever created. Two faults stacked, both now fixed:
 > - **(a) Activation** was wedged shut by the `has_heartbeat_content` skip term (Phase 1 —
->   activation is now reachable and **paced** via `proactive_budget.should_ideate_now`, so
->   the daily budget spreads across the overnight window instead of bursting at the reset;
->   see [Heartbeat Service § guard policy](../03_agents/03_heartbeat_service.md)).
+>   activation is now reachable and **paced** via `proactive_budget.should_ideate_now`, which
+>   spreads firing across the day instead of bursting right after the reset (jittered
+>   min-interval) and, as of T14, only fires inside the Houston 06:00–22:00 active window at
+>   all — see "Gate 2 — daily budget" below and
+>   [Heartbeat Service § guard policy](../03_agents/03_heartbeat_service.md)).
 > - **(b) Creation** — the prompt told the agent to create with `task_hub_task_action`
 >   (lifecycle-only, cannot create) while the real `task_hub_create` tool was unregistered.
 >   Phase 2a registered `task_hub_create_wrapper` in `tools/internal_registry.py::get_core_internal_tools`,
@@ -745,6 +747,34 @@ signal exists, the task passes (benefit of the doubt). On any error the gate
 counting only `source_kind in ('proactive_signal','reflection')`.
 Cron/`system_command` tasks are never counted. Counter resets at the UTC date
 boundary.
+
+> **T14 (2026-08-02): the counter now advances only on a real task creation.**
+> Before this fix, `heartbeat_service.py`'s reflection branch called
+> `increment_daily_proactive_count` the moment it built and injected a reflection
+> prompt — a heartbeat tick that gets the prompt is not guaranteed to actually
+> create a task (the model may propose nothing, error out, or get interrupted),
+> so the budget over-counted relative to real `reflection`/`proactive_signal`
+> Task Hub rows. The increment now lives in `task_hub.py::upsert_item`, firing
+> exactly once, only on the first INSERT of a task_id with one of those two
+> `source_kind`s — never on a re-upsert of an existing item.
+>
+> **Split keys.** `proactive_budget.py` now tracks two separate date-scoped
+> counters: `proactive_daily_budget_counter` (the real budget above) and a new
+> `proactive_ideation_ticks` — how many times ideation actually fired (prompt
+> built + injected), independent of task creation. `has_ideation_tick_budget`
+> (default ceiling 20, `UA_PROACTIVE_IDEATION_TICK_BUDGET`) backstops the case
+> where the model keeps declining to propose anything: since that never
+> advances the real budget counter, without a separate tick ceiling nothing
+> would stop ideation from firing (and burning inference) on every eligible
+> heartbeat tick all day.
+>
+> **Active-window gate.** `proactive_budget.should_ideate_now` now also refuses
+> outside the Houston 06:00–22:00 active window (`services/dormancy.py`) before
+> its existing jittered min-interval pacing — ideation is exactly the
+> content-generation work that window exists for (proposals only surface in
+> the next morning's ideation report, so firing overnight just burns quota to
+> produce intelligence nobody reads until morning). See
+> [Dormancy & Operating Hours](../08_operations/03_dormancy_and_operating_hours.md).
 
 > **The daily budget governs ONLY the Simone ideation track now.** The
 > `proactive_signal` half of this counter is **legacy** — the signal-curation

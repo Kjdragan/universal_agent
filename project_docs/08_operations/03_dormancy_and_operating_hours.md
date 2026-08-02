@@ -225,6 +225,12 @@ tz), or an explicit IANA name.
   evaluates staleness during active hours (`6 <= now.hour <= 21`), returning `None`
   (no violation) during dormancy so it doesn't false-fire on the expected overnight
   gap.
+- `proactive_budget.should_ideate_now` (added T14, 2026-08-02) — the
+  reflection/ideation pacer in `heartbeat_service.py`'s reflection branch calls
+  `dormancy.is_active_window` before its jittered min-interval check; ideation
+  proposals only surface in the next morning's ideation report, so firing
+  overnight just burns quota to produce intelligence nobody reads until
+  morning. See [Proactive Pipeline § Gate 2 — daily budget](../04_intelligence/10_proactive_pipeline.md).
 
 ## Crons exempt from the dormancy window
 
