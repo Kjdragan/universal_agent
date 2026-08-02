@@ -424,3 +424,81 @@ def test_nuggets_max_default_is_three(monkeypatch):
 
     monkeypatch.delenv("UA_PROACTIVE_DEMO_NUGGETS_MAX", raising=False)
     assert feature_flags.proactive_demo_nuggets_max() == 3
+
+
+# ── build-subprocess process-group containment ────────────────────────────────
+# Regression guard for the defect that produced BOTH nightly failures:
+# a bare ``subprocess.run(argv, timeout=N)`` kills only the direct child, so the
+# ``claude`` CLI grandchildren are ORPHANED. Orphans re-parent to PID 1 but stay
+# in the systemd unit's cgroup, keep counting against MemoryMax, and outlive the
+# main process (2026-07-27 oom-kill; 2026-08-01 result=timeout).
+def _spawn_grandchild_script(marker_seconds: str) -> list[str]:
+    """argv for: sh -> python -> `sleep <marker>` (the orphan-prone grandchild)."""
+    inner = (
+        "import subprocess,time;"
+        f"subprocess.Popen(['sleep','{marker_seconds}']);"
+        f"time.sleep({marker_seconds})"
+    )
+    return ["sh", "-c", f'python3 -c "{inner}"']
+
+
+def _count_marker_procs(marker_seconds: str) -> int:
+    out = subprocess.run(
+        ["pgrep", "-x", "-f", f"sleep {marker_seconds}"],
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    return len(out)
+
+
+@pytest.mark.timeout(60)
+def test_build_runner_timeout_reaps_the_whole_process_group(monkeypatch):
+    """On timeout the build's grandchildren must NOT survive.
+
+    Without ``start_new_session=True`` + ``os.killpg`` this test fails with one
+    surviving ``sleep`` — exactly the orphaned ``claude`` tree seen in production.
+    """
+    import os
+    import signal
+    import time
+
+    marker = "2913"  # unique duration doubles as the pgrep marker
+    # NB: _build_timeout_seconds() floors env overrides at 60s, so stub it directly.
+    monkeypatch.setattr(nuggets, "_build_timeout_seconds", lambda: 3)
+
+    def _cleanup():
+        subprocess.run(["pkill", "-9", "-x", "-f", f"sleep {marker}"], capture_output=True)
+        time.sleep(0.3)
+
+    _cleanup()
+    assert _count_marker_procs(marker) == 0, "dirty precondition"
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            nuggets._default_build_runner(_spawn_grandchild_script(marker))
+        time.sleep(1.0)
+        survivors = _count_marker_procs(marker)
+        assert survivors == 0, (
+            f"{survivors} orphaned grandchild process(es) survived the build timeout; "
+            "the build subprocess must run in its own process group and be killed with killpg"
+        )
+    finally:
+        _cleanup()
+
+    # The runner must also put the build in its OWN process group, so that
+    # killpg targets the build tree and never the cron's own process group.
+    proc = subprocess.Popen(["sleep", "5"], start_new_session=True)
+    try:
+        assert os.getpgid(proc.pid) != os.getpgid(os.getpid())
+    finally:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        proc.wait()
+
+
+@pytest.mark.timeout(60)
+def test_build_runner_returns_completedprocess_on_success():
+    """The Popen rewrite must preserve the CompletedProcess contract callers use."""
+    proc = nuggets._default_build_runner(["sh", "-c", "printf out; printf err 1>&2; exit 7"])
+    assert isinstance(proc, subprocess.CompletedProcess)
+    assert proc.returncode == 7
+    assert proc.stdout == "out"
+    assert proc.stderr == "err"

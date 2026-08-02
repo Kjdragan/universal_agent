@@ -159,6 +159,33 @@ demo. A non-ok finalize stays on the unchanged default close path.
 
 ### End-of-day golden-nuggets judge (Component D — SHIPPED, default OFF)
 
+> **UPDATE 2026-08-01 — build subprocess now runs in its OWN PROCESS GROUP (the real cause of the nightly failures).**
+> `proactive_demo_nuggets.py::_default_build_runner` used a bare
+> `subprocess.run(argv, capture_output=True, timeout=_build_timeout_seconds())`. On timeout CPython
+> kills only the **direct** child (`uv`); `build_demo.py`'s `claude` CLI grandchildren (and their MCP
+> servers) were **orphaned**. Orphans re-parent to PID 1 but **stay in the systemd unit's cgroup**, so
+> they keep counting against `MemoryMax` and outlive the main process. That one defect produced both
+> observed failures:
+> - **2026-07-27 `result=oom-kill`** — build 1 timed out at exactly 3600s (`04:52:07 → 05:52:07`),
+>   orphaning its `claude` tree; build 2 started `05:52:07` with the orphan still resident and the
+>   cgroup blew the then-current `MemoryMax=1G` **3m37s later** (`05:55:44`).
+> - **2026-08-01 `result=timeout`** — the main python **exited 0** at `06:36:47`
+>   (`ExecMainCode=1`/`ExecMainStatus=0`, peak 1.0G RSS + 1.16G swap, 23m CPU over 1h46m wall), but two
+>   orphaned `claude` processes remained in the cgroup, ignored SIGTERM through both kill phases
+>   (`Failed to kill control group …: Invalid argument`), and systemd labelled the whole run a timeout.
+>   **The job itself had already succeeded, swipe included.**
+>
+> Fix: `_default_build_runner` now uses `subprocess.Popen(..., start_new_session=True)` and, on timeout
+> or any abnormal exit, `_kill_build_process_group` escalates SIGTERM → SIGKILL across the whole process
+> group before re-raising `TimeoutExpired` (the `CompletedProcess` contract is preserved). Regression
+> guard: `tests/unit/test_proactive_demo_nuggets.py::test_build_runner_timeout_reaps_the_whole_process_group`
+> (verified to FAIL against the old runner). Note `_build_timeout_seconds()` floors env overrides at 60s,
+> so tests stub the function rather than the env var.
+>
+> Not the cause: the candidate pool is **not** accumulating — measured 2026-08-01, the open un-built
+> `tutorial_build` pool is **14** rows (cancelled 767), inflow a flat 10–19/day. The killed-run-skips-swipe
+> path is real (07-27 swept 0) but self-heals (07-28 swept 31, ≈2 days' inflow).
+
 > **UPDATE 2026-07-14 — operator-tuned "gather all day, judge & build the best few at night, reset to zero" loop (LIVE).** Five changes shipped together:
 > 1. **PATH fix (was silently failing every night).** The nuggets systemd unit set no `PATH`, so it couldn't find the `claude` binary (`/home/ua/.local/bin`); the auth probe raised `FileNotFoundError` → `auth_label="invalid"` → `goal_build` silently DRYRAN → `build_demo.py` landed a template stub → verify FAIL → **exit 3 every night**. Fixed by `Environment=PATH=/home/ua/.local/bin:…` on the unit. (Root cause was env/PATH, **not** GLM vs Anthropic — nuggets builds run `--cody-mode hybrid` = Anthropic-Max Opus.)
 > 2. **`proactive_demo_nuggets_max` default `2 → 3`** — the end-of-day judge now builds the best **0–3** leftovers.
