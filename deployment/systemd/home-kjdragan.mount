@@ -1,0 +1,37 @@
+[Unit]
+# Desktop bridge (SSHFS): resolves /home/kjdragan/... on the VPS at the SAME
+# absolute path as on mint-desktop (the "Path Guarantee" in CLAUDE.md).
+#
+# THIS UNIT DELIBERATELY REPLACES AN /etc/fstab ENTRY. Do NOT move it back.
+# systemd-fstab-generator runs on EVERY `systemctl daemon-reload` and, for each
+# fstab entry, canonicalizes the mount point (chase() -> openat()/statx()). When
+# this SSHFS mount is wedged (desktop asleep / unreachable) that statx() blocks
+# in uninterruptible D state, the generator never exits, and systemd kills the
+# generator sandbox at the hard 90 s DEFAULT_TIMEOUT_USEC. Every daemon-reload
+# then costs 90.3 s instead of ~0.5 s, and a deploy (63 reloads) blows the
+# workflow's `timeout 30m` with exit 124. Measured on uaonvps 2026-08-02:
+# wedged + in fstab = 90.42 s; wedged + native unit = 0.41 s.
+# See project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md.
+Description=Desktop bridge (SSHFS): mint-desktop:/home/kjdragan
+Documentation=https://github.com/Kjdragan/universal_agent/blob/main/project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Mount]
+What=__BRIDGE_USER__@__BRIDGE_PEER__:/home/kjdragan
+Where=/home/kjdragan
+Type=fuse.sshfs
+# `reconnect` is load-bearing: it is the only reason the bridge has ever healed
+# itself in place (observed 2026-08-01T17:53:18Z) without an unmount. Do not
+# drop it to make wedges fail fast — the de-fstab-ing above already gives us
+# fast reloads, so we keep the self-healing for free.
+# fstab-only directives (_netdev, nofail, x-systemd.*) are intentionally absent:
+# After=tailscaled.service is strictly more correct than _netdev here.
+Options=allow_other,IdentityFile=__BRIDGE_IDENTITY__,StrictHostKeyChecking=accept-new,ServerAliveInterval=15,ServerAliveCountMax=3,reconnect
+TimeoutSec=30
+# No fstab equivalent. These are what let the bridge watchdog actually detach a
+# hung FUSE mount instead of leaving a non-empty unit cgroup, which is what made
+# the two manual "just unmount it" attempts (07-31, 08-01) leave the automount
+# dead with Result=resources instead of recovering.
+LazyUnmount=yes
+ForceUnmount=yes

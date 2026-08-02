@@ -1,0 +1,10 @@
+[Unit]
+Description=Universal Agent desktop-bridge (SSHFS) wedge watchdog
+Documentation=https://github.com/Kjdragan/universal_agent/blob/main/project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md
+
+[Service]
+Type=oneshot
+ExecStart=/opt/universal_agent/scripts/vps_bridge_unwedge.sh
+# The detector samples for SAMPLES*INTERVAL (default 60s) before acting; cap
+# well above that but far below the timer interval so runs never overlap.
+TimeoutStartSec=150

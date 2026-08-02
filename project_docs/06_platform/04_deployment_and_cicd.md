@@ -283,6 +283,18 @@ Deploy renders + installs canonical units from repo templates (`deployment/syste
 
 The job's `timeout-minutes: 35` accommodates the worst-case cold build.
 
+### Deploy exit 124 (installer block stalls) — diagnose in 30 seconds
+
+```bash
+ssh uaonvps 'bash -lc "grep -c fuse.sshfs /etc/fstab; \
+  sudo journalctl _PID=1 --since -1h | grep -c \"Failed to fork off sandboxing environment\"; \
+  time sudo systemctl daemon-reload"'
+```
+
+`fuse.sshfs` in `/etc/fstab` **must be 0** and a healthy `daemon-reload` is **< 1.5 s**. A non-zero EPROTO count plus a ~90 s reload means a systemd *generator* is blocked on the wedged `/home/kjdragan` SSHFS bridge: `systemd-fstab-generator` `statx()`s every fstab mount point on every reload, that call hangs uninterruptibly on a wedged FUSE mount, and systemd kills the generator sandbox at its hard 90 s `DefaultTimeoutStartSec` (load-independent — it is a timeout, not slowness). The deploy performs ~63 reloads (20 explicit + ~43 implicit, since `systemctl enable`/`disable` reload unless given `--no-reload`), so the installer block runs ~95 min and `timeout 30m ssh` kills it. Fix: `sudo bash /opt/universal_agent/scripts/install_vps_desktop_bridge.sh` (evicts the fstab entry; runs automatically every deploy), then unwedge the bridge per [`06_networking_tailscale_proxy_sshfs.md`](06_networking_tailscale_proxy_sshfs.md) §3.1. The deploy log's `[reload-canary]` line and its `::warning::` annotation surface this directly.
+
+**Exit 124 ≠ exit 255.** 255 means the connection dropped and the deploy probably *succeeded* — run the Rule-A `/api/v1/version` SHA check. 124 means `timeout 30m` fired and the deploy genuinely did **not** finish, though services stay up on the prior code.
+
 ### How code gets shipped: `/ship`
 
 The operator/agent path is the `/ship` slash command: commit + push the current branch, open a PR to `main`, and self-enable auto-merge. It refuses to run from `main`. `gh pr create --base main` is the manual equivalent. After opening a PR, autonomous sessions **watch, don't poll** — `gh pr checks <pr> --watch` (backgrounded) — and rely on the Deploy Notify Telegram ping as the deploy-side signal rather than polling `/api/v1/version`.

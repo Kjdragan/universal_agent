@@ -236,6 +236,17 @@ trap cleanup_deployment_window EXIT
 # Schedule automatic cleanup of the flag after 25 minutes (covers worst-case startup)
 (sleep 1500 && rm -f /tmp/ua-deployment-window) </dev/null >/dev/null 2>&1 &
 
+# MUST run BEFORE the first daemon-reload of the installer block. It evicts the
+# desktop SSHFS bridge from /etc/fstab, which is what stops systemd-fstab-generator
+# from path-walking into a wedged FUSE mount on every reload and burning a hard
+# 90.3s each time (that is the exit-124 deploy timeout — see the installer header
+# and project_docs/06_platform/04_deployment_and_cicd.md). Non-fatal by design:
+# the deploy itself never reads /home/kjdragan, so a bridge-installer failure
+# must not fail a deploy.
+echo "--> Converging desktop SSHFS bridge to native systemd units (fstab eviction)..."
+sudo bash "$PROD_DIR/scripts/install_vps_desktop_bridge.sh" \
+  || echo "WARN: install_vps_desktop_bridge.sh failed (non-fatal)"
+
 echo "--> Installing canonical production systemd units from repo templates..."
 sudo bash "$PROD_DIR/scripts/install_vps_systemd_units.sh" --lane production --app-root "$PROD_DIR"
 echo "--> Installing canonical VP worker unit template from repo..."
@@ -456,6 +467,31 @@ if [ -d "$PROD_DIR/.claude/skills" ]; then
   ls -1 /home/ua/.claude/skills 2>&1 | sed 's/^/  /' | head -20 || true
 else
   echo "  (no .claude/skills/ dir in repo — skipping skill sync)"
+fi
+
+sudo bash "$PROD_DIR/scripts/install_vps_bridge_watchdog.sh" \
+  || echo "WARN: install_vps_bridge_watchdog.sh failed (non-fatal)"
+
+# --- daemon-reload canary ---------------------------------------------------
+# The installer block above performs ~63 daemon-reloads (20 explicit + ~43
+# implicit from `systemctl enable`/`disable`, which reload unless given
+# --no-reload). A healthy reload is <1.5s; a reload blocked on a wedged
+# generator costs a hard 90.3s, so a wedge turns this block into ~95 min and
+# `timeout 30m ssh` kills the deploy with exit 124.
+#
+# Until 2026-08-02 this failure produced NO signal at all — 16 of 18 installers
+# swallow errors via `|| echo WARN` and nothing was timed — so the first
+# evidence was the workflow being killed. That is why diagnosing it took days of
+# journalctl forensics. This canary makes it a one-line annotation instead.
+echo "--> Reload canary (detects a stalled systemd generator)..."
+_canary_start=$(date +%s)
+sudo systemctl daemon-reload || true
+_canary_elapsed=$(( $(date +%s) - _canary_start ))
+echo "[reload-canary] daemon-reload took ${_canary_elapsed}s"
+if [ "$_canary_elapsed" -ge 60 ]; then
+  _eproto=$(sudo journalctl _PID=1 --since "-10min" --no-pager 2>/dev/null \
+    | grep -c "Failed to fork off sandboxing environment" || true)
+  echo "::warning::Slow systemd daemon-reload (${_canary_elapsed}s, expected <2s). A systemd generator is blocked, almost always on a wedged FUSE/SSHFS mount. EPROTO events in last 10min: ${_eproto}. Check: grep -c fuse.sshfs /etc/fstab (must be 0) and systemctl status home-kjdragan.automount"
 fi
 
 echo "--> Restarting production services..."
