@@ -2721,9 +2721,15 @@ class HooksService:
                         if isinstance(execution_summary, dict)
                         else summary_text
                     )
+                    # Default False, not True: the `sender_trusted` key is
+                    # absent from metadata on essentially every real-world
+                    # row (verified against prod: 8/8 hook_triage rows had
+                    # no sender_trusted key), so a True default was silently
+                    # upgrading unknown-trust emails to trusted_execute
+                    # whenever parsing fell back to defaults. Fail closed.
                     triage_parsed = parse_email_triage_brief(
                         triage_text,
-                        sender_trusted=bool(metadata.get("sender_trusted", True)),
+                        sender_trusted=bool(metadata.get("sender_trusted", False)),
                     )
                     triage.update(
                         {
@@ -2736,6 +2742,13 @@ class HooksService:
                             "classification": str(triage_parsed.get("classification") or "").strip(),
                             "priority": str(triage_parsed.get("priority") or "").strip(),
                             "subject_summary": str(triage_parsed.get("subject_summary") or "").strip(),
+                            # Names any of the 5 fields above that were NOT
+                            # supplied by the model (JSON envelope or regex
+                            # match) and were instead manufactured by
+                            # parse_email_triage_brief's defaulting logic.
+                            # Non-empty means "don't treat this as a model
+                            # verdict" for the named field(s).
+                            "fallback_fields": list(triage_parsed.get("_fallback_fields") or []),
                         }
                     )
                     metadata["hook_triage"] = triage
@@ -6027,6 +6040,23 @@ class HooksService:
             "Do not delegate, do not create tasks, do not persist files, and do not send replies from this session.",
             "",
             "Required output format:",
+            "CRITICAL: Your response MUST begin with a fenced ```json envelope containing "
+            "EXACTLY these 5 routing fields as a single JSON object, with lowercase string values. "
+            "This envelope is parsed programmatically as the authoritative routing verdict — emit it "
+            "verbatim (valid JSON, no comments, no trailing commas), replacing every placeholder with "
+            "your actual triage determination:",
+            "```json",
+            "{",
+            '  "safety_status": "clean|quarantine",',
+            '  "routing_decision": "trusted_execute|review_required|quarantine",',
+            '  "classification": "instruction|feedback_approval|feedback_correction|status_update|fyi|social",',
+            '  "priority": "p0|p1|p2|p3",',
+            '  "subject_summary": "<one-line summary>"',
+            "}",
+            "```",
+            "After the JSON envelope, continue with the full markdown triage brief in the format below "
+            "(the markdown fields are a human-readable fallback and are parsed only if the JSON "
+            "envelope above is missing or malformed — always emit both):",
             "- safety_status: clean | quarantine",
             "- routing_decision: trusted_execute | review_required | quarantine",
             "- classification: instruction | feedback_approval | feedback_correction | status_update | fyi | social",

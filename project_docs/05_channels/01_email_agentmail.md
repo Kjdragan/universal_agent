@@ -9,7 +9,8 @@ code_paths:
   - src/universal_agent/services/email_task_bridge.py
   - src/universal_agent/services/email_tags.py
   - src/universal_agent/services/vp_email_directive.py
-last_verified: 2026-07-08
+  - src/universal_agent/hooks_service.py
+last_verified: 2026-08-02
 ---
 
 # Email / AgentMail
@@ -345,10 +346,38 @@ Classifications it produces (legacy doc, agent-defined): `instruction`, `feedbac
 
 ### 7. Triage routing
 
-Triage output is parsed (`parse_email_triage_brief` in the bridge) into
-`safety_status` (`clean`/`quarantine`), `routing_decision`
+Triage output is parsed by
+`email_task_bridge.py::parse_email_triage_brief` into `safety_status`
+(`clean`/`quarantine`), `routing_decision`
 (`trusted_execute`/`review_required`/`quarantine`), `classification`,
-`priority`, `subject_summary`. Routing in `_process_due_queue_items`:
+`priority`, `subject_summary`. The email-handler prompt
+(`hooks_service.py::HooksService._build_email_handler_prompt`) requires the
+model to open its response with a fenced ```` ```json ```` envelope
+carrying those 5 fields; the parser tries that envelope **first**
+(`_extract_json_envelope`) and only falls back to markdown-tolerant regexes
+(`_TRIAGE_FIELD_RE`, built by `_build_triage_field_pattern`) for any field
+the envelope didn't supply. Those regexes tolerate the decoration the model
+actually emits — an optional leading bullet (`-`/`*`/`•`/`+`) and up to 3
+`*`/`_`/`#` characters around the field name and colon (e.g.
+`**safety_status:** clean`, `- **safety_status:** clean`) — which the
+original plain `^\s*<field>\s*:` patterns could not match, so before this
+fix every field silently fell through to a manufactured default.
+
+Any field neither the JSON envelope nor the regex supplied is named in the
+returned `_fallback_fields` list, so a manufactured default is never
+mistaken for a model verdict. `hooks_service.py::HooksService.
+_record_email_task_hook_triage` persists that list as `hook_triage.
+fallback_fields` on the Task Hub item alongside the 5 parsed fields.
+
+That same call site resolves `sender_trusted` as
+`bool(metadata.get("sender_trusted", False))` — **default `False`**, not
+`True`. The `sender_trusted` key is absent from `metadata` on essentially
+every real inbound row (it's set explicitly only by a few callers), so this
+default is what decides `parse_email_triage_brief`'s fallback
+`routing_decision` whenever both the JSON envelope and the regexes miss:
+`review_required` when unknown, `trusted_execute` only when the caller
+explicitly recorded `sender_trusted=True`. Routing in
+`_process_due_queue_items`:
 
 | Condition | Action |
 |---|---|
