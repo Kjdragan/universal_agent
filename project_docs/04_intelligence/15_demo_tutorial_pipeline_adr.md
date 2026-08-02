@@ -159,6 +159,49 @@ demo. A non-ok finalize stays on the unchanged default close path.
 
 ### End-of-day golden-nuggets judge (Component D — SHIPPED, default OFF)
 
+> **UPDATE 2026-08-02 — funnel visibility: the lane wired only its NEGATIVE terminal transition.**
+> Production read **"774 cancelled / 0 completed"** for `tutorial_build`, which looked like a lane that
+> builds nothing. It was a **measurement artifact** — four demos demonstrably shipped Jul 29 – Aug 1. Three
+> defects, all in `proactive_demo_nuggets.py`, all on the same two functions; the last two are the two halves
+> of one leak, which is why they shipped together:
+>
+> 1. **No positive terminal transition (`select_and_build_nuggets` → `_register_and_email`).**
+>    `run_zero_backlog_swipe` → `sweep_unbuilt_pending_builds` only ever wrote `cancelled`;
+>    `task_hub.py::TASK_STATUS_COMPLETED` appeared nowhere on this path. A built row stayed `open`, was
+>    spared for exactly ONE night by the swipe's keep-set, and was `cancelled` by the next night's swipe —
+>    byte-identical to a candidate the judge had rejected. (A Jul 8 backup still had `completed=127`; the
+>    mid-July nuggets rework dropped the transition.) **Fix:** `_register_and_email` now upserts the row to
+>    `TASK_STATUS_COMPLETED` alongside the existing `nugget_build` mark (which also gained `video_slug`, so
+>    the demo's slug/id/path all travel with the terminal row). Terminal means the row is invisible to both
+>    `list_pending_approval_builds` and `sweep_unbuilt_pending_builds` (each filters `status = open`), and
+>    `task_hub.py::prune_settled_tasks` ages it out on the normal 21-day completed/parked window instead of
+>    it living forever as `open`. An **un-demoable** build counts as completed too — that verdict comes from
+>    a build that *succeeded* and was then judged un-demoable; the verdict itself stays in `nugget_build.state`.
+> 2. **The swipe discarded judge-selected candidates whose builds FAILED.** `run_zero_backlog_swipe` built
+>    `keep_task_ids` from `built_summary['built']` alone, with no concept of "attempted but failed" — so on
+>    a total-failure night the judge's very best candidates are *guaranteed* swept, because they are the only
+>    rows that were tried and every one of them failed. It partially self-heals (CSI re-ingestion upserts on
+>    the deterministic `sha256(video_id)` task_id) but only while the source video is inside the intel window;
+>    after that a top-scored candidate is gone with no retry path. **Fix:** `select_and_build_nuggets` now
+>    accumulates `summary['attempted_failed']` at all three failure exits (timeout kill / subprocess crash /
+>    nonzero rc), and the swipe keeps `built ∪ attempted_failed`. The swipe is deliberately **not** gated on
+>    a non-empty `built` — a night where nothing clears the 7.0 bar legitimately builds nothing and that pool
+>    must still be swept.
+> 3. **Failed builds became permanently invisible candidates** — landed in PR #1616, recorded here for the
+>    complete picture. `_demo_dir_exists` treated "a `demo-proactive-<slug>` dir exists" as "already handled",
+>    so a failed build's debris silently disqualified its candidate forever: it never landed, never errored,
+>    and never returned. Seven candidates were stuck this way back to 07-20, including the three highest-scored
+>    of that day's run (8.4 / 8.0 / 7.8). `_demo_dir_exists` now gates on the **landing artifact**
+>    (`manifest.json`), not on directory existence, and `_quarantine_failed_demo_dir` **renames** the debris
+>    aside (never deletes it — `.build/build_transcript.jsonl` is the forensic record cited in operator
+>    exhibits) so `build_demo.py`'s `provision_demo` doesn't hard-fail on "workspace already exists".
+>
+> Guards: `tests/unit/test_proactive_demo_nuggets.py::test_built_row_transitions_to_completed_and_survives_the_swipe`,
+> `::test_failed_build_attempt_is_kept_by_the_swipe`,
+> `::test_every_build_failure_path_records_attempted_failed`,
+> `::test_swipe_still_runs_when_nothing_was_built_or_attempted`,
+> `::test_demo_dir_without_manifest_does_not_count_as_built`.
+
 > **UPDATE 2026-08-02 — the fidelity gate is NOT broken. The build model regressed. Root-caused and fixed.**
 > Earlier notes here said the gate had rejected everything since 2026-07-18. **That was wrong**, and it came
 > from reading the wrong file: `demo_factory/lessons/build_stats.jsonl` is an *incomplete* ledger (21 rows,
