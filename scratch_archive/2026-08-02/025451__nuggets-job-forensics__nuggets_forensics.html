@@ -315,6 +315,19 @@ had already been through two of the three models — isolating the model as the 
 <tr><td><strong><code>claude-opus-5</code> + <code>xhigh</code></strong></td><td>08-02 07:19</td><td><span class="tag good">PASS</span></td><td><strong>4/4</strong></td><td><strong>2/2</strong></td><td><code>DEMO_VERIFY: PASS demo_id=… ran=1 exit=0</code></td></tr>
 </table></div>
 
+<div class="callout" style="border-left-color:#9a6700;background:#fffbeb;">
+<p><span class="kicker" style="color:#9a6700">Correction (2026-08-02)</span></p>
+<p>The row above lists the <strong>08-02 04:51 TIMEOUT</strong> build as <code>claude-sonnet-5</code> — that
+is wrong. That build is <code>demo-proactive-impeccable-makes-claude-codex-and-kimi-1</code> (its start time
+matches the journal exactly: <code>04:51:43 building … -&gt; impeccable-makes-claude-codex-and-kimi-1</code>),
+and its own <code>.build/build_transcript.jsonl</code> records <code>"model":"claude-opus-5"</code>
+throughout. <strong>Both timeouts in that cron run were <code>claude-opus-5</code></strong> — this one and
+<code>sakana-claude-code-update-is-insane</code> (started 06:16:58, also <code>claude-opus-5</code> per its
+transcript). The one build in that run that actually used <code>claude-sonnet-5</code>,
+<code>conversation-steganography-keep-your-pri</code>, <em>finished</em> rather than timing out (<code>build
+FAILED rc=3</code> at 06:16:58). Verified live from the transcripts, not re-derived from this page.</p>
+</div>
+
 <p><code>rc=0</code> (every sonnet build was <code>rc=3</code>), <code>holistic: delivers</code>, 46 turns,
 <strong>33 minutes</strong>, <strong>$4.69</strong>. Note what it returned: the <em>actual verifier output</em>,
 not <em>"Done."</em> — the precise behaviour that separated Opus from Sonnet in §3, reproduced on demand.</p>
