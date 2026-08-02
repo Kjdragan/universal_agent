@@ -422,6 +422,14 @@ independent of the webhook flow:
   authenticating mapping handles the request.
 - **HTTP 200 ≠ agent succeeded.** The 200 is returned the moment the action is
   scheduled; the agent run completes asynchronously afterward.
+- **The `self.gateway.execute(session, request)` stream must dedup the final
+  re-emission.** `hooks_service.py::HooksService._consume_gateway_execute`
+  now applies `execution_engine.py::is_redundant_final_text` to avoid
+  double-appending the fallback `final=True` text event into
+  `execution_summary["response_preview"]` — see [Webhook
+  Architecture](../05_channels/02_webhooks.md) § Gotchas summary and
+  [Gateway, Sessions & Execution](../02_execution_core/01_gateway_sessions_execution.md)
+  § Final-text dedup for the full mechanism.
 - **AgentMail webhook ingress exists but is not the production email path.** Hook
   names `AgentMailInbound` / `AgentMailWebhook` (and `agentmail_*` session keys)
   are special-cased into an `email_triage` run kind, but production email ingress

@@ -323,6 +323,20 @@ pipeline, not the webhook path.
 
 ## Gotchas summary
 
+- **Final-text dedup applies here too.** `HooksService._consume_gateway_execute`
+  (the loop every hook-dispatched agent run streams through) builds
+  `execution_summary["response_preview"]` from the last 8 non-empty `TEXT`
+  event texts, and `services/agentmail_service.py` reads that field verbatim
+  when composing a triage/alert email body. It now calls
+  `execution_engine.py::is_redundant_final_text` — the same predicate
+  `gateway_server.py` uses for its WebSocket broadcast — to drop the
+  non-streaming `final=True` fallback re-emission when streaming text for the
+  turn was already captured, tracking its own `saw_streaming_text` flag.
+  Before this, the fallback re-emission was appended unconditionally, so a
+  triage/alert email body could contain the full response text twice
+  verbatim (proven on a stored `full_message` containing `EMAIL TRIAGE BRIEF`
+  twice). See [Gateway, Sessions & Execution](../02_execution_core/01_gateway_sessions_execution.md)
+  for the shared predicate itself.
 - **Fire-and-forget.** A `200` ack does not mean the agent run succeeded — it
   means an action was built and a background task was created.
 - **Open-by-default token auth.** No `UA_HOOKS_TOKEN` → `token`-strategy
