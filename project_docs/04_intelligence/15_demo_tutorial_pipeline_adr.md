@@ -159,6 +159,30 @@ demo. A non-ok finalize stays on the unchanged default close path.
 
 ### End-of-day golden-nuggets judge (Component D — SHIPPED, default OFF)
 
+> **UPDATE 2026-08-02 — the nightly health report (standing monitoring, replaces one-off checks).**
+> `scripts/nuggets_health_report.py`, run by
+> `deployment/systemd/universal-agent-nuggets-health-report.{service,timer}` at **08:05 America/Chicago**
+> daily (after the nuggets run's worst-case 3h20m finish, and at an hour the operator is awake), installed
+> by `scripts/install_vps_nuggets_health_report.sh` — **wired into `scripts/deploy/remote_deploy.sh`, whose
+> installer list is ENUMERATED, not auto-discovered; a new installer that isn't added there never runs.**
+>
+> It exists because the three questions the 2026-08 forensics left open can only be answered by observing a
+> *future* run: (1) did #1587's process-group reap close the orphan leak — `CGPM leftover_procs=`;
+> (2) did dropping `MemoryHigh` stop the throttling and does `MemoryMax=3G` hold —
+> `CGPM memory.events high` / `memory.peak`; (3) **the fidelity gate**, which has rejected every build since
+> 2026-07-18 — `days_since_last_land` from `demo_factory/lessons/build_stats.jsonl`. Severity escalates on
+> any of those, and it is **silent when healthy** so the daily ping doesn't train the operator to ignore it.
+>
+> Two implementation notes worth keeping: it reads the journal with a **`sudo -n` fallback** because an
+> unprivileged `ua` sees the service's own stdout but *not* the `systemd[1]` lifecycle lines, so without it
+> the report says "DID NOT FIRE" on a perfectly good night (caught in live testing before shipping); and the
+> land-pass test is a **strict majority** (`got*2 > total`), matching `land_demo.py` — a tie does not pass.
+>
+> Substrate choice: this is **machine-shaped** work (journald + cgroup state on the VPS), so it is a systemd
+> timer, not a Claude routine. Routines run in an Anthropic-cloud sandbox with no tailnet, no local
+> filesystem, and SSH classifier-blocked — they cannot see any of this. See the capability ledger's
+> repo-shaped-vs-machine-shaped decision rule.
+
 > **UPDATE 2026-08-02 — memory limits corrected, and the cgroup evidence is now captured.**
 > Reading the kernel memcg records showed the memory story in the unit's own comments (and in #1579's
 > premise) was wrong. `MemoryPeak=1.0G` from the 08-01 run is a **clamp reading**, not a demand reading —

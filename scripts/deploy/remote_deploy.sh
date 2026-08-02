@@ -321,6 +321,8 @@ sudo bash "$PROD_DIR/scripts/install_vps_service_watchdog.sh" \
   || echo "WARN: install_vps_service_watchdog.sh failed (non-fatal)"
 sudo bash "$PROD_DIR/scripts/install_vps_oom_alert.sh" \
   || echo "WARN: install_vps_oom_alert.sh failed (non-fatal)"
+sudo bash "$PROD_DIR/scripts/install_vps_nuggets_health_report.sh" \
+  || echo "WARN: install_vps_nuggets_health_report.sh failed (non-fatal)"
 echo "--> Installing Mission Control sweeper service (S5 Phase B — extracted from gateway lifespan)..."
 # Standalone long-running service for the Mission Control sweeper, isolated from
 # the gateway event loop. Idempotent (re)install + restart picks up new code each
