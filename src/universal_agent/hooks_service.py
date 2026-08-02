@@ -1642,8 +1642,10 @@ class HooksService:
             kind="youtube_tutorial_interrupted",
             title="YouTube Tutorial Interrupted",
             message=(
-                f"Tutorial pipeline attempt {current_attempt_number} was interrupted. "
-                f"Automatic retry attempt {next_attempt_number}/{max_attempts} has been queued."
+                f"Tutorial pipeline attempt {current_attempt_number} was interrupted "
+                f"(reason: {reason}). Automatic retry attempt "
+                f"{next_attempt_number}/{max_attempts} has been queued for video "
+                f"{expected_video_id or 'unknown'}."
             ),
             session_id=session_id,
             severity="warning",

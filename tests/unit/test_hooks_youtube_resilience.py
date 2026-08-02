@@ -283,3 +283,39 @@ class TestSessionKeyDoubleUnderscoreDelimiter:
         # Verify round-trip: parsing the session_key recovers the full video ID
         ch, vid = HooksService._youtube_parts_from_session_key(sk)
         assert vid == "7AO4w4Y_L24"
+
+
+# ── T4: retry-queued alert message carries the discriminator + video id ─────
+
+class TestYoutubeRetryQueuedNotificationMessage:
+    """T4: the emitted ``message`` (which becomes ``summary``/``full_message``
+    and is what Telegram, the plaintext part, the Gmail snippet, and the
+    dashboard actually render) must carry ``reason`` and ``video_id`` — not
+    just the email HTML context table, which those surfaces don't read.
+    """
+
+    def test_message_contains_reason_and_video_id(self, hooks_service):
+        captured = []
+        hooks_service._notification_sink = captured.append
+
+        hooks_service._emit_youtube_retry_queued_notification(
+            session_id="session_hook_yt_h5HLLIds53g",
+            session_key="yt_somechannel__h5HLLIds53g",
+            hook_name="ComposioYouTubeTrigger",
+            expected_video_id="h5HLLIds53g",
+            current_attempt_number=1,
+            next_attempt_number=2,
+            max_attempts=3,
+            reason="hook_dispatch_failed",
+            run_id="run_abc123",
+            attempt_id="attempt_1",
+            workspace_dir="/opt/universal_agent/AGENT_RUN_WORKSPACES/run_abc123",
+        )
+
+        assert len(captured) == 1
+        payload = captured[0]
+        assert "hook_dispatch_failed" in payload["message"]
+        assert "h5HLLIds53g" in payload["message"]
+        # Still present in metadata for the email context table.
+        assert payload["metadata"]["reason"] == "hook_dispatch_failed"
+        assert payload["metadata"]["video_id"] == "h5HLLIds53g"
