@@ -10,6 +10,7 @@ code_paths:
   - "src/universal_agent/cron_service.py"
   - "src/universal_agent/gateway_server.py"
   - "src/universal_agent/services/notification_dispatcher.py"
+  - "src/universal_agent/hooks_service.py"
   - ".github/workflows/deploy.yml"
   - "scripts/deploy/remote_deploy.sh"
   - "scripts/deploy_validate_runtime.sh"
@@ -527,6 +528,17 @@ the notification metadata: `task_id` / `invalid_task_ids`, `run_id`, `workspace_
 (`notification_dispatcher.py::_format_email_html`) surfaces those in a context table plus an
 escaped `<pre>` run-log tail.
 
+**Every field is HTML-escaped, including `title`/`message`/`kind`** — not just the context
+table and the `<pre>` blocks. `message` (`record["full_message"]` or `record["summary"]`) can be
+LLM prose summarizing untrusted external content — e.g. an `agentmail_review_required` alert
+where the message is a triage model's summary of an inbound email from an unknown sender. Before
+this was closed, `title`/`message`/`kind` were interpolated into the email HTML raw: a sender
+address like `<team@hi.descope.com>` silently vanished (parsed as an unknown tag), and any
+`<a href>`/`<img>` the summarizing model was induced to echo would have rendered live in the
+operator's inbox. `_format_email_html` now escapes all three with `html.escape` **before**
+converting `message`'s newlines to `<br>` (escape-then-convert, so line breaks survive and a raw
+`<` never reaches the HTML parser).
+
 **The run-log tail alone was misleading** (PR-era fix, 2026-06-13): `run.log` opens with the
 entire echoed execution prompt (`👤 USER: <manifest>`), so a raw last-4 KB byte-tail is dominated
 by the *prompt*, not the model's answer — and on the empty-retry workspace it showed nothing but
@@ -554,6 +566,27 @@ fix is reducing inference burst load, not the run. By contrast `tool_calls > 0` 
 never emitted a closing lifecycle mutation (a close-discipline gap), which is the **majority subtype**
 when the throttle is not active (70 of 80 misses in the 2026-06-13 convergence-candidate flood) and
 warrants a different fix than the throttle.
+
+**The context-key allowlist is global, not per-alert-kind** (T4, 2026-08-02): every alert's
+metadata is filtered through the same `notification_dispatcher.py::_EMAIL_CONTEXT_KEYS` tuple
+before it reaches the email's context table — a key that isn't listed there is silently dropped,
+regardless of how diagnostic it is for that alert's kind. This bit the YouTube retry-queued alert
+(`hooks_service.py::_emit_youtube_retry_queued_notification`, `kind="youtube_tutorial_interrupted"`):
+its metadata carried `reason` (the discriminator deciding whether the video retries or is
+abandoned) and `video_id`, but neither key was in the allowlist, so the email rendered only
+`session_id`/`run_id`/`workspace_dir`. `_EMAIL_CONTEXT_KEYS` now also includes `reason`,
+`video_id`, `attempt_number`, `retry_count`, `max_attempts`, `hook_name`, and `tutorial_title` so
+hook-emitted alerts render their discriminator fields too — `_format_email_html` already skips
+empty values, so widening the allowlist is safe for every other alert kind.
+
+Widening the table alone isn't enough for `reason`/`video_id`: the context table only renders in
+the HTML email. Telegram (`notification_dispatcher.py::_format_telegram_text`), the plaintext
+email part, the Gmail snippet preview, and the dashboard summary all read `record["message"]`
+(persisted as `summary`/`full_message`), not the metadata dict. So
+`_emit_youtube_retry_queued_notification` now folds `reason` and `expected_video_id` into its
+`message=` f-string as well, so every surface — not just the HTML table — carries the
+discriminator. This doesn't disturb dedup: `notification_dispatcher.py::_scope_key_for_record`
+keys on `run_id`, not on message content.
 
 ### Crashloop fail-fast (`scripts/check_crashloop.sh`)
 

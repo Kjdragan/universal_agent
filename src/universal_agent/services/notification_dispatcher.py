@@ -124,8 +124,12 @@ def _channels_list(record: dict) -> list[str]:
 # inference throttle"); ``task_id``/``run_id``/``workspace_dir``/``tool_calls``/
 # ``stop_reason``/``response_empty``/``session_id`` make a todo-execution failure
 # (e.g. ``execution_missing_lifecycle_mutation``) debuggable straight from the
-# inbox; the trailing keys cover cron/infra alerts. The model's actual final
-# output is rendered separately (see ``final_response`` in ``_format_email_html``).
+# inbox; the trailing keys cover cron/infra alerts. ``reason``/``video_id``/
+# ``attempt_number``/``retry_count``/``max_attempts``/``hook_name``/
+# ``tutorial_title`` cover hook-emitted alerts (e.g. YouTube retry-queued) whose
+# discriminator fields were previously dropped from the email entirely. The
+# model's actual final output is rendered separately (see ``final_response`` in
+# ``_format_email_html``).
 _EMAIL_CONTEXT_KEYS = (
     "likely_cause",
     "task_id",
@@ -142,15 +146,30 @@ _EMAIL_CONTEXT_KEYS = (
     "component",
     "system_job",
     "error",
+    "reason",
+    "video_id",
+    "attempt_number",
+    "retry_count",
+    "max_attempts",
+    "hook_name",
+    "tutorial_title",
 )
 
 
 def _format_email_html(record: dict) -> str:
-    title = str(record.get("title") or "Alert")
-    message = str(record.get("full_message") or record.get("summary") or "")
+    # ``title``, ``message``, and ``kind`` can all carry untrusted content —
+    # ``message`` in particular is often LLM prose summarizing an external,
+    # attacker-controlled input (e.g. an inbound email body for
+    # ``agentmail_review_required``). Escape all three before embedding them
+    # in HTML; escape FIRST, then convert newlines, so a raw "<" doesn't get
+    # interpreted as a tag and a multi-line body doesn't collapse to one line.
+    title = _html_escape(str(record.get("title") or "Alert"))
+    message = _html_escape(
+        str(record.get("full_message") or record.get("summary") or "")
+    ).replace("\n", "<br>")
     severity = str(record.get("severity") or "info").upper()
     metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
-    kind = str(record.get("kind") or "")
+    kind = _html_escape(str(record.get("kind") or ""))
     # ``session_id`` lives on the record, not in metadata — fold it in so the
     # context table can show which session produced the alert.
     context = dict(metadata)

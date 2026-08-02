@@ -170,10 +170,66 @@ def _count_built_today(conn) -> tuple[int, int]:
 
 # ── candidate gathering ───────────────────────────────────────────────────────
 def _demo_dir_exists(root: Path, video_slug: str) -> bool:
-    """True if this candidate was already built (a landed repo dir exists)."""
-    return (root / f"demo-proactive-{video_slug}").is_dir() or (
-        root / f"demo-undemoable-{video_slug}"
-    ).is_dir()
+    """True if this candidate was already BUILT — i.e. a LANDED repo dir exists.
+
+    LOAD BEARING — "the directory exists" is NOT "the build landed". A build that
+    fails (nonzero rc, a timeout kill, a silent dry-run) leaves a
+    ``demo-proactive-<slug>`` dir behind with no ``manifest.json``. Treating that
+    debris as "already handled" removes the candidate from every future run
+    permanently and silently: it never lands, never errors, and never returns via
+    the deterministic-``task_id`` re-ingest path that rescues swept candidates.
+
+    Found 2026-08-02: SEVEN candidates were stuck this way going back to 07-20,
+    including the three highest-scored of that day's run (8.4 / 8.0 / 7.8). The
+    judge saw two eligible candidates when it should have seen nine.
+
+    ``demo-undemoable-<slug>`` always counts as handled — that rename happens only
+    inside ``tutorial_demo_finalize.finalize_tutorial_build_demo``, which runs on a
+    build that succeeded and was then judged un-demoable. That is a real verdict,
+    not debris.
+    """
+    if (root / f"demo-undemoable-{video_slug}").is_dir():
+        return True
+    demo_dir = root / f"demo-proactive-{video_slug}"
+    return demo_dir.is_dir() and (demo_dir / "manifest.json").is_file()
+
+
+def _quarantine_failed_demo_dir(root: Path, video_slug: str) -> Optional[Path]:
+    """Move a previous FAILED build's debris aside so a rebuild gets a clean path.
+
+    LOAD BEARING — ``build_demo.py`` hard-fails ``provision_demo`` with
+    "workspace already exists" when its target dir is present. So re-marking a
+    debris-blocked candidate as eligible (see ``_demo_dir_exists``) without
+    clearing the path would convert a silent skip into a *guaranteed* failed
+    build that still burns a build slot and a daily-ceiling count.
+
+    The debris is RENAMED, never deleted: its ``.build/build_transcript.jsonl``
+    is the forensic record of why the previous attempt failed, and those
+    transcripts are cited in operator exhibits. Returns the new path, or None if
+    there was nothing to move (or the move failed — in which case the build is
+    left to fail loudly rather than silently skipping again).
+    """
+    demo_dir = root / f"demo-proactive-{video_slug}"
+    if not demo_dir.is_dir() or (demo_dir / "manifest.json").is_file():
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    # Deliberately NOT "demo-proactive-*": _land_history() globs that prefix for
+    # eval_report.json, so quarantining under it would let dead builds feed the
+    # fidelity gate. Quarantined debris must be invisible to every demo glob.
+    dest = root / f"failed-proactive-{video_slug}.{stamp}"
+    try:
+        demo_dir.rename(dest)
+    except OSError:
+        logger.warning(
+            "nuggets: could not quarantine failed-build debris at %s — the rebuild "
+            "will fail on 'workspace already exists'", demo_dir, exc_info=True,
+        )
+        return None
+    logger.info(
+        "nuggets: quarantined failed-build debris %s -> %s (no manifest.json; "
+        "candidate is eligible again)", demo_dir.name, dest.name,
+    )
+    return dest
 
 
 def _gather_candidates(conn, *, root: Path) -> list[dict[str, Any]]:
@@ -456,6 +512,20 @@ def _default_build_runner(argv: list[str]) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
+def _tail(stream: Any, limit: int = 800) -> str:
+    """Last ``limit`` chars of a captured subprocess stream, or "".
+
+    LOAD BEARING — build failures used to log the stderr tail ONLY. ``build_demo.py``
+    writes its stage tokens to STDOUT (``GOAL_BUILD: DRYRUN … auth=<label>``,
+    ``DEMO_VERIFY: …``), so the one line that says *why* a build degraded was
+    captured and then discarded. A 2026-08-02 build failed rc=3 in 6m with an empty
+    transcript; the diagnosis (a single flaked live-auth probe silently dry-ran the
+    whole build) was only recoverable by inspecting the workspace by hand, because
+    the journal held stderr and nothing else.
+    """
+    return str(stream or "")[-limit:]
+
+
 def _register_and_email(
     conn,
     cand: dict[str, Any],
@@ -687,6 +757,11 @@ def select_and_build_nuggets(
             if built_today + built_this_run >= daily_max:
                 break
             argv = _build_argv(e, root=root)
+            # A candidate can only reach here with a leftover demo-proactive dir if
+            # that dir has no manifest.json (see _demo_dir_exists) — i.e. it is a
+            # previous FAILED build's debris. Move it aside or build_demo.py's
+            # provision_demo stage fails outright on "workspace already exists".
+            _quarantine_failed_demo_dir(root, e["video_slug"])
             logger.info("nuggets: building %s -> %s", e["video_title"], e["video_slug"])
             # Task Hub Observability Protocol: classify the build subprocess's
             # exit (timeout / signal / rc) into an outcome bucket for the log +
@@ -695,14 +770,16 @@ def select_and_build_nuggets(
                 proc = run_build(argv)
             except subprocess.TimeoutExpired as exc:
                 worker_exit = classify_worker_exit(return_code=None, was_timeout_killed=True)
+                out_tail = _tail(getattr(exc, "output", None))
                 logger.warning(
-                    "nuggets: build TIMEOUT for %s (%s): %s",
-                    e["video_slug"], worker_exit.outcome, exc,
+                    "nuggets: build TIMEOUT for %s (%s): %s || stdout=%s",
+                    e["video_slug"], worker_exit.outcome, exc, out_tail,
                 )
                 summary["build_failures"].append(
                     {"task_id": e["task_id"], "demo_id": f"proactive-{e['video_slug']}",
                      "returncode": None, "worker_exit": worker_exit.outcome,
-                     "error": f"timeout after {_build_timeout_seconds()}s"}
+                     "error": f"timeout after {_build_timeout_seconds()}s",
+                     "stdout_tail": out_tail}
                 )
                 continue
             except Exception as exc:  # noqa: BLE001 — a build crash drops that one, continue
@@ -720,14 +797,16 @@ def select_and_build_nuggets(
             rc = int(getattr(proc, "returncode", 1) or 0)
             worker_exit = classify_worker_exit(return_code=rc)
             if rc != 0:
-                tail = str(getattr(proc, "stderr", "") or "")[-800:]
+                tail = _tail(getattr(proc, "stderr", None))
+                out_tail = _tail(getattr(proc, "stdout", None))
                 logger.warning(
-                    "nuggets: build FAILED rc=%d (%s) for %s: %s",
-                    rc, worker_exit.outcome, e["video_slug"], tail,
+                    "nuggets: build FAILED rc=%d (%s) for %s: stderr=%s || stdout=%s",
+                    rc, worker_exit.outcome, e["video_slug"], tail, out_tail,
                 )
                 summary["build_failures"].append(
                     {"task_id": e["task_id"], "demo_id": f"proactive-{e['video_slug']}",
-                     "returncode": rc, "worker_exit": worker_exit.outcome, "error": tail}
+                     "returncode": rc, "worker_exit": worker_exit.outcome, "error": tail,
+                     "stdout_tail": out_tail}
                 )
                 continue
             built = _register_and_email(conn, e, root=root, notifier=notifier)

@@ -145,6 +145,44 @@ class TestFormatEmailHtml:
         html = _format_email_html({})
         assert "[INFO]" in html
 
+    def test_title_is_html_escaped(self):
+        html = _format_email_html({"title": "<script>alert(1)</script>"})
+        assert "<script>alert(1)</script>" not in html
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+    def test_kind_is_html_escaped(self):
+        html = _format_email_html({"kind": "<img src=x onerror=alert(1)>"})
+        assert "<img src=x onerror=alert(1)>" not in html
+        assert "&lt;img src=x onerror=alert(1)&gt;" in html
+
+    def test_message_body_escapes_unknown_tag_like_sender_address(self):
+        # Regression: an LLM-summarized external sender address like
+        # "<team@hi.descope.com>" was previously dropped from the rendered
+        # HTML entirely because it parsed as an unknown tag
+        # <team@hi.descope.com>.
+        html = _format_email_html({
+            "full_message": "Reply came from <team@hi.descope.com> regarding your account.",
+        })
+        assert "<team@hi.descope.com>" not in html
+        assert "&lt;team@hi.descope.com&gt;" in html
+
+    def test_message_body_neutralizes_injected_link(self):
+        # message/full_message is often LLM prose summarizing an untrusted
+        # external email (agentmail_review_required). An external sender who
+        # gets the triage model to echo an <a href> or tracking <img> must
+        # not have it rendered as live markup in the operator's inbox.
+        html = _format_email_html({
+            "full_message": 'Click here: <a href="https://evil.example/phish">Verify now</a>',
+        })
+        assert "<a href=" not in html
+        assert "&lt;a href=&quot;https://evil.example/phish&quot;&gt;" in html
+
+    def test_message_body_preserves_line_breaks(self):
+        html = _format_email_html({
+            "full_message": "Line one\nLine two\nLine three",
+        })
+        assert "Line one<br>Line two<br>Line three" in html
+
 
 class TestFormatEmailHtmlDiagnosticContext:
     """The lifecycle-miss enrichment: task/run/tool-call context + run.log tail.
@@ -245,6 +283,48 @@ class TestFormatEmailHtmlDiagnosticContext:
         assert "<script>x</script>" not in html
         assert "&lt;script&gt;" in html
         assert "truncated" in html
+
+
+class TestFormatEmailHtmlHookDiagnosticKeys:
+    """T4: hook-emitted alerts (e.g. YouTube retry-queued) carried a discriminator
+    (``reason``) plus identifying fields (``video_id``, ``attempt_number``,
+    ``retry_count``, ``max_attempts``, ``hook_name``, ``tutorial_title``) in
+    their metadata, but the global email context allowlist dropped them all —
+    a retry email rendered only session_id/run_id/workspace_dir even though the
+    record carried ``reason=hook_dispatch_failed`` and a ``video_id``.
+    """
+
+    def test_surfaces_youtube_retry_diagnostic_keys(self):
+        html = _format_email_html({
+            "kind": "youtube_tutorial_interrupted",
+            "metadata": {
+                "reason": "hook_dispatch_failed",
+                "video_id": "h5HLLIds53g",
+                "attempt_number": 1,
+                "retry_count": 1,
+                "max_attempts": 3,
+                "hook_name": "ComposioYouTubeTrigger",
+                "tutorial_title": "Building an Agent from Scratch",
+            },
+        })
+        assert "reason" in html
+        assert "hook_dispatch_failed" in html
+        assert "video_id" in html
+        assert "h5HLLIds53g" in html
+        assert "attempt_number" in html
+        assert ">1<" in html
+        assert "retry_count" in html
+        assert "max_attempts" in html
+        assert ">3<" in html
+        assert "hook_name" in html
+        assert "ComposioYouTubeTrigger" in html
+        assert "tutorial_title" in html
+        assert "Building an Agent from Scratch" in html
+
+    def test_absent_hook_keys_do_not_render(self):
+        html = _format_email_html({"metadata": {"job_id": "cron-1"}})
+        assert "reason" not in html
+        assert "video_id" not in html
 
 
 class TestFormatTelegramText:
