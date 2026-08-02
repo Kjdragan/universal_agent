@@ -601,7 +601,9 @@ block — see the deploy.yml parser quirk gotcha.)
 
 Alert cooldown is keyed on `(kind, scope, channel)` where `scope`
 (`notification_dispatcher.py::_scope_key_for_record`) resolves to
-`task_id`/`job_id`/`run_id`/`session_id`. A second, **separate** per-kind rollup window
+`task_id`/`job_id`/`run_id`/`metadata.thread_id`/`session_id` in that priority order
+(`thread_id` — added for T9 — lets a record with no task/job/run id still scope by the email
+conversation it belongs to). A second, **separate** per-kind rollup window
 (`notification_dispatcher.py::_rollup_start` / `_flush_expired_rollups`, default 180s) then
 collapses *any-scope* same-kind alerts that fire after the first send into a single rollup
 email — so within a rollup window distinct tasks still batch by kind; the `scope` key governs
@@ -609,6 +611,24 @@ the cross-window cooldown, not within-window batching. Default cooldown 300s, ro
 180s. For the cooldown key to resolve to the task at all, the event must carry a `task_id` in
 its metadata; the lifecycle-miss emit site now supplies it (the `task_id` diagnostic added
 above) instead of falling back to the shared `daemon_simone_todo` session id.
+
+**Cross-kind pair merge (T9).** The cooldown bucket is normally the record's own `kind`, but
+`notification_dispatcher.py::_cooldown_kind_for_record` maps a small set of kinds that describe
+the SAME underlying event at different pipeline stages onto one shared bucket
+(`_CROSS_KIND_MERGE_GROUPS`). Today that covers the AgentMail untrusted-inbound trio:
+`agentmail_external_arrived` (fires immediately on ingress) and
+`agentmail_review_required` / `agentmail_quarantined` (fire ~30-60s later, once the triage LLM
+finishes) — see `05_channels/01_email_agentmail.md` § "Untrusted inbound: arrival + post-triage
+notifications". Because they share `metadata.thread_id`, the second one to fire for the same
+thread lands in the same cooldown bucket as the first and is skipped instead of double-alerting.
+Every kind NOT listed in `_CROSS_KIND_MERGE_GROUPS` still cools down under its own literal kind,
+unchanged. This is orthogonal to `agentmail_service.py::_external_review_notification_severity`,
+which downgrades `agentmail_review_required` from `warning` to `info` (excluding it from
+email/Telegram delivery entirely — see `_list_undelivered_high_severity_notifications`'s
+`severity IN ('error','warning')` SQL filter) when the triage LLM's own verdict is non-action
+(classification `fyi`/`social`/`status_update`, or priority `p3`) — but never on a value that
+came from `email_task_bridge.parse_email_triage_brief`'s `_fallback_fields` (a manufactured
+default must never soften a security-relevant alert).
 
 ---
 

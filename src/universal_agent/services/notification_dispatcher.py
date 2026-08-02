@@ -58,8 +58,12 @@ def _scope_key_for_record(record: dict) -> str:
       2. ``entity_ref.task_id`` or ``entity_ref.id``
       3. ``metadata.job_id`` (cron job id)
       4. ``metadata.run_id``
-      5. ``session_id``
-      6. ``""`` — falls back to legacy per-kind behaviour
+      5. ``metadata.thread_id`` (email conversation id — e.g. the AgentMail
+         ``agentmail_external_arrived`` / ``agentmail_review_required`` /
+         ``agentmail_quarantined`` trio all carry the same thread_id for one
+         inbound message, so they share a scope even without a task/job/run id)
+      6. ``session_id``
+      7. ``""`` — falls back to legacy per-kind behaviour
     """
     metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
     entity_ref = record.get("entity_ref") if isinstance(record.get("entity_ref"), dict) else {}
@@ -69,12 +73,47 @@ def _scope_key_for_record(record: dict) -> str:
         ("id", entity_ref),
         ("job_id", metadata),
         ("run_id", metadata),
+        ("thread_id", metadata),
     ):
         value = str(source.get(key) or "").strip()
         if value:
             return value
     session_id = str(record.get("session_id") or "").strip()
     return session_id
+
+
+# Kinds that describe the SAME underlying event at different pipeline
+# stages and must not each fire their own operator email/Telegram alert.
+# Concretely: an untrusted inbound email fires ``agentmail_external_arrived``
+# immediately on ingress, then ~30-60s later (once the triage LLM finishes)
+# fires EITHER ``agentmail_review_required`` or ``agentmail_quarantined`` for
+# the SAME thread_id. Without this, the per-kind cooldown in
+# ``_within_cooldown``/``_record_send`` treats them as unrelated kinds and
+# both alert independently, even though they share a scope
+# (see ``_scope_key_for_record``'s ``thread_id`` resolution above).
+#
+# Grouped kinds share ONE cooldown bucket per scope via
+# ``_cooldown_kind_for_record`` below, so whichever fires first "wins" the
+# alert and the later one(s) are cooldown-suppressed instead of double
+# alerting. This reuses the existing per-(kind, scope, channel) cooldown
+# machinery unchanged — every kind NOT listed here still cools down under
+# its own literal kind, exactly as before.
+_CROSS_KIND_MERGE_GROUPS: dict[str, str] = {
+    "agentmail_external_arrived": "agentmail_inbound_alert",
+    "agentmail_review_required": "agentmail_inbound_alert",
+    "agentmail_quarantined": "agentmail_inbound_alert",
+}
+
+
+def _cooldown_kind_for_record(kind: str) -> str:
+    """Resolve the cooldown-bucket key for ``kind``.
+
+    Defaults to the literal kind — identical to today's behaviour for
+    every kind not in ``_CROSS_KIND_MERGE_GROUPS``. Grouped kinds map to a
+    shared bucket name so a same-scope pair across DIFFERENT kinds is
+    coalesced by the existing cooldown machinery instead of alerting twice.
+    """
+    return _CROSS_KIND_MERGE_GROUPS.get(str(kind or "").strip().lower(), kind)
 
 
 def _delivery_state_for_channel(record: dict, channel: str) -> Optional[dict]:
@@ -129,7 +168,10 @@ def _channels_list(record: dict) -> list[str]:
 # ``tutorial_title`` cover hook-emitted alerts (e.g. YouTube retry-queued) whose
 # discriminator fields were previously dropped from the email entirely. The
 # model's actual final output is rendered separately (see ``final_response`` in
-# ``_format_email_html``).
+# ``_format_email_html``). ``classification``/``priority`` surface the email
+# triage LLM's verdict (e.g. "fyi"/"p3") on ``agentmail_review_required``
+# alerts, so when one DOES send as "warning" the operator can see why it
+# wasn't downgraded to "info" without checking the dashboard.
 _EMAIL_CONTEXT_KEYS = (
     "likely_cause",
     "task_id",
@@ -147,6 +189,8 @@ _EMAIL_CONTEXT_KEYS = (
     "system_job",
     "error",
     "reason",
+    "classification",
+    "priority",
     "video_id",
     "attempt_number",
     "retry_count",
@@ -390,6 +434,12 @@ class NotificationDispatcher:
             return
         kind = str(record.get("kind") or "")
         scope = _scope_key_for_record(record)
+        # Cross-kind merge: kinds describing the same underlying event
+        # (e.g. an inbound email's arrival notice and its post-triage
+        # disposition) share a cooldown bucket per scope — see
+        # ``_cooldown_kind_for_record``. Every other kind maps to itself,
+        # so this is a no-op for the existing per-kind cooldown behaviour.
+        cooldown_kind = _cooldown_kind_for_record(kind)
         # Per-kind rollup: while a kind's window is open, buffer same-kind
         # alerts (any scope) into a single rollup instead of emailing each.
         # The row is marked delivered so it cannot re-surface and double-send.
@@ -401,7 +451,7 @@ class NotificationDispatcher:
             except Exception:
                 logger.exception("notification_dispatcher: mark_delivered(email rollup) failed")
             return
-        if self._within_cooldown(kind, scope, "email"):
+        if self._within_cooldown(cooldown_kind, scope, "email"):
             summary["email_cooldown_skipped"] += 1
             return
         if not self._email_targets:
@@ -433,7 +483,7 @@ class NotificationDispatcher:
                 )
 
         if delivered_any:
-            self._record_send(kind, scope, "email")
+            self._record_send(cooldown_kind, scope, "email")
             try:
                 self._mark_delivered(str(record.get("id") or ""), "email")
             except Exception:
@@ -453,7 +503,8 @@ class NotificationDispatcher:
             return
         kind = str(record.get("kind") or "")
         scope = _scope_key_for_record(record)
-        if self._within_cooldown(kind, scope, "telegram"):
+        cooldown_kind = _cooldown_kind_for_record(kind)
+        if self._within_cooldown(cooldown_kind, scope, "telegram"):
             summary["telegram_cooldown_skipped"] += 1
             return
         if self._telegram_chat_id is None or str(self._telegram_chat_id).strip() == "":
@@ -474,7 +525,7 @@ class NotificationDispatcher:
             summary["telegram_failed"] += 1
             return
 
-        self._record_send(kind, scope, "telegram")
+        self._record_send(cooldown_kind, scope, "telegram")
         try:
             self._mark_delivered(str(record.get("id") or ""), "telegram")
         except Exception:
