@@ -969,21 +969,49 @@ implicit signals without understanding this loop.
   `AgentMailService()` + `await startup()` directly — the one-shot subprocess
   mailer pattern of `insight_scoring_health.py` — so they inherit the
   AgentMail→gws 429 fallback for free (gated `UA_AGENTMAIL_GMAIL_FALLBACK`,
-  pinned `1` in the deploy bootstrap). Candidate selection in
-  `intelligence_reporter.py::IntelligenceReporter._rank_digest_artifacts` applies
-  three deterministic hygiene passes before truncating to the limit: (1) **dedup
-  by work target** — `_dedup_candidates` collapses artifacts sharing a
-  `_dedup_key_for_artifact` (`metadata.task_id`, else the demo workspace slug
-  parsed from `source_ref` with the `__demo-N` suffix stripped), keeping the
-  highest-scored and preferring `cody_demo_task` over its `proactive_work_item`
-  mirror on a tie; (2) **staleness backstop** — `_is_stale_candidate` drops
-  candidates whose newest of `created_at`/`updated_at` is older than 7 days, or
-  whose metadata already carries a `merged`/`closed` PR state (so days-old merged
-  PRs don't resurface; no synchronous `gh` lookup runs in this cron path); and
-  (3) **chatter strip** — `_compose_digest_text` runs `_sanitize_summary` over
-  each summary (preferring `recap.success_assessment` over the raw description),
-  removing leading BRIEF/ACCEPTANCE instruction boilerplate and trailing
-  conversational tails like "Want me to … ?" / "Should I … ?".
+  pinned `1` in the deploy bootstrap).
+
+  **Pool draw (T15, 2026-08-02).** `_rank_digest_artifacts` first calls
+  `proactive_artifacts.archive_stale_artifacts` — the same `_is_stale_candidate`
+  predicate used by the staleness backstop below, but applied durably via the
+  existing `update_artifact_state(status=ARTIFACT_STATUS_ARCHIVED)` verb rather
+  than only filtering that one query's results — then draws the candidate pool
+  via `proactive_artifacts.list_artifacts(delivery_state=DELIVERY_NOT_SURFACED,
+  exclude_status=ARTIFACT_STATUS_ARCHIVED, limit=250, order_by="updated_at")`.
+  Before this fix the pool was `list_artifacts(limit=250)` with no delivery
+  filter, ordered `priority DESC, updated_at DESC` (still `list_artifacts`'s
+  default when `order_by` is omitted, for callers like the
+  `/api/v1/dashboard/proactive-artifacts` endpoint that want a general
+  priority-ordered view). Root cause: 293 lifetime artifacts at `priority>=4`
+  were never archived, so they permanently occupied the priority-ordered
+  250-row window — every `source_kind='proactive_signal'` artifact (priority
+  almost always `<=3`) was structurally unreachable: 3,436 lifetime rows, zero
+  ever surfaced across 3.5 months. `order_by="updated_at"` ranks the pool by
+  recency first so fresh, low-priority material isn't crowded out by old
+  high-priority rows within the same bounded window, and the archive sweep
+  keeps that window from silently re-saturating over time.
+
+  Candidate selection then applies deterministic hygiene passes before
+  truncating to the limit: (1) **dedup by work target** — `_dedup_candidates`
+  collapses artifacts sharing a `_dedup_key_for_artifact` (`metadata.task_id`,
+  else the demo workspace slug parsed from `source_ref` with the `__demo-N`
+  suffix stripped), keeping the highest-scored and preferring `cody_demo_task`
+  over its `proactive_work_item` mirror on a tie; (2) **staleness backstop** —
+  `_is_stale_candidate` drops candidates whose newest of
+  `created_at`/`updated_at` is older than `_STALE_MAX_AGE_DAYS` (7 days), or
+  whose metadata already carries a `merged`/`closed` PR state (so days-old
+  merged PRs don't resurface; no synchronous `gh` lookup runs in this cron
+  path) — this is now a belt-and-suspenders re-check, since the archive sweep
+  above already removes matching rows from the pool query itself; (3) **per-
+  lane cap** — `_apply_per_lane_cap` keeps at most `UA_DIGEST_PER_LANE_CAP`
+  (default 5) ranked entries per `source_kind`, so one high-volume lane (e.g.
+  hundreds/week of low-priority `proactive_signal` insights, which all share
+  that one `source_kind`) cannot fill every digest slot on recency alone once
+  the pool favors freshness; and (4) **chatter strip** —
+  `_compose_digest_text` runs `_sanitize_summary` over each summary
+  (preferring `recap.success_assessment` over the raw description), removing
+  leading BRIEF/ACCEPTANCE instruction boilerplate and trailing conversational
+  tails like "Want me to … ?" / "Should I … ?".
 - **Hourly intel digest** — the convergence-brief digest (one collated email of
   `intel_brief` ships per active hour). The composition/render/throttle contract
   lives in `hourly_intel_digest.py::compose_send_payload` (per-brief 👍/👎 links

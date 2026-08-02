@@ -1,6 +1,7 @@
-"""Digest hygiene: cross-path dedup, staleness backstop, chatter sanitization.
+"""Digest hygiene: cross-path dedup, staleness backstop, chatter sanitization,
+per-lane cap.
 
-Locks the three additive fixes to the daily proactive-review digest in
+Locks the additive fixes to the daily proactive-review digest in
 ``services/intelligence_reporter.py``:
 
   (a) two artifacts that point at the same underlying work target (a demo
@@ -10,7 +11,11 @@ Locks the three additive fixes to the daily proactive-review digest in
       already-merged/closed PR) is excluded — and a metadata-resolved
       merged/closed PR is excluded regardless of age;
   (c) a summary that leaks a BRIEF/ACCEPTANCE boilerplate header or a
-      conversational tail like "Want me to exit it?" is scrubbed.
+      conversational tail like "Want me to exit it?" is scrubbed;
+  (d) T15: no single source_kind lane may occupy more than the configured
+      per-lane cap of ranked digest slots, so a high-volume low-priority
+      lane (e.g. hundreds/week of YouTube transcript insights, all sharing
+      source_kind='proactive_signal') cannot monopolize the digest.
 """
 
 from __future__ import annotations
@@ -18,8 +23,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from universal_agent.services.intelligence_reporter import (
+    _apply_per_lane_cap,
     _dedup_candidates,
     _is_stale_candidate,
+    _per_lane_cap,
     _sanitize_summary,
 )
 
@@ -104,3 +111,55 @@ def test_summary_drops_should_i_tail():
     cleaned = _sanitize_summary(summary)
     assert "Should I open a PR?" not in cleaned
     assert "Wired up the digest dedup." in cleaned
+
+
+def _lane_artifact(source_kind: str, index: int) -> dict:
+    return {"artifact_id": f"pa_{source_kind}_{index}", "source_kind": source_kind}
+
+
+def test_per_lane_cap_limits_a_firehose_lane():
+    # 10 proactive_signal entries (the firehose lane) ranked ahead of 2 from
+    # another lane — without a cap, the firehose lane alone would fill a
+    # small digest.
+    ranked = [_lane_artifact("proactive_signal", i) for i in range(10)] + [
+        _lane_artifact("cody_demo_task", i) for i in range(2)
+    ]
+    capped = _apply_per_lane_cap(ranked, cap=3)
+    lane_counts: dict[str, int] = {}
+    for artifact in capped:
+        lane_counts[artifact["source_kind"]] = lane_counts.get(artifact["source_kind"], 0) + 1
+    assert lane_counts["proactive_signal"] == 3
+    assert lane_counts["cody_demo_task"] == 2
+
+
+def test_per_lane_cap_preserves_relative_order():
+    ranked = [
+        _lane_artifact("proactive_signal", 0),
+        _lane_artifact("cody_demo_task", 0),
+        _lane_artifact("proactive_signal", 1),
+        _lane_artifact("proactive_signal", 2),
+    ]
+    capped = _apply_per_lane_cap(ranked, cap=1)
+    assert [a["artifact_id"] for a in capped] == ["pa_proactive_signal_0", "pa_cody_demo_task_0"]
+
+
+def test_per_lane_cap_missing_source_kind_grouped_as_unknown():
+    ranked = [{"artifact_id": "pa_x"}, {"artifact_id": "pa_y"}]
+    capped = _apply_per_lane_cap(ranked, cap=1)
+    assert len(capped) == 1
+    assert capped[0]["artifact_id"] == "pa_x"
+
+
+def test_per_lane_cap_env_default(monkeypatch):
+    monkeypatch.delenv("UA_DIGEST_PER_LANE_CAP", raising=False)
+    assert _per_lane_cap() == 5
+
+
+def test_per_lane_cap_env_override(monkeypatch):
+    monkeypatch.setenv("UA_DIGEST_PER_LANE_CAP", "8")
+    assert _per_lane_cap() == 8
+
+
+def test_per_lane_cap_env_invalid_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("UA_DIGEST_PER_LANE_CAP", "not-a-number")
+    assert _per_lane_cap() == 5
