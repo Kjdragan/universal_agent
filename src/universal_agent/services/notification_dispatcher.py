@@ -146,11 +146,19 @@ _EMAIL_CONTEXT_KEYS = (
 
 
 def _format_email_html(record: dict) -> str:
-    title = str(record.get("title") or "Alert")
-    message = str(record.get("full_message") or record.get("summary") or "")
+    # ``title``, ``message``, and ``kind`` can all carry untrusted content —
+    # ``message`` in particular is often LLM prose summarizing an external,
+    # attacker-controlled input (e.g. an inbound email body for
+    # ``agentmail_review_required``). Escape all three before embedding them
+    # in HTML; escape FIRST, then convert newlines, so a raw "<" doesn't get
+    # interpreted as a tag and a multi-line body doesn't collapse to one line.
+    title = _html_escape(str(record.get("title") or "Alert"))
+    message = _html_escape(
+        str(record.get("full_message") or record.get("summary") or "")
+    ).replace("\n", "<br>")
     severity = str(record.get("severity") or "info").upper()
     metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
-    kind = str(record.get("kind") or "")
+    kind = _html_escape(str(record.get("kind") or ""))
     # ``session_id`` lives on the record, not in metadata — fold it in so the
     # context table can show which session produced the alert.
     context = dict(metadata)

@@ -527,6 +527,17 @@ the notification metadata: `task_id` / `invalid_task_ids`, `run_id`, `workspace_
 (`notification_dispatcher.py::_format_email_html`) surfaces those in a context table plus an
 escaped `<pre>` run-log tail.
 
+**Every field is HTML-escaped, including `title`/`message`/`kind`** — not just the context
+table and the `<pre>` blocks. `message` (`record["full_message"]` or `record["summary"]`) can be
+LLM prose summarizing untrusted external content — e.g. an `agentmail_review_required` alert
+where the message is a triage model's summary of an inbound email from an unknown sender. Before
+this was closed, `title`/`message`/`kind` were interpolated into the email HTML raw: a sender
+address like `<team@hi.descope.com>` silently vanished (parsed as an unknown tag), and any
+`<a href>`/`<img>` the summarizing model was induced to echo would have rendered live in the
+operator's inbox. `_format_email_html` now escapes all three with `html.escape` **before**
+converting `message`'s newlines to `<br>` (escape-then-convert, so line breaks survive and a raw
+`<` never reaches the HTML parser).
+
 **The run-log tail alone was misleading** (PR-era fix, 2026-06-13): `run.log` opens with the
 entire echoed execution prompt (`👤 USER: <manifest>`), so a raw last-4 KB byte-tail is dominated
 by the *prompt*, not the model's answer — and on the empty-retry workspace it showed nothing but
