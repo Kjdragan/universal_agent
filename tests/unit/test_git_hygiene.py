@@ -57,6 +57,26 @@ def test_wired_into_session_start_for_all_sessions() -> None:
     )
 
 
+def test_hook_falls_back_to_origin_main_when_working_tree_lacks_the_script() -> None:
+    """The desktop checkout is routinely PARKED on an old task branch.
+
+    It sat on `fix/scratch-index-dir-links` with 40 dirty files while `main` was
+    339 commits ahead. On such a branch `scripts/git_hygiene.sh` is not in the
+    working tree at all, so a bare `[ -f ... ]` test silently skips — disabling
+    the sweep on exactly the checkout that drifts. The hook must therefore fall
+    back to the canonical copy on origin/main.
+    """
+    text = SESSION_START.read_text()
+    assert "origin/main:scripts/git_hygiene.sh" in text, (
+        "no origin/main fallback: on a parked checkout the hook would silently "
+        "do nothing, which is where the sweep is needed most"
+    )
+    # Must fetch first, or a cold session compares against a stale origin ref.
+    fallback_at = text.index("origin/main:scripts/git_hygiene.sh")
+    fetch_at = text.rindex("git fetch", 0, fallback_at)
+    assert fetch_at < fallback_at
+
+
 def test_uses_patch_id_comparison_not_ancestry() -> None:
     """Squash-merge is the repo's merge strategy.
 
