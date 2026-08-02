@@ -16,7 +16,7 @@ code_paths:
   - deployment/systemd/universal-agent-oom-alert.service
   - deployment/systemd/universal-agent-oom-alert.timer
   - deployment/systemd/templates/universal-agent-gateway.service.template
-last_verified: 2026-06-22
+last_verified: 2026-08-02
 ---
 
 # VPS Recovery & Security
@@ -103,7 +103,28 @@ Per cycle, for each configured service (`check_service`):
    e.g. an autonomous-runtime-split rollback `stop`+`disable`s the worker, and
    resurrecting it would re-enter split mode. All always-on monitored units report
    `enabled`, so this only ever skips a deliberately-off unit.
-1. **Active-state check** — `systemctl is-active`.
+1. **Active-state check** — `systemctl is-active`, wrapped in `timeout 10` with
+   the exit code captured separately from stdout (`check_service`).
+   - **An EMPTY result is a PROBE failure, not "down" (fixed 2026-08-02).**
+     Originally the probe discarded both stderr and the exit status via a bare
+     `|| true`, so a probe timeout / dbus hiccup / systemctl erroring before it
+     printed anything left `active_state=""`, and `"" != "active"` read as
+     "down" — firing a `systemctl restart` against a service that was never
+     actually down. Seven such restarts fired 08-01/08-02 against services PID
+     1 proved were running continuously, one of which bounced a healthy
+     production service. An empty result now logs
+     `state=probe_unavailable rc=<n> action=skip_restart` and is **never**
+     passed to `restart_service`. Consecutive empty results are tracked in a
+     separate per-service counter (`<sanitized-name>.probefail`, distinct from
+     the health-check `.failcount` file); once it reaches
+     `UA_WATCHDOG_PROBE_FAIL_THRESHOLD` (default 3) the watchdog escalates a
+     best-effort `event=probe_unavailable` notification (debounced via a
+     `<sanitized-name>.probealert` marker + `FLAP_COOLDOWN_SECONDS`, the same
+     pattern as the flapping-backoff alert below) — so a genuinely wedged
+     systemd/dbus still pages a human, without the empty-probe-means-down false
+     inference. A non-empty result (whether `active` or a real `inactive`/
+     `failed`) resets the probe-failure counter and proceeds to the checks
+     below unchanged.
    - **Transient states are skipped.** `activating`, `deactivating`, and
      `reloading` are states a *healthy* unit passes through during a normal
      (re)start, so the watchdog leaves the unit alone (logs
@@ -116,9 +137,9 @@ Per cycle, for each configured service (`check_service`):
      `inactive:deactivating`, never a real crash. A genuinely-stuck unit still
      settles into `failed`/`inactive` (after `Restart=always` is exhausted) and
      gets restarted on the next tick, so the dead-unit backstop is preserved.
-   - Otherwise, if not `active` (i.e. `failed`/`inactive`/`unknown`), restart
-     immediately (`restart_service`) and reset the fail counter. No threshold for
-     the inactive case.
+   - Otherwise, if not `active` (i.e. a real, non-empty `failed`/`inactive`/
+     `unknown`), restart immediately (`restart_service`) and reset the fail
+     counter. No threshold for the inactive case.
 2. **Heartbeat-file check (preferred)** — if a heartbeat file is configured, the
    watchdog reads its freshness (`is_heartbeat_fresh`). Fresh → reset counter.
    Stale → increment a per-service consecutive-failure counter; restart once it
@@ -141,7 +162,9 @@ per restart, pruned to `RESTART_WINDOW_SECONDS`, default 3600) via
 
 - **Under the cap** (`UA_WATCHDOG_MAX_RESTARTS_PER_HOUR`, default 6): restart as
   before, record the timestamp (`record_restart`), and fire a best-effort
-  `severity=warning` notification.
+  `severity=warning` notification (`severity=error` if this particular attempt
+  was itself the one escalated restart allowed after a flap cooldown — see
+  `notify_restart`'s real `$flapping` flag below).
 - **At/over the cap**: a service restarted ≥ cap/hr is not being fixed by more
   restarts. Within `FLAP_COOLDOWN_SECONDS` (default 600) of the last restart the
   watchdog **backs off** (skips the restart, logs `action=skip_restart
@@ -150,17 +173,39 @@ per restart, pruned to `RESTART_WINDOW_SECONDS`, default 3600) via
   `<sanitized-name>.flapalert` marker). After the cooldown elapses it allows one
   more (escalated) attempt. This stops the previously-invisible "restart every
   30s forever" failure mode.
+- **The `systemctl restart` COMMAND itself failing gets its own event (fixed
+  2026-08-02), separate from flapping.** `restart_service`'s failure branch
+  previously passed a hardcoded escalation flag of `1` and a hardcoded
+  post-state of `"failed"` regardless of what actually happened, so
+  `_build_payload` rendered it through the flapping branch —
+  `severity=error, requires_action=true`, title "Watchdog restarted
+  (flapping)", body "1x in the last 60m" — for services that were, in fact,
+  healthy (four phantom ERRORs were sent this way). The failure branch now
+  passes the **real** computed `$flapping` flag (not a literal `1`) and a real
+  post-restart-attempt probe (`restart_command_failed:${new_state:-probe_unavailable}`,
+  itself `timeout 10`-wrapped). `watchdog_restart_notifier.py::_build_payload`
+  has a dedicated `event=restart_command_failed` branch with its own title
+  ("Watchdog restart command FAILED: …") and message wording that says the
+  restart *command* failed and reports the real observed post-attempt state,
+  instead of borrowing the flapping vocabulary.
 
 Alerts are delivered by `scripts/watchdog_restart_notifier.py`, which **bootstraps
 Infisical** (`initialize_runtime_secrets`) to obtain `UA_OPS_TOKEN` — the oneshot's
 `-/opt/universal_agent/.env` does *not* carry that token — then POSTs to
 `/api/v1/ops/notifications`, riding the existing `NotificationDispatcher`
-email+Telegram fan-out. The OOM notifier (`watchdog_oom_notifier.py`) gained the
+email+Telegram fan-out. `_build_payload` branches on `--event`, one of
+`restart` (success; wording flips to "restarted (flapping)" when `--escalated`
+is the real computed flag), `flapping_backoff` (restart skipped, cap
+exceeded), `restart_command_failed` (the `systemctl restart` command itself
+failed), or `probe_unavailable` (the `is-active` probe returned empty for
+`UA_WATCHDOG_PROBE_FAIL_THRESHOLD` consecutive cycles — no restart was
+attempted). The OOM notifier (`watchdog_oom_notifier.py`) gained the
 same Infisical bootstrap, closing a latent gap where OOM alerts would 401
 silently. The whole notify path is best-effort (`|| true`, `timeout 30`): a
 gateway being down can never block its own restart. Knobs:
 `UA_WATCHDOG_NOTIFY_ENABLED` (default 1), `UA_WATCHDOG_MAX_RESTARTS_PER_HOUR`,
-`UA_WATCHDOG_RESTART_WINDOW_SECONDS`, `UA_WATCHDOG_FLAP_COOLDOWN_SECONDS`.
+`UA_WATCHDOG_RESTART_WINDOW_SECONDS`, `UA_WATCHDOG_FLAP_COOLDOWN_SECONDS`,
+`UA_WATCHDOG_PROBE_FAIL_THRESHOLD`.
 
 **Default service specs** (`DEFAULT_SERVICE_SPECS`, format
 `service|http_health_url|heartbeat_file`):
@@ -218,6 +263,7 @@ effectively dead config given the heartbeat file is present.
 | `UA_WATCHDOG_CURL_BIN` | `curl` | |
 | `UA_WATCHDOG_STATE_DIR` | `/var/lib/universal-agent/watchdog` | fail-count files |
 | `UA_WATCHDOG_HEALTH_FAIL_THRESHOLD` | `3` | consecutive failures before restart (must be ≥1) |
+| `UA_WATCHDOG_PROBE_FAIL_THRESHOLD` | `3` | consecutive EMPTY `is-active` results before escalating a `probe_unavailable` notification (must be ≥1); never triggers a restart on its own |
 | `UA_WATCHDOG_HTTP_TIMEOUT_SECONDS` | `8` | per-probe curl `--max-time` (must be ≥1) |
 | `UA_WATCHDOG_HTTP_OK_MAX_STATUS` | `499` | upper bound of "healthy" HTTP status (must be ≥100) |
 | `UA_WATCHDOG_POST_RESTART_SETTLE_SECONDS` | `2` | sleep after restart before re-reading state |

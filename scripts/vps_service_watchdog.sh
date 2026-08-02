@@ -9,6 +9,14 @@ SYSTEMCTL_BIN="${UA_WATCHDOG_SYSTEMCTL_BIN:-systemctl}"
 CURL_BIN="${UA_WATCHDOG_CURL_BIN:-curl}"
 STATE_DIR="${UA_WATCHDOG_STATE_DIR:-/var/lib/universal-agent/watchdog}"
 HEALTH_FAIL_THRESHOLD="${UA_WATCHDOG_HEALTH_FAIL_THRESHOLD:-3}"
+# Consecutive `systemctl is-active` PROBE failures (empty result — timeout,
+# dbus hiccup, systemctl erroring before printing anything) before we escalate
+# a notification. This is deliberately separate from HEALTH_FAIL_THRESHOLD: an
+# empty probe result is NOT evidence the service is down (see check_service),
+# so it never triggers a restart on its own — but a probe that stays broken
+# for this many consecutive cycles means systemd/dbus itself may be wedged and
+# a human needs to look.
+PROBE_FAIL_THRESHOLD="${UA_WATCHDOG_PROBE_FAIL_THRESHOLD:-3}"
 HTTP_TIMEOUT_SECONDS="${UA_WATCHDOG_HTTP_TIMEOUT_SECONDS:-8}"
 HTTP_OK_MAX_STATUS="${UA_WATCHDOG_HTTP_OK_MAX_STATUS:-499}"
 POST_RESTART_SETTLE_SECONDS="${UA_WATCHDOG_POST_RESTART_SETTLE_SECONDS:-2}"
@@ -30,6 +38,11 @@ NOTIFIER_PYTHON="${UA_WATCHDOG_PYTHON_BIN:-$(dirname "$SCRIPT_DIR")/.venv/bin/py
 
 if ! [[ "$HEALTH_FAIL_THRESHOLD" =~ ^[0-9]+$ ]] || [[ "$HEALTH_FAIL_THRESHOLD" -lt 1 ]]; then
   log "invalid UA_WATCHDOG_HEALTH_FAIL_THRESHOLD=$HEALTH_FAIL_THRESHOLD (must be >=1)"
+  exit 2
+fi
+
+if ! [[ "$PROBE_FAIL_THRESHOLD" =~ ^[0-9]+$ ]] || [[ "$PROBE_FAIL_THRESHOLD" -lt 1 ]]; then
+  log "invalid UA_WATCHDOG_PROBE_FAIL_THRESHOLD=$PROBE_FAIL_THRESHOLD (must be >=1)"
   exit 2
 fi
 
@@ -86,6 +99,47 @@ write_fail_count() {
 reset_fail_count() {
   local service="$1"
   write_fail_count "$service" 0
+}
+
+# --- Consecutive is-active PROBE failure counter (separate from the
+# health-check fail counter above: a probe failure means we got no answer at
+# all from systemctl, not that the service reported unhealthy). ---
+probe_fail_file_for() {
+  local service="$1"
+  printf '%s/%s.probefail' "$STATE_DIR" "$(service_key "$service")"
+}
+
+probe_alert_marker_for() {
+  local service="$1"
+  printf '%s/%s.probealert' "$STATE_DIR" "$(service_key "$service")"
+}
+
+read_probe_fail_count() {
+  local service="$1"
+  local file
+  file="$(probe_fail_file_for "$service")"
+  if [[ ! -f "$file" ]]; then
+    printf '0'
+    return
+  fi
+  local value
+  value="$(cat "$file" 2>/dev/null || true)"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$value"
+  else
+    printf '0'
+  fi
+}
+
+write_probe_fail_count() {
+  local service="$1"
+  local value="$2"
+  printf '%s' "$value" >"$(probe_fail_file_for "$service")"
+}
+
+reset_probe_fail_count() {
+  local service="$1"
+  write_probe_fail_count "$service" 0
 }
 
 http_status_code() {
@@ -189,6 +243,23 @@ notify_restart() {
     "${esc_flag[@]}" 2>&1 | sed 's/^/[ua-watchdog] notifier: /' || true
 }
 
+# Best-effort escalation when the is-active PROBE itself has produced no
+# result for PROBE_FAIL_THRESHOLD consecutive cycles. Distinct from
+# notify_restart: no restart was attempted (a probe failure is not evidence
+# of a down service), so this needs its own event/wording rather than
+# borrowing the restart or flapping notification shape.
+notify_probe_unavailable() {
+  local service="$1" probe_failures="$2"
+  [[ "$NOTIFY_ENABLED" == "1" ]] || return 0
+  [[ -x "$NOTIFIER_PYTHON" ]] || return 0
+  [[ -f "$NOTIFIER_SCRIPT" ]] || return 0
+  timeout 30 "$NOTIFIER_PYTHON" "$NOTIFIER_SCRIPT" \
+    --service "$service" --reason "is-active probe returned empty" --event "probe_unavailable" \
+    --post-state "probe_unavailable" --restart-count "$probe_failures" \
+    --window-seconds "$RESTART_WINDOW_SECONDS" --max-per-hour "$MAX_RESTARTS_PER_HOUR" \
+    2>&1 | sed 's/^/[ua-watchdog] notifier: /' || true
+}
+
 restart_service() {
   local service="$1"
   local reason="$2"
@@ -230,9 +301,18 @@ restart_service() {
     return 0
   fi
 
+  # The `systemctl restart` COMMAND failed — distinct from a genuinely
+  # flapping service (which restarts successfully but too often). Probe the
+  # actual post-attempt state so the notification reflects reality instead of
+  # hardcoding escalated=1/post_state="failed" regardless of what actually
+  # happened (that false-flapping report sent 4 phantom ERRORs against
+  # services that were healthy — see notify_restart's "restart_command_failed"
+  # branch in watchdog_restart_notifier.py for the reader-facing wording).
+  local new_state
+  new_state="$(timeout 10 "$SYSTEMCTL_BIN" is-active "$service" 2>/dev/null || true)"
   record_restart "$service"
-  log "service=$service restart_result=failed"
-  notify_restart "$service" "$reason" "restart" 1 "failed" "$((prior_count + 1))"
+  log "service=$service restart_result=failed post_state=${new_state:-probe_unavailable} flapping=$flapping"
+  notify_restart "$service" "$reason" "restart_command_failed" "$flapping" "restart_command_failed:${new_state:-probe_unavailable}" "$((prior_count + 1))"
   return 1
 }
 
@@ -255,8 +335,43 @@ check_service() {
     return
   fi
 
-  local active_state
-  active_state="$("$SYSTEMCTL_BIN" is-active "$service" 2>/dev/null || true)"
+  local active_state active_rc=0
+  if active_state="$(timeout 10 "$SYSTEMCTL_BIN" is-active "$service" 2>/dev/null)"; then
+    active_rc=0
+  else
+    active_rc=$?
+  fi
+
+  if [[ -z "$active_state" ]]; then
+    # An EMPTY is-active result (probe timeout, dbus hiccup, systemctl
+    # erroring before it printed anything) is NOT evidence the service is
+    # down. It used to be folded into the "!= active" branch below via a bare
+    # `|| true` that discarded both stderr and the exit status — that fired 7
+    # false restarts on 08-01/08-02 against services PID 1 proves were running
+    # continuously, one of which bounced a healthy production service. Skip
+    # the restart and track consecutive probe failures separately so a
+    # genuinely wedged systemd/dbus still escalates to a human after
+    # PROBE_FAIL_THRESHOLD cycles — the backstop is preserved, only the false
+    # "empty means down" inference is removed.
+    local probe_failures
+    probe_failures="$(read_probe_fail_count "$service")"
+    probe_failures=$((probe_failures + 1))
+    write_probe_fail_count "$service" "$probe_failures"
+    log "service=$service state=probe_unavailable rc=$active_rc consecutive_probe_failures=$probe_failures threshold=$PROBE_FAIL_THRESHOLD action=skip_restart"
+    if [[ "$probe_failures" -ge "$PROBE_FAIL_THRESHOLD" ]]; then
+      local marker marker_age=999999 now
+      marker="$(probe_alert_marker_for "$service")"
+      now="$(date +%s)"
+      [[ -f "$marker" ]] && marker_age=$((now - $(cat "$marker" 2>/dev/null || echo 0)))
+      if [[ "$marker_age" -ge "$FLAP_COOLDOWN_SECONDS" ]]; then
+        printf '%s' "$now" >"$marker"
+        notify_probe_unavailable "$service" "$probe_failures"
+      fi
+    fi
+    return
+  fi
+  reset_probe_fail_count "$service"
+
   # `activating`/`deactivating`/`reloading` are TRANSIENT states a healthy unit
   # passes through during a normal (re)start — e.g. the slow graceful drain on
   # the autonomous-runtime + mission-control-sweeper workers, which can sit in
