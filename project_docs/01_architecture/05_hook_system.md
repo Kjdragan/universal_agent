@@ -7,7 +7,8 @@ code_paths:
   - src/universal_agent/hooks_service.py
   - src/universal_agent/sdk/
   - src/universal_agent/gateway_server.py
-last_verified: 2026-06-26
+  - webhook_transforms/
+last_verified: 2026-08-02
 ---
 
 # Hook System Architecture
@@ -160,6 +161,10 @@ For agent actions:
 - A video-level dedup guard (`_youtube_video_dispatch_inflight`, lock-protected,
   TTL `UA_HOOKS_YOUTUBE_DISPATCH_DEDUP_TTL_SECONDS`, default 3600s) prevents the
   same YouTube `video_id` from being dispatched concurrently by multiple sources.
+  `_dispatch_action(skip_video_dedup=True)` bypasses it — see
+  [Retry lane](#retry-lane-youtube). Each dispatch releases only the marker it
+  acquired (`_release_video_dispatch_inflight`), so a retry that starts while the
+  outgoing dispatch is still unwinding does not have its marker deleted.
 - The run is executed through the gateway: a `GatewayRequest(user_input,
   metadata)` is admitted via `self._turn_admitter`, executed via
   `self.gateway.execute(session, request)` (streaming events), and finalized via
@@ -176,11 +181,46 @@ special hook name `AgentMailInbound` flips `session_role`/`run_kind` to
 `_build_agent_user_input` specializes the prompt by `action.to`:
 
 - `youtube-expert` (canonical) / `youtube-explainer-expert` (legacy alias) —
-  routes to the YouTube specialist with artifact-path directives.
+  artifact-path directives plus the **inline-execution preamble** (below).
 - `email-handler` — builds a two-phase triage→execute prompt.
+- everything else — the generic preamble that mandates
+  `Task(subagent_type='<action.to>', ...)`.
 
 These aliases are defined as module constants (`YOUTUBE_AGENT_ROUTE_ALIASES`,
 `EMAIL_HANDLER_ROUTE_ALIASES`).
+
+### The YouTube lane runs INLINE, it does not delegate
+
+`action.to` stays `youtube-expert` (it is what `_is_youtube_agent_route` keys the
+workflow / dedup / artifact-validation lane off), but the **prompt** tells the
+coordinator to run `Skill: youtube-transcript-metadata` then
+`Skill: youtube-tutorial-creation` itself. The directive block is the module
+constant `YOUTUBE_INLINE_EXECUTION_DIRECTIVES`, and it must appear in **three**
+places because three different code paths compose the prompt:
+
+| Emitter | Covers |
+|---|---|
+| `hooks_service.py::build_manual_youtube_action` | CSI / internal `dispatch_internal_action` producers |
+| `hooks_service.py::HooksService._build_agent_user_input` | the routing preamble wrapped around **every** YouTube action, whatever built it |
+| `webhook_transforms/manual_youtube_transform.py::YOUTUBE_INLINE_EXECUTION_DIRECTIVES` | the live external `/api/v1/hooks/youtube/manual` lane |
+
+The transform is the easy one to miss: `_load_transform` imports it standalone
+via `importlib` from outside the package (so it cannot import the constant, and
+carries a synced copy), and its returned `message` **overrides** the base
+action's — fixing only `build_manual_youtube_action` would leave the real webhook
+still ordering a delegation. Drift guard:
+`tests/unit/test_hooks_youtube_resilience.py::TestInlineTutorialExecutionPrompt::test_manual_transform_message_matches_the_inline_directives`.
+
+Why: every UA in-process session sets `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
+(`main.py`, `agent_setup.py::AgentSetup._build_options`, resolved by
+`utils/model_resolution.py::resolve_agent_teams_enabled`), which makes `Task` /
+`Agent` **fire-and-forget**. A delegating coordinator returned in ~12s, the
+post-turn gate `_validate_youtube_tutorial_artifacts` found no manifest and
+raised, and the backgrounded subagent was killed with the session — total
+artifact loss on 4 of 5 hook runs on 2026-08-01/02. The one surviving run had
+redundantly done the work inline. The `youtube-expert` sub-agent definition is
+unchanged and still valid for interactive/other callers; only the hook lane's
+prompt changed.
 
 ## Workflow admission
 
@@ -198,6 +238,60 @@ Admission writes go to the runtime DB and are wrapped in
 `_run_with_runtime_db_retry` (4 attempts, 0.25s base backoff) to tolerate SQLite
 `database is locked` errors. A locked DB surfaces as `decision="failed",
 reason="runtime_db_locked", retryable=True`.
+
+## Retry lane (YouTube)
+
+`_queue_or_finalize_youtube_attempt` decides retry-vs-needs_review from
+`_is_retryable_youtube_dispatch_failure(reason)`. On a retry it calls
+`WorkflowAdmissionService.queue_retry` and then `_schedule_youtube_retry_attempt`,
+which dispatches the new attempt in the background. That path carries three
+invariants, all of which had to be added after the whole lane was found
+structurally dead (2026-08-02):
+
+1. **The dedup marker is released before the retry is scheduled.**
+   `_schedule_youtube_retry_attempt` calls `_release_video_dispatch_inflight`
+   itself. It runs inside `_dispatch_action`'s `except` handler — i.e. *before*
+   the `finally` that pops the marker — so without this every retry raced the
+   outgoing dispatch.
+2. **The retry dispatch bypasses the dedup guard**
+   (`_dispatch_action(skip_video_dedup=True)`). This is deliberately a separate
+   parameter from `skip_workflow_admission`: that one means "an attempt is
+   already leased", this one means "the concurrency guard does not apply".
+   Conflating them would let any admission-skipping caller silently defeat
+   cross-source video dedup.
+3. **The retry task is retained and its result is inspected.**
+   `_schedule_youtube_retry_attempt` keeps the task in `_youtube_retry_tasks`
+   (asyncio holds tasks only weakly) and attaches a done-callback. The callback
+   finalizes via `_finalize_unstarted_youtube_retry` on an exception **and**
+   whenever `result["decision"]` is not in
+   `YOUTUBE_RETRY_LIVE_DISPATCH_DECISIONS` — the dedup guard *returns*
+   `{"decision": "skipped"}` rather than raising, so an exception-only callback
+   would not have caught the real failure. `_finalize_unstarted_youtube_retry`
+   only acts while the attempt is still in `WORKFLOW_ATTEMPT_OPEN_STATUSES`, so
+   it never clobbers an attempt `_dispatch_action` already finalized.
+
+Without these, an attempt-2 sat `queued` with a NULL `provider_session_id` for 60
+minutes until `services/stuck_run_reaper.py::finalize_stale_youtube_hook_runs`
+killed it, and attempt-3 never queued.
+
+### Failure classification
+
+`_dispatch_failure_reason` maps an exception to a reason code:
+
+| Reason | Source | Retryable? |
+|---|---|---|
+| `youtube_artifacts_invalid` | `_is_youtube_artifact_validation_error` — the deterministic post-turn gate `_validate_youtube_tutorial_artifacts` raised (`youtube_artifacts_missing_manifest`, `youtube_artifacts_incomplete:*`) | **No** → needs_review |
+| `hook_dispatch_interrupted` | `_is_dispatch_interruption_error` token match | Yes |
+| `hook_dispatch_failed` | everything else | Yes |
+| `hook_idle_timeout*` | idle watchdog | **No** → needs_review (no live session to resume) |
+| `hook_timeout*`, `proxy_connect_failed` | wall-clock / proxy | Yes |
+
+The artifact verdict is checked **first** so a stray interruption token in the
+execution summary cannot launder a deterministic validation failure into a
+retryable class. Retrying such a failure replays an identical prompt against
+identical inputs — it burns attempts and hides the lost tutorial.
+`_validate_youtube_tutorial_artifacts` itself is unchanged: it catches real total
+artifact loss and must stay strict.
 
 ## Internal (trusted) dispatch paths
 

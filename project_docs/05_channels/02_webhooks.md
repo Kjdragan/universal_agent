@@ -7,7 +7,7 @@ code_paths:
   - src/universal_agent/gateway_server.py
   - src/universal_agent/hooks_service.py
   - src/universal_agent/signals_ingest.py
-last_verified: 2026-06-22
+last_verified: 2026-08-02
 ---
 
 # Webhook Architecture
@@ -176,7 +176,25 @@ keyed by resolved module path (`_load_transform`). A transform may:
 agent action: it normalizes the video target, derives a `session_key`
 (`yt_<channel>__<video>`), picks `learning_mode` from `mode`
 (`explainer_only` / `explainer_plus_code` / `auto`), and emits a structured
-prompt routing the run to `youtube-expert` with artifact-path rules.
+prompt with artifact-path rules.
+
+`action.to` is `youtube-expert` — that is what keys the workflow / dedup /
+artifact-validation lane — but the prompt (`YOUTUBE_INLINE_EXECUTION_DIRECTIVES`)
+tells the coordinator to run `Skill: youtube-transcript-metadata` then
+`Skill: youtube-tutorial-creation` **inline**, NOT to delegate via `Task`. Under
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` delegation is fire-and-forget and loses
+every artifact; see
+[Hook System Architecture](../01_architecture/05_hook_system.md) § "The YouTube
+lane runs INLINE". Every other route keeps the generic Task-delegation preamble.
+
+**A transform's `message` overrides the base action's.** The external
+`/api/v1/hooks/youtube/manual` lane is served by
+`webhook_transforms/manual_youtube_transform.py::transform`, not by
+`build_manual_youtube_action`, so it carries its **own** synced copy of
+`YOUTUBE_INLINE_EXECUTION_DIRECTIVES` (it is loaded standalone via `importlib`
+from outside the package and cannot import the constant). Any change to the
+YouTube prompt must touch all three emitters — the two in `hooks_service.py` and
+this one; a drift guard test enforces the copy.
 
 ## Internal (trusted) dispatch path
 

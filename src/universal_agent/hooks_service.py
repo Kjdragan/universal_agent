@@ -98,6 +98,42 @@ YOUTUBE_INGEST_DEGRADABLE_FAILURE_CLASSES = {
     "transcript_unavailable",
     "empty_or_low_quality_transcript",
 }
+# Deterministic post-turn artifact-validation failures. These are NOT transient:
+# the agent session ran to completion and simply produced no (or an invalid)
+# tutorial manifest, so replaying the same prompt reproduces the same outcome.
+# They collapse to the dedicated non-retryable ``youtube_artifacts_invalid``
+# reason instead of the generic (retryable) ``hook_dispatch_failed``.
+YOUTUBE_ARTIFACTS_INVALID_REASON = "youtube_artifacts_invalid"
+# The YouTube tutorial hook runs its skills INLINE in the coordinator session.
+# Under Claude Code Agent Teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1, set for
+# every UA in-process session by ``main.py`` / ``agent_setup.py``) ``Task`` and
+# ``Agent`` are fire-and-forget: the coordinator delegates, returns in seconds,
+# the post-turn gate ``_validate_youtube_tutorial_artifacts`` finds no manifest
+# and raises, and the backgrounded subagent is killed with the session. Every
+# artifact is lost. Running the two skills inline is what the one surviving
+# production run actually did.
+YOUTUBE_INLINE_EXECUTION_DIRECTIVES = (
+    "Execution mode: do ALL of this work INLINE in THIS session.",
+    f"Do NOT delegate with Task(subagent_type='{YOUTUBE_AGENT_CANONICAL}', ...) or Agent(...).",
+    "Delegation is fire-and-forget here: the subagent is backgrounded, this turn ends "
+    "immediately, and every tutorial artifact is lost when the session closes.",
+    "Step 1 (inline): Skill: youtube-transcript-metadata - fetch transcript + metadata.",
+    "Step 2 (inline): Skill: youtube-tutorial-creation - write the durable tutorial artifacts.",
+    "Do not end your turn until manifest.json exists on disk under the durable base path below.",
+)
+YOUTUBE_ARTIFACT_VALIDATION_ERROR_TOKENS = (
+    "youtube_artifacts_missing_manifest",
+    "youtube_artifacts_incomplete",
+)
+# ``_dispatch_action`` decisions that mean the dispatch actually took ownership
+# of the workflow attempt (it is live, or it finalized the attempt itself).
+# Anything else means the retry never started, so the scheduling side has to
+# finalize the attempt or it sits ``queued`` until the stale-run reaper kills it.
+YOUTUBE_RETRY_LIVE_DISPATCH_DECISIONS = {"accepted", "completed", "started"}
+# Workflow attempt statuses that are still open — the only states in which the
+# retry done-callback may finalize. Guards against clobbering an attempt that
+# ``_dispatch_action`` already finalized (or already queued a further retry for).
+WORKFLOW_ATTEMPT_OPEN_STATUSES = {"queued", "running", "blocked"}
 YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS = (
     # ── Process-level signals (deployment restarts) ──
     "exit code -15",
@@ -318,10 +354,13 @@ def build_manual_youtube_action(
 
     lines = [
         "Manual YouTube URL ingestion event received.",
-        "Route this run to the YouTube specialist.",
-        f"target_subagent: {YOUTUBE_AGENT_CANONICAL}",
-        "Ingestion first: use youtube-transcript-metadata skill for transcript+metadata.",
-        "Then use youtube-tutorial-creation for durable tutorial artifacts.",
+        # Do the work INLINE. Under Claude Code Agent Teams
+        # (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) Task/Agent is
+        # fire-and-forget: delegating returns immediately, this turn ends in
+        # seconds, the post-turn artifact gate finds no manifest, and the
+        # backgrounded subagent dies with the session. See
+        # `_build_agent_user_input` for the matching routing preamble.
+        *YOUTUBE_INLINE_EXECUTION_DIRECTIVES,
         "Produce durable learning artifacts in UA_ARTIFACTS_DIR.",
         f"resolved_artifacts_root: {artifacts_root}",
         "Path rule: do not use a literal UA_ARTIFACTS_DIR folder segment in file paths.",
@@ -721,6 +760,11 @@ class HooksService:
             60,
             self._safe_int_env("UA_HOOKS_YOUTUBE_DISPATCH_DEDUP_TTL_SECONDS", 3600),
         )
+        # Strong references to in-flight YouTube retry tasks. `asyncio` only
+        # holds tasks weakly, so a fire-and-forget `create_task(...)` can be
+        # garbage-collected mid-run. `_schedule_youtube_retry_attempt` adds here
+        # and its done-callback discards.
+        self._youtube_retry_tasks: set[Any] = set()
 
     def _load_config(self) -> HooksConfig:
         ops_config = load_ops_config()
@@ -1194,6 +1238,21 @@ class HooksService:
             return False
         return any(token in lowered for token in YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS)
 
+    @staticmethod
+    def _is_youtube_artifact_validation_error(detail: str) -> bool:
+        """True when the failure came from the deterministic post-turn artifact gate.
+
+        ``_validate_youtube_tutorial_artifacts`` raises when the agent session
+        finished without leaving a usable tutorial manifest. That is a verdict
+        about what is on disk, not a transient fault — replaying the same prompt
+        reproduces it — so it must not be classified as ``hook_dispatch_failed``
+        (which is in the retryable set).
+        """
+        lowered = str(detail or "").strip().lower()
+        if not lowered:
+            return False
+        return any(token in lowered for token in YOUTUBE_ARTIFACT_VALIDATION_ERROR_TOKENS)
+
     def _dispatch_failure_reason(self, exc: Exception, execution_summary: Optional[dict[str, Any]]) -> str:
         parts: list[str] = []
         if isinstance(exc, Exception):
@@ -1202,6 +1261,11 @@ class HooksService:
             parts.append(str(execution_summary.get("reported_error_message") or ""))
             parts.append(str(execution_summary.get("iteration_status") or ""))
         detail = " ".join(part for part in parts if part).strip()
+        # Order matters: the deterministic artifact verdict wins over the
+        # interruption sniffer, so a validation error can never be laundered
+        # into a retryable class by an unrelated token in the summary.
+        if self._is_youtube_artifact_validation_error(str(exc) if isinstance(exc, Exception) else ""):
+            return YOUTUBE_ARTIFACTS_INVALID_REASON
         if self._is_dispatch_interruption_error(detail):
             return "hook_dispatch_interrupted"
         return "hook_dispatch_failed"
@@ -1210,6 +1274,12 @@ class HooksService:
     def _is_retryable_youtube_dispatch_failure(reason: str) -> bool:
         normalized = str(reason or "").strip().lower()
         if not normalized:
+            return False
+        # youtube_artifacts_invalid is a DETERMINISTIC verdict from the post-turn
+        # artifact gate (see `_is_youtube_artifact_validation_error`). Retrying it
+        # replays the identical prompt against the identical inputs, so it burns
+        # attempts and hides the lost tutorial. Route it to needs_review instead.
+        if normalized == YOUTUBE_ARTIFACTS_INVALID_REASON:
             return False
         if normalized in {
             "hook_dispatch_interrupted",
@@ -1668,6 +1738,82 @@ class HooksService:
             ),
         )
 
+    def _release_video_dispatch_inflight(self, video_id: str) -> None:
+        """Drop the video-level dedup marker for ``video_id`` (best-effort)."""
+        clean = str(video_id or "").strip()
+        if clean:
+            self._youtube_video_dispatch_inflight.pop(clean, None)
+
+    def _finalize_unstarted_youtube_retry(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        session_id: str,
+        session_key: str,
+        hook_name: str,
+        expected_video_id: str,
+        workspace_dir: str,
+        reason: str,
+    ) -> None:
+        """Route a retry attempt that never actually ran to needs_review.
+
+        ``_schedule_youtube_retry_attempt`` fires the retry as a background task
+        and previously discarded its result. When the retry returned early (the
+        video dedup guard returns ``{"decision": "skipped"}`` rather than
+        raising) nothing ever finalized the attempt, so it sat ``queued`` with a
+        NULL ``provider_session_id`` until the stale-run reaper killed it an hour
+        later — and no further attempt was queued. Finalizing here surfaces the
+        lost tutorial immediately.
+
+        Only fires while the attempt is still OPEN: if ``_dispatch_action`` got
+        far enough to finalize the attempt itself (or to queue a further retry),
+        this must not clobber that outcome.
+        """
+        try:
+            context = self._workflow_attempt_context_safe(run_id=run_id, attempt_id=attempt_id)
+            attempt_status = str(context.get("attempt_status") or "").strip().lower()
+            if attempt_status and attempt_status not in WORKFLOW_ATTEMPT_OPEN_STATUSES:
+                return
+            logger.error(
+                "YouTube retry attempt never started run_id=%s attempt_id=%s video_id=%s reason=%s; "
+                "routing to needs_review",
+                run_id,
+                attempt_id,
+                expected_video_id,
+                reason,
+            )
+            self._workflow_admission_service().mark_needs_review(
+                run_id,
+                attempt_id=attempt_id,
+                reason=reason,
+                failure_class="youtube_retry_not_started",
+                summary={
+                    "video_id": expected_video_id or "",
+                    "hook_name": hook_name,
+                    "workspace_dir": workspace_dir,
+                },
+            )
+            self._emit_youtube_tutorial_failure_notification(
+                session_id=session_id,
+                session_key=session_key,
+                hook_name=hook_name,
+                expected_video_id=expected_video_id,
+                reason=reason,
+                started_at_epoch=None,
+                run_id=run_id,
+                attempt_id=attempt_id,
+                workspace_dir=workspace_dir,
+                provider_session_id=session_id,
+                max_attempts=3,
+            )
+        except Exception:
+            logger.exception(
+                "Failed finalizing unstarted YouTube retry run_id=%s attempt_id=%s",
+                run_id,
+                attempt_id,
+            )
+
     def _schedule_youtube_retry_attempt(
         self,
         *,
@@ -1675,16 +1821,82 @@ class HooksService:
         run_id: str,
         attempt_id: str,
         workspace_dir: str,
-    ) -> None:
-        asyncio.create_task(
+        session_id: str = "",
+        session_key: str = "",
+        hook_name: str = "",
+        expected_video_id: str = "",
+    ) -> "asyncio.Task[dict[str, Any]]":
+        # Release the video-level dedup marker BEFORE scheduling. The scheduling
+        # caller runs inside `_dispatch_action`'s except handler, i.e. BEFORE its
+        # `finally` pops the marker, so without this the retry raced the outgoing
+        # dispatch and was rejected as a duplicate every single time.
+        self._release_video_dispatch_inflight(expected_video_id)
+        retry_task = asyncio.create_task(
             self._dispatch_action(
                 action,
                 workflow_run_id=run_id,
                 workflow_attempt_id=attempt_id,
                 workflow_workspace_dir=workspace_dir,
                 skip_workflow_admission=True,
+                # Belt and braces with the release above: this retry IS the
+                # serialized continuation of the run that just failed, so the
+                # video dedup guard must never reject it.
+                skip_video_dedup=True,
             )
         )
+        # Retain a strong reference: a bare `asyncio.create_task(...)` result is
+        # only weakly held by the loop and may be garbage-collected mid-flight.
+        self._youtube_retry_tasks.add(retry_task)
+
+        def _on_retry_done(done: "asyncio.Task[dict[str, Any]]") -> None:
+            self._youtube_retry_tasks.discard(done)
+            try:
+                if done.cancelled():
+                    # Cancellation is the deploy/shutdown signal (SIGTERM cancels
+                    # every pending task). Leave the attempt open so the existing
+                    # interruption machinery — `recover_interrupted_youtube_sessions`
+                    # on startup, and `stuck_run_reaper.finalize_stale_youtube_hook_runs`
+                    # as the backstop — can replay it. Marking it needs_review here
+                    # would make every restart burn an in-flight retry.
+                    logger.warning(
+                        "YouTube retry task cancelled run_id=%s attempt_id=%s; "
+                        "leaving the attempt open for startup recovery",
+                        run_id,
+                        attempt_id,
+                    )
+                    return
+                exc = done.exception()
+                if exc is not None:
+                    failure_reason = f"youtube_retry_raised:{exc}"
+                else:
+                    result = done.result() or {}
+                    decision = str(result.get("decision") or "").strip().lower()
+                    if decision in YOUTUBE_RETRY_LIVE_DISPATCH_DECISIONS:
+                        return
+                    detail = str(result.get("reason") or "").strip()
+                    failure_reason = (
+                        f"youtube_retry_not_started:{detail or decision or 'unknown'}"
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed inspecting YouTube retry task run_id=%s attempt_id=%s",
+                    run_id,
+                    attempt_id,
+                )
+                return
+            self._finalize_unstarted_youtube_retry(
+                run_id=run_id,
+                attempt_id=attempt_id,
+                session_id=session_id,
+                session_key=session_key,
+                hook_name=hook_name or (action.name or "Hook"),
+                expected_video_id=expected_video_id,
+                workspace_dir=workspace_dir,
+                reason=failure_reason,
+            )
+
+        retry_task.add_done_callback(_on_retry_done)
+        return retry_task
 
     def _queue_or_finalize_youtube_attempt(
         self,
@@ -1757,6 +1969,10 @@ class HooksService:
                     run_id=workflow_run_id,
                     attempt_id=retry_decision.attempt_id,
                     workspace_dir=workspace_dir,
+                    session_id=session_id,
+                    session_key=session_key,
+                    hook_name=hook_name,
+                    expected_video_id=expected_video_id,
                 )
                 return
 
@@ -1945,153 +2161,6 @@ class HooksService:
             message="\n".join(message_lines),
             deliver=True,
         )
-
-    async def finalize_stale_youtube_runs(self) -> int:
-        """Sweep the durable DB for YouTube runs stuck in active status.
-
-        For each run with ``run_kind = 'youtube_tutorial_hook'`` and an active
-        attempt status (running / queued / blocked):
-        - If the gateway session is still alive, skip it.
-        - If tutorial artifacts already exist, mark it ``completed``.
-        - Otherwise mark it ``failed`` with reason ``session_crashed``.
-
-        Also deregisters stale sessions from the heartbeat service.
-
-        Returns the number of finalized runs.
-        """
-        conn = self._runtime_db_connect()
-        try:
-            rows = conn.execute(
-                """
-                SELECT r.run_id,
-                       r.run_spec_json,
-                       r.workspace_dir,
-                       r.provider_session_id,
-                       r.latest_attempt_id,
-                       a.status AS attempt_status
-                FROM runs r
-                LEFT JOIN run_attempts a ON a.attempt_id = r.latest_attempt_id
-                WHERE r.run_kind = 'youtube_tutorial_hook'
-                ORDER BY r.updated_at DESC
-                """
-            ).fetchall()
-        finally:
-            conn.close()
-
-        finalized = 0
-        for row in rows:
-            attempt_status = str(row["attempt_status"] or "").strip().lower()
-            if attempt_status not in {"running", "queued", "blocked"}:
-                continue
-
-            run_id = str(row["run_id"] or "").strip()
-            attempt_id = str(row["latest_attempt_id"] or "").strip() or None
-            provider_session_id = str(row["provider_session_id"] or "").strip()
-
-            # Check if the gateway session is still alive
-            session_alive = False
-            if provider_session_id:
-                try:
-                    from universal_agent.gateway_server import (
-                        get_session as _get_session,
-                    )
-                    session = _get_session(provider_session_id)
-                    if session is not None:
-                        session_alive = True
-                except Exception:
-                    pass
-
-            if session_alive:
-                continue
-
-            # Session is dead — determine outcome
-            try:
-                run_spec = json.loads(str(row["run_spec_json"] or "{}"))
-            except Exception:
-                run_spec = {}
-            if not isinstance(run_spec, dict):
-                run_spec = {}
-
-            video_id = ""
-            try:
-                payload = json.loads(str(run_spec.get("payload_json") or "{}"))
-                if isinstance(payload, dict):
-                    video_id = str(payload.get("video_id") or "").strip()
-            except Exception:
-                pass
-
-            # Check if artifacts already exist (session completed but DB wasn't updated)
-            has_artifacts = False
-            if video_id:
-                try:
-                    result = self._validate_youtube_tutorial_artifacts(
-                        video_id=video_id,
-                        started_at_epoch=0.0,
-                    )
-                    # Method raises RuntimeError if artifacts are missing/incomplete
-                    # If we reach here, artifacts exist
-                    has_artifacts = isinstance(result, dict)
-                except Exception:
-                    pass
-
-            try:
-                was = self._workflow_admission_service()
-                if has_artifacts:
-                    was.mark_completed(
-                        run_id,
-                        attempt_id=attempt_id,
-                        summary={
-                            "status": "completed",
-                            "video_id": video_id,
-                            "reason": "stale_run_finalized_with_artifacts",
-                        },
-                    )
-                    logger.info(
-                        "📺 Finalized stale YouTube run as completed run_id=%s video_id=%s",
-                        run_id,
-                        video_id,
-                    )
-                else:
-                    was.mark_failed(
-                        run_id,
-                        attempt_id=attempt_id,
-                        failure_reason="session_crashed",
-                        failure_class="session_crashed",
-                    )
-                    logger.warning(
-                        "📺 Finalized stale YouTube run as failed run_id=%s video_id=%s session_id=%s",
-                        run_id,
-                        video_id,
-                        provider_session_id,
-                    )
-                finalized += 1
-            except Exception as exc:
-                logger.warning(
-                    "📺 Failed to finalize stale run run_id=%s: %s",
-                    run_id,
-                    exc,
-                )
-
-            # Deregister the stale session from heartbeat service
-            if provider_session_id:
-                try:
-                    from universal_agent.gateway_server import _heartbeat_service
-                    if _heartbeat_service:
-                        _heartbeat_service.unregister_session(provider_session_id)
-                        logger.info(
-                            "📺 Deregistered stale heartbeat session session_id=%s",
-                            provider_session_id,
-                        )
-                except Exception as exc:
-                    logger.debug(
-                        "📺 Could not deregister heartbeat session %s: %s",
-                        provider_session_id,
-                        exc,
-                    )
-
-        if finalized:
-            logger.info("📺 Finalized %d stale YouTube runs", finalized)
-        return finalized
 
     async def recover_interrupted_youtube_sessions(self, workspace_root: Path) -> int:
         if not self._startup_recovery_enabled:
@@ -4499,7 +4568,19 @@ class HooksService:
         workflow_attempt_id: Optional[str] = None,
         workflow_workspace_dir: Optional[str] = None,
         skip_workflow_admission: bool = False,
+        skip_video_dedup: bool = False,
     ) -> dict[str, Any]:
+        """Dispatch a hook action.
+
+        ``skip_video_dedup`` bypasses the video-level dispatch dedup guard. It is
+        for the retry lane ONLY (``_schedule_youtube_retry_attempt``), where the
+        dispatch IS the serialized continuation of a run that just failed — the
+        guard would otherwise reject it as a duplicate of the very attempt it is
+        replacing. Deliberately separate from ``skip_workflow_admission``: that
+        one says "an attempt is already leased", this one says "the concurrency
+        guard does not apply". Conflating them would let any admission-skipping
+        caller silently defeat cross-source video dedup.
+        """
         logger.info("Dispatching hook action kind=%s", action.kind)
         if action.kind == "wake":
             logger.info("Wake hook action is not implemented yet; dropping action")
@@ -4585,7 +4666,14 @@ class HooksService:
                 }
 
         # --- Video-level dispatch dedup guard ---
-        if is_youtube_tutorial and expected_video_id:
+        video_dedup_acquired = False
+        if is_youtube_tutorial and expected_video_id and skip_video_dedup:
+            logger.info(
+                "Video dispatch dedup guard bypassed for retry lane video_id=%s session_key=%s",
+                expected_video_id,
+                session_key,
+            )
+        elif is_youtube_tutorial and expected_video_id:
             async with self._youtube_video_dispatch_lock:
                 self._evict_stale_video_dispatch_entries()
                 existing_ts = self._youtube_video_dispatch_inflight.get(expected_video_id)
@@ -4606,6 +4694,7 @@ class HooksService:
                         "inflight_age_seconds": int(age),
                     }
                 self._youtube_video_dispatch_inflight[expected_video_id] = time.time()
+                video_dedup_acquired = True
 
         if is_youtube_tutorial:
             if timeout_seconds is None:
@@ -4821,6 +4910,10 @@ class HooksService:
                                     run_id=workflow_run_id,
                                     attempt_id=retry_decision.attempt_id,
                                     workspace_dir=str(session_workspace),
+                                    session_id=session_id,
+                                    session_key=session_key,
+                                    hook_name=hook_name,
+                                    expected_video_id=expected_video_id,
                                 )
                         elif ingest_failure_class == "inflight_duplicate":
                             workflow_service.mark_blocked(
@@ -5689,9 +5782,13 @@ class HooksService:
                         0,
                         self._agent_dispatch_pending_count - 1,
                     )
-            # Release video-level dispatch dedup guard
-            if is_youtube_tutorial and expected_video_id:
-                self._youtube_video_dispatch_inflight.pop(expected_video_id, None)
+            # Release the video-level dispatch dedup guard — but only the marker
+            # THIS dispatch acquired. A retry scheduled from an except handler
+            # (which releases the marker itself, see
+            # `_schedule_youtube_retry_attempt`) can already be running by the
+            # time we get here, and an unconditional pop would delete ITS marker.
+            if video_dedup_acquired and expected_video_id:
+                self._release_video_dispatch_inflight(expected_video_id)
 
     @staticmethod
     def _run_log_progress_marker(run_log_path: Path) -> tuple[int, float]:
@@ -5997,11 +6094,25 @@ class HooksService:
                     ]
                 )
 
-        # ── Generic routing (YouTube, other hooks) ───────────────────────
+        # ── Routing preamble ─────────────────────────────────────────────
+        # YouTube tutorial runs execute INLINE; every other route still
+        # delegates to its subagent via Task. See
+        # ``YOUTUBE_INLINE_EXECUTION_DIRECTIVES`` for why: Agent Teams makes
+        # Task/Agent fire-and-forget, so a delegating YouTube coordinator ends
+        # its turn in seconds and the post-turn artifact gate finds nothing.
+        if _is_youtube_agent_route(route):
+            preamble = [
+                f"Webhook route target: {action.to} (run this role INLINE, do not delegate)",
+                *YOUTUBE_INLINE_EXECUTION_DIRECTIVES,
+            ]
+        else:
+            preamble = [
+                f"Webhook route target: {action.to}",
+                "Mandatory: delegate this run to the target subagent using Task.",
+                f"Use Task(subagent_type='{action.to}', prompt='Use the webhook payload below and complete the run end-to-end.').",
+            ]
         routing_lines = [
-            f"Webhook route target: {action.to}",
-            "Mandatory: delegate this run to the target subagent using Task.",
-            f"Use Task(subagent_type='{action.to}', prompt='Use the webhook payload below and complete the run end-to-end.').",
+            *preamble,
             "",
             *extra_lines,
             "" if extra_lines else "",
