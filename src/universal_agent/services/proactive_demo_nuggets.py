@@ -32,6 +32,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import signal
 import sqlite3
 import subprocess
 from typing import Any, Callable, Optional
@@ -386,14 +387,73 @@ def _build_argv(cand: dict[str, Any], *, root: Path) -> list[str]:
     return argv
 
 
+def _kill_build_process_group(proc: subprocess.Popen, *, grace_seconds: float = 15.0) -> None:
+    """SIGTERM then SIGKILL the build's whole process GROUP.
+
+    ``claude`` demonstrably ignores SIGTERM (2026-08-01: it survived both of
+    systemd's default 90s kill phases), so the SIGKILL escalation is required,
+    not belt-and-braces.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            return
+        try:
+            proc.wait(timeout=grace_seconds)
+            if sig is signal.SIGTERM:
+                # Direct child is gone, but the group may still hold grandchildren.
+                # One unconditional SIGKILL sweep guarantees the cgroup is clean.
+                continue
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def _default_build_runner(argv: list[str]) -> subprocess.CompletedProcess:
-    """Run build_demo.py as a subprocess (the injection seam tests replace)."""
-    return subprocess.run(
+    """Run build_demo.py as a subprocess (the injection seam tests replace).
+
+    LOAD BEARING — runs the build in its OWN process group (``start_new_session``)
+    so a timeout can kill the WHOLE tree.
+
+    ``build_demo.py`` shells out to the ``claude`` CLI, which spawns its own MCP
+    server children. A bare ``subprocess.run(argv, timeout=N)`` kills only the
+    DIRECT child (``uv``) and ORPHANS those grandchildren. Orphans re-parent to
+    PID 1 but STAY IN THIS SERVICE'S CGROUP, so they keep counting against the
+    unit's MemoryMax and outlive the main process. That single defect produced
+    both nightly failures:
+      - 2026-07-27: build 1 timed out at 3600s -> its ``claude`` tree was orphaned
+        -> build 2 started with it still resident -> cgroup blew the (then) 1G
+        MemoryMax and systemd recorded ``result=oom-kill`` 3m37s later.
+      - 2026-08-01: the main python exited 0, but two orphaned ``claude``
+        processes were still in the cgroup, ignored SIGTERM through both of
+        systemd's kill phases, and systemd recorded ``result=timeout``.
+    Killing the process group on timeout reaps the tree and leaves the cgroup clean.
+    """
+    timeout = _build_timeout_seconds()
+    proc = subprocess.Popen(
         argv,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=_build_timeout_seconds(),
+        start_new_session=True,
     )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_build_process_group(proc)
+        # The whole group is dead now, so the pipes are closed and this cannot hang.
+        stdout, stderr = proc.communicate()
+        raise subprocess.TimeoutExpired(argv, timeout, output=stdout, stderr=stderr) from None
+    except BaseException:
+        # Never leave a live build tree behind on any abnormal exit path.
+        _kill_build_process_group(proc)
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
 def _register_and_email(
