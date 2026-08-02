@@ -67,6 +67,36 @@ def _build_payload(args: argparse.Namespace) -> dict:
         )
         severity = "error"
         requires_action = True
+    elif args.event == "restart_command_failed":
+        # The `systemctl restart` COMMAND itself failed — distinct from a
+        # service that restarts successfully but too often (flapping). This
+        # used to borrow the flapping wording via a hardcoded escalated=1 /
+        # post-state="failed", which rendered "restarted (flapping)" next to
+        # a self-contradicting "1x in the last 60m" body for services that
+        # were, in reality, healthy. Say plainly that the command failed and
+        # report the real observed post-attempt state instead.
+        title = f"Watchdog restart command FAILED: {args.service}"
+        message = (
+            f"Service watchdog attempted to restart {args.service} (reason: {args.reason}) but the "
+            f"`systemctl restart` command itself failed. Actual post-attempt state: {args.post_state}. "
+            f"{args.restart_count}x restart attempts in the last {args.window_seconds // 60}m."
+        )
+        severity = "error"
+        requires_action = True
+    elif args.event == "probe_unavailable":
+        # `systemctl is-active` returned no result for several consecutive
+        # cycles. This is NOT evidence the service is down (no restart was
+        # attempted) — it means the probe itself (systemd/dbus) may be wedged
+        # and needs operator attention.
+        title = f"Watchdog: {args.service} health probe unavailable"
+        message = (
+            f"`systemctl is-active {args.service}` returned no result for {args.restart_count} "
+            f"consecutive watchdog cycles (reason: {args.reason}). No restart was attempted — an "
+            f"empty probe result is not confirmation the service is down — but systemd/dbus itself "
+            f"may be wedged and needs operator attention."
+        )
+        severity = "error"
+        requires_action = True
     else:
         verb = "restarted (flapping)" if escalated else "restarted"
         title = f"Watchdog {verb}: {args.service}"
@@ -132,8 +162,12 @@ def main() -> int:
     parser.add_argument(
         "--event",
         default="restart",
-        choices=["restart", "flapping_backoff"],
-        help="restart = a restart happened; flapping_backoff = restart skipped due to flap rate-limit",
+        choices=["restart", "flapping_backoff", "restart_command_failed", "probe_unavailable"],
+        help=(
+            "restart = a restart happened; flapping_backoff = restart skipped due to flap "
+            "rate-limit; restart_command_failed = `systemctl restart` itself failed; "
+            "probe_unavailable = `systemctl is-active` returned no result for N consecutive cycles"
+        ),
     )
     parser.add_argument("--post-state", default="unknown")
     parser.add_argument("--restart-count", type=int, default=0)
