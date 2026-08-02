@@ -304,6 +304,9 @@ def test_undemoable_rename_is_honored(conn, tmp_path):
     # The candidate is marked built (won't be re-judged on a same-day re-fire).
     marked = task_hub.get_item(conn, "tb-u")["metadata"]["nugget_build"]
     assert marked["state"] == "undemoable" and marked["undemoable"] is True
+    # ...and is terminal-COMPLETED: un-demoable is a verdict from a build that
+    # SUCCEEDED, so the pipeline completed. The verdict lives in nugget_build.state.
+    assert task_hub.get_item(conn, "tb-u")["status"] == task_hub.TASK_STATUS_COMPLETED
 
 
 # ── already-built candidates are excluded from re-judging ─────────────────────
@@ -644,6 +647,116 @@ def test_quarantine_moves_debris_aside_and_preserves_the_transcript(tmp_path):
     # Must not match the demo-proactive-* glob that feeds _land_history().
     assert not dest.name.startswith("demo-proactive-")
     assert list(root.glob("demo-proactive-*/eval_report.json")) == []
+
+
+# ── the funnel must be able to SEE its own output ────────────────────────────
+def test_built_row_transitions_to_completed_and_survives_the_swipe(conn, monkeypatch):
+    """A row that produced a demo must land on the POSITIVE terminal status.
+
+    Regression for 2026-08-02: the lane wired only the NEGATIVE terminal
+    transition. A built row stayed ``open``, was spared for exactly one night by
+    the swipe's keep-set, and was ``cancelled`` by the next night's swipe —
+    byte-identical to a candidate the judge rejected. Production read
+    "774 cancelled / 0 completed" while four demos had demonstrably shipped
+    Jul 29 - Aug 1; a Jul 8 backup still had completed=127.
+    """
+    monkeypatch.delenv("UA_DISABLE_PROACTIVE_DEMO_SWIPE", raising=False)
+    _seed_pending_candidate(conn, "tb-a", video_title="Build a RAG agent with the ADK")
+
+    result = nuggets.select_and_build_nuggets(
+        dry_run=False,
+        conn=conn,
+        call_llm=_verdict_llm({0: (9.0, True, "specific + novel")}),
+        build_runner=_make_build_runner(),
+        notifier=_noop_notifier,
+    )
+    assert len(result["built"]) == 1
+
+    item = task_hub.get_item(conn, "tb-a")
+    assert item["status"] == task_hub.TASK_STATUS_COMPLETED
+    marked = item["metadata"]["nugget_build"]
+    assert marked["state"] == "built"
+    # The demo's identity travels with the terminal row (slug + id + path).
+    assert marked["demo_id"] == f"proactive-{marked['video_slug']}"
+    assert marked["workspace_dir"].endswith(f"demo-proactive-{marked['video_slug']}")
+
+    # Terminal => invisible to the swipe's ``status = open`` filter, so the row
+    # can never be re-swept into ``cancelled`` on a later night.
+    swipe = nuggets.run_zero_backlog_swipe(built_summary=result, dry_run=False, conn=conn)
+    assert swipe["swept"] == 0
+    assert task_hub.get_item(conn, "tb-a")["status"] == task_hub.TASK_STATUS_COMPLETED
+
+
+# ── a FAILED attempt is not a rejection — it must survive the night ──────────
+def test_failed_build_attempt_is_kept_by_the_swipe(conn, monkeypatch):
+    """The keep-set is ``built ∪ attempted_failed``, not ``built`` alone.
+
+    On a total-failure night the judge's very best candidates are the ONLY rows
+    that were tried, and every one of them failed — so a built-only keep-set
+    guarantees they are swept. Rows the judge never selected must still sweep.
+    """
+    monkeypatch.delenv("UA_DISABLE_PROACTIVE_DEMO_SWIPE", raising=False)
+    _seed_pending_candidate(conn, "tb-fail", video_title="Build a RAG agent with the ADK")
+
+    result = nuggets.select_and_build_nuggets(
+        dry_run=False,
+        conn=conn,
+        call_llm=_verdict_llm({0: (9.0, True, "specific + novel")}),
+        build_runner=_make_build_runner(status="fail"),
+        notifier=_noop_notifier,
+    )
+    assert result["built"] == []
+    assert result["attempted_failed"] == ["tb-fail"]
+    assert result["build_failures"][0]["task_id"] == "tb-fail"
+
+    # A never-attempted pending row seeded after the build must still be swept.
+    _seed_pending_candidate(conn, "tb-reject", video_title="Vague hype about AI")
+    swipe = nuggets.run_zero_backlog_swipe(built_summary=result, dry_run=False, conn=conn)
+
+    assert swipe["swept"] == 1
+    assert task_hub.get_item(conn, "tb-fail")["status"] == task_hub.TASK_STATUS_OPEN
+    assert task_hub.get_item(conn, "tb-reject")["status"] == task_hub.TASK_STATUS_CANCELLED
+
+
+@pytest.mark.parametrize("mode", ["timeout", "crash", "nonzero"])
+def test_every_build_failure_path_records_attempted_failed(conn, mode):
+    """All three failure exits (timeout kill / subprocess crash / nonzero rc)
+    must feed the keep-set — a candidate lost on any one of them is unretryable
+    once its source video ages out of the intel window."""
+    _seed_pending_candidate(conn, "tb-x", video_title="Build a RAG agent with the ADK")
+
+    def _runner(argv):
+        if mode == "timeout":
+            raise subprocess.TimeoutExpired(argv, 1, output="stdout tail", stderr="")
+        if mode == "crash":
+            raise RuntimeError("exec failed")
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom")
+
+    result = nuggets.select_and_build_nuggets(
+        dry_run=False,
+        conn=conn,
+        call_llm=_verdict_llm({0: (9.0, True, "specific + novel")}),
+        build_runner=_runner,
+        notifier=_noop_notifier,
+    )
+    assert result["built"] == []
+    assert result["attempted_failed"] == ["tb-x"]
+
+
+def test_swipe_still_runs_when_nothing_was_built_or_attempted(conn, monkeypatch):
+    """A night where NOTHING clears the judge's 7.0 bar legitimately builds
+    nothing. The swipe must NOT be gated on a non-empty build set — that pool
+    still has to return to ~zero."""
+    monkeypatch.delenv("UA_DISABLE_PROACTIVE_DEMO_SWIPE", raising=False)
+    _seed_pending_candidate(conn, "tb-a", video_title="a")
+    _seed_pending_candidate(conn, "tb-b", video_title="b")
+
+    res = nuggets.run_zero_backlog_swipe(
+        built_summary={"built": [], "attempted_failed": []}, dry_run=False, conn=conn
+    )
+    assert res["swept"] == 2 and res["kept"] == 0
+    assert task_hub.get_item(conn, "tb-a")["status"] == task_hub.TASK_STATUS_CANCELLED
+    assert task_hub.get_item(conn, "tb-b")["status"] == task_hub.TASK_STATUS_CANCELLED
 
 
 def test_quarantine_never_touches_a_landed_demo(tmp_path):

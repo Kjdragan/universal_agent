@@ -534,8 +534,9 @@ def _register_and_email(
     notifier: Optional[Callable[..., Any]] = None,
 ) -> dict[str, Any]:
     """Register the landed demo (symlink + manifest key-alias + undemoable
-    rename) via ``tutorial_demo_finalize.finalize_tutorial_build_demo``, then send
-    the built email. Returns a per-build summary dict."""
+    rename) via ``tutorial_demo_finalize.finalize_tutorial_build_demo``, send the
+    built email, and move the source row to ``TASK_STATUS_COMPLETED``. Returns a
+    per-build summary dict."""
     from universal_agent.services.demo_built_notifier import notify_demo_built
     from universal_agent.services.tutorial_demo_finalize import (
         finalize_tutorial_build_demo,
@@ -579,7 +580,28 @@ def _register_and_email(
     except Exception:  # noqa: BLE001 — email best-effort, never fails the build
         logger.warning("nuggets: built email failed for %s", demo_id, exc_info=True)
 
-    # Mark the candidate built so a same-day re-fire (and the daily count) sees it.
+    # Mark the candidate built so a same-day re-fire (and the daily count) sees it,
+    # and move it to the POSITIVE terminal status.
+    #
+    # LOAD BEARING — ``TASK_STATUS_COMPLETED`` is the only signal that says "this
+    # candidate produced a demo". Without it the lane wires up exactly one terminal
+    # transition, the NEGATIVE one: a built row stayed ``open``, was spared for a
+    # single night by ``run_zero_backlog_swipe``'s keep-set, and was then
+    # ``cancelled`` by the next night's swipe — byte-identical to a candidate the
+    # judge rejected. That made the funnel unable to see its own output: production
+    # read "774 cancelled / 0 completed" on 2026-08-02 while four demos had
+    # demonstrably shipped Jul 29 - Aug 1. (A Jul 8 backup had completed=127; the
+    # mid-July nuggets rework dropped the positive transition.)
+    #
+    # Terminal also means the row leaves the candidate pool for good:
+    # ``list_pending_approval_builds`` and ``sweep_unbuilt_pending_builds`` both
+    # filter on ``status = open``, so a completed row is neither re-judged nor
+    # swept, and ``task_hub.prune_settled_tasks`` ages it out on the normal
+    # 21-day completed/parked window instead of it living forever as ``open``.
+    #
+    # An ``undemoable`` build is completed too — that verdict comes from a build
+    # that SUCCEEDED and was then judged un-demoable, so the pipeline did complete;
+    # the verdict itself is preserved in ``nugget_build.state``.
     try:
         from universal_agent import task_hub
 
@@ -587,11 +609,13 @@ def _register_and_email(
             conn,
             {
                 "task_id": cand["task_id"],
+                "status": task_hub.TASK_STATUS_COMPLETED,
                 "metadata": {
                     "nugget_build": {
                         "state": "undemoable" if undemoable else "built",
                         "demo_id": demo_id,
                         "workspace_dir": workspace_dir,
+                        "video_slug": video_slug,
                         "undemoable": undemoable,
                         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                     }
@@ -652,6 +676,11 @@ def select_and_build_nuggets(
         "built": [],
         "dropped": [],
         "build_failures": [],
+        # task_ids the judge SELECTED and this run actually ATTEMPTED to build,
+        # where the build failed (timeout / crash / nonzero rc). Consumed by
+        # run_zero_backlog_swipe's keep-set — see its docstring for why a failed
+        # attempt must survive the night rather than be swept with the rejects.
+        "attempted_failed": [],
         "error": None,
     }
 
@@ -781,6 +810,7 @@ def select_and_build_nuggets(
                      "error": f"timeout after {_build_timeout_seconds()}s",
                      "stdout_tail": out_tail}
                 )
+                summary["attempted_failed"].append(e["task_id"])
                 continue
             except Exception as exc:  # noqa: BLE001 — a build crash drops that one, continue
                 worker_exit = classify_worker_exit(return_code=None, was_signaled=True)
@@ -793,6 +823,7 @@ def select_and_build_nuggets(
                      "returncode": None, "worker_exit": worker_exit.outcome,
                      "error": f"{type(exc).__name__}: {exc}"}
                 )
+                summary["attempted_failed"].append(e["task_id"])
                 continue
             rc = int(getattr(proc, "returncode", 1) or 0)
             worker_exit = classify_worker_exit(return_code=rc)
@@ -808,6 +839,7 @@ def select_and_build_nuggets(
                      "returncode": rc, "worker_exit": worker_exit.outcome, "error": tail,
                      "stdout_tail": out_tail}
                 )
+                summary["attempted_failed"].append(e["task_id"])
                 continue
             built = _register_and_email(conn, e, root=root, notifier=notifier)
             summary["built"].append(built)
@@ -845,10 +877,28 @@ def run_zero_backlog_swipe(
 
     Runs AFTER :func:`select_and_build_nuggets`, UNCONDITIONALLY at end of day
     (even when the build early-returned on budget=0 / no candidates), so the
-    pending pool always returns to ~zero. Preserves the just-built rows
-    (``built_summary['built']``). No-op on ``dry_run`` or when
+    pending pool always returns to ~zero. No-op on ``dry_run`` or when
     ``UA_DISABLE_PROACTIVE_DEMO_SWIPE`` is set. Opens its own activity-DB conn
     unless one is injected (tests).
+
+    The keep-set is ``built ∪ attempted_failed`` — every row the judge SELECTED
+    and this run TOUCHED, not just the ones that landed:
+
+    * ``built_summary['built']`` — belt-and-braces only, since those rows are
+      already ``completed`` (terminal) by :func:`_register_and_email` and the
+      sweep's ``status = open`` filter can no longer see them.
+    * ``built_summary['attempted_failed']`` — LOAD BEARING. A keep-set built
+      from ``built`` alone has no concept of "attempted but failed", so on a
+      total-failure night the judge's very best candidates are *guaranteed*
+      swept: they are the only rows that were tried, and every one of them
+      failed. That partially self-heals — CSI re-ingestion upserts on a
+      deterministic ``sha256(video_id)`` task_id, resurrecting the row — but
+      only while the source video is still inside the intel window. Once it
+      ages out, a top-scored candidate is gone with no retry path at all.
+
+    The swipe is deliberately NOT gated on ``built != []``: a night where
+    nothing clears the judge's 7.0 bar legitimately builds nothing, and that
+    pool must still be swept.
     """
     if dry_run or _swipe_disabled():
         return {"skipped": "disabled_or_dry_run", "swept": 0}
@@ -867,7 +917,18 @@ def run_zero_backlog_swipe(
             for b in (built_summary.get("built") or [])
             if b.get("task_id")
         }
-        return sweep_unbuilt_pending_builds(conn, keep_task_ids=built_ids)
+        attempted_failed = {
+            str(t).strip()
+            for t in (built_summary.get("attempted_failed") or [])
+            if str(t or "").strip()
+        }
+        keep = {t for t in (built_ids | attempted_failed) if t}
+        if attempted_failed:
+            logger.info(
+                "nuggets swipe: preserving %d failed-build attempt(s) for retry: %s",
+                len(attempted_failed), sorted(attempted_failed),
+            )
+        return sweep_unbuilt_pending_builds(conn, keep_task_ids=keep)
     except Exception as exc:  # noqa: BLE001 — a swipe failure must not fail the cron
         logger.warning("nuggets: zero-backlog swipe failed: %s", exc)
         return {"error": f"{type(exc).__name__}: {exc}", "swept": 0}
