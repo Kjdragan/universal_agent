@@ -44,10 +44,35 @@ done
 # grandchildren still charged to this cgroup at teardown?
 if [ -r "$CG/cgroup.procs" ]; then
   n=$(wc -l < "$CG/cgroup.procs" 2>/dev/null || echo 0)
-  echo "CGPM leftover_procs=$n"
-  while read -r p; do
-    [ -n "$p" ] && echo "CGPM leftover pid=$p comm=$(cat "/proc/$p/comm" 2>/dev/null || echo gone)"
-  done < "$CG/cgroup.procs"
+  # MUST exclude our own process tree. ExecStopPost runs INSIDE the cgroup it is
+  # measuring, so this script and every subshell it spawns appear in cgroup.procs.
+  # Counting them made leftover_procs structurally incapable of reading 0 — the
+  # first real run reported `leftover_procs=3` when all three were this script
+  # (verified: the only pid logged was comm=nuggets_cgroup_). The nightly health
+  # report escalates on leftover_procs != 0, so uncorrected this would have fired
+  # a false alarm EVERY night and trained the operator to ignore the one signal
+  # that proves #1587's process-group reap is still holding.
+  self_tree=" $$ $PPID "
+  for _ in 1 2 3; do            # a few passes to catch grandchildren of subshells
+    for p in $(cat "$CG/cgroup.procs" 2>/dev/null); do
+      ppid=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null)
+      case "$self_tree" in *" $ppid "*) case "$self_tree" in *" $p "*) ;; *) self_tree="$self_tree$p " ;; esac ;; esac
+    done
+  done
+  real=0
+  for p in $(cat "$CG/cgroup.procs" 2>/dev/null); do
+    case "$self_tree" in *" $p "*) continue ;; esac
+    # A pid that is already gone by the time we look at it did NOT outlive the run —
+    # it is a transient subshell from this script's own command substitutions that
+    # raced the cgroup.procs read. Counting those kept the number stuck at 2.
+    comm=$(cat "/proc/$p/comm" 2>/dev/null) || continue
+    [ -n "$comm" ] || continue
+    real=$((real + 1))
+    echo "CGPM leftover pid=$p comm=$comm"
+  done
+  # `total` is the raw cgroup.procs count (includes this script); `leftover_procs`
+  # is what actually outlived the run and is the number the health report gates on.
+  echo "CGPM leftover_procs=$real total_in_cgroup=$n"
 fi
 
 # A few high-signal memory.stat rows (the full file is ~50 lines of noise).
