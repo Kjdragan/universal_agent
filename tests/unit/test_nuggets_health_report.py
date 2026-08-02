@@ -34,13 +34,13 @@ JOURNAL_OK = """\
 2026-08-02T06:30:02+0000 srv nuggets_cgroup_postmortem.sh[9]: CGPM memory.peak=2310000000
 2026-08-02T06:30:02+0000 srv nuggets_cgroup_postmortem.sh[9]: CGPM memory.events high 0
 2026-08-02T06:30:02+0000 srv nuggets_cgroup_postmortem.sh[9]: CGPM memory.events oom_kill 0
-2026-08-02T06:30:02+0000 srv nuggets_cgroup_postmortem.sh[9]: CGPM leftover_procs=0
+2026-08-02T06:30:02+0000 srv nuggets_cgroup_postmortem.sh[9]: CGPM leftover_procs=0 total_in_cgroup=3
 2026-08-02T06:30:03+0000 srv systemd[1]: universal-agent-proactive-demo-nuggets.service: Deactivated successfully.
 2026-08-02T06:30:03+0000 srv systemd[1]: universal-agent-proactive-demo-nuggets.service: Consumed 25min 3.1s CPU time.
 """
 
 JOURNAL_LEAK = JOURNAL_OK.replace(
-    "CGPM leftover_procs=0", "CGPM leftover_procs=2"
+    "CGPM leftover_procs=0 total_in_cgroup=3", "CGPM leftover_procs=2 total_in_cgroup=5"
 ).replace(
     "CGPM memory.events high 0", "CGPM memory.events high 41"
 ) + (
@@ -161,3 +161,16 @@ def test_report_is_quiet_when_healthy_and_loud_when_not(monkeypatch, tmp_path):
     rep = nhr.build_report()
     assert rep["severity"] in ("warning", "error")
     assert any("FIDELITY GATE" in p for p in rep["problems"])
+
+
+def test_leftover_procs_parses_alongside_total_in_cgroup():
+    """The post-mortem emits `leftover_procs=N total_in_cgroup=M` on one line.
+
+    `total_in_cgroup` is the raw cgroup.procs count and INCLUDES the ExecStopPost
+    script itself, so it is never 0 and must not be what the report gates on. Only
+    `leftover_procs` (self-tree excluded) means something outlived the run.
+    """
+    r = nhr._parse_run(JOURNAL_OK)
+    assert r["cgpm"]["leftover_procs"] == "0"      # must not swallow "total_in_cgroup"
+    r2 = nhr._parse_run(JOURNAL_LEAK)
+    assert r2["cgpm"]["leftover_procs"] == "2"
