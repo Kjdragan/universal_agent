@@ -42,6 +42,7 @@ __all__ = [
     "WorktreeProvisionResult",
     "assert_no_artifacts",
     "detect_repo_root",
+    "gh_pr_exists",
     "gh_pr_merged_at",
     "list_changed_py_files",
     "list_registered_worktrees",
@@ -246,10 +247,22 @@ def run_git(
         return None
 
 
+#: The two directories that hold this estate's registered worktrees. BOTH are
+#: defaults (2026-08-02): ``.worktrees`` is where ``vp/worker_loop.py`` and
+#: hand-rolled ``git worktree add`` calls land, while ``.claude/worktrees`` is
+#: where the Claude Code harness puts every agent worktree it spawns. Defaulting
+#: to ``.worktrees`` alone is how a 6.7 GiB ``.venv`` (torch + nvidia + triton)
+#: sat untouched under ``.claude/worktrees`` while BOTH cleanup jobs enumerated
+#: its worktree and discarded it as out-of-scope, and the daily reaper logged
+#: "Reaped 0 … 0.00 MiB" three runs running with the disk at 90.0%.
+_DEFAULT_PRUNE_ROOT_RELPATHS: tuple[str, ...] = (".worktrees", ".claude/worktrees")
+
+
 def worktree_prune_roots(repo_root: Path) -> list[Path]:
     """Directories whose CHILDREN are prunable worktrees (the allowlist).
 
-    Default ``<repo>/.worktrees``; override with a colon-separated
+    Defaults to BOTH ``<repo>/.worktrees`` AND ``<repo>/.claude/worktrees``
+    (see ``_DEFAULT_PRUNE_ROOT_RELPATHS``); override with a colon-separated
     ``UA_WORKTREE_PRUNE_ROOTS``. This allowlist is load-bearing, not
     decoration: nine registered worktrees live under
     ``AGENT_RUN_WORKSPACES/vp_coder_primary_external/**``, a subtree already
@@ -257,20 +270,26 @@ def worktree_prune_roots(repo_root: Path) -> list[Path]:
     every registration without a path allowlist would race their
     ``shutil.move`` / ``shutil.rmtree``.
 
+    Widening the DEFAULT does not widen what gets deleted on its own — every
+    per-worktree guard in both consumers still has to pass. It only stops the
+    two jobs from silently declaring the harness's own worktree directory
+    somebody else's problem.
+
     Both worktree jobs read the SAME env var deliberately: a daily reaper and a
     weekly pruner that disagreed about scope would be much worse than either
     being slightly too narrow.
     """
 
     raw = (os.getenv("UA_WORKTREE_PRUNE_ROOTS") or "").strip()
+    defaults = [(repo_root / rel).resolve() for rel in _DEFAULT_PRUNE_ROOT_RELPATHS]
     if not raw:
-        return [(repo_root / ".worktrees").resolve()]
+        return defaults
     roots: list[Path] = []
     for part in raw.split(":"):
         part = part.strip()
         if part:
             roots.append(Path(part).expanduser().resolve())
-    return roots or [(repo_root / ".worktrees").resolve()]
+    return roots or defaults
 
 
 def live_process_inside(path: Path, *, deep: bool = False) -> bool:
@@ -325,6 +344,69 @@ def live_process_inside(path: Path, *, deep: bool = False) -> bool:
     return False
 
 
+def _gh_env() -> dict[str, str]:
+    """Minimal env allow-list for spawning ``gh``.
+
+    ``gh`` is a third-party binary, i.e. a trust boundary: the process env of
+    these units carries Infisical-resolved secrets it has no business reading,
+    so it gets an explicit allow-list rather than the inherited environment.
+    """
+
+    allowed = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "XDG_CONFIG_HOME",
+               "GH_HOST", "GH_TOKEN", "GITHUB_TOKEN")
+    return {k: v for k, v in os.environ.items() if k in allowed and v}
+
+
+def gh_pr_exists(branch: str) -> Optional[bool]:
+    """Whether ANY pull request (any state) was ever opened for ``branch``.
+
+    Returns ``True`` (at least one PR exists — open, closed, or merged),
+    ``False`` (GitHub definitively knows of none), or ``None`` (we could not
+    find out: non-zero exit, timeout, unparseable JSON). Callers MUST treat
+    ``None`` as "do not act".
+
+    WHY THIS EXISTS (2026-08-02): ``gh_pr_merged_at`` returns ``None`` for two
+    very different worlds — "a PR is open, work in flight, hands off" and "no
+    PR was ever opened, this branch exists only in somebody's abandoned
+    worktree". Collapsing them made the weekly prune skip the second case
+    forever, which is how an orphan worktree holding a 6.7 GiB ``.venv`` (its
+    branch on no remote, no PR, its commit reachable from nothing else)
+    survived every run of both cleanup jobs. This is the query that tells them
+    apart; the ``False`` answer is the ONLY one that unlocks the age-out lane,
+    and it unlocks it only alongside that lane's own age/liveness gates.
+    """
+
+    repo = os.getenv("UA_GH_REPO", "Kjdragan/universal_agent")
+    cmd = [
+        "gh", "pr", "list", "--repo", repo, "--head", branch,
+        "--state", "all", "--limit", "10", "--json", "number,state",
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=GH_TIMEOUT_S, env=_gh_env(),
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("gh pr list (state=all) failed for %s: %s", branch, exc)
+        return None
+    if result.returncode != 0:
+        logger.warning(
+            "gh pr list (state=all) returned %d for %s: %s",
+            result.returncode, branch, (result.stderr or "").strip(),
+        )
+        return None
+    try:
+        rows = json.loads(result.stdout or "[]")
+    except ValueError as exc:
+        logger.warning(
+            "gh pr list (state=all) emitted unparseable JSON for %s: %s", branch, exc
+        )
+        return None
+    if not isinstance(rows, list):
+        logger.warning("gh pr list (state=all) returned a non-list for %s", branch)
+        return None
+    return bool(rows)
+
+
 def gh_pr_merged_at(branch: str) -> Optional[datetime]:
     """Return the merge timestamp of ``branch``'s PR, or ``None``.
 
@@ -332,20 +414,14 @@ def gh_pr_merged_at(branch: str) -> Optional[datetime]:
     ``mergedAt`` returns ``None``. What ``None`` *means* differs by caller —
     the weekly prune reads it as "not provably merged, leave the tree alone",
     the daily reap reads it as "not merged, so this open tree is mine" — which
-    is why both keep their own additional guards.
+    is why both keep their own additional guards. Neither may read it as "no PR
+    exists"; that question has its own query (``gh_pr_exists``).
 
     ``--state merged`` also excludes closed-but-unmerged branches, whose trees
     are deliberately left alone.
-
-    Spawns ``gh`` (third-party binary) with a minimal env allow-list rather
-    than the full environment, per the least-privilege rule for trust
-    boundaries: the process env of these units carries Infisical-resolved
-    secrets that ``gh`` has no business reading.
     """
 
-    allowed = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "XDG_CONFIG_HOME",
-               "GH_HOST", "GH_TOKEN", "GITHUB_TOKEN")
-    env = {k: v for k, v in os.environ.items() if k in allowed and v}
+    env = _gh_env()
     repo = os.getenv("UA_GH_REPO", "Kjdragan/universal_agent")
     cmd = [
         "gh", "pr", "list", "--repo", repo, "--head", branch,

@@ -176,6 +176,24 @@ def _merged_at_stub(merged_branches: set[str], age_hours: float = 48.0):
     return _lookup
 
 
+def _pr_exists_stub(no_pr_branches: set[str] | None = None, unknown: bool = False):
+    """Injected stand-in for ``_gh_pr_exists``.
+
+    Default: every branch HAS a pull request, which is the pre-2026-08-02 world
+    and keeps the merged/open cases reading exactly as they always did. Only the
+    branches named in ``no_pr_branches`` take the no-PR lane.
+    """
+
+    named = no_pr_branches or set()
+
+    def _lookup(branch: str):
+        if unknown:
+            return None
+        return branch not in named
+
+    return _lookup
+
+
 def _run_prune(worktree_repo: dict, **kwargs) -> dict:
     records = prune_merged_worktrees(
         repo_root=worktree_repo["repo"],
@@ -189,6 +207,7 @@ def _run_prune(worktree_repo: dict, **kwargs) -> dict:
                  "claude/stray"}
             ),
         ),
+        pr_exists=kwargs.pop("pr_exists", _pr_exists_stub()),
         min_merge_age_hours=kwargs.pop("min_merge_age_hours", 24),
         **kwargs,
     )
@@ -326,10 +345,222 @@ class TestPruneMergedWorktrees:
         assert len(by_path) == len(in_scope)
 
 
+def _age_tree(root: Path, age_seconds: float) -> None:
+    """Backdate EVERY entry under ``root`` (and ``root`` itself).
+
+    The no-PR lane's second gate reads the newest mtime anywhere beneath the
+    tree, so aging the directory alone — which is all the merged lane needs —
+    would leave every file looking like it was written a second ago.
+    """
+    past = time.time() - age_seconds
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in filenames + dirnames:
+            target = Path(dirpath) / name
+            try:
+                os.utime(target, (past, past), follow_symlinks=False)
+            except (OSError, NotImplementedError):
+                continue
+    os.utime(root, (past, past))
+
+
+def _make_orphan_worktree(
+    repo: Path, roots: Path, name: str, *, commit_age_seconds: float,
+) -> Path:
+    """A worktree whose branch was NEVER pushed and has no PR — the real case.
+
+    Mirrors ``/opt/universal_agent/.claude/worktrees/
+    fix-reflection-active-count-excludes-cron`` as measured 2026-08-02: a
+    committed, clean checkout on a branch with no remote-tracking ref and no
+    pull request, holding a 6.7 GiB ``.venv``.
+    """
+    roots.mkdir(parents=True, exist_ok=True)
+    wt = roots / name
+    _git(repo, "worktree", "add", "-q", str(wt), "-b", f"claude/{name}", "main")
+    (wt / f"{name}.txt").write_text(f"orphan work for {name}\n")
+    # A .venv stand-in: the whole reason this tree matters on disk. Gitignored,
+    # as the real repo does — otherwise it alone would make the tree dirty and
+    # the clean-tree gate (which applies to both lanes) would skip it forever.
+    (wt / ".gitignore").write_text(".venv/\n")
+    (wt / ".venv" / "lib").mkdir(parents=True)
+    (wt / ".venv" / "lib" / "big.bin").write_bytes(b"\x00" * 1024)
+    _git(wt, "add", f"{name}.txt", ".gitignore")
+    when = f"@{int(time.time() - commit_age_seconds)} +0000"
+    _git(wt, "commit", "-q", "-m", f"orphan {name}",
+         env={"GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when})
+    return wt
+
+
+_THIRTY_DAYS = 30 * 24 * 3600
+_TWO_DAYS = 2 * 24 * 3600
+
+
+class TestNoPrAgeOutLane:
+    """The third branch state (2026-08-02): no PR was EVER opened.
+
+    Previously indistinguishable from "a PR is open" (both are a ``None`` from
+    ``gh_pr_merged_at``) and therefore skipped forever, which is how an orphan
+    worktree holding a 6.7 GiB ``.venv`` survived every run of both cleanup
+    jobs with the VPS at 90.0% disk.
+    """
+
+    def _orphan(self, worktree_repo: dict, *, tree_age: float,
+                commit_age: float = _THIRTY_DAYS) -> Path:
+        wt = _make_orphan_worktree(
+            worktree_repo["repo"], worktree_repo["roots"], "orphan",
+            commit_age_seconds=commit_age,
+        )
+        _age_tree(wt, tree_age)
+        return wt
+
+    def test_old_no_pr_worktree_is_pruned(self, worktree_repo, caplog):
+        caplog.set_level("INFO")
+        wt = self._orphan(worktree_repo, tree_age=_THIRTY_DAYS)
+        by_path = _run_prune(
+            worktree_repo, pr_exists=_pr_exists_stub({"claude/orphan"}),
+        )
+        rec = by_path[str(wt.resolve())]
+        assert rec["action"] == "removed", rec
+        assert rec["lane"] == "no-pr"
+        assert "no PR ever opened" in rec["reason"]
+        assert not wt.exists()
+        # Loud logging: branch, SHA and age evidence all present.
+        assert "NO-PR AGE-OUT" in caplog.text
+        assert "claude/orphan" in caplog.text
+        # The commits survive — a mistaken removal costs a `git worktree add`.
+        assert _git(worktree_repo["repo"], "rev-parse", "--verify", "claude/orphan")
+
+    def test_no_pr_worktree_younger_than_threshold_is_kept(self, worktree_repo):
+        wt = self._orphan(worktree_repo, tree_age=_TWO_DAYS)
+        by_path = _run_prune(
+            worktree_repo, pr_exists=_pr_exists_stub({"claude/orphan"}),
+        )
+        rec = by_path[str(wt.resolve())]
+        assert rec["action"] == "skipped"
+        assert "no PR, but directory touched" in rec["reason"]
+        assert "7d age-out window" in rec["reason"]
+        assert wt.exists()
+
+    def test_no_pr_worktree_with_a_live_process_is_kept(self, worktree_repo):
+        """Age alone never prunes: the liveness gate is proved with a REAL
+        process, and it is the ``deep=True`` variant so a venv held open by
+        exe/mmap counts even when no cwd points into the tree."""
+        wt = self._orphan(worktree_repo, tree_age=_THIRTY_DAYS)
+        proc = subprocess.Popen(["sleep", "45"], cwd=str(wt))
+        try:
+            by_path = _run_prune(
+                worktree_repo, pr_exists=_pr_exists_stub({"claude/orphan"}),
+            )
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+        rec = by_path[str(wt.resolve())]
+        assert rec["action"] == "skipped"
+        assert "running process" in rec["reason"]
+        assert wt.exists()
+
+    def test_recent_content_beneath_an_old_directory_is_kept(self, worktree_repo):
+        """The worktree root's mtime does not move when a session edits a file
+        three levels down — the harness's own agent worktrees live exactly
+        there, so the newest-content gate is what sees them."""
+        wt = self._orphan(worktree_repo, tree_age=_THIRTY_DAYS)
+        nested = wt / "src" / "deep"
+        nested.mkdir(parents=True)
+        (nested / "active.py").write_text("# committed a moment ago\n")
+        # Committed with an OLD date, so the tree is clean and the tip-commit
+        # gate passes: only the file's own mtime says somebody is still here.
+        old = f"@{int(time.time() - _THIRTY_DAYS)} +0000"
+        _git(wt, "add", "src")
+        _git(wt, "commit", "-q", "-m", "nested",
+             env={"GIT_AUTHOR_DATE": old, "GIT_COMMITTER_DATE": old})
+        os.utime(nested / "active.py", None)  # ...and it was just touched
+        os.utime(wt, (time.time() - _THIRTY_DAYS,) * 2)  # root still looks old
+
+        by_path = _run_prune(
+            worktree_repo, pr_exists=_pr_exists_stub({"claude/orphan"}),
+        )
+        rec = by_path[str(wt.resolve())]
+        assert rec["action"] == "skipped"
+        assert "content touched" in rec["reason"]
+        assert wt.exists()
+
+    def test_recent_tip_commit_blocks_the_prune(self, worktree_repo):
+        wt = self._orphan(
+            worktree_repo, tree_age=_THIRTY_DAYS, commit_age=3600.0,
+        )
+        by_path = _run_prune(
+            worktree_repo, pr_exists=_pr_exists_stub({"claude/orphan"}),
+        )
+        rec = by_path[str(wt.resolve())]
+        assert rec["action"] == "skipped"
+        assert "branch tip committed" in rec["reason"]
+        assert wt.exists()
+
+    def test_open_pr_worktree_is_never_aged_out(self, worktree_repo):
+        """Work in flight is not ours to delete at ANY age."""
+        wt = self._orphan(worktree_repo, tree_age=_THIRTY_DAYS)
+        by_path = _run_prune(worktree_repo, pr_exists=_pr_exists_stub())
+        rec = by_path[str(wt.resolve())]
+        assert rec["action"] == "skipped"
+        assert "a PR exists for this branch" in rec["reason"]
+        assert wt.exists()
+
+    def test_unknown_pr_state_is_fail_closed(self, worktree_repo):
+        wt = self._orphan(worktree_repo, tree_age=_THIRTY_DAYS)
+        by_path = _run_prune(
+            worktree_repo, pr_exists=_pr_exists_stub(unknown=True),
+        )
+        rec = by_path[str(wt.resolve())]
+        assert rec["action"] == "skipped"
+        assert "could not determine whether a PR exists" in rec["reason"]
+        assert wt.exists()
+
+    def test_lane_can_be_switched_off(self, worktree_repo):
+        wt = self._orphan(worktree_repo, tree_age=_THIRTY_DAYS)
+        by_path = _run_prune(
+            worktree_repo,
+            pr_exists=_pr_exists_stub({"claude/orphan"}),
+            no_pr_enabled=False,
+        )
+        rec = by_path[str(wt.resolve())]
+        assert rec["action"] == "skipped"
+        assert "no-PR lane disabled" in rec["reason"]
+        assert wt.exists()
+
+    def test_dirty_no_pr_worktree_is_kept(self, worktree_repo):
+        """Gate 6 applies to BOTH lanes: uncommitted work is never deleted."""
+        wt = self._orphan(worktree_repo, tree_age=_THIRTY_DAYS)
+        (wt / "scratch.tmp").write_text("in flight\n")
+        os.utime(wt, (time.time() - _THIRTY_DAYS,) * 2)
+        by_path = _run_prune(
+            worktree_repo, pr_exists=_pr_exists_stub({"claude/orphan"}),
+        )
+        rec = by_path[str(wt.resolve())]
+        assert rec["action"] == "skipped"
+        assert "dirty working tree" in rec["reason"]
+        assert wt.exists()
+
+    def test_env_tunable_threshold(self, worktree_repo, monkeypatch):
+        monkeypatch.setenv("UA_WORKTREE_PRUNE_NO_PR_MIN_AGE_DAYS", "60")
+        wt = self._orphan(worktree_repo, tree_age=_THIRTY_DAYS)
+        by_path = _run_prune(
+            worktree_repo, pr_exists=_pr_exists_stub({"claude/orphan"}),
+        )
+        rec = by_path[str(wt.resolve())]
+        assert rec["action"] == "skipped"
+        assert "60d age-out window" in rec["reason"]
+        assert wt.exists()
+
+
 class TestPruneRoots:
-    def test_defaults_to_repo_dot_worktrees(self, monkeypatch, tmp_path):
+    def test_defaults_to_both_worktree_dirs(self, monkeypatch, tmp_path):
+        """Regression: defaulting to ``.worktrees`` alone left the harness's own
+        ``.claude/worktrees`` — the 6.7 GiB blind spot — permanently
+        out-of-scope for BOTH cleanup jobs."""
         monkeypatch.delenv("UA_WORKTREE_PRUNE_ROOTS", raising=False)
-        assert _prune_roots(tmp_path) == [(tmp_path / ".worktrees").resolve()]
+        assert _prune_roots(tmp_path) == [
+            (tmp_path / ".worktrees").resolve(),
+            (tmp_path / ".claude" / "worktrees").resolve(),
+        ]
 
     def test_env_override_is_colon_separated(self, monkeypatch, tmp_path):
         a = tmp_path / "a"
