@@ -44,9 +44,10 @@ ENDPOINT = (
     or os.getenv("UA_OOM_ALERT_ENDPOINT")
     or "http://127.0.0.1:8002/api/v1/ops/notifications"
 ).strip()
-BUILD_STATS = Path(
-    os.getenv("UA_DEMO_FACTORY_BUILD_STATS", "/home/ua/lrepos/demo_factory/lessons/build_stats.jsonl")
-)
+# Where demo workspaces land. Each holds an eval_report.json — the authoritative
+# per-build fidelity verdict. NOT lessons/build_stats.jsonl, which is an
+# incomplete ledger (see _land_history).
+DEMO_GLOB_ROOT = Path(os.getenv("UA_DEMO_WORKSPACE_ROOT", "/home/ua/lrepos"))
 # Days with no successful land before we escalate. The gate broke 2026-07-18; a
 # healthy factory lands something most nights, so 3 quiet days is already wrong.
 STALE_LAND_DAYS = int(os.getenv("UA_NUGGETS_STALE_LAND_DAYS", "3") or "3")
@@ -148,40 +149,60 @@ def _parse_run(text: str) -> dict[str, Any]:
 
 # ── fidelity-gate tracking ────────────────────────────────────────────────────
 def _land_history() -> dict[str, Any]:
-    """Last successful fidelity-gate pass, and the recent vote record."""
+    """Last successful fidelity-gate pass, and the recent vote record.
+
+    SOURCE OF TRUTH IS THE PER-DEMO ``eval_report.json``, NOT
+    ``lessons/build_stats.jsonl``. build_stats is an incomplete ledger: it held 21
+    rows and its newest fidelity pass was 2026-07-18, which made it look like the
+    gate had rejected everything for two weeks. The eval reports show passes on
+    07-21, 07-22, 07-23, 07-26, 07-28, 07-29 and 07-30 that build_stats simply
+    never recorded. Reading the wrong file produced a two-week-long false alarm and
+    hid the real signal, which is that the collapse starts exactly on 07-31.
+
+    Each report carries a ``verdict`` block (``status`` PASS/FAIL, ``votes``) and a
+    ``_vote`` block (``samples_requested`` vs ``samples_ok`` — the latter matters
+    because the vote denominator is the number of samples that did NOT error).
+    """
     res: dict[str, Any] = {"last_land": None, "days_since": None, "recent": []}
-    if not BUILD_STATS.exists():
-        return res
-    rows = []
-    for line in BUILD_STATS.read_text(errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    rows: list[tuple[float, dict[str, Any]]] = []
+    for report in DEMO_GLOB_ROOT.glob("demo-*/eval_report.json"):
         try:
-            rows.append(json.loads(line))
+            d = json.loads(report.read_text(errors="replace"))
+            rows.append((report.stat().st_mtime, d))
         except Exception:
             continue
-    for d in rows:
-        ts = str(d.get("ts") or d.get("timestamp") or d.get("date") or "")
-        votes = d.get("eval_votes") or d.get("votes")
-        if not votes:
+    rows.sort(key=lambda r: r[0])
+    last_land_mtime: float | None = None
+    for mtime, d in rows:
+        ver = d.get("verdict") or {}
+        vote = d.get("_vote") or {}
+        status = str(ver.get("status") or vote.get("gate") or "")
+        if not status:
             continue
-        passed = False
-        m = re.match(r"(\d+)\s*/\s*(\d+)", str(votes))
-        if m:
-            got, total = int(m.group(1)), int(m.group(2))
-            passed = total > 0 and got * 2 > total  # strict majority
+        ts = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(timespec="seconds")
+        passed = status.upper() == "PASS"
         res["recent"].append(
-            {"ts": ts[:19], "demo": str(d.get("demo_id") or "")[:48], "votes": str(votes), "pass": passed}
+            {
+                "ts": ts[:19],
+                "demo": str(ver.get("demo_id") or "")[:48],
+                "votes": str(ver.get("votes") or ""),
+                "requested": vote.get("samples_requested"),
+                "ok": vote.get("samples_ok"),
+                "gating": f"{ver.get('gating_pass')}/{ver.get('gating_total')}",
+                "pass": passed,
+            }
         )
         if passed:
             res["last_land"] = ts[:19]
-    if res["last_land"]:
-        try:
-            last = datetime.fromisoformat(res["last_land"]).replace(tzinfo=timezone.utc)
-            res["days_since"] = (datetime.now(timezone.utc) - last).days
-        except Exception:
-            pass
+            last_land_mtime = mtime
+    # Compute the age from the raw mtime, NOT by re-parsing the truncated display
+    # string: ts[:19] drops the "+00:00" offset, so datetime.fromisoformat returns a
+    # NAIVE datetime and subtracting it from an aware now() raises — which silently
+    # left days_since=None and made every report escalate as "never landed".
+    if last_land_mtime is not None:
+        res["days_since"] = int(
+            (datetime.now(timezone.utc) - datetime.fromtimestamp(last_land_mtime, tz=timezone.utc)).days
+        )
     res["recent"] = res["recent"][-8:]
     return res
 

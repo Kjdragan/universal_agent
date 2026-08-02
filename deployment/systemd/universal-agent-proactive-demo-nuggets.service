@@ -32,6 +32,63 @@ Environment=PATH=/home/ua/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=UA_DEPLOYMENT_PROFILE=vps
 Environment=UA_INFISICAL_ENABLED=1
 Environment=INFISICAL_ENVIRONMENT=production
+# LOAD BEARING — build model for this lane, and the fix for the fidelity-gate
+# collapse. demo_factory's `model_tiers.py` right-sizes the `generic` class down
+# to sonnet ("per evidence (the Mandelbrot study)"); this lane passes no
+# --build-model, so it inherits that. The config was DEAD until the VPS
+# demo_factory checkout was pulled to 71e2868 on 2026-07-31 02:06 UTC. The very
+# next nuggets run — 04:52 UTC, 2h46m later — built with claude-sonnet-5 instead
+# of claude-opus-4-8, and the fidelity gate has passed ZERO builds since:
+#   07-20..07-30  claude-opus-4-8  votes 5/5, 5/5, 5/5, 4/5, 3/5, 3/4, 3/4  PASS
+#   07-31..08-02  claude-sonnet-5  votes 0/2, 1/3, 0/3, 1/3, 0/3            FAIL
+#
+# It is NOT a turn/thinking budget cap and NOT a bad model id. Every session ended
+# `stop_reason=end_turn` at 49-58 turns, and the transcripts record the correct
+# `model: claude-sonnet-5`. What the session RESULT text shows is the real story —
+# opus echoed the verifier's own output, sonnet self-certified:
+#   opus-4-8   40 turns  $4.20  49.4k out  -> "DEMO_VERIFY: PASS demo_id=..."
+#   opus-4-8   44 turns  $4.38  46.9k out  -> "`DEMO_VERIFY: PASS` — goal complete."
+#   sonnet-5   58 turns  $3.38  53.0k out  -> "No change since last turn. Holding..."
+#   sonnet-5   56 turns  $4.61  69.4k out  -> "PASS. Build complete; condition satisfied."
+#   sonnet-5   49 turns  $2.70  40.1k out  -> "Done."
+# Sonnet declares victory without running the verifier, which is why the
+# deterministic verifier still passes (something runs) while the fidelity judge
+# scores `gating 0/5`, `0/7`, `0/8` — zero capability requirements met. The gate
+# is CORRECT; the builds regressed.
+#
+# And the right-sizing saved nothing: sonnet used MORE turns and MORE output
+# tokens, and one run cost $4.61 against opus's $4.20/$4.38 — at a 0% land rate,
+# so the cost per landed demo went from ~$6 to infinite.
+#
+# The eval_samples 5->3 change from the same commit is NOT the cause: under strict
+# majority, P(pass) at K=3 vs K=5 differs by <4pp at any per-sample rate. The
+# per-sample rate itself collapsed (~0.7 -> ~0.12).
+#
+# Scoped to THIS unit via demo_factory's documented per-class override rather than
+# flipping the global tier — sonnet may be right for the simple local-compute
+# demos the Mandelbrot study measured, while this lane's judge selects
+# integration-heavy tutorials (MCP + OAuth, multi-agent harnesses, provider
+# routing). Also the only fix that reaches production on the normal deploy path:
+# the VPS demo_factory checkout is pulled MANUALLY (remote_deploy.sh has no
+# demo_factory step). Reversible by deleting this line. Use the bare `opus` alias
+# instead if you'd rather auto-track future Opus releases.
+Environment=DEMO_FACTORY_BUILD_MODEL_GENERIC=claude-opus-5
+# Reasoning effort for the build's `claude` sessions. Per the official docs
+# (code.claude.com/docs/en/model-config § "Adjust effort level"), the DEFAULT is
+# `high` on every model that supports effort — so this is a one-step raise, not a
+# rescue from `medium`. Opus 5 supports low|medium|high|xhigh|max.
+# `CLAUDE_CODE_EFFORT_LEVEL` is the documented env-var lever (the flag equivalent
+# is --effort, which would need a demo_factory argv change and that repo is pulled
+# to the VPS MANUALLY). Chosen because an autonomous end-to-end build is exactly
+# the "complex problem" adaptive reasoning is for, and the observed failure is a
+# judgment failure — sonnet declaring the goal met without running the verifier —
+# not a knowledge gap.
+# NB this trades runtime for quality: builds are capped at 3600s each
+# (UA_PROACTIVE_DEMO_NUGGETS_BUILD_TIMEOUT_SECONDS) and opus-4-8 at default effort
+# finished in ~21 min / 40-44 turns, so there is headroom — but the nightly health
+# report watches `builds_timeout` and will say so if xhigh pushes builds over.
+# Set to `auto` to fall back to the model default.
+Environment=CLAUDE_CODE_EFFORT_LEVEL=xhigh
 EnvironmentFile=-/opt/universal_agent/.env
 ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.proactive_demo_nuggets_cron
 # Memory. CORRECTED 2026-08-02 after reading the kernel memcg records; the
@@ -63,12 +120,21 @@ ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.proac
 # available on a 16G host. This job is already bounded end-to-end by wall clock
 # (3600s/build, TimeoutStartSec below), so throttling it is pure downside.
 #
-# MemoryMax stays 3G DELIBERATELY, as fault isolation rather than as a fitted
-# limit. With #1587 reaping orphaned build trees, expected demand is the ~2.16G
-# baseline, not the 6G seen when a timed-out build's `claude` tree stayed charged
-# to the cgroup for the rest of the run. If the ExecStopPost postmortem below
-# shows a post-#1587 run still pushing past 3G, raise this to 6G -- do not guess.
-MemoryMax=3G
+# MemoryMax RAISED 3G -> 6G on measured evidence from the first post-#1587/#1588
+# run (2026-08-02 04:51 UTC), sampled live mid-run at 06:06 UTC:
+#   memory.events:  high 0   max 2706   oom 0   oom_kill 0
+#   memory.peak = 3221622784 (3.0004 GiB -- pinned AT MemoryMax=3221225472, the
+#                 397312 B overshoot being the per-CPU charge-batch slop)
+#   memory.swap.current = 0
+# Reading: `high 0` confirms removing MemoryHigh worked, and swap 0 + oom_kill 0
+# confirm it is no longer thrashing or dying. But `max 2706` says the cgroup hit
+# its 3G ceiling 2706 times and had to synchronously reclaim each time -- with
+# ONE build running and the orphan leak already fixed. 3G is not fault isolation
+# here, it is a binding constraint on the steady state, and that reclaim pressure
+# is a plausible contributor to the 3600s build timeout this same run hit.
+# 6G matches the ~6 GiB demand measured at the three memcg OOMs and still leaves
+# ~9.7G headroom on the 16G box (box-wide /proc/pressure/memory reads 0.00).
+MemoryMax=6G
 # Capture the cgroup evidence that a Type=oneshot otherwise destroys on exit:
 # memory.events (the high/max/oom counters), memory.pressure, and any leftover
 # processes still charged at teardown. ExecStopPost runs inside the unit's

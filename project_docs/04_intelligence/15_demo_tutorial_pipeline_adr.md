@@ -159,6 +159,73 @@ demo. A non-ok finalize stays on the unchanged default close path.
 
 ### End-of-day golden-nuggets judge (Component D — SHIPPED, default OFF)
 
+> **UPDATE 2026-08-02 — the fidelity gate is NOT broken. The build model regressed. Root-caused and fixed.**
+> Earlier notes here said the gate had rejected everything since 2026-07-18. **That was wrong**, and it came
+> from reading the wrong file: `demo_factory/lessons/build_stats.jsonl` is an *incomplete* ledger (21 rows,
+> newest pass 07-18). The authoritative per-build record is each workspace's `eval_report.json`, and it shows
+> passes on **07-21, 07-22, 07-23, 07-26, 07-28, 07-29 and 07-30**. The real collapse starts **2026-07-31**.
+>
+> **What changed.** `demo_factory/scripts/model_tiers.py` right-sizes the `generic` class to `sonnet`
+> ("per evidence (the Mandelbrot study)"), and this lane's build argv passes no `--build-model`. That config
+> was *dead* until the VPS `demo_factory` checkout was pulled to `71e2868` on **2026-07-31 02:06 UTC**
+> (`git reflog`). The very next nuggets run — **04:52 UTC, 2h46m later** — built with `claude-sonnet-5`
+> instead of `claude-opus-4-8`:
+>
+> | Window | Build model | Fidelity votes |
+> |---|---|---|
+> | 07-20 → 07-30 | `claude-opus-4-8` | 5/5, 5/5, 5/5, 4/5, 3/5, 3/4, 3/4 → **PASS** |
+> | 07-31 → 08-02 | `claude-sonnet-5` | 0/2, 1/3, 0/3, 1/3, 0/3 → **FAIL** |
+>
+> **It is not a budget cap and not a bad model id.** Every session ended `stop_reason=end_turn` at 49–58
+> turns and the transcripts record the correct `model: claude-sonnet-5`. Thinking was on for both — sonnet
+> emitted *more* thinking events (286–717) than opus (252–363). The session *result* text is the tell:
+>
+> | Model | Turns | Cost | Output | Final result text |
+> |---|---|---|---|---|
+> | opus-4-8 | 40 | $4.20 | 49.4k | `DEMO_VERIFY: PASS demo_id=…` |
+> | opus-4-8 | 44 | $4.38 | 46.9k | `` `DEMO_VERIFY: PASS` — goal complete.`` |
+> | sonnet-5 | 58 | $3.38 | 53.0k | "No change since last turn. Holding…" |
+> | sonnet-5 | 56 | **$4.61** | 69.4k | "PASS. Build complete; condition satisfied." |
+> | sonnet-5 | 49 | $2.70 | 40.1k | "Done." |
+>
+> Opus echoes the verifier's own output; **sonnet self-certifies**. That is why the deterministic verifier
+> still passes (something runs) while the fidelity judge scores `gating 0/5`, `0/7`, `0/8` — zero capability
+> requirements met. **The gate is correct; the builds regressed.** And the right-sizing saved nothing: sonnet
+> used more turns and more output tokens, one run costing **$4.61 vs opus's $4.20** — at a 0% land rate, so
+> cost per landed demo went from ~$6 to infinite.
+>
+> The `eval_samples` 5→3 change from the same commit is **not** the cause: under the strict-majority rule
+> (`got*2 > total`, in the *demo_factory* repo's `scripts/evaluate_artifact.py`), P(pass) at K=3 vs K=5
+> differs by <4pp at any per-sample rate. The per-sample rate itself collapsed (~0.7 → ~0.12).
+>
+> **Fix:** `Environment=DEMO_FACTORY_BUILD_MODEL_GENERIC=claude-opus-5` on the nuggets unit — demo_factory's
+> documented per-class override, scoped to this lane rather than flipping the global tier (sonnet may be right
+> for the simple local-compute demos the Mandelbrot study measured; this lane's judge selects
+> integration-heavy tutorials). It is also the only fix that reaches production on the normal deploy path:
+> **the VPS `demo_factory` checkout is pulled MANUALLY** — `remote_deploy.sh` has no demo_factory step.
+>
+> **Measured follow-through on MemoryMax (3G → 6G).** #1588 deliberately held `MemoryMax=3G` so the first
+> post-fix run would be interpretable. It ran 2026-08-02 04:51 UTC and was sampled live mid-run at 06:06:
+> `memory.events: high 0, max 2706, oom 0, oom_kill 0`; `memory.peak = 3221622784` (3.0004 GiB — pinned *at*
+> the 3 GiB cap, the 397 KB overshoot being per-CPU charge-batch slop); `memory.swap.current = 0`.
+> `high 0` confirms the `MemoryHigh` removal worked and swap/oom zero confirm it is no longer thrashing or
+> dying — but **`max 2706`** means the cgroup hit its ceiling 2706 times and synchronously reclaimed each
+> time, with one build running and the orphan leak already fixed. 3G was a binding constraint on the steady
+> state, not fault isolation, and that reclaim pressure plausibly contributed to the 3600s build timeout the
+> same run hit. Raised to **6G**, matching the ~6 GiB demand measured at the three memcg OOMs, leaving ~9.7G
+> headroom on the 16G box.
+>
+> **#1587's process-group reap verified live.** That same run hit a build timeout at 05:51:43 — the first
+> since the fix. At 06:06 the cgroup held only the main python (04:51), the *next* build's tree (05:54), and
+> the sampling shell. **Zero** processes survived from the timed-out 04:51→05:51 build. Pre-fix, an orphaned
+> `claude` from 04:52 would still have been resident and charged to the cgroup.
+>
+> **Structural weakness worth knowing:** `goal_condition.py` hard-requires the literal
+> `DEMO_VERIFY: PASS demo_id=<id>` token, which is good — but that token only proves the README `## Run`
+> command executed, **not** that the capability exists. A demo can print it while implementing nothing. That
+> gap is precisely what the LLM fidelity judge is for, so the layering is sound; the failure was that its
+> rejections reached nobody. The nightly health report now closes that loop.
+
 > **UPDATE 2026-08-02 — the nightly health report (standing monitoring, replaces one-off checks).**
 > `scripts/nuggets_health_report.py`, run by
 > `deployment/systemd/universal-agent-nuggets-health-report.{service,timer}` at **08:05 America/Chicago**
