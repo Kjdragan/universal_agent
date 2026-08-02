@@ -147,8 +147,9 @@ The alert's "conversion stopped, 774 cancelled / 0 completed" is a **measurement
 - **Fix:** accumulate failed-build task_ids in `select_and_build_nuggets` as `attempted_failed`; in `run_zero_backlog_swipe` do `keep = built_ids | attempted_failed`. `sweep_unbuilt_pending_builds` already honors `keep_task_ids`.
 - **Do NOT** gate the whole swipe on `built != []` — a night where nothing clears 7.0 legitimately has empty `built` and should sweep.
 
-### T12 — Nuggets health report cannot see "zero demos landed"
+### T12 — Nuggets health report cannot see "zero demos landed" — ⛔ TAKEN BY THE HUB, DO NOT DO
 **File:** `scripts/nuggets_health_report.py`
+**Status: in flight in the hub session (3ea4352b) as of 2026-08-02 13:45 CDT. Skip it.** Described here only so you recognise it if you trip over it. If you find its PR already merged, that is expected.
 
 This is why the nuggets failure hid for three nights. Three separate defects:
 
@@ -211,6 +212,21 @@ This is why the nuggets failure hid for three nights. Three separate defects:
 - **Ideation report double-counts.** Says 40 when the unique queue is 22 — `get_stale_proposals` is a strict superset of `get_held_proposals` and `deliver_ideation_report` sums both. Subtract the intersection by `task_id` before counting/rendering; relabel "new" → "held". The backpressure branch already does this (`stale = []`) — the bug is recognized in one branch and not the other.
 - **episode_ideas morning email builds broken YouTube links.** `showrunner/report.py::link_for` special-cases only `x:` and falls through to `youtube.com/watch?v={vid}`, so 21 `l30:<url>` rows render as `watch?v=l30:https://github.com/...`. `hotcards.py::_link` handles it correctly — two copies drifted. Hoist one `source_link(row)` resolver. Rendering-only; the dispatch seed carries the real URL. Same-root sibling: `report.py::calibration` miscounts every l30 candidate as YouTube.
 - **Scout "4 sources dead" is a threshold bug, not dead sources.** `EMPTY_THRESHOLD=120` is one global run-count applied to sources with 3-minute and 30-day natural cadences. `hn:whoishiring` is a **permanent false positive by construction** — it will exceed 120 empty polls for ~29 days of every 30. The run-side watchdog already solved this correctly with time-based quiet detection after a false-positive day on 07-31; that fix was never carried into `scout/digest.py::build_digest`. Carry it.
+
+### T20 — Failed builds become permanently invisible candidates (`_demo_dir_exists` trap)
+**File:** `src/universal_agent/services/proactive_demo_nuggets.py::_demo_dir_exists`
+**Found 2026-08-02 by the demo_factory session during recon — newer than the rest of this doc.**
+
+The three failed nightly builds left `demo-proactive-*` directories on disk while their `task_hub` rows stayed `open`. `_demo_dir_exists` then treats "a directory exists" as "already handled," so those candidates — scored 8.4 / 8.0 / 7.8, the highest of the night — are silently skipped **forever**. They never land and never error; they just stop being considered.
+
+- **Why this matters beyond the three:** it explains the one thing the triage sweep could not. Swept candidates self-heal because `task_id` is a deterministic `sha256(video_id)` and CSI re-ingestion upserts them back to `open` — but these three never came back into play. The dir-exists check is why. T11 and T20 are the two halves of the same leak; fixing only T11 leaves this open.
+- **Fix:** `_demo_dir_exists` must distinguish a *landed* workspace from a *failed* one. Gate on the landing artifact (`eval_report.json` / `manifest.json` present and valid), not on directory existence. A directory with no landing artifact is a failed attempt and the candidate must remain eligible.
+- **Do NOT delete or move the existing `demo-proactive-*` dirs** — they hold the forensic build transcripts cited in the published exhibit, and the other session deliberately left them in place.
+
+### Context: the nuggets build failure itself is already FIXED
+Do not investigate it. The demo_factory session confirmed the root cause and shipped it: the Stop hook's `--demo-id <basename>` token used the workspace dirname (`demo-proactive-sakana-…`) while the pinned id was `proactive-sakana-…`, so it could never match; and the hook ran `sys.executable` (no demo venv) against the condition's `uv run python`, which produced the `run_exit_1` divergence. Shipped as demo_factory PR #221 (`35aaaab`), VPS pulled and sha256-verified, plus an N=3 identical-PASS circuit breaker. A controlled run launched ~18:35Z against 11 verified-unbuilt candidates.
+
+Two consequences for you: (a) the "opus vs sonnet" question is closed — every lane already resolves opus-tier, so `DEMO_FACTORY_ALL_OPUS=1` is a literal no-op and there is nothing to decide; (b) whether `CLAUDE_CODE_EFFORT_LEVEL=xhigh` takes effect is now answerable from artifacts — `goal_build` writes `.build/build_launch.json` and `land_demo` lifts `build_model`/`build_effort` into `manifest.json`.
 
 ---
 
