@@ -106,7 +106,9 @@ def _parse_run(text: str) -> dict[str, Any]:
         "builds_attempted": 0,
         "builds_rc3": 0,
         "builds_timeout": 0,
+        "builds_raised": 0,
         "builds_ok": 0,
+        "rc_histogram": {},
         "swept": None,
         "cgpm": {},
         "leftover": [],
@@ -126,8 +128,20 @@ def _parse_run(text: str) -> dict[str, Any]:
             out["builds_attempted"] += 1
         if "build TIMEOUT" in line:
             out["builds_timeout"] += 1
-        if re.search(r"build FAILED rc=3", line):
-            out["builds_rc3"] += 1
+        # "build subprocess raised" (proactive_demo_nuggets.py's except Exception
+        # branch, around a bare subprocess call) is a build that died WITHOUT ever
+        # producing a returncode -- the old rc=3-only match couldn't see it, so a
+        # night that crashed every build looked identical to a night that built
+        # nothing at all.
+        if "build subprocess raised" in line:
+            out["builds_raised"] += 1
+        # Any nonzero rc is a failure, not just rc=3 (nonzero_exit). Keep an rc
+        # histogram so the failure mode is visible at a glance instead of
+        # collapsing every rc into one bucket.
+        m = re.search(r"build FAILED rc=(-?\d+)", line)
+        if m:
+            rc = m.group(1)
+            out["rc_histogram"][rc] = out["rc_histogram"].get(rc, 0) + 1
         m = re.search(r"nuggets swipe: cancelled (\d+)", line)
         if m:
             out["swept"] = int(m.group(1))
@@ -141,8 +155,13 @@ def _parse_run(text: str) -> dict[str, Any]:
         m = re.search(r"CGPM leftover pid=(\d+) comm=(\S+)", line)
         if m:
             out["leftover"].append(f"{m.group(2)}({m.group(1)})")
+    # builds_rc3 stays as its own field for backward compatibility (it used to be
+    # the only failure counter) but is now derived from the histogram rather than
+    # incremented separately, so the two can never drift apart.
+    out["builds_rc3"] = out["rc_histogram"].get("3", 0)
+    builds_failed = sum(out["rc_histogram"].values()) + out["builds_raised"]
     out["builds_ok"] = max(
-        0, out["builds_attempted"] - out["builds_rc3"] - out["builds_timeout"]
+        0, out["builds_attempted"] - builds_failed - out["builds_timeout"]
     )
     return out
 
@@ -165,7 +184,12 @@ def _land_history() -> dict[str, Any]:
     """
     res: dict[str, Any] = {"last_land": None, "days_since": None, "recent": []}
     rows: list[tuple[float, dict[str, Any]]] = []
-    for report in DEMO_GLOB_ROOT.glob("demo-*/eval_report.json"):
+    # Scoped to demo-proactive-* only. The unscoped "demo-*" glob picks up ANY
+    # demo workspace on the box, including manually-built ones (e.g. from an
+    # operator-driven /demo session) that have nothing to do with this nightly
+    # job. A manual land resets days_since_last_land and fakes the fidelity-gate
+    # signal for a factory that hasn't actually landed anything on its own.
+    for report in DEMO_GLOB_ROOT.glob("demo-proactive-*/eval_report.json"):
         try:
             d = json.loads(report.read_text(errors="replace"))
             rows.append((report.stat().st_mtime, d))
@@ -223,6 +247,21 @@ def build_report() -> dict[str, Any]:
         problems.append(f"unit result={run['result']}")
         severity = "error"
 
+    # ZERO-LANDS RULE: a night that attempted builds and landed none of them must
+    # never render as healthy. This is the gap that let three consecutive nights
+    # of all-timeout, zero-land runs show up as a "perfect night" -- nothing else
+    # below fires on a single bad night (the fidelity-gate check only escalates
+    # once days_since_last_land crosses STALE_LAND_DAYS, which a recent land can
+    # mask for days).
+    if run["builds_attempted"] > 0 and run["builds_ok"] == 0:
+        problems.append(
+            f"{run['builds_attempted']} build(s) attempted, 0 landed this run "
+            f"(rc_histogram={run['rc_histogram'] or {}}, raised={run['builds_raised']}, "
+            f"timeout={run['builds_timeout']}) — a night that builds and lands nothing "
+            "is never healthy, regardless of how recently something else landed"
+        )
+        severity = "error"
+
     leftover = run["cgpm"].get("leftover_procs")
     if leftover not in (None, "0"):
         problems.append(
@@ -235,7 +274,17 @@ def build_report() -> dict[str, Any]:
     if isinstance(high, int) and high > 0:
         problems.append(f"memory.events high={high} — something is still throttling on memory")
         severity = "error"
-    for k in ("memory.events max", "memory.events oom", "memory.events oom_kill"):
+    # memory.events max is INFORMATIONAL, not an error. Under cgroup v2, `max`
+    # increments on every successful synchronous reclaim when the cgroup is at
+    # its MemoryMax ceiling -- that is the expected steady state for a job
+    # deliberately run under a MemoryMax limit, and it fires every single night
+    # for a reason that has nothing to do with health. Report the number so it
+    # stays visible, but never let it drive severity=error. Genuine OOM signals
+    # (oom / oom_kill) are a different thing entirely and still escalate.
+    mx = run["cgpm"].get("memory.events max")
+    if isinstance(mx, int) and mx > 0:
+        problems.append(f"memory.events max={mx} (informational — expected reclaim under MemoryMax)")
+    for k in ("memory.events oom", "memory.events oom_kill"):
         v = run["cgpm"].get(k)
         if isinstance(v, int) and v > 0:
             problems.append(f"{k}={v}")
@@ -269,7 +318,8 @@ def render(rep: dict[str, Any]) -> tuple[str, str]:
     }[rep["severity"]]
     parts = [
         f"run={run['started'] or 'DID NOT FIRE'} result={run['result'] or '?'}",
-        f"builds={run['builds_attempted']} (ok={run['builds_ok']} rc3={run['builds_rc3']} timeout={run['builds_timeout']})",
+        f"builds={run['builds_attempted']} (ok={run['builds_ok']} rc3={run['builds_rc3']} "
+        f"timeout={run['builds_timeout']} raised={run['builds_raised']} rc_hist={run['rc_histogram'] or {}})",
         f"swept={run['swept']}",
         f"peak={cg.get('memory.peak', '?')} swap_peak={cg.get('memory.swap.peak', '?')}",
         f"mem.high_events={cg.get('memory.events high', '?')} leftover_procs={cg.get('leftover_procs', '?')}",
