@@ -1667,6 +1667,113 @@ class TestPostTriageLifecycle:
         assert "old parser assertion" in row["last_error"]
 
 
+# ── T9: agentmail_review_required classification-aware severity ───────────
+
+
+class TestExternalReviewNotificationSeverity:
+    """Tests for ``_external_review_notification_severity``.
+
+    T9 root cause: the triage LLM correctly classified a vendor newsletter
+    as ``fyi``/``p3`` ("do not reply"), but the notification hard-coded
+    severity="warning" for every external-sender review, ignoring the
+    verdict. This downgrades to "info" ONLY when the non-action signal
+    (classification or priority) came from the model itself — never from a
+    manufactured fallback default (see ``_fallback_fields`` in
+    ``email_task_bridge.parse_email_triage_brief``).
+    """
+
+    def test_downgrades_on_real_fyi_classification(self):
+        from universal_agent.services.agentmail_service import (
+            _external_review_notification_severity,
+        )
+
+        triage = {
+            "classification": "fyi",
+            "priority": "p2",
+            "_fallback_fields": [],
+        }
+        assert _external_review_notification_severity(triage) == "info"
+
+    def test_downgrades_on_real_p3_priority(self):
+        from universal_agent.services.agentmail_service import (
+            _external_review_notification_severity,
+        )
+
+        triage = {
+            "classification": "instruction",
+            "priority": "p3",
+            "_fallback_fields": [],
+        }
+        assert _external_review_notification_severity(triage) == "info"
+
+    def test_downgrades_on_real_social_classification(self):
+        from universal_agent.services.agentmail_service import (
+            _external_review_notification_severity,
+        )
+
+        triage = {"classification": "social", "priority": "", "_fallback_fields": []}
+        assert _external_review_notification_severity(triage) == "info"
+
+    def test_stays_warning_for_action_classification(self):
+        from universal_agent.services.agentmail_service import (
+            _external_review_notification_severity,
+        )
+
+        triage = {
+            "classification": "instruction",
+            "priority": "p1",
+            "_fallback_fields": [],
+        }
+        assert _external_review_notification_severity(triage) == "warning"
+
+    def test_no_downgrade_when_classification_is_fallback(self):
+        # classification="fyi" LOOKS non-action, but the parser could not
+        # find it in the model's response and manufactured it — must not
+        # soften the alert on a fabricated default.
+        from universal_agent.services.agentmail_service import (
+            _external_review_notification_severity,
+        )
+
+        triage = {
+            "classification": "fyi",
+            "priority": "",
+            "_fallback_fields": ["classification", "priority"],
+        }
+        assert _external_review_notification_severity(triage) == "warning"
+
+    def test_no_downgrade_when_priority_is_fallback(self):
+        from universal_agent.services.agentmail_service import (
+            _external_review_notification_severity,
+        )
+
+        triage = {
+            "classification": "",
+            "priority": "p3",
+            "_fallback_fields": ["classification", "priority"],
+        }
+        assert _external_review_notification_severity(triage) == "warning"
+
+    def test_missing_fallback_fields_key_defaults_to_no_fallback(self):
+        # A triage dict without an explicit "_fallback_fields" key (e.g.
+        # hand-built by an older caller) must not silently treat every
+        # field as trusted-real OR silently treat everything as fallback;
+        # parse_email_triage_brief always sets the key, so an absent key
+        # means "nothing was flagged as fallback" — downgrade proceeds.
+        from universal_agent.services.agentmail_service import (
+            _external_review_notification_severity,
+        )
+
+        triage = {"classification": "fyi", "priority": ""}
+        assert _external_review_notification_severity(triage) == "info"
+
+    def test_empty_triage_stays_warning(self):
+        from universal_agent.services.agentmail_service import (
+            _external_review_notification_severity,
+        )
+
+        assert _external_review_notification_severity({}) == "warning"
+
+
 # ── Bounce / Automated Email Filtering ─────────────────────────────────
 
 

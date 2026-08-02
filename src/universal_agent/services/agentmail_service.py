@@ -93,6 +93,38 @@ def _trusted_triage_is_non_action(triage: dict[str, Any]) -> bool:
     )
 
 
+_NON_ACTION_TRIAGE_PRIORITIES = {"p3", "3"}
+
+
+def _external_review_notification_severity(triage: dict[str, Any]) -> str:
+    """Resolve the ``agentmail_review_required`` notification severity.
+
+    Defaults to "warning" (the existing behaviour). Downgrades to "info"
+    when the triage LLM's OWN verdict says the email is non-action — e.g.
+    a vendor newsletter classified ``fyi`` at ``p3`` priority. This is the
+    root-cause fix for T9: previously a correct ``fyi``/``p3``/"do not
+    reply" verdict from the triage classifier was ignored by a hard
+    "external sender = warning" binary.
+
+    CRITICAL: only downgrades on a REAL model verdict. ``triage`` carries
+    ``_fallback_fields`` (see ``email_task_bridge.parse_email_triage_brief``)
+    — the list of fields the parser could NOT find in the model's response
+    and had to manufacture a default for. If the field that would justify
+    the downgrade (``classification`` or ``priority``) is itself in that
+    list, the value is fabricated, not a model verdict, and severity stays
+    "warning" — a manufactured default must never soften a
+    security-relevant alert.
+    """
+    fallback_fields = set(triage.get("_fallback_fields") or [])
+    classification = str(triage.get("classification") or "").strip().lower()
+    if classification in _NON_ACTION_TRIAGE_CLASSIFICATIONS and "classification" not in fallback_fields:
+        return "info"
+    priority = str(triage.get("priority") or "").strip().lower()
+    if priority in _NON_ACTION_TRIAGE_PRIORITIES and "priority" not in fallback_fields:
+        return "info"
+    return "warning"
+
+
 async def _extract_inbound_email_tasks(*, subject: str, body: str) -> list[dict[str, Any]]:
     """Return canonical inbound tasks for an email request.
 
@@ -3401,11 +3433,13 @@ class AgentMailService:
                 kind="agentmail_review_required",
                 title="🔶 External Email — Human Triage Required",
                 message=note or f"External inbound email from {sender_email or 'unknown sender'} requires security review.",
-                severity="warning",
+                severity=_external_review_notification_severity(triage),
                 metadata={
                     "thread_id": thread_id,
                     "sender_email": sender_email,
                     "session_key": str(payload.get("session_key") or ""),
+                    "classification": str(triage.get("classification") or ""),
+                    "priority": str(triage.get("priority") or ""),
                 },
             )
 

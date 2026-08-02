@@ -403,6 +403,56 @@ sent (`has_ack_outbound`), or the request text matches
 `_request_requires_single_final_response` (e.g. "one final response only"). This
 prevents duplicate / premature replies.
 
+### 7a. Untrusted inbound: arrival + post-triage notifications
+
+An untrusted, non-self-send inbound email fires **two** operator notification
+kinds at different pipeline stages, both `severity="warning"` by default:
+
+1. **`agentmail_external_arrived`** — emitted immediately in
+   `_handle_inbound_email`, right after the pre-triage security gates pass and
+   before the email is queued for triage. Carries `metadata.thread_id`,
+   `sender_email`, `message_id`.
+2. **`agentmail_review_required`** (or `agentmail_quarantined` if the triage
+   verdict is `routing_decision == quarantine`) — emitted ~30-60s later from
+   `_route_external_email_task`, once the triage LLM's brief has been parsed.
+   Carries `metadata.thread_id`, `sender_email`, and (T9) `classification` /
+   `priority` lifted from the parsed `triage` dict.
+
+Because both carry the same `thread_id` for one inbound message, this used to
+fire as two separate operator emails per untrusted email ~54s apart (T9). Two
+independent, cooperating fixes now apply:
+
+- **Cross-kind cooldown merge**: `notification_dispatcher.py::_scope_key_for_record`
+  resolves `metadata.thread_id` as a scope candidate, and
+  `_cooldown_kind_for_record` maps all three kinds above onto one shared
+  cooldown bucket (`_CROSS_KIND_MERGE_GROUPS`). Whichever kind fires first for
+  a given thread "wins" the email/Telegram send; the later one for the same
+  thread is cooldown-suppressed instead of double-alerting. See
+  `08_operations/05_incident_response_patterns.md` § "Notification dedup" for
+  the general mechanism.
+- **Classification-aware severity downgrade**:
+  `agentmail_service.py::_external_review_notification_severity` downgrades
+  the `agentmail_review_required` notification from `warning` to `info` when
+  the triage LLM's own verdict is non-action — `classification` in
+  `fyi`/`social`/`status_update`, or `priority == "p3"`. An `info` severity
+  notification never reaches `_list_undelivered_high_severity_notifications`
+  (its SQL filter is `severity IN ('error','warning')`), so it never attempts
+  email/Telegram delivery at all — only the dashboard shows it. This is the
+  root-cause fix for the reported incident: a vendor newsletter correctly
+  classified `fyi`/`p3` by the triage LLM was still hard-coded to `warning`.
+  **Guardrail**: the downgrade only fires when the deciding field
+  (`classification` or `priority`) is a REAL model verdict — if
+  `parse_email_triage_brief`'s `_fallback_fields` list contains that field
+  name (the value was manufactured because the model's response couldn't be
+  parsed), severity stays `warning`. A fabricated default must never soften a
+  security-relevant alert.
+- **Out of scope (T9)**: a dedicated bulk/newsletter lane (`List-Unsubscribe`
+  / `Precedence` header parsing) does not exist anywhere in the codebase —
+  possible future work, not built here. Whether arrival notices should reach
+  the operator's inbox at all remains an open, deliberately deferred
+  question; both notification kinds still fire (only the redundant SECOND
+  email is suppressed).
+
 ### 8. Startup recovery
 
 `recover_abandoned_sessions` runs once at startup and does three passes over the
