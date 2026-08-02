@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/api/server.py
   - src/universal_agent/api/gateway_bridge.py
   - src/universal_agent/loop_control.py
-last_verified: 2026-06-28
+last_verified: 2026-08-02
 ---
 
 # Gateway, Sessions & Execution
@@ -671,7 +671,43 @@ kwarg name (`additional_headers` vs `extra_headers`) across library versions.
 to `/api/v1/sessions`, opens the `/stream` WebSocket, sends `execute`, and
 **converts gateway event types into Web-UI `WebSocketEvent` types** via a
 `type_map`. It filters `final=True` text events once streaming text has been
-seen (avoids double-rendering the final assistant message).
+seen (avoids double-rendering the final assistant message) — its own
+independent re-implementation of the predicate below, operating on the
+already-serialized wire dict rather than a raw `AgentEvent` (not yet
+migrated to the shared helper).
+
+### Final-text dedup (`is_redundant_final_text`)
+
+`execution_engine.py::ExecutionEngineAdapter.execute` always yields a
+fallback `TEXT` event shaped `data={"text": result.response_text, "final":
+True}` at the end of a turn, for consumers that don't process incremental
+streaming text. When the turn already streamed text via
+`hooks.py::emit_text_event` (each such event carries a `time_offset` key),
+that fallback event is a verbatim repeat of everything already delivered.
+`execution_engine.py::is_redundant_final_text(event, saw_streaming_text)` is
+the single shared predicate for "drop this event" — `True` iff the event is
+`TEXT` with `data["final"] is True` **and** the caller's own
+`saw_streaming_text` flag (updated from `time_offset is not None` on each
+event, checked-then-updated in that order) is already `True`.
+
+Two in-repo consumers call it directly on `AgentEvent` objects:
+
+- `gateway_server.py::_run_gateway_session_request`'s WebSocket broadcast
+  loop (`is_redundant_final_text(event, saw_streaming_text) → continue`).
+- `hooks_service.py::HooksService._consume_gateway_execute` — every
+  hook-dispatched agent run (webhooks, YouTube tutorials, email triage)
+  streams through this loop, which builds
+  `execution_summary["response_preview"]` (the last 8 non-empty text-event
+  strings, joined). `services/agentmail_service.py` reads that field
+  verbatim when composing triage/alert email bodies. Before this predicate
+  was applied here too, the fallback re-emission was appended
+  unconditionally, so an alert/triage email body could contain the full
+  response text twice (proven on a stored `full_message` containing `EMAIL
+  TRIAGE BRIEF` twice, 3,693 chars) — see [Webhook
+  Architecture](../05_channels/02_webhooks.md) § Gotchas summary.
+
+`GatewayBridge` above still carries its own equivalent check over the wire
+JSON rather than calling this helper — a known follow-up, not yet done.
 
 ## Timeout & WS-tuning knobs (`timeout_policy.py`)
 
