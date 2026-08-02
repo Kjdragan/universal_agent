@@ -1,0 +1,693 @@
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<title>Golden-Nuggets Job — What Is Actually Wrong</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    background: #ffffff; color: #1f2328;
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0; padding: 0 20px 80px;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  header { border-bottom: 3px solid #1f2328; padding: 34px 0 18px; margin-bottom: 28px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.02em; }
+  .sub { color: #59636e; font-size: 15px; margin: 0; }
+  h2 {
+    font-size: 22px; margin: 44px 0 12px; padding-bottom: 7px;
+    border-bottom: 1px solid #d1d9e0; letter-spacing: -0.01em; scroll-margin-top: 16px;
+  }
+  h3 { font-size: 17px; margin: 26px 0 8px; }
+  p, li { font-size: 15.5px; }
+  code {
+    background: #f0f1f3; border-radius: 5px; padding: 1.5px 5px;
+    font: 13.5px/1.5 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    word-break: break-word;
+  }
+  pre {
+    background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 7px;
+    padding: 13px 15px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; font-size: 13px; }
+  .tw { overflow-x: auto; margin: 14px 0; border: 1px solid #d1d9e0; border-radius: 7px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { padding: 8px 11px; text-align: left; border-bottom: 1px solid #e4e8ed; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  .tag {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+  .bad  { background: #ffe0e0; color: #8b1a1a; }
+  .good { background: #dcf5e3; color: #145523; }
+  .warn { background: #fff2cc; color: #7a5600; }
+  .neut { background: #eceff2; color: #45505c; }
+  .callout {
+    border-left: 4px solid #1f2328; background: #f6f8fa;
+    padding: 14px 18px; margin: 20px 0; border-radius: 0 7px 7px 0;
+  }
+  .callout.hit { border-left-color: #b31d1d; background: #fff5f5; }
+  .callout.ok  { border-left-color: #1a7f37; background: #f2fcf5; }
+  .callout.q   { border-left-color: #8250df; background: #faf7ff; }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child  { margin-bottom: 0; }
+  .verdict { font-weight: 700; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 5px 0; }
+  .toc { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 7px; padding: 14px 20px; margin: 22px 0 8px; }
+  .toc ol { margin: 6px 0 0; }
+  .toc a { color: #0550ae; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .meta { color: #59636e; font-size: 13.5px; }
+  hr { border: none; border-top: 1px solid #d1d9e0; margin: 40px 0; }
+  .kicker { font-size: 12.5px; letter-spacing: .09em; text-transform: uppercase; color: #8b949e; font-weight: 700; }
+  img, svg { max-width: 100%; }
+</style>
+
+<div class="wrap">
+<header>
+  <p class="kicker">Production forensics · uaonvps</p>
+  <h1>universal-agent-proactive-demo-nuggets — what is actually wrong</h1>
+  <p class="sub">Investigated 2026-08-01 · evidence from journald, systemd cgroup accounting, the live activity-state DB, demo_factory build stats, and the deployed source</p>
+</header>
+
+<div class="callout hit">
+<p><span class="kicker" style="color:#b31d1d">Bottom line</span></p>
+<p><strong>The 2026-08-01 run did not fail.</strong> Its main python <strong>exited cleanly with status
+0</strong> at 06:36:47 after completing every phase including the zero-backlog swipe. The
+<code>result=timeout</code> systemd recorded was a <em>post-exit cgroup cleanup</em> failure — leftover
+<code>claude</code> children that ignored SIGTERM.</p>
+<p><strong>There is a real one-line subprocess bug</strong> — the per-build timeout kills only the direct
+<code>uv</code> child and <strong>orphans the <code>claude</code> grandchildren, which stay charged to the
+service's cgroup</strong>. Proven, and worth fixing on its own terms.
+<span class="tag good">fixed &amp; deployed</span> But it is <em>not</em> what caused the OOMs — see below.</p>
+<p><strong>The OOMs have a different cause, and it is the interesting one.</strong> All three
+(07-20, 07-22, 07-27) fire shortly after the demo under test downloads a <strong>multi-gigabyte ML
+model</strong> — 954 M, 2.9 G, 1.7 G. On 07-22 the weights finished landing at 05:37:20 and the cgroup died at
+05:38:49, <strong>89 seconds later</strong>. This job builds demos like <em>"Run Alibaba OvisOCR2
+Locally"</em> and then <em>executes</em> them, loading the weights with CPU <code>torch</code> inside a
+1 GB-capped cgroup on a GPU-less 4-core box. <span class="tag warn">structural — needs your call</span></p>
+<p><strong>Your instinct on <code>MemoryHigh=2G</code> was right, and my first read was wrong.</strong> The
+reassuring "peak was only 1.0G" is a <em>clamp</em> reading — pinned at <code>MemoryMax=1G</code> with 1.16G
+spilled to swap — and #1579 <strong>was not even live that night</strong> (it landed 13h later). Real demand
+was ~6 GiB. <code>MemoryHigh=2G</code> binds on every observed night.
+<span class="tag good">removed</span></p>
+<p>And underneath all of it: <strong>this job has not landed a demo since 2026-07-18.</strong> Every build
+since passes the deterministic verifier and is then rejected by the Gemini fidelity judge. It burns 1–2 hours
+of inference a night and ships nothing. <span class="tag warn">needs your call</span></p>
+</div>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#refutation">The premise that does not survive the evidence</a></li>
+  <li><a href="#rootcause">The orphaned process group (real bug, not the OOM cause)</a></li>
+  <li><a href="#deeper">The deeper problem: the fidelity gate rejects everything</a></li>
+  <li><a href="#runs">Run-by-run measured table</a></li>
+  <li><a href="#profile">Per-phase memory &amp; time profile</a></li>
+  <li><a href="#questions">Verdicts on Q1–Q5</a></li>
+  <li><a href="#pr1579">Was PR #1579 right?</a></li>
+  <li><a href="#recs">Ranked recommendations</a></li>
+  <li><a href="#unknown">What we could not determine</a></li>
+  <li><a href="#handoff">Handoff — what continues, what needs you</a></li>
+</ol>
+</div>
+
+<h2 id="refutation">1. The premise that does not survive the evidence</h2>
+
+<p>Two claims in the brief are contradicted by the machine:</p>
+
+<div class="callout">
+<p><strong>“The 2026-08-02 04:51 UTC run is the first under these limits — read its journal first.”</strong><br>
+That run <strong>had not happened yet</strong>. The investigation started at 2026-08-01 23:48 UTC; the run fires
+at 04:51 UTC on 08-02. There is no post-#1579 run to read. Every number below is from 07-26 → 08-01.</p>
+</div>
+
+<div class="callout">
+<p><strong>“The main python died around 1h46m.”</strong><br>
+It did not. <code>systemctl show</code> for the invocation starting <code>2026-08-01 04:50:51 UTC</code> reports:</p>
+<pre><code>ExecMainStartTimestamp = Sat 2026-08-01 04:50:51 UTC
+ExecMainExitTimestamp  = Sat 2026-08-01 06:36:47 UTC
+ExecMainCode           = 1        # CLD_EXITED — a normal exit(), not a signal
+ExecMainStatus         = 0        # success
+MemoryPeak             = 1075073024   # 1.0009 GiB
+MemorySwapPeak         = 1249239040   # 1.16 GiB
+CPUUsageNSec           = 1379767225000 # 22m59.6s CPU across 1h45m56s wall</code></pre>
+<p class="meta"><strong>Note:</strong> <code>systemctl show</code> also reports
+<code>Result=success</code>, but that field is <em>not</em> evidence — an earlier diagnostic session ran
+<code>sudo systemctl reset-failed</code> on this unit twice (19:58:21 and 20:06:57 UTC on 08-01), which clears
+<code>Result</code>. The load-bearing fields are <code>ExecMainCode</code>/<code>ExecMainStatus</code>, which
+<code>reset-failed</code> does not touch, plus the journal evidence below.</p>
+<p>The run's own final JSON printed and closed at 06:36:45, two seconds before exit:</p>
+<pre><code>06:36:45  nuggets swipe: cancelled 11 un-built pending candidate(s) (kept 0 built, preserved 1 gpu-approved)
+06:36:45    "error": null,
+06:36:45    "finished_at": "2026-08-01T06:36:45+00:00",
+06:36:45    "ok": true,
+06:36:45    "swipe": { "kept": 0, "preserved_approved": 1, "swept": 11 }
+06:36:45  }</code></pre>
+<p>That JSON is the last statement in <code>main()</code> before <code>sys.exit</code>, so a printed-and-closed
+summary <em>is</em> proof of clean completion.</p>
+<p>The process ran 1h45m56s and <strong>exited 0</strong>. What happened next is the whole story:</p>
+<pre><code>06:38:17  State 'stop-sigterm' timed out. Killing.
+06:38:17  Killing process 480395 (2.1.220) with signal SIGKILL.
+06:38:17  Killing process 490840 (2.1.220) with signal SIGKILL.
+06:38:17  Failed to kill control group /system.slice/...: Invalid argument
+06:39:48  State 'final-sigterm' timed out. Killing.
+06:39:48  Unit process 480395 (2.1.220) remains running after unit stopped.
+06:39:48  Failed with result 'timeout'.</code></pre>
+<p><code>2.1.220</code> is the <code>claude</code> CLI (its process name is its version string). systemd spent
+3 minutes failing to reap leftover children <em>after the job had already succeeded</em>, then labelled the
+whole run a timeout.</p>
+</div>
+
+<h2 id="rootcause">2. The orphaned process group — a real bug, but not the OOM cause</h2>
+
+<p>The deployed <code>services/proactive_demo_nuggets.py::_default_build_runner</code> is:</p>
+
+<pre><code>def _default_build_runner(argv: list[str]) -&gt; subprocess.CompletedProcess:
+    """Run build_demo.py as a subprocess (the injection seam tests replace)."""
+    return subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        timeout=_build_timeout_seconds(),
+    )</code></pre>
+
+<p>Verified live on the VPS: <code>grep -c "killpg\|start_new_session"</code> on
+<code>/opt/universal_agent/src/.../proactive_demo_nuggets.py</code> returns <strong>0</strong>.</p>
+
+<p>On <code>TimeoutExpired</code>, CPython kills only the <strong>direct</strong> child — here <code>uv</code>.
+The process tree below it survives:</p>
+
+<pre><code>systemd oneshot cgroup
+└─ python -m ...proactive_demo_nuggets_cron        [the main process]
+   └─ uv run --project demo_factory python build_demo.py     ← only THIS gets killed
+      └─ python build_demo.py
+         └─ claude --print --output-format stream-json ... /goal ...   ← ORPHANED
+            └─ notebooklm-mcp                                          ← ORPHANED</code></pre>
+
+<div class="callout hit">
+<p>Orphans re-parent to PID&nbsp;1 but <strong>cgroup membership is inherited at fork and does not change on
+re-parenting</strong>. The orphaned <code>claude</code> tree therefore stays inside
+<code>system.slice/universal-agent-proactive-demo-nuggets.service</code>, keeps counting against
+<code>MemoryMax</code>, and outlives the main process.</p>
+</div>
+
+<h3>Reproducible proof</h3>
+<p>Mirroring <code>_default_build_runner</code> exactly, with a <code>sh → python → sleep</code> tree:</p>
+
+<div class="tw"><table>
+<tr><th>Case</th><th>Implementation</th><th>Surviving grandchildren after timeout</th></tr>
+<tr><td><strong>A</strong> — current code</td><td><code>subprocess.run(argv, capture_output=True, timeout=N)</code></td><td><span class="tag bad">1 orphaned</span></td></tr>
+<tr><td><strong>B</strong> — the fix</td><td><code>Popen(..., start_new_session=True)</code> + <code>os.killpg(SIGKILL)</code></td><td><span class="tag good">0</span></td></tr>
+</table></div>
+
+<p>This is now a committed regression test
+(<code>test_build_runner_timeout_reaps_the_whole_process_group</code>), run as a <strong>negative control</strong>
+against the old runner: it fails with <em>“1 orphaned grandchild process(es) survived the build timeout”</em>
+and passes with the fix.</p>
+
+<h3>The 2026-07-27 chain, in 3 minutes 37 seconds</h3>
+<pre><code>04:51:44  Starting
+04:52:07  judge done — 16 candidates DROPPED; "building Run Alibaba OvisOCR2..."   (build 1)
+05:52:07  build TIMEOUT for run-alibaba-ovisocr2 (exactly 3600s)   ← orphan created
+05:52:07  "building OpenAI's Privacy Filter..."                    (build 2, orphan still resident)
+05:55:44  A process of this unit has been killed by the OOM killer
+05:55:50  Failed with result 'oom-kill'.   Consumed 22min 23s CPU</code></pre>
+<p>Build 2 started inside a cgroup that was still holding build 1's abandoned <code>claude</code> tree.
+<code>MemoryMax</code> was <strong>1G</strong> that night. It blew the ceiling 3m37s later.</p>
+
+<div class="callout hit">
+<p><strong>Direct proof the orphan was alive and working after the kill.</strong> Filesystem timestamps in the
+abandoned build's workspace:</p>
+<pre><code>05:52:07  uv SIGKILLed (subprocess.run timeout fires)
+05:55:22  demo-proactive-run-alibaba-ovisocr2…/.build/build_transcript.jsonl   mtime
+05:55:44  memcg OOM kills the unit</code></pre>
+<p>The orphaned <code>claude</code> was <strong>still writing its transcript 3m15s after its parent was
+killed, and 22 seconds before the OOM.</strong> The same pattern appears on 2026-07-23, where an orphan wrote
+five more files (including <code>run_screencast.mp4</code>) through 05:55:26 after a 05:51:50 kill.</p>
+</div>
+
+<p>The build loop then <code>continue</code>s to the next candidate after a timeout — so orphans
+<strong>accumulate within a single run</strong>, and each subsequent build has less headroom than the last.</p>
+
+<h2 id="deeper">3. The deeper problem: the fidelity gate rejects everything</h2>
+
+<p>Chasing why builds take an hour surfaced something larger. <code>rc=3</code> — the exit code on the
+failed builds — does <strong>not</strong> mean the demo is broken. In
+<code>demo_factory/scripts/build_demo.py::Driver.finish</code>, <code>rc=3</code> means
+<code>land != "PASS"</code>, and <code>land_demo.py</code> computes
+<code>final_pass = passed and eval_passed</code> — the deterministic verifier <em>and</em> a Gemini
+fidelity judge voting by strict majority.</p>
+
+<p>From <code>demo_factory/lessons/build_stats.jsonl</code> (read directly on the VPS):</p>
+
+<div class="tw"><table>
+<tr><th>Date</th><th>demo_id</th><th>Verifier</th><th>Fidelity votes</th><th>Outcome</th></tr>
+<tr><td>2026-07-17</td><td>trace-curator</td><td><span class="tag good">pass</span></td><td>5/5</td><td><span class="tag good">landed</span></td></tr>
+<tr><td>2026-07-18</td><td>phone-escalation</td><td><span class="tag good">pass</span></td><td>4/5</td><td><span class="tag good">landed</span></td></tr>
+<tr><td>2026-07-31</td><td>proactive-buzz-kimi-k3-…</td><td><span class="tag good">pass</span></td><td>0/2</td><td><span class="tag bad">rc=3</span></td></tr>
+<tr><td>2026-07-31</td><td>proactive-herdr-…</td><td><span class="tag good">pass</span></td><td>1/3</td><td><span class="tag bad">rc=3</span></td></tr>
+<tr><td>2026-08-01</td><td>proactive-hermes-agent-kimi-k3-…</td><td><span class="tag good">pass</span></td><td>0/3</td><td><span class="tag bad">rc=3</span></td></tr>
+<tr><td>2026-08-01</td><td>proactive-voice-agent-observability-…</td><td><span class="tag good">pass</span></td><td>1/3</td><td><span class="tag bad">rc=3</span></td></tr>
+<tr><td>2026-08-01</td><td>proactive-build-a-secure-mcp-server-…</td><td><span class="tag good">pass</span></td><td>0/3</td><td><span class="tag bad">rc=3</span></td></tr>
+<tr><td>2026-08-02</td><td>epi-show-hn-a-rust-coding-ag</td><td><span class="tag good">pass</span></td><td>0/3</td><td><span class="tag bad">rc=3</span></td></tr>
+</table></div>
+
+<div class="callout hit">
+<p><strong>The last fidelity pass was 2026-07-18.</strong> Every build since — including all of 07-31 and
+08-01 — produced a demo that <em>ran and passed the deterministic verifier</em>, and was then rejected by the
+judge. One of them (<code>herdr</code>) even scored <code>gating_pass 3/4</code> with holistic verdict
+<code>"delivers"</code> and still failed on a 1-of-3 vote.</p>
+<p>Note the panel size also changed: <strong>5 voters in July, 2–3 voters now</strong>. A strict majority over
+2–3 voters is a materially harsher gate than 4/5 was.</p>
+</div>
+
+<p>Two corrections to the unit's own comments fell out of this:</p>
+<ul>
+<li><code>--video</code> is a <strong>deprecated no-op</strong>; <code>a.video</code> is never read. The
+explainer render happens in <code>land_demo.py</code> <em>after</em> <code>final_pass</code>, so with zero
+passes it has never fired on these builds. Newest <code>*-explainer.mp4</code> on disk is from 2026-07-23.</li>
+<li>Builds run on <strong><code>claude-sonnet-5</code>, not Opus</strong> — <code>--model-tier auto</code>
+right-sizes the generic class down. The unit comment "(Opus /goal, slow)" is wrong.</li>
+</ul>
+
+<h2 id="runs">4. Run-by-run measured table</h2>
+
+<div class="tw"><table>
+<tr><th>Date (UTC)</th><th>Builds</th><th>Per-build durations</th><th>Σ builds</th><th>Wall</th><th>CPU</th><th>systemd result</th><th>Swipe</th></tr>
+<tr><td>07-26</td><td><strong>1</strong></td><td>45m21s</td><td>45m21s</td><td>45m29s</td><td>7m13.7s</td><td><span class="tag good">success</span></td><td>yes (2)</td></tr>
+<tr><td>07-27</td><td>2</td><td>60m00s <span class="tag bad">TIMEOUT</span> + 3m37s (OOM)</td><td>63m37s</td><td>64m06s</td><td>22m23.7s</td><td><span class="tag bad">oom-kill</span></td><td><span class="tag bad">no (0)</span></td></tr>
+<tr><td>07-28</td><td><strong>3</strong></td><td>25m58s, 40m53s <span class="tag warn">rc=3</span>, 34m20s</td><td>101m11s</td><td>101m38s</td><td>58m17.6s</td><td><span class="tag good">success</span></td><td>yes (31 — catch-up)</td></tr>
+<tr><td>07-29</td><td><strong>1</strong></td><td>23m49s</td><td>23m49s</td><td>24m03s</td><td>14m48.5s</td><td><span class="tag good">success</span></td><td>yes (10)</td></tr>
+<tr><td>07-30</td><td><strong>3</strong></td><td>29m53s, 36m45s, 26m44s <span class="tag warn">rc=3</span></td><td>93m22s</td><td>93m41s</td><td>1h31m52.1s</td><td><span class="tag good">success</span></td><td>yes (19)</td></tr>
+<tr><td>07-31</td><td><strong>3</strong></td><td>31m19s <span class="tag warn">rc=3</span>, 46m04s <span class="tag warn">rc=3</span>, 60m00s <span class="tag bad">TIMEOUT</span></td><td>137m23s</td><td>137m35s</td><td>—</td><td><span class="tag warn">no terminal line</span></td><td>yes (18)</td></tr>
+<tr><td>08-01</td><td><strong>3</strong></td><td>22m10s <span class="tag warn">rc=3</span>, 42m22s <span class="tag warn">rc=3</span>, 41m15s <span class="tag warn">rc=3</span></td><td><strong>105m47s</strong></td><td><strong>105m56s</strong></td><td>22m59.6s</td><td><span class="tag bad">timeout</span> <span class="meta">(cleanup only)</span></td><td>yes (11)</td></tr>
+</table></div>
+
+<div class="callout ok">
+<p><strong>Wall clock is build time and nothing else.</strong> On 08-01, Σ(builds) = 105m47s against a wall of
+105m56s — <strong>99.86 % of the run was spent inside <code>subprocess.run</code></strong>. Nine seconds of
+non-build time. Every fast run built <strong>1</strong> demo; every slow run built <strong>3</strong>.</p>
+</div>
+
+<p class="meta">Swipe counts are <code>status='cancelled'</code> rows in
+<code>task_hub_items</code> by <code>updated_at</code> day. Wall/CPU from systemd
+<code>Consumed …</code> lines; per-build durations from the app's own
+<code>nuggets: building …</code> / result log lines.</p>
+
+<h2 id="profile">5. Per-phase memory &amp; time profile</h2>
+
+<div class="tw"><table>
+<tr><th>Phase</th><th>Time</th><th>Memory</th><th>Confidence</th></tr>
+<tr><td>SQL scan + LLM judge</td><td><strong>~23 s</strong> (07-27: 04:51:44 → 04:52:07, 16 candidates scored)</td><td>parent python only, well under 100 MB</td><td><span class="tag good">measured</span> (time) / <span class="tag warn">estimated</span> (mem)</td></tr>
+<tr><td>One demo build</td><td><strong>31–60 min</strong>; 3600 s is the hard cap and is hit</td><td><code>claude</code> RSS <strong>457 MB</strong> + <code>notebooklm-mcp</code> <strong>96–98 MB</strong> + <code>uv</code> ~47 MB → <strong>~600 MB tree</strong></td><td><span class="tag good">measured live</span></td></tr>
+<tr><td>Build + one retained orphan</td><td>—</td><td><strong>~1.2 GB</strong> — exceeds the old 1G ceiling</td><td><span class="tag warn">derived</span> (2 × measured tree)</td></tr>
+<tr><td>Zero-backlog swipe</td><td>&lt; 1 min (08-01: last build 06:36:07 → exit 06:36:47)</td><td>negligible — one UPDATE over ≤ 20 rows</td><td><span class="tag good">measured</span></td></tr>
+<tr><td><strong>Whole unit, 08-01</strong></td><td>1h45m56s wall / 23m CPU</td><td><strong>1.0009 GiB peak + 1.16 GiB swap</strong></td><td><span class="tag good">systemd accounting</span></td></tr>
+</table></div>
+
+<p>Exactly <strong>one</strong> MCP server attaches per build session (<code>notebooklm-mcp</code>), confirmed
+from the <code>stream-json</code> init event. This build does <em>not</em> pay the heavy multi-MCP cost a
+Simone session does (~1.7 GB across 21 processes).</p>
+
+<p>The 23m-CPU / 1h46m-wall gap is <strong>not</strong> swap thrash — it is the parent blocking on
+<code>subprocess.run</code> while <code>claude</code> waits on network I/O. Box-wide memory pressure measured
+<code>0.00 / 0.00 / 0.00</code>; the pressure on this host is I/O
+(<code>full avg60 = 7.11</code>), not memory.</p>
+
+<h3>A bonus finding: the box's "load 15" is a phantom, and it is the desktop SSHFS bridge</h3>
+
+<p>Chasing whether contention explained the slow runs turned up something unrelated but worth knowing. During
+this investigation the VPS showed load average <strong>15.2–15.6 pinned for 100 minutes</strong> — while
+<code>sar</code> reported the CPU <strong>85–94 % idle</strong>, <code>%iowait &lt; 1.1</code>,
+<code>procs_blocked = 0</code>, and <code>sda %util 0.1–4.7 %</code>.</p>
+
+<p>The cause is <code>/home/kjdragan</code>, the SSHFS mount back to the desktop:</p>
+<pre><code>kernel: INFO: task systemd-fstab-g:247133 blocked for more than 614 seconds.
+        stack: fuse_getattr / fuse_do_getattr / fuse_simple_request / fuse_update_get_attr</code></pre>
+<p>Every <code>systemctl daemon-reload</code> forks <code>systemd-fstab-generator</code>, which
+<code>stat()</code>s <code>/home/kjdragan</code>; against a degraded FUSE mount that call blocks
+<strong>uninterruptibly and forever</strong>. There were <strong>218 daemon-reloads on 08-01 alone</strong>.
+FUSE waits count toward load average but never reach <code>procs_blocked</code> — hence phantom load. Load
+collapsed from 15.3 to 0.99 within three minutes of the mount deactivating at 00:57:20.</p>
+
+<div class="callout" style="border-left-color:#bf8700;background:#fffbf0">
+<p>Two practical consequences: (1) the <code>io full avg60 = 7.11</code> pressure reading is the same artifact,
+not real disk contention; (2) this is why <code>systemctl</code> calls against this box kept returning
+<em>"Connection timed out"</em> throughout the investigation. As of 02:12 UTC 08-02 the bridge was
+<strong>down</strong> — no sshfs mounted, <code>home-kjdragan.automount</code> in
+<code>inactive / Result=resources</code>.</p>
+</div>
+
+<div class="callout ok">
+<p><strong>Closed out — root-caused and fixed in a parallel session (PR #1591, deployed
+<code>15da9ac7</code> at 03:14 UTC).</strong> That session went further than this one and corrected the
+mechanism I inferred: <code>systemd-fstab-generator</code> runs on <em>every</em> <code>daemon-reload</code>
+and <code>statx()</code>s each fstab mount point; against a wedged FUSE mount that call blocks
+uninterruptibly and systemd kills the generator sandbox at its hard 90 s timeout. At roughly 63 reloads per
+deploy that is ~95 minutes inside a <code>timeout 30m</code> — the recurring exit-124 deploy failures. Also
+worth knowing: <em>"Failed to fork off sandboxing environment"</em> is a misnomer — the fork succeeded;
+<code>safe_fork(FORK_WAIT)</code> maps a non-zero child exit to <code>-EPROTO</code>.</p>
+<p>Fix: the bridge moved out of <code>/etc/fstab</code> into native
+<code>home-kjdragan.mount</code>/<code>.automount</code> units, plus a watchdog timer. Measured on the same
+wedged mount: <strong>90.42 s → 0.41 s</strong>. Re-verified live at 03:29 UTC:
+<code>reload 0.42 s</code>, zero <code>fuse.sshfs</code> lines in <code>/etc/fstab</code>, bridge
+<code>active/active</code>. The phantom load and the <code>systemctl</code> timeouts described above are
+gone.</p>
+</div>
+
+<h2 id="questions">6. Verdicts on Q1–Q5</h2>
+
+<div class="callout q">
+<p class="verdict">Q1 — Was the memory ceiling the real constraint, or a symptom? <span class="tag warn">BOTH — and my first answer was wrong</span></p>
+<p>I initially called it a pure symptom, reasoning that "peak was 1.0 GiB, so 1G was nearly enough." That
+reasoning is invalid — and the arithmetic proves it cleanly. <code>MemoryPeak = 1075073024</code> is
+<strong>1 331 200 bytes above exactly 1 GiB</strong> — 325 pages. The per-CPU charge stock on this box is
+<code>nr_cpus × MEMCG_CHARGE_BATCH = 4 × 64 pages = 1.0 MiB</code>. That overshoot <em>is</em> the charge-batch
+slop over a hard <code>memory.max</code> of 1 GiB. A free-running peak does not land 0.12 % above a round power
+of two.</p>
+<p>The four-night series settles it beyond argument — resident peak identical to the decimal while swap varies
+<strong>10×</strong>:</p>
+<div class="tw"><table>
+<tr><th>Night</th><th>CPU consumed</th><th>Memory peak</th><th>Swap peak</th></tr>
+<tr><td>2026-07-15</td><td>10m26s</td><td><strong>1.0G</strong></td><td>380.7M</td></tr>
+<tr><td>2026-07-21</td><td>2h51m08s</td><td><strong>1.0G</strong></td><td>1.9G</td></tr>
+<tr><td>2026-07-23</td><td>1h01m44s</td><td><strong>1.0G</strong></td><td>189.4M</td></tr>
+<tr><td>2026-08-01</td><td>22m59.6s</td><td><strong>1.0G</strong></td><td>1.1G</td></tr>
+</table></div>
+<p>That is a ceiling being read as headroom. You cannot measure demand off a limit the job is sitting on.</p>
+<p>The kernel's memcg records give the real number. <strong>Three</strong> <code>CONSTRAINT_MEMCG</code>
+oom-kills of this unit (not one), all at <code>limit=1048576kB</code>:</p>
+<div class="tw"><table>
+<tr><th>Date</th><th>swap at OOM</th><th>anon resident</th><th>Total anon demand</th><th>Reclaim</th></tr>
+<tr><td>2026-07-20</td><td>5.08 GiB</td><td>~1.0 GiB</td><td><strong>~6.05 GiB</strong></td><td>100 % direct (<code>pgscan_kswapd = 0</code>)</td></tr>
+<tr><td>2026-07-22</td><td>4.96 GiB</td><td>~1.0 GiB</td><td><strong>~5.92 GiB</strong></td><td>100 % direct</td></tr>
+<tr><td>2026-07-27</td><td>5.63 GiB</td><td>~1.0 GiB</td><td><strong>~6.58 GiB</strong></td><td>100 % direct</td></tr>
+</table></div>
+<p>So the ceiling <em>was</em> a real, binding constraint — the 07-27 OOM stack is literally
+<code>do_swap_page → swapin_readahead → … → mem_cgroup_out_of_memory</code>: it died <em>while paging back
+in</em>.</p>
+
+<div class="callout hit">
+<p><strong>And here I have to correct myself again — this time on the root cause of the OOMs.</strong> I
+attributed the 6 GiB to orphan accumulation. The adversarial pass found that <strong>2 of the 3 OOM nights had
+no orphan at all</strong>, and 2 of the orphan nights had no OOM. The variable that tracks all three is
+something else entirely, and the timestamps are unambiguous:</p>
+<div class="tw"><table>
+<tr><th>OOM</th><th>Model the demo downloaded</th><th>Size</th><th>Download finished</th><th>Gap to OOM</th></tr>
+<tr><td>2026-07-20 06:07:13</td><td><code>Qwen--Qwen2.5-0.5B-Instruct</code></td><td>954 M</td><td>05:19:47</td><td>47 min</td></tr>
+<tr><td>2026-07-22 05:38:49</td><td><code>Trelis--tiron</code></td><td><strong>2.9 G</strong></td><td><strong>05:37:20</strong></td><td><strong>89 seconds</strong></td></tr>
+<tr><td>2026-07-27 05:55:44</td><td><code>ATH-MaaS--OvisOCR2</code></td><td>1.7 G</td><td>05:18:44</td><td>37 min</td></tr>
+</table></div>
+<p><strong>This job builds demos that download multi-gigabyte ML models and load them with CPU
+<code>torch</code> — inside a 1 GB-capped cgroup, on a GPU-less 4-core box.</strong> The 07-27 demo is
+literally titled <em>"Run Alibaba OvisOCR2 <strong>Locally</strong>"</em>. Its workspace is 1.1 GB of
+<code>.venv</code> alone; the shared HF cache is now <strong>8.9 GB</strong>. The verifier <em>executes</em>
+the demo's own <code>## Run</code> command, which is what pulls the weights into anon memory. That is where
+6 GiB comes from — not from orphans.</p>
+</div>
+
+<p><strong>Per-phase:</strong> judge ≈ 23 s, negligible memory. Each build ~600 MB of <em>tooling</em>
+(<code>claude</code> 457 MB + <code>notebooklm-mcp</code> 98 MB + <code>uv</code> 47 MB) for 22–60 min —
+<strong>plus whatever the demo under test allocates</strong>, which for a model-loading demo is multiple GB and
+dwarfs everything else. Swipe &lt; 1 min, negligible.</p>
+</div>
+
+<div class="callout q">
+<p class="verdict">Q2 — Is MemoryHigh=2G a mistake? <span class="tag bad">YES — you were right, I was wrong</span> <span class="tag good">now removed</span></p>
+<p>My first pass called it inert because peak was below 2 G. That rested on the same invalid clamp reading, and
+on a second error: <strong>#1579 was not live during the 08-01 run at all.</strong> It landed at 19:27 UTC on
+08-01; the run was 04:50→06:39. Independent proof from the run itself — its <code>stop-sigterm</code> expired
+at exactly <strong>90 s</strong> after main exit (06:36:47 → 06:38:17), which is
+<code>DefaultTimeoutStopSec</code>, <em>not</em> the <code>TimeoutStopSec=300</code> that #1579 added. There has
+never been a run under these limits.</p>
+<p>Corrected verdict: <strong>every observed night exceeded 2 GiB of anon demand</strong> — 6.05, 5.92, 6.58 on
+the OOM nights and 2.16 on the lightest surviving one. <code>MemoryHigh=2G</code> therefore binds every time.
+And the mechanism you worried about is exactly right: <code>memory.high</code> does not kill, it forces direct
+reclaim <em>and</em> imposes an explicit sleep penalty on return to userspace
+(<code>mem_cgroup_handle_over_high</code>). It trades a loud <code>result=oom-kill</code> for a quiet
+<code>result=timeout</code> — the precise diagnostic confusion that cost a day here.</p>
+<p>There is also nothing to protect: box-wide <code>/proc/pressure/memory</code> reads
+<code>0.00 / 0.00 / 0.00</code> with ~11.7 GiB available on a 16 GiB host, and the job is already bounded
+end-to-end by wall clock. So <code>memory.high</code> here is pure downside. <strong>Removed in PR #1588.</strong></p>
+<p><strong>On the decisive evidence you asked for:</strong> you were right that
+<code>memory.events</code>'s <code>high</code> counter and <code>memory.pressure</code> settle it — and they were
+genuinely unreadable, because a <code>Type=oneshot</code> destroys its cgroup on exit. That gap is now closed:
+PR #1588 adds an <code>ExecStopPost=</code> post-mortem that runs <em>inside</em> the cgroup while it still
+exists (verified empirically, and it fires on abnormal exits too). From tonight, every run records its own
+<code>high</code>/<code>max</code>/<code>oom</code> counters and pressure totals.</p>
+</div>
+
+<div class="callout q">
+<p class="verdict">Q3 — Why is runtime growing run over run? <span class="tag warn">IT ISN'T GROWING — it tracks build count, exactly</span></p>
+<p>The series is not monotonic: 45m → 64m → 102m → <strong>24m</strong> → 94m → 138m → 106m. It is bimodal, and
+the variable is simply <strong>how many demos got built</strong>:</p>
+<ul>
+<li><strong>1-build nights</strong> (07-26, 07-29): 45m and 24m.</li>
+<li><strong>3-build nights</strong> (07-28, 07-30, 07-31, 08-01): 102m, 94m, 138m, 106m.</li>
+<li>Builds run <strong>strictly sequentially</strong>, and Σ(build durations) accounts for the wall clock to
+within seconds — on 08-01, 105m47s of builds inside a 105m56s run (<strong>99.86 %</strong>).</li>
+</ul>
+<p>So: not a growing pool (Q4 refutes that), not retries (there are none in the pipeline), and
+<strong>not cross-lane contention</strong> — <code>proactive-demo-build-sweep</code> fires at 13:30/18:30/23:30
+UTC and is an <em>enqueuer</em>, not a build lane; it never overlaps 04:51. Heavy neighbours were present on
+07-28 and 07-31 but <strong>absent on 07-30 and minimal on 08-01</strong> — two of the other slow runs — so
+contention does not explain the split. Build count does, on every single night.</p>
+<p><strong>The <code>3 × 3600 + slack</code> assumption holds.</strong> Worst observed is 07-31 at 137m23s of
+build time; even three fully-timed-out builds would be 10800 s plus a ~23 s judge and a &lt;60 s swipe, inside
+the 12000 s budget. <code>TimeoutStartSec</code> is not the binding constraint and #1419 was sound.</p>
+</div>
+
+<div class="callout q">
+<p class="verdict">Q4 — Does swipe-runs-last hurt us? <span class="tag warn">REAL BUT SELF-HEALING</span> — the feedback loop is <span class="tag good">REFUTED</span></p>
+<p>The mechanism is real and confirmed in code: <code>proactive_demo_nuggets_cron.py::main</code> calls
+<code>run_zero_backlog_swipe</code> on the line <em>after</em> <code>select_and_build_nuggets</code>, and it is
+<strong>not</strong> in a <code>try/finally</code> — a hard kill skips it. 2026-07-27 proves it: that OOM-killed
+run swept <strong>0</strong> rows.</p>
+<p><strong>But the runaway loop you feared does not exist in the data.</strong> Measured read-only against
+<code>/opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db</code>:</p>
+<ul>
+<li>Current open un-built pool: <strong>14 rows</strong> (vs 767 cancelled).</li>
+<li>Inflow is flat: 8, 8, 17, 19, 18, 15, 19, 6, 11, 17, 12, 18, 15, 10, 10 per day (07-18 → 08-01).</li>
+<li>07-27 swept 0 — and <strong>07-28 swept 31</strong>, roughly two days' inflow. The next night's swipe
+catches up automatically, because the filter is "everything still open", not "today's rows".</li>
+<li>Still-open rows by creation day: 06-23 × 1, 07-31 × 3, 08-01 × 10 — i.e. essentially just today's inflow
+awaiting tonight's run.</li>
+</ul>
+<p>So: worth hardening (cheap), but it is <strong>not</strong> a cost driver and it is not compounding.</p>
+<p><strong>A different recycling loop does exist, though, and it is the one worth your attention.</strong> The
+08-01 swipe reported <code>swept: 11, kept: 0, preserved_approved: 1</code> — and <strong>three of those
+cancelled rows were re-opened at 13:35:05 the next day</strong> by the following day's ingest. Two of the three
+are <em>the failed builds themselves</em>. The cause is in
+<code>sweep_unbuilt_pending_builds</code>: it preserves only <code>built_summary["built"]</code>, which was
+empty (<code>kept: 0</code>) because every build ended <code>rc=3</code>. So a build that ran for 40 minutes,
+produced a working demo, and was rejected by the fidelity judge is swept as "un-built" and
+<strong>re-ingested to be built again tomorrow</strong>.</p>
+<p>Combined with §3 — where the fidelity gate rejects everything — that is a genuine loop: the same candidates
+can be rebuilt night after night, each attempt costing 20–60 minutes of inference, each rejected, each
+re-queued. It has not blown up the pool size (the numbers above show it hasn't), but it is burning real money.
+It disappears the moment the fidelity gate is fixed.</p>
+</div>
+
+<div class="callout q">
+<p class="verdict">Q5 — One systemd start, or per-build units / a bounded queue? <span class="tag neut">KEEP ONE UNIT</span></p>
+<p>Keep the single oneshot. The work is genuinely sequential and bounded (≤3 builds, hard-capped at 3600 s
+each), the total fits comfortably in the existing budget, and the current shape keeps the judge → build → swipe
+invariant in one place where the daily-ceiling accounting is already correct. Per-build units would buy
+per-build memory isolation and independent failure — but at the cost of splitting the 5/day ceiling logic
+across unit boundaries, needing a queue/state machine to sequence them, and making "did the swipe run?" a
+distributed question. That is a lot of machinery to solve a problem that a 20-line process-group fix already
+solves.</p>
+<p>The one structural change worth making is smaller: move the swipe so it <em>always</em> runs (see
+recommendation&nbsp;3).</p>
+</div>
+
+<h2 id="pr1579">7. Was PR #1579 right?</h2>
+
+<div class="callout">
+<p><strong>It was built on a premise that does not hold, and it is incomplete. One part of it is genuinely
+good.</strong></p>
+<ul>
+<li><strong><code>TimeoutStopSec=300</code> — genuinely useful, keep it.</strong> This is the one change that
+addressed the real 08-01 failure mode. It gives systemd longer to reap leftovers instead of giving up after the
+90 s default.</li>
+<li><strong><code>MemoryHigh=2G</code> — a mistake, exactly as you suspected.</strong> It binds on every
+observed night (lightest demand 2.16 GiB), throttles rather than kills, and converts a loud OOM into a quiet
+timeout. <span class="tag good">removed in #1588</span></li>
+<li><strong><code>MemoryMax=3G</code> — under-sized against observed demand, but defensible now.</strong>
+Measured demand on the OOM nights was ~6 GiB, so 3G would not have saved them. Post-#1587, with orphan trees
+reaped, expected demand is the ~2.16 GiB baseline and 3G is reasonable <em>as fault isolation</em>. It is now
+documented as a deliberate choice rather than a fitted limit, to be raised to 6G only if the new post-mortem
+shows a post-fix run exceeding it.</li>
+</ul>
+<p>Two factual corrections to the diagnosis written into the unit's comment:</p>
+<ol>
+<li><em>"the judge + its claude CLI children peaked at exactly 1.0G … and died at the former MemoryMax=1G
+ceiling"</em> — on 08-01 the process <strong>exited 0</strong>. It did not die. The 1.0 G figure is the cgroup
+pinned at its old limit with 1.16 G of overflow in swap.</li>
+<li><strong>None of #1579's limits were in effect when those numbers were taken.</strong> It landed ~13 h after
+the run it cites. Tonight (2026-08-02 04:51 UTC) is the first run under any of it — and now also the first
+under #1587 and #1588.</li>
+</ol>
+</div>
+
+<h2 id="recs">8. Ranked recommendations</h2>
+
+<h3>1. Kill the build's whole process group on timeout &nbsp;<span class="tag good">SHIPPED &amp; MERGED</span></h3>
+<p><strong><a href="https://github.com/Kjdragan/universal_agent/pull/1587">PR #1587</a></strong> —
+<code>Popen(..., start_new_session=True)</code> plus SIGTERM→SIGKILL <code>killpg</code> escalation on timeout
+and on any abnormal exit, with the <code>CompletedProcess</code> contract preserved. Merged with all checks
+green; deploy ran on merge. <span class="tag neut">risk: low</span> — confined to one function that already had
+a test-injection seam; 23/23 unit tests pass, <code>ruff</code> clean, <code>doc_audit.py</code> 0 errors, and
+the canonical ADR was updated in the same PR.</p>
+<p>The regression test was validated as a <strong>negative control</strong>: reverted against the old runner it
+fails with <em>"1 orphaned grandchild process(es) survived the build timeout"</em>; with the fix it passes. A
+test that cannot fail proves nothing, so this was checked explicitly.</p>
+
+<h3>2. Investigate the fidelity gate — it is rejecting 100% of builds <span class="tag bad">HIGHEST VALUE</span></h3>
+<p>Seven consecutive builds have passed the deterministic verifier and been rejected by the Gemini judge; the
+last pass was 2026-07-18. This is the difference between a job that costs 1–2 h/night and produces demos, and
+one that costs the same and produces nothing. Two concrete leads: the voter panel shrank from 5 to 2–3
+(strict majority over 3 is much harsher than 4/5), and <code>herdr</code> failed at 1/3 despite a holistic
+verdict of <code>"delivers"</code>. <span class="tag warn">design decision — your call</span>: is the gate
+correctly catching a real regression in build quality, or has the gate itself regressed? I did not change it.</p>
+
+<h3>3. Make the zero-backlog swipe unconditional</h3>
+<p>Wrap the <code>select_and_build_nuggets</code> call in <code>try/finally</code> so an exception cannot skip
+the swipe, and/or add <code>ExecStopPost=</code> running the swipe standalone so even a killed run resets the
+pool. <span class="tag neut">risk: low</span>, <span class="tag neut">value: low</span> — the DB shows the
+current behaviour self-heals, so this is hygiene, not a fix. Not shipped; say the word.</p>
+
+<h3>3b. Remove MemoryHigh, and capture the cgroup evidence &nbsp;<span class="tag good">SHIPPED</span></h3>
+<p><strong><a href="https://github.com/Kjdragan/universal_agent/pull/1588">PR #1588</a></strong> — drops
+<code>MemoryHigh=2G</code>, records why <code>MemoryMax=3G</code> is now a deliberate fault-isolation choice
+rather than a fitted limit, and adds <code>ExecStopPost=</code> →
+<code>scripts/nuggets_cgroup_postmortem.sh</code>. The post-mortem runs <em>inside</em> the unit's cgroup while
+it still exists — verified empirically against a live cgroup on the box — and fires on abnormal exits too, so
+oom-kill and timeout runs are captured. From tonight, <code>journalctl -u … | grep CGPM</code> gives you
+<code>memory.events</code> (<code>high</code>/<code>max</code>/<code>oom</code>), <code>memory.pressure</code>,
+swap peaks, and any leftover pids still charged at teardown. That closes the "unmeasurable" gap permanently.
+It also corrects the unit's false "Opus /goal" and <code>--video</code> comments.
+<span class="tag neut">risk: low</span> — the post-mortem is prefixed <code>-</code> so it can never change
+the unit's result.</p>
+
+<h3>2b. Decide what happens when a demo wants to run a 3 GB model on a GPU-less box <span class="tag bad">STRUCTURAL</span></h3>
+<p>This is the memory question that actually matters, and it is a design decision, not a limit. The factory
+keeps selecting "run &lt;model&gt; locally" tutorials, then <em>executing</em> them on a 4-core VPS with no GPU
+— pulling 954 M / 1.7 G / 2.9 G of weights into a capped cgroup. All three OOMs are this. The shared HF cache
+is already <strong>8.9 GB</strong>. Options, roughly in order of how much they change:</p>
+<ul>
+<li><strong>Filter at the judge.</strong> Teach the golden-nuggets judge to reject candidates whose demo would
+require local model inference — it already scores for "specific technical capability"; add "runnable on a
+GPU-less 4-core box" as a hard gate. Cheapest, and it also stops burning an hour on demos likely to fail the
+fidelity judge anyway.</li>
+<li><strong>Route them to the desktop GPU</strong> via the existing operator-approval path, rather than
+attempting them on the VPS.</li>
+<li><strong>Give model-loading demos their own limits</strong> — a separate slice with a much higher
+<code>MemoryMax</code>, accepting that a 3 GB model needs ~4–6 GB resident.</li>
+</ul>
+<p>I did not pick one — it changes what the factory builds, which is yours to decide.</p>
+
+<h3>4. Decide whether MemoryMax should be 6G</h3>
+<p>Deliberately <em>not</em> shipped. Observed demand on the OOM nights was ~6 GiB, which argues for 6G — but
+that demand was manufactured by the orphan leak that #1587 just fixed. Changing the limit in the same night as
+the fix would make tonight's result uninterpretable. <strong>Let tonight's CGPM output tell us</strong>: if a
+post-fix run still pushes past 3G, raise it; if it settles near 2.2 GiB, 3G is correct.
+<span class="tag warn">one variable at a time</span></p>
+
+<h3>5. Consider bounding swap rather than zeroing it</h3>
+<p><code>MemorySwapMax=0</code> is the instinctive fix for the thrash, but paired with
+<code>MemoryMax=3G</code> against ~6 GiB demand it would guarantee an immediate OOM every heavy night — and the
+swipe, which runs last and is not in a <code>try/finally</code>, would never fire. If the evidence supports
+bounding swap after tonight, <code>MemoryMax=6G</code> + <code>MemorySwapMax=1G</code> cuts the thrash tail
+while leaving a valve. <span class="tag warn">wait for data</span></p>
+
+<h3>6. Ignore the <code>Invalid argument</code> cgroup-kill warning</h3>
+<p>It is cosmetic and not fixable from the unit file. systemd 255's kill path enumerates
+<code>cgroup.threads</code> after <code>cgroup.procs</code>, and on kernel 6.8
+<code>pidfd_open()</code> on a <strong>non-leader TID</strong> returns <code>EINVAL</code>, which systemd does
+not whitelist (it whitelists <code>EAGAIN</code>/<code>ESRCH</code>/<code>ENOENT</code>). Measured directly on
+the box: <code>pidfd_open(1166122) → -22 EINVAL</code>. Cross-checked on mint-desktop with the
+<em>byte-identical</em> systemd library but kernel 7.0, where the same call returns <code>ENOENT</code> and the
+warning does not appear. The SIGKILLs were issued <em>before</em> the failing sweep, so nothing was left
+un-signalled. It disappears on a ≥6.9 kernel.</p>
+
+<h2 id="unknown">9. What we could not determine</h2>
+<ul>
+<li><strong>Why two <code>claude</code> processes were still alive on 08-01 at all.</strong> All three builds
+that night ended <code>rc=3</code>, not on a timeout — so the timeout path that orphans grandchildren
+<em>did not fire</em>. The leak mechanism is proven and fixed, but on 08-01 specifically the leftovers must
+have come from a different path (a <code>claude</code> sub-agent, or a background stage inside
+<code>build_demo.py</code>). Tonight's CGPM <code>leftover_procs</code> line will show whether any survive
+post-fix. <strong>This is the one place where the shipped fix may be incomplete</strong>, and it is worth
+saying plainly rather than claiming the case is closed.</li>
+<li><strong>Why <code>SIGKILL</code>'d PIDs stayed in <code>cgroup.procs</code> for 91 s.</strong> A SIGKILLed
+task cannot be reaped while in uninterruptible sleep; swap-in page faults are the leading explanation given the
+07-27 OOM stack, but the process states are gone and this could not be proven post-hoc.</li>
+<li><strong>What happened to the 2026-07-31 run's terminal journal line.</strong> Its wall clock is now known
+(137m35s, ending ~07:09:45) and its swipe ran (18 rows), so it did reach the end — but its
+<code>Deactivated</code>/<code>Consumed</code> lines are absent from the journal. Unexplained.</li>
+<li><strong>Whether the fidelity gate regressed or the builds did.</strong> Both are consistent with the data;
+distinguishing them needs a human look at one rejected demo.</li>
+<li><strong>Tonight's run (2026-08-02 04:51 UTC) is the real test.</strong> It had not fired at the time of
+writing — it is the first run under #1587, #1588, <em>and</em> #1579's <code>TimeoutStopSec</code>, and the
+first that will record its own cgroup evidence.</li>
+</ul>
+
+<div class="callout ok">
+<p><strong>You no longer have to check this by hand.</strong> The three open questions are now watched by a
+nightly report (<a href="https://github.com/Kjdragan/universal_agent/pull/1592">PR #1592</a>) —
+<code>universal-agent-nuggets-health-report.timer</code>, 08:05 America/Chicago, after the run's worst-case
+finish and at an hour you're awake. It escalates on any regression and is <strong>silent when
+healthy</strong>, so a daily "all good" ping doesn't train you to ignore it.</p>
+<p>Manual equivalent, if you want it now:</p>
+<pre><code>journalctl -u universal-agent-proactive-demo-nuggets.service --since "2026-08-02 04:00" | grep CGPM</code></pre>
+</div>
+
+<h2 id="handoff">10. Handoff — what continues, what's closed, what needs you</h2>
+
+<h3>Closed</h3>
+<div class="tw"><table>
+<tr><th>Item</th><th>Disposition</th></tr>
+<tr><td>Orphaned <code>claude</code> trees on build timeout</td><td><span class="tag good">fixed &amp; live</span> #1587 — negative-control tested</td></tr>
+<tr><td><code>MemoryHigh=2G</code> throttling</td><td><span class="tag good">removed &amp; live</span> #1588</td></tr>
+<tr><td>cgroup evidence destroyed on exit</td><td><span class="tag good">fixed &amp; live</span> #1588 — <code>ExecStopPost</code> post-mortem</td></tr>
+<tr><td>Q3 runtime growth · Q4 backlog feedback loop</td><td><span class="tag good">answered</span> — refuted with measurements; no change needed</td></tr>
+<tr><td>Q5 one-unit-vs-many</td><td><span class="tag good">answered</span> — keep one unit</td></tr>
+<tr><td>SSHFS phantom load / <code>systemctl</code> timeouts</td><td><span class="tag good">fixed</span> — PR #1591, parallel session</td></tr>
+</table></div>
+
+<h3>Continuing automatically — no session required</h3>
+<p>The nightly report (#1592) verifies, every night and forever:
+<code>leftover_procs</code> (did #1587 hold?), <code>memory.events high</code> and <code>memory.peak</code>
+(did #1588 hold, and does 3G suffice?), build outcomes, and days-since-last-land. It notifies only on a
+problem. This is a systemd timer rather than a cloud routine because it reads journald and cgroup state on the
+VPS — machine-only data a routine's sandbox cannot reach.</p>
+
+<h3>Needs a decision from you — surfaced daily until resolved</h3>
+<ol>
+<li><strong>The fidelity gate.</strong> 100% rejection since 2026-07-18; every build passes the deterministic
+verifier and is then voted down. Two concrete leads: the voter panel shrank from 5 to 2–3 (strict majority over
+3 is much harsher than 4/5), and <code>herdr</code> failed at 1/3 despite <code>gating_pass 3/4</code> and a
+holistic verdict of <code>"delivers"</code>. <em>Is the gate correctly catching a real drop in build quality,
+or has the gate itself regressed?</em> That question needs a human to look at one rejected demo — I did not
+change it. The report will keep raising it every morning.</li>
+<li><strong>Model-loading demos on a GPU-less box.</strong> All three OOMs are demos pulling multi-GB weights
+(954 M / 1.7 G / 2.9 G) and running CPU <code>torch</code> on 4 cores. Options in §8 (2b): filter at the
+judge, route to the desktop GPU, or give them their own limits. This changes what the factory builds, so it's
+yours.</li>
+<li><strong>Whether <code>MemoryMax</code> should be 6G.</strong> Deliberately left at 3G so tonight's run is
+interpretable. The report's <code>memory.peak</code> answers it within a day.</li>
+</ol>
+<p class="meta">Deliberately not done: hardening the swipe into a <code>try/finally</code> (the DB shows the
+current behaviour self-heals, so it's hygiene, not a fix), and collapsing the demo build's retry/turn budget.
+Both are noted rather than silently dropped.</p>
+
+<hr>
+<p class="meta"><strong>Method.</strong> Six parallel investigators gathered evidence, five analysts drew verdicts, and three adversarial verifiers were tasked with <em>refuting</em> the conclusions rather than confirming them. That pass overturned two of my own verdicts (Q1 and Q2) and narrowed a third — those corrections are marked in place above rather than quietly rewritten.</p>
+<p class="meta">All VPS access was read-only (<code>journalctl</code>, <code>systemctl show</code>,
+<code>sqlite3 file:…?mode=ro</code>, <code>/proc</code> and cgroup reads). No production service was restarted
+and no flag was flipped. Code was read from a fresh worktree at <code>origin/main</code> and cross-checked
+against the deployed tree at <code>/opt/universal_agent</code>.</p>
+</div>
