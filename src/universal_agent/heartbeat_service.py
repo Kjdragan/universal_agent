@@ -2713,7 +2713,8 @@ class HeartbeatService:
                 try:
                     from universal_agent.services.proactive_budget import (
                         has_daily_budget as has_nightly_budget,
-                        increment_daily_proactive_count as _increment_nightly_task_count,
+                        has_ideation_tick_budget,
+                        increment_ideation_ticks,
                         record_ideation_now,
                         should_ideate_now,
                     )
@@ -2726,36 +2727,55 @@ class HeartbeatService:
                     try:
                         _has_budget = has_nightly_budget(ref_conn)
                         # Pace ideation: spread the daily budget across the
-                        # overnight window instead of letting every idle tick
+                        # active window instead of letting every idle tick
                         # fire it back-to-back right after the reset (a burst
-                        # that would spike ZAI rate limits). should_ideate_now is
-                        # only consulted here (queue empty, no other work), so a
-                        # False just lets the tick fall through to a cheap skip.
+                        # that would spike ZAI rate limits). should_ideate_now
+                        # also refuses outside Houston's 06:00-22:00 active
+                        # window (services.dormancy) -- it is only consulted
+                        # here (queue empty, no other work), so a False just
+                        # lets the tick fall through to a cheap skip.
                         _paced_ok = should_ideate_now(ref_conn)
+                        # Separate safety ceiling on ideation ATTEMPTS, not
+                        # task creations: a run where the model keeps
+                        # declining to propose anything never advances
+                        # _has_budget (that only tracks real task_hub inserts
+                        # now), so without this a "never proposes" day would
+                        # keep firing ideation on every eligible tick.
+                        _has_tick_budget = has_ideation_tick_budget(ref_conn)
                         # Backpressure faucet (task 6): while the held backlog
                         # exceeds the threshold with no recent operator review
                         # activity, emit 0 proposals and log why — new ideas
                         # would just deepen an unread pile.
                         _backpressure = ideation_backpressure_reason(ref_conn)
-                        if _has_budget and _paced_ok and _backpressure is None:
+                        if _has_budget and _paced_ok and _has_tick_budget and _backpressure is None:
                             ref_ctx = build_reflection_context(
                                 ref_conn,
                                 workspace_dir=str(session.workspace_dir),
                             )
                             _reflection_ctx_text = str(ref_ctx.get("reflection_prompt_text") or "")
-                            _increment_nightly_task_count(ref_conn, increment=1)
+                            # This counts an ideation ATTEMPT (prompt built +
+                            # injected), NOT a task creation. The real budget
+                            # counter (proactive_daily_budget_counter) only
+                            # advances from task_hub.upsert_item's insert
+                            # path, when/if the agent actually creates a
+                            # proactive_signal/reflection task this turn — a
+                            # turn that gets this prompt is not guaranteed to
+                            # create anything.
+                            _ticks = increment_ideation_ticks(ref_conn)
                             record_ideation_now(ref_conn)
                             metadata["reflection"] = {
                                 "mode": True,
                                 "nightly_task_count": ref_ctx.get("nightly_task_count", 0),
                                 "budget_remaining": ref_ctx.get("nightly_budget_remaining", 0),
+                                "ideation_ticks": _ticks,
                                 "stalled_brainstorms": len(ref_ctx.get("stalled_brainstorms") or []),
                                 "recent_completions": len(ref_ctx.get("recent_completions") or []),
                             }
                             logger.info(
-                                "Reflection context built for %s: budget_remaining=%d, stalled=%d",
+                                "Reflection context built for %s: budget_remaining=%d, ticks=%d, stalled=%d",
                                 session.session_id,
                                 ref_ctx.get("nightly_budget_remaining", 0),
+                                _ticks,
                                 len(ref_ctx.get("stalled_brainstorms") or []),
                             )
                         else:
@@ -2763,6 +2783,8 @@ class HeartbeatService:
                                 guard_skip_reason = "daily_budget_exhausted"
                             elif not _paced_ok:
                                 guard_skip_reason = "ideation_paced"
+                            elif not _has_tick_budget:
+                                guard_skip_reason = "ideation_ticks_exhausted"
                             else:
                                 guard_skip_reason = "ideation_backpressure"
                             _is_reflection_mode = False

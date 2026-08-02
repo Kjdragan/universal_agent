@@ -1514,6 +1514,23 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
         payload,
     )
     conn.commit()
+
+    # Proactive ideation daily budget: count a TRUE task creation (first
+    # insert of this task_id) with source_kind in ('proactive_signal',
+    # 'reflection') -- never a re-upsert of an existing item, and never a
+    # prompt-injection attempt that may not result in a task at all (that
+    # used to be counted here in heartbeat_service.py's reflection branch,
+    # which over-counted every idle tick regardless of whether the agent
+    # actually created anything). See services/proactive_budget.py.
+    if not existing and payload["source_kind"] in ("proactive_signal", "reflection"):
+        try:
+            from universal_agent.services.proactive_budget import (
+                increment_daily_proactive_count,
+            )
+            increment_daily_proactive_count(conn, increment=1)
+        except Exception:  # noqa: BLE001 — budget accounting must never break task creation
+            logger.debug("proactive budget increment failed for %s", task_id, exc_info=True)
+
     return get_item(conn, task_id) or payload
 
 
