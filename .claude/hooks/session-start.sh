@@ -45,9 +45,25 @@ cd "${CLAUDE_PROJECT_DIR:-$(pwd)}" || exit 0
 # "branch from origin/main instead"; guard-fresh-branch.sh denies branching off a
 # stale base). Defending is not fixing. This actually removes the drift.
 # Safety contract and per-step guards: scripts/git_hygiene.sh.
+#
+# The origin/main fallback is load-bearing, not belt-and-braces. This checkout is
+# routinely PARKED on an old task branch (it sat on fix/scratch-index-dir-links
+# with 40 dirty files while main was 339 commits ahead). On such a branch
+# scripts/git_hygiene.sh does not exist in the working tree, so a bare
+# `[ -f ... ]` test silently skips — leaving the sweep disabled on precisely the
+# checkout that drifts. Run the canonical copy from origin/main instead, and
+# fetch first so that ref is current on a cold session.
 if [ -f scripts/git_hygiene.sh ]; then
     timeout 60 bash scripts/git_hygiene.sh 2>&1 || \
         echo "[session-start] git hygiene skipped (non-fatal)"
+else
+    git fetch --quiet origin 2>/dev/null || true
+    if git cat-file -e origin/main:scripts/git_hygiene.sh 2>/dev/null; then
+        echo "[session-start] working tree predates scripts/git_hygiene.sh; running the origin/main copy"
+        git show origin/main:scripts/git_hygiene.sh 2>/dev/null \
+            | timeout 60 bash -s 2>&1 \
+            || echo "[session-start] git hygiene skipped (non-fatal)"
+    fi
 fi
 
 # Web-only below this line. Local dev manages its own venv.
