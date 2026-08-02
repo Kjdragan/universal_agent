@@ -120,12 +120,21 @@ ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.proac
 # available on a 16G host. This job is already bounded end-to-end by wall clock
 # (3600s/build, TimeoutStartSec below), so throttling it is pure downside.
 #
-# MemoryMax stays 3G DELIBERATELY, as fault isolation rather than as a fitted
-# limit. With #1587 reaping orphaned build trees, expected demand is the ~2.16G
-# baseline, not the 6G seen when a timed-out build's `claude` tree stayed charged
-# to the cgroup for the rest of the run. If the ExecStopPost postmortem below
-# shows a post-#1587 run still pushing past 3G, raise this to 6G -- do not guess.
-MemoryMax=3G
+# MemoryMax RAISED 3G -> 6G on measured evidence from the first post-#1587/#1588
+# run (2026-08-02 04:51 UTC), sampled live mid-run at 06:06 UTC:
+#   memory.events:  high 0   max 2706   oom 0   oom_kill 0
+#   memory.peak = 3221622784 (3.0004 GiB -- pinned AT MemoryMax=3221225472, the
+#                 397312 B overshoot being the per-CPU charge-batch slop)
+#   memory.swap.current = 0
+# Reading: `high 0` confirms removing MemoryHigh worked, and swap 0 + oom_kill 0
+# confirm it is no longer thrashing or dying. But `max 2706` says the cgroup hit
+# its 3G ceiling 2706 times and had to synchronously reclaim each time -- with
+# ONE build running and the orphan leak already fixed. 3G is not fault isolation
+# here, it is a binding constraint on the steady state, and that reclaim pressure
+# is a plausible contributor to the 3600s build timeout this same run hit.
+# 6G matches the ~6 GiB demand measured at the three memcg OOMs and still leaves
+# ~9.7G headroom on the 16G box (box-wide /proc/pressure/memory reads 0.00).
+MemoryMax=6G
 # Capture the cgroup evidence that a Type=oneshot otherwise destroys on exit:
 # memory.events (the high/max/oom counters), memory.pressure, and any leftover
 # processes still charged at teardown. ExecStopPost runs inside the unit's

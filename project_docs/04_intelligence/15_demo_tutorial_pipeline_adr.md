@@ -204,6 +204,22 @@ demo. A non-ok finalize stays on the unchanged default close path.
 > integration-heavy tutorials). It is also the only fix that reaches production on the normal deploy path:
 > **the VPS `demo_factory` checkout is pulled MANUALLY** — `remote_deploy.sh` has no demo_factory step.
 >
+> **Measured follow-through on MemoryMax (3G → 6G).** #1588 deliberately held `MemoryMax=3G` so the first
+> post-fix run would be interpretable. It ran 2026-08-02 04:51 UTC and was sampled live mid-run at 06:06:
+> `memory.events: high 0, max 2706, oom 0, oom_kill 0`; `memory.peak = 3221622784` (3.0004 GiB — pinned *at*
+> the 3 GiB cap, the 397 KB overshoot being per-CPU charge-batch slop); `memory.swap.current = 0`.
+> `high 0` confirms the `MemoryHigh` removal worked and swap/oom zero confirm it is no longer thrashing or
+> dying — but **`max 2706`** means the cgroup hit its ceiling 2706 times and synchronously reclaimed each
+> time, with one build running and the orphan leak already fixed. 3G was a binding constraint on the steady
+> state, not fault isolation, and that reclaim pressure plausibly contributed to the 3600s build timeout the
+> same run hit. Raised to **6G**, matching the ~6 GiB demand measured at the three memcg OOMs, leaving ~9.7G
+> headroom on the 16G box.
+>
+> **#1587's process-group reap verified live.** That same run hit a build timeout at 05:51:43 — the first
+> since the fix. At 06:06 the cgroup held only the main python (04:51), the *next* build's tree (05:54), and
+> the sampling shell. **Zero** processes survived from the timed-out 04:51→05:51 build. Pre-fix, an orphaned
+> `claude` from 04:52 would still have been resident and charged to the cgroup.
+>
 > **Structural weakness worth knowing:** `goal_condition.py` hard-requires the literal
 > `DEMO_VERIFY: PASS demo_id=<id>` token, which is good — but that token only proves the README `## Run`
 > command executed, **not** that the capability exists. A demo can print it while implementing nothing. That
