@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from universal_agent.utils.json_utils import json_loads_obj as _json_loads_obj
 from universal_agent.utils.time_utils import now_iso as _now_iso
@@ -286,31 +286,106 @@ def list_artifacts(
     conn: sqlite3.Connection,
     *,
     status: str = "",
+    exclude_status: str = "",
     delivery_state: str = "",
     limit: int = 50,
+    order_by: str = "priority",
 ) -> list[dict[str, Any]]:
-    """Query artifacts with optional status and delivery_state filters, ordered by priority."""
+    """Query artifacts with optional status/delivery_state filters and a bounded LIMIT.
+
+    ``order_by`` picks which rows win the LIMIT window (default preserves the
+    original behavior for existing callers):
+
+    - ``"priority"`` (default): ``priority DESC, updated_at DESC``.
+    - ``"updated_at"``: ``updated_at DESC, priority DESC`` — use this for any
+      caller drawing a bounded pool of *reviewable* candidates. Un-archived
+      high-priority rows that are never revisited (see ``exclude_status``)
+      would otherwise permanently occupy a priority-ordered LIMIT window and
+      starve fresher, lower-priority rows from ever being seen.
+    """
     ensure_schema(conn)
     clauses: list[str] = []
     params: list[Any] = []
     if status:
         clauses.append("status = ?")
         params.append(status)
+    if exclude_status:
+        clauses.append("status != ?")
+        params.append(exclude_status)
     if delivery_state:
         clauses.append("delivery_state = ?")
         params.append(delivery_state)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    order_clause = (
+        "updated_at DESC, priority DESC" if order_by == "updated_at" else "priority DESC, updated_at DESC"
+    )
     rows = conn.execute(
         f"""
         SELECT *
         FROM proactive_artifacts
         {where}
-        ORDER BY priority DESC, updated_at DESC
+        ORDER BY {order_clause}
         LIMIT ?
         """,
         (*params, max(1, min(int(limit), 500))),
     ).fetchall()
     return [_hydrate_artifact(dict(row)) for row in rows]
+
+
+def archive_stale_artifacts(
+    conn: sqlite3.Connection,
+    *,
+    is_stale: Callable[[dict[str, Any]], bool],
+    exclude_artifact_types: Optional[set[str]] = None,
+) -> int:
+    """Persist a staleness verdict by archiving matching not-yet-archived rows.
+
+    A transient staleness filter applied only at ranking time (e.g. a digest
+    dropping candidates older than N days from ONE query's results) never
+    shrinks the table — those rows keep matching every future query and keep
+    occupying any bounded ``LIMIT`` window drawn from it. This composes with
+    the existing ``update_artifact_state`` archive verb (no new status is
+    introduced) to make that exclusion durable: once a row is judged stale by
+    the caller-supplied ``is_stale`` predicate, it is archived and will not
+    be reconsidered.
+
+    ``is_stale`` receives a plain dict with ``artifact_type``, ``metadata``,
+    ``created_at``, and ``updated_at`` — the same shape callers already use
+    for their own transient staleness checks, so the exact same predicate can
+    be reused for both the transient filter and this durable sweep.
+
+    Returns the number of rows archived.
+    """
+    ensure_schema(conn)
+    exclude_types = exclude_artifact_types or set()
+    rows = conn.execute(
+        """
+        SELECT artifact_id, artifact_type, metadata_json, created_at, updated_at
+        FROM proactive_artifacts
+        WHERE status != ?
+        """,
+        (ARTIFACT_STATUS_ARCHIVED,),
+    ).fetchall()
+    archived = 0
+    for row in rows:
+        artifact_type = str(row["artifact_type"] or "").strip()
+        if artifact_type in exclude_types:
+            continue
+        candidate = {
+            "artifact_id": row["artifact_id"],
+            "artifact_type": artifact_type,
+            "metadata": _json_loads_obj(row["metadata_json"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        if is_stale(candidate):
+            update_artifact_state(
+                conn,
+                artifact_id=str(row["artifact_id"]),
+                status=ARTIFACT_STATUS_ARCHIVED,
+            )
+            archived += 1
+    return archived
 
 
 def sync_from_proactive_signal_cards(conn: sqlite3.Connection, *, limit: int = 200) -> dict[str, int]:

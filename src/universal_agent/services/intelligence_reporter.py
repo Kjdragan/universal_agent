@@ -303,7 +303,32 @@ class IntelligenceReporter:
     def _rank_digest_artifacts(self, *, limit: int) -> list[dict[str, Any]]:
         proactive_artifacts.sync_from_proactive_signal_cards(self._conn)
         self._sync_from_proactive_work_items()
-        artifacts = proactive_artifacts.list_artifacts(self._conn, limit=250)
+        # Persist the staleness verdict (see _is_stale_candidate below) so
+        # days-old rows stop occupying the bounded pool query's LIMIT window
+        # on every future digest — see T15: 293 never-archived priority>=4
+        # artifacts were permanently saturating list_artifacts(limit=250),
+        # making every lower-priority artifact (e.g. proactive_signal, whose
+        # priority is almost always <=3) structurally unreachable.
+        proactive_artifacts.archive_stale_artifacts(
+            self._conn,
+            is_stale=_is_stale_candidate,
+            exclude_artifact_types={"daily_digest"},
+        )
+        # delivery_state=DELIVERY_NOT_SURFACED: only draw from artifacts that
+        # have never been surfaced to the operator. exclude_status=ARCHIVED:
+        # belt-and-suspenders alongside the archive sweep above (an archived
+        # row can still carry delivery_state='not_surfaced' since archiving
+        # doesn't rewrite delivery_state). order_by="updated_at": rank the
+        # pool by recency first so fresh, low-priority material isn't
+        # permanently crowded out by old high-priority rows within the same
+        # bounded LIMIT window (the root cause above).
+        artifacts = proactive_artifacts.list_artifacts(
+            self._conn,
+            delivery_state=proactive_artifacts.DELIVERY_NOT_SURFACED,
+            exclude_status=proactive_artifacts.ARTIFACT_STATUS_ARCHIVED,
+            limit=250,
+            order_by="updated_at",
+        )
         candidates = [
             artifact
             for artifact in artifacts
@@ -324,7 +349,12 @@ class IntelligenceReporter:
         # Collapse duplicates that point at the same underlying work target
         # (e.g. a demo mirrored as both cody_demo_task and proactive_work_item).
         deduped = _dedup_candidates(scored)
-        return [artifact for artifact, _score in deduped][:limit]
+        ranked = [artifact for artifact, _score in deduped]
+        # Per-lane cap: without this, a single high-volume source_kind (e.g. a
+        # firehose of low-priority proactive_signal insights) can fill every
+        # digest slot on recency alone, crowding out other lanes entirely.
+        capped = _apply_per_lane_cap(ranked, cap=_per_lane_cap())
+        return capped[:limit]
 
     def _compose_digest_text(
         self,
@@ -575,6 +605,23 @@ _DEDUP_TYPE_PREFERENCE = {
 
 _STALE_MAX_AGE_DAYS = 7
 
+# Max ranked digest slots any single source_kind lane may occupy. Without a
+# cap, a high-volume low-priority lane (e.g. hundreds/week of YouTube
+# transcript insights, all sharing source_kind='proactive_signal') can win
+# every slot on recency alone once the pool is ordered updated_at DESC,
+# starving every other lane's candidates out of a fixed-size digest.
+_DEFAULT_PER_LANE_CAP = 5
+
+
+def _per_lane_cap() -> int:
+    """Resolve the per-source_kind digest cap; override via UA_DIGEST_PER_LANE_CAP."""
+    raw = str(os.getenv("UA_DIGEST_PER_LANE_CAP", "")).strip()
+    try:
+        cap = int(raw) if raw else _DEFAULT_PER_LANE_CAP
+    except ValueError:
+        cap = _DEFAULT_PER_LANE_CAP
+    return max(1, cap)
+
 # Conversational / instructional lines that must never leak into the digest.
 _CHATTER_LINE_RE = re.compile(
     r"^\s*(?:want me to .*\?|should i .*\?|let me know\b.*|shall i .*\?|"
@@ -635,6 +682,31 @@ def _dedup_candidates(
         if _dedup_preference(artifact, score) > _dedup_preference(kept_artifact, kept_score):
             best[key] = (artifact, score)
     return [best[key] for key in order]
+
+
+def _apply_per_lane_cap(
+    ranked: list[dict[str, Any]],
+    *,
+    cap: int,
+) -> list[dict[str, Any]]:
+    """Drop entries once their source_kind lane has filled ``cap`` slots.
+
+    ``ranked`` must already be sorted best-first (post score + dedup). Kept
+    entries preserve that relative order, so a subsequent ``[:limit]`` slice
+    still keeps the highest-scoring survivors across all lanes rather than
+    the highest-scoring items of whichever lane happens to sort first.
+    """
+    counts: dict[str, int] = {}
+    kept: list[dict[str, Any]] = []
+    effective_cap = max(1, int(cap))
+    for artifact in ranked:
+        lane = str(artifact.get("source_kind") or "").strip() or "unknown"
+        seen = counts.get(lane, 0)
+        if seen >= effective_cap:
+            continue
+        counts[lane] = seen + 1
+        kept.append(artifact)
+    return kept
 
 
 def _parse_iso(value: Any) -> datetime | None:
