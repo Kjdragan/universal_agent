@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Deploy exit 124 — root cause and durable fix</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body {
+  background:#ffffff; color:#1f2328; margin:0;
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+.wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }
+header.hero {
+  border:1px solid #d0d7de; border-radius:12px; padding:28px 28px 22px;
+  background:linear-gradient(180deg,#f6f8fa,#ffffff);
+}
+h1 { font-size: 30px; line-height:1.25; margin:0 0 8px; letter-spacing:-.02em; }
+.sub { color:#59636e; font-size:16px; margin:0; }
+.badges { margin-top:16px; display:flex; flex-wrap:wrap; gap:8px; }
+.badge { font-size:12.5px; font-weight:600; padding:4px 10px; border-radius:999px; border:1px solid; }
+.b-red   { color:#82071e; background:#ffebe9; border-color:#ffcecb; }
+.b-green { color:#0a5f38; background:#dafbe1; border-color:#aceebb; }
+.b-blue  { color:#0550ae; background:#ddf4ff; border-color:#b6e3ff; }
+.b-gray  { color:#59636e; background:#f6f8fa; border-color:#d0d7de; }
+h2 { font-size:22px; margin:44px 0 12px; padding-bottom:8px; border-bottom:1px solid #d0d7de; letter-spacing:-.01em; }
+h3 { font-size:17px; margin:28px 0 8px; }
+p { margin: 10px 0; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 13px;
+  background:#f6f8fa; padding:2px 6px; border-radius:6px; border:1px solid #d0d7de; }
+pre { background:#f6f8fa; border:1px solid #d0d7de; border-radius:10px; padding:14px 16px;
+  overflow-x:auto; font-size:13px; line-height:1.55; }
+pre code { background:none; border:none; padding:0; }
+.tablewrap { overflow-x:auto; margin:14px 0; }
+table { border-collapse:collapse; width:100%; font-size:14.5px; }
+th, td { border:1px solid #d0d7de; padding:9px 12px; text-align:left; vertical-align:top; }
+th { background:#f6f8fa; font-weight:600; }
+tr.hit td { background:#fff8c5; }
+tr.good td { background:#dafbe1; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.callout { border-left:4px solid; padding:14px 18px; border-radius:0 8px 8px 0; margin:18px 0; }
+.c-key  { border-color:#0969da; background:#ddf4ff; }
+.c-warn { border-color:#bf8700; background:#fff8c5; }
+.c-kill { border-color:#cf222e; background:#ffebe9; }
+.c-ok   { border-color:#1a7f37; background:#dafbe1; }
+.callout p:first-child { margin-top:0; } .callout p:last-child { margin-bottom:0; }
+.mermaid { background:#f6f8fa; border:1px solid #d0d7de; border-radius:10px; padding:18px; margin:18px 0;
+  overflow-x:auto; text-align:center; }
+.big { display:flex; flex-wrap:wrap; gap:14px; margin:20px 0; }
+.stat { flex:1 1 190px; border:1px solid #d0d7de; border-radius:10px; padding:14px 16px; background:#f6f8fa; }
+.stat .n { font-size:26px; font-weight:700; letter-spacing:-.02em; }
+.stat .l { font-size:12.5px; color:#59636e; text-transform:uppercase; letter-spacing:.04em; margin-top:2px; }
+.n-red { color:#cf222e; } .n-green { color:#1a7f37; }
+ul, ol { padding-left:22px; } li { margin:6px 0; }
+footer { margin-top:56px; padding-top:18px; border-top:1px solid #d0d7de; color:#59636e; font-size:13.5px; }
+.toc { background:#f6f8fa; border:1px solid #d0d7de; border-radius:10px; padding:14px 20px; margin:24px 0; }
+.toc ol { margin:6px 0; } .toc a { color:#0969da; text-decoration:none; } .toc a:hover { text-decoration:underline; }
+.small { font-size:13.5px; color:#59636e; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Production deploy exit 124 — root cause, proof, and the durable fix</h1>
+  <p class="sub">A wedged SSHFS mount named in <code>/etc/fstab</code> made every <code>systemd daemon-reload</code> cost a hard 90.3 s. At ~63 reloads per deploy, that is ~95 minutes inside a <code>timeout 30m</code> envelope.</p>
+  <div class="badges">
+    <span class="badge b-red">3 deploys burned</span>
+    <span class="badge b-green">Reproduced deterministically</span>
+    <span class="badge b-green">Fix measured: 90.42 s → 0.41 s</span>
+    <span class="badge b-blue">PR #1591</span>
+    <span class="badge b-gray">uaonvps · systemd 255</span>
+  </div>
+</header>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#tldr">The one-paragraph answer</a></li>
+    <li><a href="#evidence">Evidence: it is a timeout, not slowness</a></li>
+    <li><a href="#mechanism">The mechanism, isolated syscall-deep</a></li>
+    <li><a href="#proof">Proof the fix works</a></li>
+    <li><a href="#losers">Why the other four directions lost</a></li>
+    <li><a href="#shipped">What shipped</a></li>
+    <li><a href="#diagnose">Diagnose it in 30 seconds next time</a></li>
+    <li><a href="#residual">Residual risk and what I deferred</a></li>
+  </ol>
+</div>
+
+<h2 id="tldr">1. The one-paragraph answer</h2>
+
+<p><code>systemd-fstab-generator</code> runs on <strong>every</strong> <code>systemctl daemon-reload</code>, and for each <code>/etc/fstab</code> entry it canonicalizes the mount point — <code>chase()</code> → <code>openat()</code> → <code>statx()</code>. The desktop SSHFS bridge was an fstab entry, so when that mount is <strong>wedged</strong> (desktop asleep or unreachable) the <code>statx()</code> blocks in uninterruptible <code>D</code> state. The generator never exits; systemd kills its generator sandbox at the hard 90 s <code>DEFAULT_TIMEOUT_USEC</code>; the child exits non-zero and PID 1 logs <code>Failed to fork off sandboxing environment for executing generators: Protocol error</code>. Every reload then costs 90.3 s instead of ~0.5 s. A deploy performs ~63 reloads, so the installer block runs ~95 min and <code>timeout 30m ssh</code> kills it with exit 124.</p>
+
+<div class="callout c-key">
+<p><strong>The correction that matters.</strong> The suspicion going in was that the deploy <em>triggers</em> the automount and causes the wedge. It does not. Nothing in the entire deploy path reads <code>/home/kjdragan</code> — the only occurrence is a comment. The wedge is <strong>ambient</strong> (it starts and ends independently of deploys; on 08-01 it healed at 17:53:18 with no deploy and no unmount). The deploy's role is purely as an <strong>amplifier</strong>: it is the single biggest consumer of <code>daemon-reload</code> on the box.</p>
+</div>
+
+<div class="callout c-warn">
+<p><strong>“Protocol error” is a misnomer — fork did not fail.</strong> <code>safe_fork(FORK_WAIT)</code> converts a non-zero child exit status into <code>-EPROTO</code>. The sandbox child was created fine, ran, and exited 1 because its generators hit <code>alarm(90)</code>. Chasing “why can’t systemd fork?” is a dead end — the message describes the messenger, not the fault.</p>
+</div>
+
+<h2 id="evidence">2. Evidence: it is a timeout, not slowness</h2>
+
+<p>1542 <code>daemon-reload</code> events from the journal (2026-07-29 → 08-02), bucketed:</p>
+
+<div class="big">
+  <div class="stat"><div class="n">1356</div><div class="l">fast reloads</div><div class="small">median 695 ms · max 1070 ms</div></div>
+  <div class="stat"><div class="n n-red">186</div><div class="l">slow reloads</div><div class="small">min 90293 ms · max 91025 ms</div></div>
+  <div class="stat"><div class="n">0</div><div class="l">in between</div><div class="small">nothing from 1.1 s to 90.3 s</div></div>
+</div>
+
+<p>A load-dependent problem produces a fat tail. This produces two disjoint clusters exactly 90 s apart — the signature of a fixed timeout. Arithmetically, <strong>slow = fast + exactly 90 s</strong>: the <code>alarm(90)</code> covers only generator execution, and the remaining ~300–1000 ms is the rest of the reload, which is precisely the fast population.</p>
+
+<p>Two slow→fast transitions land exactly on SSHFS unmount timestamps, tying the two together before any experiment was run:</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Slow run begins</th><th>Returns to fast</th><th>Coincides with</th></tr></thead>
+<tbody>
+<tr><td class="mono">07-31 22:42:06</td><td class="mono">07-31 23:21:52</td><td>SSHFS mount deactivated 23:21:42</td></tr>
+<tr><td class="mono">08-01 11:59:36</td><td class="mono">08-01 17:53:18</td><td>healed in place — <em>no</em> unmount (sshfs <code>reconnect</code> won)</td></tr>
+<tr class="hit"><td class="mono">08-01 23:45:16</td><td class="mono">08-02 01:08:46</td><td><strong>the failing deploy</strong> (23:42:16 → 00:12:35, exit 124)</td></tr>
+<tr><td class="mono">08-01 19:30:07</td><td class="mono">08-01 20:03:36</td><td>SSHFS mount deactivated 20:03:36</td></tr>
+</tbody>
+</table>
+</div>
+
+<p class="small">The 08-01 11:59→17:53 row is the one that disproves “mounted ⇒ slow”. The mount was up the whole time and reloads were fast for hours before and after. The trigger is the mount being <em>wedged</em>, not merely present.</p>
+
+<h2 id="mechanism">3. The mechanism, isolated syscall-deep</h2>
+
+<div class="mermaid">
+flowchart TD
+  A["systemctl daemon-reload"] --> B["PID 1: manager_reload()"]
+  B --> C["manager_run_generators()"]
+  C --> D["safe_fork sd-gens<br/>new mount namespace"]
+  D --> E["execute_directories<br/>alarm(90) armed"]
+  E --> F["17 generators run in parallel"]
+  F --> G["16 generators<br/>return in 0.02s"]
+  F --> H["systemd-fstab-generator"]
+  H --> I["for each fstab entry:<br/>canonicalize mount point"]
+  I --> J["openat / statx on<br/>/home/kjdragan"]
+  J --> K["FUSE request to a<br/>STOPPED sshfs daemon"]
+  K --> L["blocks in D state<br/>uninterruptible"]
+  L --> M["alarm(90) fires<br/>SIGALRM kills the runner"]
+  M --> N["child exits non-zero<br/>safe_fork returns -EPROTO"]
+  N --> O["'Failed to fork off sandboxing<br/>environment' + 90.3s reload"]
+  style H fill:#ffebe9,stroke:#cf222e
+  style L fill:#ffebe9,stroke:#cf222e
+  style O fill:#ffebe9,stroke:#cf222e
+  style G fill:#dafbe1,stroke:#1a7f37
+</div>
+
+<h3>Experiment 1 — deterministic reproduction</h3>
+<p>Wedge induced with <code>SIGSTOP</code> on the sshfs FUSE daemon — a faithful analogue of a sleeping desktop (the daemon is alive, has accepted the FUSE request, and never answers), fully reversible with <code>SIGCONT</code>.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Bridge state</th><th><code>daemon-reload</code></th><th>EPROTO in journal</th></tr></thead>
+<tbody>
+<tr><td>Absent (no FUSE mount)</td><td class="mono">0.43 s</td><td>no</td></tr>
+<tr><td>Mounted, healthy</td><td class="mono">0.41 s</td><td>no</td></tr>
+<tr class="hit"><td>Mounted, <strong>wedged</strong>, in <code>/etc/fstab</code></td><td class="mono"><strong>90.42 s</strong></td><td><strong>yes</strong></td></tr>
+<tr><td>Unwedged again</td><td class="mono">1.23 s</td><td>no</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Experiment 2 — which generator?</h3>
+<p>Every installed generator run individually against the same wedged mount:</p>
+<pre><code>cloud-init-generator                 0.02s rc=0
+netplan                              0.02s rc=0
+snapd-generator                      0.02s rc=0
+systemd-cryptsetup-generator         0.02s rc=0
+systemd-fstab-generator             20.02s rc=124   &lt;-- the only one
+systemd-getty-generator              0.02s rc=0
+systemd-gpt-auto-generator           0.05s rc=0
+   ... 10 more, all 0.02-0.03s rc=0</code></pre>
+
+<p>And the sandbox itself is innocent — namespace creation plus the recursive read-only remount of <code>/</code> measured <strong>0.01 s</strong> on the wedged mount. This matters: it means the mount merely <em>existing in the namespace</em> is not the problem, so taking it out of fstab is a genuine root-cause fix rather than a dodge.</p>
+
+<h3>Experiment 3 — the counterfactual</h3>
+<p>Same wedged mount, same namespace; only the fstab file the generator reads differs (via <code>SYSTEMD_FSTAB</code>, never touching the real one):</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>fstab given to the generator</th><th>Time</th><th>Exit</th><th>Units emitted</th></tr></thead>
+<tbody>
+<tr class="hit"><td>real <code>/etc/fstab</code> (bridge present)</td><td class="mono">20.02 s</td><td class="mono">124 (killed)</td><td class="mono">4, then hangs</td></tr>
+<tr class="good"><td>copy with <em>only</em> the bridge line removed</td><td class="mono">0.02 s</td><td class="mono">0</td><td class="mono">4, clean</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Both emit the identical four units (<code>-.mount</code>, <code>boot.mount</code>, <code>boot-efi.mount</code>, <code>swapfile.swap</code>) — it does the same work either way. It only hangs when it reaches the bridge. <strong>~1000× difference from one line of a text file.</strong></p>
+
+<h3>The blocking syscall, caught in the act</h3>
+<pre><code>openat(5, "home",     O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+openat(7, "kjdragan", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 5
+strace: Process 1219185 detached          &lt;-- never returns</code></pre>
+<p class="small"><code>O_PATH</code> opens do not trigger FUSE; the next call on that descriptor — resolving the mount — does, and that is where it dies.</p>
+
+<h2 id="proof">4. Proof the fix works</h2>
+
+<p>The bridge was converted to native systemd units and removed from <code>/etc/fstab</code>. Critically, the running mount at that moment had merely been <em>adopted</em> from the old generated unit — so I tore it down and let the repo unit create it from scratch before measuring. Proof it is the repo's unit: the new <code>mount.fuse.sshfs</code> argv carries no <code>_netdev</code> (an fstab-only directive the generator used to inject).</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Check</th><th>Result</th></tr></thead>
+<tbody>
+<tr class="good"><td>Bridge functional (reads desktop's <code>CLAUDE.md</code> over SSHFS)</td><td class="mono">yes</td></tr>
+<tr class="good"><td>Mount created by the repo unit (<code>_netdev</code> absent from argv)</td><td class="mono">confirmed</td></tr>
+<tr class="good"><td>Both units <code>ActiveState=active</code>, <code>Result=success</code></td><td class="mono">yes</td></tr>
+<tr class="good"><td>Generator fragments for the bridge</td><td class="mono">0</td></tr>
+<tr class="good"><td><code>fuse.sshfs</code> lines in <code>/etc/fstab</code></td><td class="mono">0</td></tr>
+<tr class="good"><td><strong>Wedged</strong> (<code>waiting=1</code>) <code>daemon-reload</code></td><td class="mono"><strong>0.41 s / 0.43 s</strong></td></tr>
+<tr class="good"><td>EPROTO events while wedged</td><td class="mono">0</td></tr>
+<tr class="good"><td>Recovery via FUSE connection <code>abort</code></td><td class="mono">bridge restored</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout c-ok">
+<p><strong>90.42 s → 0.41 s under the identical failure condition</strong>, with the bridge still fully working. Same wedge, same mount in the namespace — the generator is simply no longer told to walk into it.</p>
+</div>
+
+<h2 id="losers">5. Why the other four directions lost</h2>
+
+<div class="callout c-kill">
+<p><strong>(a) Self-defending deploy script — <code>timeout 5 stat -t /home/kjdragan/.</code> then lazy-unmount. Rejected: the probe is broken twice over.</strong></p>
+<p><em>It cannot time out.</em> A hung FUSE call is uninterruptible: the child parks in <code>D</code> at <code>request_wait_answer</code> and <code>timeout</code> then blocks in <code>sigsuspend</code> waiting to reap a child that cannot die. <code>SIGKILL</code> is ignored. Measured still running at T+8 s on a 5 s timeout. The guard would hang the deploy <em>harder</em> than the bug.</p>
+<p><em>It cannot tell the states apart.</em> I hit this live: at the start of this session <code>stat</code> returned in <strong>2 ms</strong> while the bridge was completely dead — because with the automount dead the path is an empty <em>local</em> directory. Healthy → 2 ms. Dead → 2 ms. Wedged → forever. The probe reports "fine" for two of the three states and hangs on the third.</p>
+<p><em>And the remedy doesn't remedy.</em> <code>fusermount -uz</code> / <code>umount -l</code> remove the mountinfo entry but leave <code>waiting=1</code>, the connection dir present, and the process in <code>D</code>.</p>
+</div>
+
+<div class="callout c-kill">
+<p><strong>(b) Mount-option tuning. Rejected — wrong layer.</strong> <code>x-systemd.mount-timeout</code> bounds a mount <em>attempt</em>; the block here is a <code>statx()</code> on a mount that is already up. <code>x-systemd.device-timeout</code> is a literal no-op (needs a <code>What=</code> that yields a <code>.device</code> unit; <code>user@host:path</code> yields none). <code>x-systemd.idle-timeout</code> is actively dangerous — periodically unmounting a possibly-wedged FUSE mount is exactly what killed the bridge on 07-31 and 08-01. And the hand-added <code>ServerAliveInterval=15</code> was already on the box and demonstrably insufficient: wedges after it lasted 33 min and ~6 h, because the desktop's sshd answers keepalives even while the sftp request path is stalled. <em>The declarative half of (b) survives — it is the same change as (c), and it shipped.</em></p>
+</div>
+
+<div class="callout c-warn">
+<p><strong>Dropping <code>reconnect</code> — the sharpest lever, deliberately not pulled.</strong> Without it a broken transport makes sshfs exit and subsequent syscalls fail instantly with <code>-ENOTCONN</code>, so reloads would also be fast. But <code>reconnect</code> is the only reason the bridge has ever healed itself in place (08-01 17:53:18). Trading the capability's self-healing for something we get for free by de-fstab-ing is a bad trade. It was only ever harmful <em>because</em> a generator was reading through it.</p>
+</div>
+
+<div class="callout c-kill">
+<p><strong>Bounding the reload (<code>timeout 120 systemctl daemon-reload</code>). Rejected — saves zero seconds.</strong> The D-Bus <code>Reload</code> method stashes the reply and returns; PID 1 does the work in its own loop. Killing the <em>client</em> cannot cancel PID 1, which stays single-threaded and D-Bus-unresponsive for the full 90 s — so the very next <code>systemctl</code> call just blocks for the remainder. It only looks like a fix in a log that times individual commands.</p>
+</div>
+
+<div class="callout c-kill">
+<p><strong>Raising the timeout envelope. Rejected.</strong> Surviving today's wedged reload count needs ~120 min, which parks the <code>deploy-production</code> concurrency group for two hours and serializes every subsequent merge behind a deploy that is doing nothing but waiting on a dead FUSE daemon. Converting a 30-minute failure into a 2-hour success is strictly worse.</p>
+</div>
+
+<div class="callout c-warn">
+<p><strong>(d) Batching the reloads — right idea, and the scoping matters enormously.</strong> The obvious version (collapse the ~20 explicit <code>daemon-reload</code> calls into one) is a <strong>no-op</strong>: a deploy actually performs <strong>~63</strong> reloads, because <code>systemctl enable</code> and <code>disable</code> reload implicitly unless given <code>--no-reload</code>. Batching only the explicit ones leaves 43 × 90.3 s ≈ 65 min — still over budget, with the fix appearing mysteriously ineffective. Correctly scoped it is real defense-in-depth; see §8 for why it is a separate PR.</p>
+</div>
+
+<h2 id="shipped">6. What shipped — <a href="https://github.com/Kjdragan/universal_agent/pull/1591">PR #1591</a></h2>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Change</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td><code>deployment/systemd/home-kjdragan.{mount,automount}</code> — the bridge as native units, peer coordinates templated</td><td><strong>primary</strong></td></tr>
+<tr><td><code>scripts/install_vps_desktop_bridge.sh</code> — idempotent: install units → <strong>evict any fstab bridge entry</strong> → reload</td><td><strong>primary</strong></td></tr>
+<tr><td><code>remote_deploy.sh</code> — runs it <em>before</em> the installer block's first reload</td><td><strong>primary</strong></td></tr>
+<tr><td><code>[reload-canary]</code> + <code>::warning::</code> annotation on any reload ≥ 60 s</td><td>observability</td></tr>
+<tr><td>Bridge watchdog (5 min): detect via <code>/sys/fs/fuse/connections/&lt;minor&gt;/waiting</code>, recover via connection <code>abort</code></td><td>capability uptime</td></tr>
+<tr><td><code>tests/unit/test_desktop_bridge_no_fstab.py</code> — 5 guards</td><td>anti-regression</td></tr>
+<tr><td>Three canonical docs updated</td><td>doc contract</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Two things the incident taught that are now encoded</h3>
+<p><strong>The IaC gap.</strong> The hand-added <code>ServerAliveInterval=15,ServerAliveCountMax=3,reconnect</code> existed <em>nowhere</em> in git — an exhaustive grep for <code>fuse.sshfs</code>, <code>x-systemd.automount</code>, <code>allow_other</code>, <code>mount-timeout</code> returned zero hits repo-wide. A VPS rebuild would have silently lost both the bridge and this fix. It is now repo-owned and reconverged every deploy. The doc that described it even asserted "there is no <code>sshfs</code> mount command anywhere in <code>scripts/</code>" — true when written, and precisely why nothing could see the drift.</p>
+
+<p><strong>Why "just unmount it" failed twice.</strong> <code>pkill -f mount.fuse.sshfs</code> does not kill a wedged sshfs daemon (it survives in <code>futex_do_wait</code>), and lazy unmount does not abort the connection. Both leave a non-empty unit cgroup — the journal's <code>Found left-over process (mount.fuse.sshf) in control group</code> — so systemd's next start fails with <code>Result=resources</code> and the bridge stays <strong>down</strong> rather than recovering. Only <code>echo 1 &gt; /sys/fs/fuse/connections/&lt;minor&gt;/abort</code> frees <code>D</code>-state waiters. That is now the watchdog's first move.</p>
+
+<div class="callout c-warn">
+<p><strong>Found while investigating:</strong> the bridge was <em>already dead</em> when this session started — <code>home-kjdragan.automount</code> had been <code>inactive (dead) (Result: resources)</code> since 00:57:24 UTC, roughly 80 minutes, with nobody aware. The documented Path Guarantee was silently gone. Restored, and the watchdog now catches this within 5 minutes.</p>
+</div>
+
+<h2 id="diagnose">7. Diagnose it in 30 seconds next time</h2>
+
+<pre><code>ssh uaonvps 'bash -lc "grep -c fuse.sshfs /etc/fstab; \
+  sudo journalctl _PID=1 --since -1h | grep -c \"Failed to fork off sandboxing environment\"; \
+  time sudo systemctl daemon-reload"'</code></pre>
+
+<p>The fstab count <strong>must be 0</strong> and a healthy reload is <strong>&lt; 1.5 s</strong>. A non-zero EPROTO count plus a ~90 s reload means a generator is blocked on a wedged FUSE mount. This line now lives in <code>project_docs/06_platform/04_deployment_and_cicd.md</code>.</p>
+
+<div class="callout c-key">
+<p><strong>Exit 124 ≠ exit 255 — and the old runbook conflated them.</strong> The existing triage bullet described a slow <code>daemon-reload</code> deploy failure as the <em>255</em> case: connection dropped, deploy probably succeeded, run the SHA check. Applying that reflex to a 124 is exactly wrong — 124 means <code>timeout 30m</code> fired and the deploy genuinely did <strong>not</strong> finish. Now split into two bullets in <code>08_operations/05_incident_response_patterns.md</code>.</p>
+</div>
+
+<h2 id="residual">8. Residual risk and what I deferred</h2>
+
+<ul>
+<li><strong>Deferred: collapsing ~63 reloads/deploy to 1.</strong> Correctly scoped this needs <code>--no-reload</code> on every <code>enable</code>/<code>disable</code> across 19 installers plus a deferred-<code>--now</code> flush, which changes unit start ordering. That is a rewrite of the deploy path, and shipping it in the same PR as the fix for a broken deploy is how one problem becomes two. It is real defense-in-depth against a <em>future</em> unknown generator wedge — worth doing, worth doing separately.</li>
+<li><strong>Old fstab backups still on the box</strong> (<code>/etc/fstab.prev</code>, <code>/etc/fstab.bak-*</code>) contain the original bridge line. A human restoring one reinstates the stall; the installer re-evicts it on the next deploy, but the window between is unguarded.</li>
+<li><strong><code>systemd-gpt-auto-generator</code> is masked</strong> on this box and that is quietly load-bearing — it is the other generator that touches <code>/home</code>. A distro upgrade that unmasks it could reintroduce a stall through a path this fix does not cover.</li>
+<li><strong>Consumer-side hangs are only partly addressed.</strong> With <code>reconnect</code> and no idle timeout, an agent reading through the bridge still blocks during a wedge until the watchdog fires (≤ ~5 min). Accepted deliberately: the alternative costs the self-healing that keeps this bridge alive.</li>
+<li><strong>The watchdog does root-level surgery on a shared mount.</strong> A false positive aborts a healthy FUSE connection. Mitigated by requiring <code>waiting &gt; 0</code> sustained across 6 × 10 s samples (a healthy mount drains in milliseconds), and the blast radius is bounded — the automount is re-armed and the next access remounts.</li>
+</ul>
+
+<footer>
+Investigated and fixed 2026-08-02 on <span class="mono">uaonvps</span> (systemd 255.4-1ubuntu8.16). All timings measured on the box; the wedge was induced with <span class="mono">SIGSTOP</span> on the sshfs daemon and fully reversed. Source-level mechanism corroborated against systemd v255 (<span class="mono">manager.c::manager_run_generators</span>, <span class="mono">exec-util.c::do_execute</span>).
+</footer>
+
+</div>
+<script>
+mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose' });
+</script>
+</body>
+</html>
