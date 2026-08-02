@@ -159,6 +159,40 @@ demo. A non-ok finalize stays on the unchanged default close path.
 
 ### End-of-day golden-nuggets judge (Component D — SHIPPED, default OFF)
 
+> **UPDATE 2026-08-02 — memory limits corrected, and the cgroup evidence is now captured.**
+> Reading the kernel memcg records showed the memory story in the unit's own comments (and in #1579's
+> premise) was wrong. `MemoryPeak=1.0G` from the 08-01 run is a **clamp reading**, not a demand reading —
+> that run was pinned at the then-current `MemoryMax=1G` and spilled 1.16G to swap, and #1579 did not land
+> until 19:27 UTC that day, ~13h *after* the run. Real demand, from the three `CONSTRAINT_MEMCG` oom-kills
+> in `/var/log/kern.log` (**2026-07-20, 07-22, 07-27**, all at `limit=1048576kB`): anon resident ~1.0G plus
+> swap of 5.08G / 4.96G / 5.63G ⇒ **~6.0–6.6G of anon demand**. Even the lightest surviving night wanted
+> 2.16G.
+> - **`MemoryHigh=2G` removed.** `memory.high` throttles rather than kills (direct reclaim plus an explicit
+>   userspace sleep penalty). At 2G it binds on *every* observed night, so it buys only a slower run — and it
+>   converts a loud `result=oom-kill` into a quiet `result=timeout`. There is nothing to protect either:
+>   box-wide `/proc/pressure/memory` reads `0.00/0.00/0.00` with ~11.7G available.
+> - **`MemoryMax` stays 3G deliberately**, as fault isolation rather than a fitted limit. With #1587 reaping
+>   orphaned build trees the expected demand is the ~2.16G baseline, not the 6G seen when a timed-out build's
+>   `claude` tree stayed charged to the cgroup. Raise to 6G only if the postmortem shows a post-#1587 run
+>   still exceeding 3G.
+> - **`ExecStopPost=` → `scripts/nuggets_cgroup_postmortem.sh`.** A `Type=oneshot` destroys its cgroup on
+>   exit, so `memory.events` (the `high`/`max`/`oom` counters) and `memory.pressure` were unreadable
+>   post-hoc — which is why the throttling question could not be answered from a finished run.
+>   `ExecStopPost` runs *inside* the cgroup while it still exists (verified empirically), and on abnormal
+>   exits too. Grep a run with `journalctl -u universal-agent-proactive-demo-nuggets.service | grep CGPM`.
+>
+> Two long-standing comments in the unit were also corrected: builds run on **`claude-sonnet-5`, not Opus**
+> (`--model-tier auto` right-sizes the generic class down), and **`--video` is a deprecated no-op**
+> (`build_demo.py` never reads `a.video`; the explainer render lives in `land_demo.py` after `final_pass`).
+>
+> **Open, and more valuable than any of the above: the fidelity gate is rejecting 100% of builds.** The last
+> `land` PASS in `demo_factory/lessons/build_stats.jsonl` was **2026-07-18** (`phone-escalation`, 4/5). Every
+> build since — 07-31 ×2, 08-01 ×3, 08-02 ×1 — passed the deterministic verifier (`verify_pass: true`) and
+> was then failed by the Gemini fidelity judge (votes 0/2, 1/3, 0/3, 1/3, 0/3, 0/3). `herdr` failed at 1/3
+> with `gating_pass 3/4` and holistic verdict `"delivers"`. The voter panel also shrank from 5 to 2–3, and a
+> strict majority over 3 is a materially harsher gate than 4/5. Un-triaged — this is why the nightly job
+> costs 1–2h of inference and lands nothing.
+
 > **UPDATE 2026-08-01 — build subprocess now runs in its OWN PROCESS GROUP (the real cause of the nightly failures).**
 > `proactive_demo_nuggets.py::_default_build_runner` used a bare
 > `subprocess.run(argv, capture_output=True, timeout=_build_timeout_seconds())`. On timeout CPython
