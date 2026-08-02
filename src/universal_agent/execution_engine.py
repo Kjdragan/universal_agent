@@ -67,6 +67,34 @@ def _logfire_runtime_enabled() -> bool:
 logger = logging.getLogger(__name__)
 
 
+def is_redundant_final_text(event: AgentEvent, saw_streaming_text: bool) -> bool:
+    """True when ``event`` is the non-streaming fallback re-emission of the
+    complete final response text AND that text was already delivered via
+    incremental streaming, so re-broadcasting/re-appending it would
+    duplicate content.
+
+    :meth:`ExecutionEngineAdapter.execute` always yields a ``TEXT`` event
+    shaped ``data={"text": result.response_text, "final": True}`` at the
+    end of a turn, as a fallback for consumers that don't process
+    incremental streaming events. When the SDK path already streamed text
+    via ``hooks.emit_text_event()`` (those events carry a ``time_offset``
+    key), that final event is a verbatim repeat of everything already seen
+    and every consumer must drop it.
+
+    Callers own their own ``saw_streaming_text`` bool and must update it
+    from the *current* event only AFTER calling this predicate (a
+    streaming TEXT event is one with ``data.get("time_offset") is not
+    None``) — matching the check-then-update ordering this logic used
+    before being extracted into a shared helper.
+    """
+    return (
+        event.type == EventType.TEXT
+        and isinstance(event.data, dict)
+        and event.data.get("final") is True
+        and saw_streaming_text
+    )
+
+
 _TERMINATED_PROCESS_ERROR_TOKENS = (
     "terminated process",
     "cannot write to terminated process",

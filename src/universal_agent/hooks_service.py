@@ -26,6 +26,7 @@ from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run, get_run_attempt
+from universal_agent.execution_engine import is_redundant_final_text
 from universal_agent.gateway import GatewayRequest, InProcessGateway
 from universal_agent.heartbeat_mediation import (
     assess_triage_compliance,
@@ -5880,6 +5881,14 @@ class HooksService:
         reported_timeout_message: Optional[str] = None
         iteration_status: str = ""
         text_tail: list[str] = []
+        # Mirrors gateway_server.py's `saw_streaming_text` dedup: the
+        # execution engine always re-emits the complete final response as a
+        # `{"final": True}` TEXT event for non-streaming consumers. When
+        # streaming text was already seen (via `hooks.emit_text_event()`,
+        # marked by a `time_offset` key), that re-emission is a verbatim
+        # repeat and must not be appended again — see
+        # `execution_engine.is_redundant_final_text`.
+        saw_streaming_text = False
 
         # Open run.log for append so hook-dispatched sessions can be rehydrated
         _rl_handle = None
@@ -5914,11 +5923,17 @@ class HooksService:
                         tool_name = str(event.data.get("tool_name") or event.data.get("name") or "")
                     _rl_write(f"[{_rl_ts}] \U0001f527 TOOL CALL: {tool_name}" if tool_name else f"[{_rl_ts}] \U0001f527 TOOL CALL")
                 elif event_name == "text" and isinstance(getattr(event, "data", None), dict):
-                    text = str((event.data or {}).get("text") or "").strip()
-                    if text:
-                        text_tail.append(text)
-                        if len(text_tail) > 8:
-                            text_tail = text_tail[-8:]
+                    # Drop the non-streaming final-response re-emission when
+                    # streaming text for this turn was already captured
+                    # above, so it isn't appended (and later emailed) twice.
+                    if not is_redundant_final_text(event, saw_streaming_text):
+                        text = str((event.data or {}).get("text") or "").strip()
+                        if text:
+                            text_tail.append(text)
+                            if len(text_tail) > 8:
+                                text_tail = text_tail[-8:]
+                    if event.data.get("time_offset") is not None:
+                        saw_streaming_text = True
                 elif event_name == "error" and isinstance(getattr(event, "data", None), dict):
                     message = str((event.data or {}).get("message") or "").strip()
                     detail = str((event.data or {}).get("detail") or "").strip()
@@ -5975,6 +5990,16 @@ class HooksService:
             reported_error_message = reported_error_message or f"iteration_status:{iteration_status}"
 
         summary: dict[str, Any] = {"tool_calls": tool_calls, "duration_seconds": duration_seconds}
+        # NOTE: despite the name, this is the join of the last 8 (deduped,
+        # post-`is_redundant_final_text`) text events, truncated to 4000
+        # chars — the effective full response tail, not a short "preview".
+        # Left named `response_preview` rather than renamed (e.g. to
+        # `response_tail`) because the key is a cross-service contract:
+        # `services/agentmail_service.py` reads it directly
+        # (`_parse_queue_triage_result`, `_get_recorded_hook_triage` and
+        # friends), and `tests/unit/test_agentmail_service.py` has ~8
+        # fixtures keyed on it. Renaming would ripple beyond this module
+        # for a cosmetic gain — not worth it in this PR.
         response_preview = "\n".join(text_tail).strip()
         if response_preview:
             summary["response_preview"] = response_preview[:4000]

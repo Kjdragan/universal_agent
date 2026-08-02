@@ -116,6 +116,7 @@ from universal_agent.durable.state import (
     list_vp_sessions,
     upsert_vp_bridge_cursor,
 )
+from universal_agent.execution_engine import is_redundant_final_text
 from universal_agent.feature_flags import (
     coder_vp_enabled,
     cron_enabled,
@@ -7300,12 +7301,7 @@ async def _run_gateway_session_request(
                     )[-4000:]
 
             # ── Final dedup: skip WS broadcast of redundant final text ──
-            if (
-                event.type == EventType.TEXT
-                and isinstance(event.data, dict)
-                and event.data.get("final") is True
-                and saw_streaming_text
-            ):
+            if is_redundant_final_text(event, saw_streaming_text):
                 continue
             if event.type == EventType.TEXT and isinstance(event.data, dict):
                 if str(event.data.get("text") or "").strip():
