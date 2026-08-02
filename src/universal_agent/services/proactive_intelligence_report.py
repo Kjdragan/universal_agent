@@ -84,7 +84,10 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     Returns a structured dict with:
       - proactive_tasks: open/completed/failed/total counts + by_source breakdown
       - budget: used/remaining/daily_limit
-      - signal_cards: pending/promoted counts
+      - signal_cards: pending count + "promoted" (status in actioned/tracking/
+        approved -- any card the operator acted on positively; the legacy
+        'promoted' status itself has had no writer since 2026-06, so counting
+        it directly always read ~0)
       - utilization: avg occupancy, peak, queue depth
       - timestamp, period
     """
@@ -166,12 +169,25 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     try:
         proactive_signals.ensure_schema(conn)
         pending_rows = conn.execute(
-            "SELECT COUNT(*) AS c FROM proactive_signal_cards WHERE status = 'pending'"
+            "SELECT COUNT(*) AS c FROM proactive_signal_cards WHERE status = ?",
+            (proactive_signals.CARD_STATUS_PENDING,),
         ).fetchone()
         signal_pending = int(pending_rows["c"]) if pending_rows else 0
 
+        # 'promoted' is a legacy relic status -- proactive_signals.py's own
+        # writer inventory documents that no current writer produces it
+        # (apply_card_action sets 'actioned' for any dashboard action button
+        # or 'tracking' for track_topic; record_feedback can set 'approved'
+        # via the feedback endpoint). Counting status='promoted' always read
+        # ~0 regardless of real operator activity. "Promoted" now means any
+        # card the operator acted on positively.
         promoted_rows = conn.execute(
-            "SELECT COUNT(*) AS c FROM proactive_signal_cards WHERE status = 'promoted'"
+            "SELECT COUNT(*) AS c FROM proactive_signal_cards WHERE status IN (?, ?, ?)",
+            (
+                proactive_signals.CARD_STATUS_ACTIONED,
+                proactive_signals.CARD_STATUS_TRACKING,
+                proactive_signals.CARD_STATUS_APPROVED,
+            ),
         ).fetchone()
         signal_promoted = int(promoted_rows["c"]) if promoted_rows else 0
     except Exception as exc:
@@ -405,7 +421,7 @@ def format_report_email(report: dict[str, Any]) -> tuple[str, str, str]:
         "",
         "═══ Signal Cards ═══",
         f"  Pending:   {signals.get('pending', 0)}",
-        f"  Promoted:  {signals.get('promoted', 0)}",
+        f"  Actioned:  {signals.get('promoted', 0)}",
         "",
     ])
 

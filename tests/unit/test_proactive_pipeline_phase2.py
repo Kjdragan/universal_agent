@@ -165,6 +165,67 @@ class TestReportDataGathering:
 
         assert stats["signal_cards"]["pending"] >= 5
 
+    def test_gather_stats_counts_promoted_as_actioned_tracking_approved(self, tmp_path):
+        """T19a: 'promoted' is a legacy status no current writer produces (see
+        proactive_signals.py's writer inventory) -- counting status='promoted'
+        directly always read ~0. The stat must count cards the operator
+        actually acted on positively: actioned, tracking, or approved."""
+        from universal_agent.services.proactive_intelligence_report import (
+            gather_pipeline_stats,
+        )
+
+        db_path = tmp_path / "runtime_state.db"
+        with _connect(db_path) as conn:
+            proactive_signals.ensure_schema(conn)
+            for i, status in enumerate(("actioned", "tracking", "approved", "pending", "rejected")):
+                proactive_signals.upsert_generated_card(conn, {
+                    "card_id": f"card-status-{i}",
+                    "source": "youtube",
+                    "card_type": "signal_card",
+                    "title": f"Card {i}",
+                    "summary": "x",
+                    "priority": 3,
+                })
+                conn.execute(
+                    "UPDATE proactive_signal_cards SET status = ? WHERE card_id = ?",
+                    (status, f"card-status-{i}"),
+                )
+            conn.commit()
+
+            stats = gather_pipeline_stats(conn)
+
+        # actioned + tracking + approved = 3; pending and rejected excluded.
+        assert stats["signal_cards"]["promoted"] == 3
+        assert stats["signal_cards"]["pending"] == 1
+
+    def test_gather_stats_promoted_excludes_legacy_promoted_status(self, tmp_path):
+        """A literal legacy status='promoted' row (predating the rename) must
+        NOT be double-counted alongside the new actioned/tracking/approved
+        set -- it belongs to neither the old nor new active vocabulary."""
+        from universal_agent.services.proactive_intelligence_report import (
+            gather_pipeline_stats,
+        )
+
+        db_path = tmp_path / "runtime_state.db"
+        with _connect(db_path) as conn:
+            proactive_signals.ensure_schema(conn)
+            proactive_signals.upsert_generated_card(conn, {
+                "card_id": "legacy-promoted",
+                "source": "youtube",
+                "card_type": "signal_card",
+                "title": "Legacy relic",
+                "summary": "x",
+                "priority": 3,
+            })
+            conn.execute(
+                "UPDATE proactive_signal_cards SET status = 'promoted' WHERE card_id = 'legacy-promoted'"
+            )
+            conn.commit()
+
+            stats = gather_pipeline_stats(conn)
+
+        assert stats["signal_cards"]["promoted"] == 0
+
     def test_gather_stats_includes_source_kind_breakdown(self, tmp_path):
         """Report breaks down tasks by source_kind."""
         from universal_agent.services.proactive_intelligence_report import (

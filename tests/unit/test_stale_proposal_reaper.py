@@ -21,6 +21,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import sqlite3
 
+import pytest
+
 from universal_agent import task_hub
 from universal_agent.services import ideation_report
 
@@ -143,6 +145,55 @@ def test_report_sends_when_only_stale_proposals_exist(monkeypatch):
     stale = ideation_report.get_stale_proposals(conn, max_age_hours=72)
     assert held == []
     assert len(stale) == 1
+
+
+def test_held_and_stale_queries_overlap_on_an_old_open_reflection_item():
+    """Root-cause proof for the T19b double-count: get_held_proposals (newest
+    25, agent_ready=0) and get_stale_proposals (every OPEN reflection/
+    brainstorm item >72h, no agent_ready filter) are NOT mutually exclusive
+    -- a reflection proposal that is both held and older than 72h matches
+    both queries. deliver_ideation_report must not render it twice."""
+    conn = _conn()
+    _seed(conn, task_id="held_and_old", source_kind="reflection", age_hours=24 * 5)
+
+    held_ids = {p["task_id"] for p in ideation_report.get_held_proposals(conn)}
+    stale_ids = {s["task_id"] for s in ideation_report.get_stale_proposals(conn, max_age_hours=72)}
+    assert held_ids & stale_ids == {"held_and_old"}
+
+
+@pytest.mark.asyncio
+async def test_deliver_ideation_report_does_not_double_count_held_and_stale(monkeypatch):
+    """T19b fix: a proposal that is both held and >72h old must appear in the
+    delivered report exactly once (as a new proposal), not once in each
+    section -- and the reported total must equal the number of DISTINCT
+    proposals, not len(proposals) + len(stale) over an overlapping union."""
+    monkeypatch.setenv("UA_ARTIFACT_ACK_SECRET", "test-secret")
+    monkeypatch.setenv("UA_IDEATION_BACKPRESSURE_PENDING", "1000")  # stay out of the drain view
+    conn = _conn()
+    _seed(conn, task_id="held_and_old", source_kind="reflection", age_hours=24 * 5)
+    _seed(conn, task_id="fresh_held", source_kind="reflection", age_hours=1)
+    _seed(conn, task_id="truly_stale", source_kind="brainstorm", age_hours=24 * 5)
+
+    sent: dict = {}
+
+    class _Mail:
+        async def send_email(self, **kwargs):
+            sent.update(kwargs)
+            return {"status": "sent", "message_id": "m1"}
+
+    monkeypatch.setattr(
+        ideation_report, "publish_html_to_scratch", lambda *a, **k: "https://scratch/x"
+    )
+    result = await ideation_report.deliver_ideation_report(conn, _Mail(), "op@example.com")
+
+    assert result["status"] == "delivered"
+    # 3 distinct task_ids total -- the union, not the (overlapping) sum.
+    assert result["count"] == 3
+    # held_and_old must render exactly once in the email HTML: it is a
+    # <div> card, so its task_id appears in exactly one action-link block.
+    assert sent["html"].count("/api/v1/ideation/held_and_old/action") == 2  # promote + dismiss, ONE card
+    assert "STALE PROPOSALS NEEDING VERDICT" in sent["html"]
+    assert "/api/v1/ideation/truly_stale/action" in sent["html"]
 
 
 # ─── 2. 14d reaper ────────────────────────────────────────────────────────────
