@@ -16,7 +16,7 @@ code_paths:
   - "scripts/check_crashloop.sh"
   - "scripts/check_heartbeat_liveness.py"
   - "src/universal_agent/loop_control.py"
-last_verified: 2026-06-22
+last_verified: 2026-08-02
 ---
 
 # Incident Response Patterns
@@ -41,6 +41,13 @@ The four recurring classes:
 A fifth, lower-severity recurring nuisance — **deploy-restart noise** (SIGTERM-killed workers
 mislabeled as failures) — is documented at the end because its suppression logic is shared
 machinery the other classes also lean on.
+
+A **sixth** class was added 2026-08-02 and is different in kind from all of the above:
+**silent quality regression** — every unit green, every deploy green, no error anywhere, and
+the pipeline producing *zero usable output* for days. It has no symptom the triage map below
+can catch, because nothing is unhealthy; it is found only by an **outcome** metric
+(landed-artifacts/day), never by a liveness one. Read it if you own any autonomous pipeline
+whose gates only prove that something *ran*.
 
 ---
 
@@ -607,6 +614,76 @@ above) instead of falling back to the shared `daemon_simone_todo` session id.
 - **`.env` is rewritten from scratch every deploy** (deterministic bootstrap dict in
   `deploy.yml`). VPS-side `.env` edits do not survive — put durable values in code defaults or
   the bootstrap dict.
+
+---
+
+## Class 6 — Silent quality regression (a green pipeline that produces nothing)
+
+The first *non-crash* incident class in this doc. Nothing failed, nothing alerted, every unit
+stayed `active`, and the system burned ~$4/build for three nights producing zero usable output.
+
+### Symptom
+
+- Units green, deploys green, no errors in the journal, no OOM, no crashloop.
+- A downstream quality gate rejects **everything**, but its rejections are terminal in a
+  workspace nobody reads — no notification, no Task Hub row, no dashboard tile.
+- Discovered only because a human happened to ask why the output shelf was empty.
+
+Live case (2026-07-31 → 08-02, golden-nuggets demo lane): the Gemini fidelity judge scored
+`gating 0/5`, `0/7`, `0/8` — zero capability requirements met — on six consecutive builds,
+while the deterministic verifier passed every one.
+
+### Root cause
+
+Two independent failures that only bite **together**:
+
+1. **A weak inner gate.** `demo_factory`'s verifier token (`DEMO_VERIFY: PASS demo_id=…`) proves
+   the README `## Run` command *executed*, not that the capability *exists*. An artifact can
+   print it while implementing nothing. The strong gate (the LLM fidelity judge) sits outside it.
+2. **A model swap nobody decided.** `demo_factory/scripts/model_tiers.py` right-sizes the
+   `generic` class to a cheaper build model. That config was **dead** until the VPS checkout was
+   pulled — `demo_factory` is **pulled manually**, so it has no deploy gate and no announcement.
+   The next scheduled run silently changed build model and the land rate went 7/7 → 0/6.
+
+The deeper lesson: **the stronger model was masking the weak gate.** The pipeline had always
+accepted "the model says it's done"; a model marginally more willing to self-certify turned a
+latent structural gap into a total outage of *output* with no outage of *service*.
+
+### Gotchas (code-verified)
+
+- **A green deterministic gate plus a failing LLM judge means the deterministic gate is too
+  weak** — not that the judge is broken. Check that direction first; the judge is usually right.
+- **Judge every model right-sizing on landed-output rate, not token price.** Here the cheaper
+  model used *more* turns and *more* output tokens and cost *more* per run ($4.61 vs $4.20) at a
+  0% land rate — so cost per landed artifact went from ~$6 to infinite. A cost optimization that
+  is never measured against outcomes can invert its own goal.
+- **Beware validating on one workload class and applying to another.** The right-sizing evidence
+  came from a simple local-compute demo; it was applied to integration-heavy builds (OAuth, MCP,
+  multi-agent) that behave nothing like it.
+- **Repos outside the deploy pipeline change production without a deploy.** `remote_deploy.sh`
+  has no `demo_factory` step, so `git reflog` on that checkout — not this repo's git log — is the
+  change record that explains the behavior shift.
+
+### What now mitigates this at the source
+
+- `scripts/nuggets_health_report.py` (timer: `universal-agent-nuggets-health-report.timer`,
+  08:05 America/Chicago) reports days-since-last-landed-artifact and escalates when a gate
+  rejects everything. **Silent when healthy**, so the signal stays meaningful.
+- The nuggets unit pins its build model and effort explicitly
+  (`DEMO_FACTORY_BUILD_MODEL_GENERIC`, `CLAUDE_CODE_EFFORT_LEVEL`) rather than inheriting a tier
+  default that can change underneath it.
+- **Still open:** the inner gate is unchanged. `goal_condition` does not force the verifier token
+  to actually appear before the loop may exit, and the token still proves execution rather than
+  capability. Until that changes, this class recurs on any model drift — the nightly report is a
+  detector, not a fix.
+
+### Generalization — ask this of any autonomous pipeline
+
+> *If the model silently got worse, what in this pipeline would fail loudly?*
+
+If the answer is "nothing — the gates only prove that something ran," the pipeline is one model
+change away from this class. Add an outcome metric (landed artifacts/day) that alarms on zero,
+and make the strongest gate's rejections reach a human.
 
 ---
 
