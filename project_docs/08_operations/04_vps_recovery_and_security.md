@@ -11,6 +11,8 @@ code_paths:
   - scripts/watchdog_restart_notifier.py
   - scripts/vps_health_check.sh
   - src/universal_agent/process_heartbeat.py
+  - CSI_Ingester/development/csi_ingester/app.py
+  - CSI_Ingester/development/csi_ingester/livez.py
   - deployment/systemd/universal-agent-service-watchdog.service
   - deployment/systemd/universal-agent-service-watchdog.timer
   - deployment/systemd/universal-agent-oom-alert.service
@@ -218,7 +220,7 @@ gateway being down can never block its own restart. Knobs:
 | `universal-agent-telegram` | — | `/var/lib/universal-agent/heartbeat/telegram.heartbeat` | **heartbeat** |
 | `universal-agent-mission-control-sweeper` | — | — | **active-state only** (no HTTP/heartbeat) |
 | `universal-agent-autonomous-runtime` | — | — | **active-state only** (the autonomous-runtime split worker; see note) |
-| `csi-ingester` | `http://127.0.0.1:8091/healthz` | — | HTTP |
+| `csi-ingester` | `http://127.0.0.1:8091/livez` | — | HTTP |
 
 > **The autonomous-runtime split worker is `active-state only` ON PURPOSE.** It is
 > a 2nd `gateway_server` process that hosts all the autonomous loops
@@ -231,19 +233,54 @@ gateway being down can never block its own restart. Knobs:
 > coverage; a busy-loop probe is not.
 
 > **CSI Ingester health path is `/healthz`, not `/health`.** The CSI service
-> (`CSI_Ingester/development/csi_ingester/app.py`) intentionally exposes only
-> `/healthz`, `/readyz`, and `/metrics` — there is **no** `/health` route, so a
-> manual `curl http://127.0.0.1:8091/health` returns **404**. That 404 means
-> "wrong path," **not** "service down" — do not raise a CSI-down alert off it.
-> The systemd watchdog (`scripts/vps_service_watchdog.sh`) and the heartbeat
-> directive (`memory/HEARTBEAT.md` → VPS System Health Check item 10) already
-> use `/healthz`. Separately, CSI *content* freshness (are the 444 YouTube RSS
-> channels polling?) is a DB-based signal in
+> (`CSI_Ingester/development/csi_ingester/app.py`) intentionally exposes
+> `/healthz`, `/readyz`, `/livez`, and `/metrics` — there is **no** `/health`
+> route, so a manual `curl http://127.0.0.1:8091/health` returns **404**. That
+> 404 means "wrong path," **not** "service down" — do not raise a CSI-down
+> alert off it. The heartbeat directive (`memory/HEARTBEAT.md` → VPS System
+> Health Check item 10) uses `/healthz` — a plain, unconditional "is the
+> process alive" stub (always `{"status": "ok"}` if the event loop can answer
+> at all).
+>
+> **The systemd watchdog (`scripts/vps_service_watchdog.sh`) probes `/livez`,
+> not `/healthz` (T13, 2026-08-02).** Before T13, the watchdog's *only* CSI
+> signal was `/healthz` — which meant a poller wedged inside an otherwise-live
+> uvicorn process (event loop still answering requests, but the
+> `youtube_channel_rss` adapter's scheduler task stuck/dead) was invisible and
+> un-restartable. `/livez` (`csi_ingester/livez.py::compute_livez_status`) is
+> schedule-aware: it reads the `youtube_channel_rss` adapter's
+> `schedule_fetch_hours`/`schedule_timezone` config and its persisted
+> `last_fetch_epoch`, and reports unhealthy (503) **only** when a fetch is
+> genuinely overdue given the schedule — an hour deliberately excluded from
+> `schedule_fetch_hours` (a quiet window) is always healthy, even with a
+> days-stale epoch, so `/livez` can never fire on the false positive that
+> motivated T13 (an RSS-quiet hour mistaken for a stall). The overdue
+> threshold ("grace") defaults to 2x the largest gap between consecutive
+> scheduled fetch hours (`csi_ingester/livez.py::compute_grace_seconds`),
+> floored at 30 minutes. `/healthz` itself is untouched by T13 — same
+> unconditional stub, same consumer (the heartbeat directive above).
+>
+> Separately, CSI *content* freshness (are the 444 YouTube RSS channels
+> polling?) is a DB-based signal in
 > `utils/db_health_monitor.py::check_csi_source_freshness` (a SQLite query on
-> `source_state`, never an HTTP probe); never conflate an HTTP-path 404 with
-> channel staleness. (Optional hardening, operator-approval + CSI restart
-> required: add a `/health` → `/healthz` alias in CSI's `app.py` so the
-> conventional path also answers 200.)
+> `source_state`, never an HTTP probe) — a UA-side check independent of both
+> `/healthz` and `/livez`. Never conflate an HTTP-path 404 with channel
+> staleness, and never conflate `/healthz`'s liveness stub with `/livez`'s
+> schedule-aware progress check — they answer different questions and the
+> watchdog now deliberately uses different endpoints for each.
+>
+> **T13 also fixed a restart-amplification bug:** the adapter's
+> `_last_fetch_epoch` (used both by the schedule gate's
+> `schedule_min_interval_seconds` check and now by `/livez`) previously lived
+> only in adapter memory. A process restart reset it to `0.0` — falsy, so the
+> min-interval check was skipped entirely — meaning a tight restart loop
+> re-triggered a full 443-channel RSS sweep on *every* restart (observed
+> 2026-08-02: three back-to-back full sweeps at 01:06/01:29/01:44 from
+> `/healthz`-driven restarts). The epoch is now persisted through the
+> adapter's existing `set_state_backend` hook (`source_state` table, key
+> `youtube_channel_rss:__schedule__`) and hydrated on the first
+> `fetch_events()` call after a restart, so a fresh process picks up where the
+> last one left off instead of believing it has never fetched.
 
 > [VERIFY: legacy runbook 24 lists telegram as "active-state only, no HTTP
 > probe." Code now configures a telegram **heartbeat file** by default. The

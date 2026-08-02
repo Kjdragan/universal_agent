@@ -17,7 +17,10 @@ code_paths:
   - src/universal_agent/services/scratch_publish.py
   - src/universal_agent/services/proactive_tutorial_builds.py
   - src/universal_agent/systemd_migrated_jobs.py
-last_verified: 2026-08-01
+  - CSI_Ingester/development/csi_ingester/adapters/youtube_channel_rss.py
+  - CSI_Ingester/development/csi_ingester/livez.py
+  - CSI_Ingester/development/csi_ingester/app.py
+last_verified: 2026-08-02
 ---
 
 # YouTube CSI Flow
@@ -622,6 +625,45 @@ not-modified) resets it; **transient errors (`429`/`5xx`/network) are neutral** 
 outage can't falsely deactivate a live channel. After `channel_deactivate_after` consecutive
 gone-responses (default `10`) the channel is set `active = 0` with `demoted_at = now`, so the
 dead feed drops out of `get_active_youtube_channels` and is no longer polled.
+
+### B.6 Schedule-aware liveness probe (`/livez`, T13) and restart-safe fetch epoch
+
+The adapter self-gates on a time-of-day schedule
+(`csi_ingester/adapters/youtube_channel_rss.py::YouTubeChannelRSSAdapter.fetch_events`):
+if `schedule_fetch_hours` is configured (production: `[2, 6, 8, 10, 12, 14, 16, 18, 20]`
+Central, `config/config.yaml`), it only actually polls RSS during those hours, and
+`schedule_min_interval_seconds` (production: 5400s) further prevents double-fetching
+inside one fetch hour. Two related fixes landed together as T13:
+
+- **`/healthz` was CSI's only watchdog signal**, and it is an unconditional stub
+  (`{"status": "ok"}` whenever the uvicorn event loop can answer at all) — so a
+  poller wedged *inside* an otherwise-live process was invisible to the VPS
+  watchdog and un-restartable. `csi_ingester/app.py::livez` adds a schedule-aware
+  `/livez` endpoint, backed by the pure decision function
+  `csi_ingester/livez.py::compute_livez_status`: healthy when the current hour is
+  outside `schedule_fetch_hours` (a deliberate quiet window — RSS silence there is
+  expected, not a stall) **or** a fetch completed within a grace window derived
+  from the schedule (`csi_ingester/livez.py::compute_grace_seconds` — 2x the
+  largest gap between consecutive scheduled hours, floored at 30 minutes; e.g. the
+  production schedule's largest gap is 20:00→02:00 = 6h, so grace = 12h). Only a
+  genuinely overdue fetch outside a quiet window returns 503. The VPS watchdog
+  (`scripts/vps_service_watchdog.sh` `DEFAULT_SERVICE_SPECS`) now probes `/livez`
+  for `csi-ingester`, not `/healthz` — see
+  [VPS Recovery & Security](../08_operations/04_vps_recovery_and_security.md) for
+  the full watchdog-side writeup. `/healthz` itself is unchanged and still used by
+  the `memory/HEARTBEAT.md` manual liveness check.
+- **The schedule gate's `_last_fetch_epoch` now survives a restart.** It was
+  previously adapter-memory-only, so a fresh process always started from `0.0` —
+  which, being falsy, skipped the `schedule_min_interval_seconds` check entirely
+  (`if self._schedule_min_interval and self._last_fetch_epoch:`) and re-triggered
+  an immediate full ~443-channel sweep on every restart. It's now persisted
+  through the adapter's existing `set_state_backend` hook (same `source_state`
+  table the per-channel seen-ID/etag state already uses) under a dedicated key,
+  `youtube_channel_rss:__schedule__`, and hydrated once on the first
+  `fetch_events()` call after construction — a restarted process picks up the real
+  last-fetch time instead of believing it has never fetched. The same epoch feeds
+  a new `csi.rss.seconds_since_fetch` Prometheus gauge on `/metrics`
+  (`csi_ingester/metrics.py::MetricsRegistry.set_gauge`).
 
 ---
 

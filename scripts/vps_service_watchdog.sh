@@ -464,7 +464,15 @@ DEFAULT_HEARTBEAT_DIR="/var/lib/universal-agent/heartbeat"
 # so an HTTP probe would false-restart it mid-turn — the very starvation the
 # split eliminated. is-active monitoring + the is-enabled skip above (so a
 # split-rollback's disabled worker is left alone) is the correct, safe coverage.
-DEFAULT_SERVICE_SPECS=$'universal-agent-gateway|http://127.0.0.1:8002/api/v1/health|/var/lib/universal-agent/heartbeat/gateway.heartbeat\nuniversal-agent-api|http://127.0.0.1:8001/api/health|\nuniversal-agent-webui|http://127.0.0.1:3000/|\nuniversal-agent-telegram||/var/lib/universal-agent/heartbeat/telegram.heartbeat\nuniversal-agent-mission-control-sweeper||\nuniversal-agent-autonomous-runtime||\ncsi-ingester|http://127.0.0.1:8091/healthz|'
+# csi-ingester probes /livez, NOT /healthz (T13): /healthz is an
+# unconditional stub (a live event loop, nothing more), so a poller wedged
+# inside an otherwise-live uvicorn was invisible to this watchdog and
+# un-restartable. /livez is schedule-aware — it checks the
+# youtube_channel_rss adapter's actual fetch progress against its
+# schedule_fetch_hours config and only reports unhealthy when a fetch is
+# genuinely overdue (a deliberate quiet window is always healthy). See
+# csi_ingester/livez.py and csi_ingester/app.py::livez.
+DEFAULT_SERVICE_SPECS=$'universal-agent-gateway|http://127.0.0.1:8002/api/v1/health|/var/lib/universal-agent/heartbeat/gateway.heartbeat\nuniversal-agent-api|http://127.0.0.1:8001/api/health|\nuniversal-agent-webui|http://127.0.0.1:3000/|\nuniversal-agent-telegram||/var/lib/universal-agent/heartbeat/telegram.heartbeat\nuniversal-agent-mission-control-sweeper||\nuniversal-agent-autonomous-runtime||\ncsi-ingester|http://127.0.0.1:8091/livez|'
 SERVICE_SPECS="${UA_WATCHDOG_SERVICE_SPECS:-$DEFAULT_SERVICE_SPECS}"
 
 while IFS= read -r spec; do
