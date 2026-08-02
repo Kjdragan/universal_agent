@@ -285,6 +285,48 @@ class TestFormatEmailHtmlDiagnosticContext:
         assert "truncated" in html
 
 
+class TestFormatEmailHtmlHookDiagnosticKeys:
+    """T4: hook-emitted alerts (e.g. YouTube retry-queued) carried a discriminator
+    (``reason``) plus identifying fields (``video_id``, ``attempt_number``,
+    ``retry_count``, ``max_attempts``, ``hook_name``, ``tutorial_title``) in
+    their metadata, but the global email context allowlist dropped them all —
+    a retry email rendered only session_id/run_id/workspace_dir even though the
+    record carried ``reason=hook_dispatch_failed`` and a ``video_id``.
+    """
+
+    def test_surfaces_youtube_retry_diagnostic_keys(self):
+        html = _format_email_html({
+            "kind": "youtube_tutorial_interrupted",
+            "metadata": {
+                "reason": "hook_dispatch_failed",
+                "video_id": "h5HLLIds53g",
+                "attempt_number": 1,
+                "retry_count": 1,
+                "max_attempts": 3,
+                "hook_name": "ComposioYouTubeTrigger",
+                "tutorial_title": "Building an Agent from Scratch",
+            },
+        })
+        assert "reason" in html
+        assert "hook_dispatch_failed" in html
+        assert "video_id" in html
+        assert "h5HLLIds53g" in html
+        assert "attempt_number" in html
+        assert ">1<" in html
+        assert "retry_count" in html
+        assert "max_attempts" in html
+        assert ">3<" in html
+        assert "hook_name" in html
+        assert "ComposioYouTubeTrigger" in html
+        assert "tutorial_title" in html
+        assert "Building an Agent from Scratch" in html
+
+    def test_absent_hook_keys_do_not_render(self):
+        html = _format_email_html({"metadata": {"job_id": "cron-1"}})
+        assert "reason" not in html
+        assert "video_id" not in html
+
+
 class TestFormatTelegramText:
     def test_basic_format(self):
         text = _format_telegram_text({
