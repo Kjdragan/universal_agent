@@ -185,6 +185,16 @@ demo. A non-ok finalize stays on the unchanged default close path.
 > (`--model-tier auto` right-sizes the generic class down), and **`--video` is a deprecated no-op**
 > (`build_demo.py` never reads `a.video`; the explainer render lives in `land_demo.py` after `final_pass`).
 >
+> **Scope correction to #1587's claim.** #1587's description attributes *both* nightly failures to the
+> orphan-on-timeout path. That is right for **2026-07-27** (build 1 timed out at exactly 3600s, orphaning its
+> tree, and the cgroup OOMed 3m37s later) but **overstated for 2026-08-01**: all three builds that night ended
+> `rc=3`, not on a timeout, so the `TimeoutExpired` path never fired. The two leftover `claude` processes at
+> that run's teardown must therefore have come from a different path — a `claude` sub-agent, or a background
+> stage inside `build_demo.py` (`land_demo.py` deliberately fires the explainer render as a detached
+> `Popen(shell=True, start_new_session=True)`, though that requires `final_pass` which was false). The fix in
+> #1587 is correct and necessary regardless — a timeout that leaves a live process tree is a bug on its own
+> terms — but it may not be *sufficient*. The `CGPM leftover_procs=` line added below is the direct test.
+>
 > **Open, and more valuable than any of the above: the fidelity gate is rejecting 100% of builds.** The last
 > `land` PASS in `demo_factory/lessons/build_stats.jsonl` was **2026-07-18** (`phone-escalation`, 4/5). Every
 > build since — 07-31 ×2, 08-01 ×3, 08-02 ×1 — passed the deterministic verifier (`verify_pass: true`) and
