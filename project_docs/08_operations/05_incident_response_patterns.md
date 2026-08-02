@@ -583,14 +583,24 @@ above) instead of falling back to the shared `daemon_simone_todo` session id.
   cancel-in-progress: false }` so simultaneous merges queue serially instead of racing on
   `/opt/universal_agent/.git/index.lock`. The deploy also removes a stale `index.lock` if no
   git process is running.
-- **SSH idle-eviction false-failure**: a long *silent* remote deploy step (systemd
-  `daemon-reload` + `enable --now` on a busy VPS can run minutes with no output) lets an
-  intermediate idle-timeout-killer drop the TCP connection, so the workflow exits **255 even
-  though the VPS restarted at the merged SHA**. The fix in `deploy.yml` is keepalive on the
-  deploy `ssh` invocation — `-o ServerAliveInterval=30 -o ServerAliveCountMax=120` (up to ~60
-  min of idle tolerance inside the outer `timeout 30m`) plus heartbeat output lines from the
-  otherwise-silent install scripts. A red deploy is therefore *not* proof of failure: always
-  run the Rule-A `/api/v1/version` SHA check before treating it as one.
+- **Deploy exit code decides the diagnosis — check it FIRST.** These two look alike in the
+  Actions UI and need opposite responses:
+  - **Exit 255 — SSH idle-eviction false-failure.** A long *silent* remote deploy step lets an
+    intermediate idle-timeout-killer drop the TCP connection, so the workflow goes red **even
+    though the VPS restarted at the merged SHA**. Mitigated in `deploy.yml` by keepalive on the
+    deploy `ssh` invocation (`-o ServerAliveInterval=30 -o ServerAliveCountMax=120`, ~60 min of
+    idle tolerance inside the outer `timeout 30m`) plus heartbeat output from the otherwise-silent
+    install scripts. A red deploy is *not* proof of failure: run the Rule-A `/api/v1/version`
+    SHA check before treating it as one.
+  - **Exit 124 — `timeout 30m` fired; the deploy really did NOT finish.** Do *not* apply the
+    255 reflex here. Since 2026-07-31 the cause has always been the systemd **installer block**:
+    a wedged `/home/kjdragan` SSHFS mount makes `systemd-fstab-generator` block, and systemd
+    kills the generator sandbox at a hard **90 s** `DefaultTimeoutStartSec`, so every
+    `daemon-reload` costs 90.3 s instead of ~0.5 s. This is a fixed timeout, **not** "a busy
+    VPS running slow" — the measured distribution is bimodal with zero mass between 1.1 s and
+    90.3 s. 30-second probe and remediation: [`04_deployment_and_cicd.md`](../06_platform/04_deployment_and_cicd.md)
+    § "Deploy exit 124". Structurally prevented since 2026-08-02 by moving the bridge out of
+    `/etc/fstab` into native systemd units.
 - **Branch-versus-deploy honesty**: a commit on a branch — or merged to `main` but with the
   deploy not yet green — is **not deployed**. Confirm with the `/api/v1/version` SHA check
   before claiming "shipped."

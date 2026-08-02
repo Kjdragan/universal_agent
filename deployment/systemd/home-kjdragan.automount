@@ -1,0 +1,21 @@
+[Unit]
+# Autofs trigger for the desktop bridge. This pair (.automount + .mount) is
+# exactly what `x-systemd.automount` in /etc/fstab used to make
+# systemd-fstab-generator emit — we now write it by hand so the generator never
+# has to chase /home/kjdragan on every daemon-reload. Same mechanism, same lazy
+# on-first-access trigger, none of the 90 s generator stall.
+Description=Desktop bridge (SSHFS) automount for /home/kjdragan
+Documentation=https://github.com/Kjdragan/universal_agent/blob/main/project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md
+
+[Automount]
+Where=/home/kjdragan
+# TimeoutIdleSec=0 (never auto-unmount) is DELIBERATE — do not "fix" it to a
+# non-zero value. A periodic idle unmount of a possibly-wedged FUSE mount is
+# precisely the operation that took the bridge down on 2026-07-31 and
+# 2026-08-01 (left-over mount.fuse.sshfs in the cgroup -> Result=resources ->
+# automount dead and never re-armed). Wedge recovery is the bridge watchdog's
+# job (scripts/vps_bridge_unwedge.sh), which aborts the FUSE connection first.
+TimeoutIdleSec=0
+
+[Install]
+WantedBy=remote-fs.target

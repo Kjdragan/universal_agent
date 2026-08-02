@@ -17,6 +17,13 @@ code_paths:
   - "scripts/update_webshare_proxy_credentials.py"
   - "src/universal_agent/youtube_ingest.py"
   - "scripts/sync_remote_workspaces.sh"
+  - "deployment/systemd/home-kjdragan.mount"
+  - "deployment/systemd/home-kjdragan.automount"
+  - "deployment/systemd/universal-agent-bridge-watchdog.service"
+  - "deployment/systemd/universal-agent-bridge-watchdog.timer"
+  - "scripts/install_vps_desktop_bridge.sh"
+  - "scripts/install_vps_bridge_watchdog.sh"
+  - "scripts/vps_bridge_unwedge.sh"
   - "scripts/publish_scratch.sh"
   - "scripts/build_scratch_index.py"
   - "scripts/scratch_archive.py"
@@ -260,13 +267,35 @@ Credentials and host/port are *all* read from env (Infisical-populated). Never h
 
 There are **two distinct cross-machine file mechanisms.** Don't conflate them.
 
-### 3.1 SSHFS path bridge (OS-level, not in repo)
+### 3.1 SSHFS path bridge (repo-managed systemd units)
 
 When UA runs on the VPS, the desktop's `/home/kjdragan/...` tree is mounted onto the VPS at the **identical path** via SSHFS over Tailscale. This means VPS-side code can `open("/home/kjdragan/...")` and it resolves transparently to the desktop file — no fetcher tool needed. This is the "Path Guarantee" / "Cross-Machine File Resolution" capability described in `CLAUDE.md`.
 
-**How it's set up (added 2026-04-23):** a **VPS-side systemd mount unit** mounts the workstation's `/home/kjdragan` at the same path on the VPS via SSHFS over Tailscale, authenticating with the `id_ed25519` key. This is what makes "refer to `/home/kjdragan/...` directly from VPS code" work transparently.
+**How it's set up (rewritten 2026-08-02):** the bridge is a **native systemd `.automount` + `.mount` pair**, `deployment/systemd/home-kjdragan.automount` and `deployment/systemd/home-kjdragan.mount`, installed by `scripts/install_vps_desktop_bridge.sh` on every deploy. The `ua` VPS user reads the desktop paths through this mount; there is no `kjdragan` account on the VPS. Peer coordinates (`__BRIDGE_USER__`, `__BRIDGE_PEER__`, `__BRIDGE_IDENTITY__`) are templated and rendered at install time, so the operator's machine identity is config rather than committed content.
 
-**Code reality:** there is **no `sshfs` mount command anywhere in `scripts/`.** Grep for `sshfs` returns only *comments and docs* (e.g. `bootstrap_vps_access.sh`, `end_session_cleanup.sh`, `CLAUDE.md`). The mount unit lives on the VPS filesystem, not in this repo — from the code's perspective the SSHFS bridge is an *assumed OS substrate*, not a version-controlled component. The `ua` VPS user reads the desktop paths through this mount; there is no `kjdragan` account on the VPS. To inspect/repair it, check the VPS for the sshfs systemd mount unit.
+> ⚠️ **NEVER put this mount back into `/etc/fstab`.** It lived there until 2026-08-02 and that is the root cause of the recurring **exit-124 production deploy timeout**. `systemd-fstab-generator` runs on *every* `systemctl daemon-reload` and canonicalizes each fstab entry's mount point (`chase()` → `openat()` → `statx()`). When the bridge is **wedged**, that `statx()` blocks in uninterruptible `D` state, the generator never exits, systemd kills the generator sandbox at its hard 90 s `DEFAULT_TIMEOUT_USEC`, and PID 1 logs `Failed to fork off sandboxing environment for executing generators: Protocol error`. Every reload then costs **90.3 s** instead of ~0.5 s; a deploy performs ~63 reloads, so the installer block runs ~95 min and `timeout 30m ssh` kills it. Measured on `uaonvps` with the mount deliberately wedged: **in fstab → 90.42 s; native units → 0.41 s** (the mount is present in the namespace either way — what changes is only whether a *generator* is told to walk into it). `scripts/install_vps_desktop_bridge.sh` asserts the fstab entry is absent on every deploy, and `tests/unit/test_desktop_bridge_no_fstab.py` blocks any script that would re-add one.
+
+**Wedged ≠ unmounted — and they need opposite responses.** Three distinct states:
+
+| State | Symptom | What to do |
+|---|---|---|
+| Healthy | `findmnt -t fuse.sshfs /home/kjdragan` shows the source; reads return | nothing |
+| **Wedged** | mount present, reads hang forever, `/sys/fs/fuse/connections/<minor>/waiting` > 0 | abort the FUSE connection (below) |
+| Absent/dead | `home-kjdragan.automount` inactive or `Result=resources`; path is an **empty local dir** | `systemctl start home-kjdragan.automount` |
+
+**Do not probe the bridge with `stat`/`ls`.** A hung FUSE call is uninterruptible: the caller parks in `D` at `request_wait_answer`, and `timeout N stat` does **not** bound it (`timeout` then blocks in `sigsuspend` waiting to reap a child that cannot die; `SIGKILL` is ignored). And with the automount dead, the path is an empty *local* directory that stats in 2 ms and looks perfectly healthy — so `stat` cannot distinguish any of the three states. Read `/sys/fs/fuse/connections/<minor>/waiting` instead (a pure kernel counter, no FUSE round trip).
+
+**Repairing a wedge.** The only primitive that frees `D`-state waiters is aborting the connection. `pkill -f mount.fuse.sshfs` does **not** kill a wedged sshfs daemon (it survives in `futex_do_wait`), and `umount -l` / `fusermount -uz` remove the mountinfo entry but leave `waiting` > 0, the connection dir present, and the process in `D`. Those were the twice-tried manual fixes on 2026-07-31 and 2026-08-01; they left a non-empty unit cgroup (`Found left-over process (mount.fuse.sshf) in control group`), so systemd's next start failed with `Result=resources` and the bridge stayed **down** instead of recovering. Any older runbook prescribing `fusermount -u` + remount is obsolete. The correct sequence — automated by `scripts/vps_bridge_unwedge.sh`, run every 5 min by `universal-agent-bridge-watchdog.timer`:
+
+```bash
+MINOR=$(awk '$5=="/home/kjdragan" && /fuse\.sshfs/ {split($3,a,":"); print a[2]; exit}' /proc/self/mountinfo)
+sudo sh -c "echo 1 > /sys/fs/fuse/connections/$MINOR/abort"   # frees D-state waiters
+sudo systemctl stop home-kjdragan.mount                        # LazyUnmount/ForceUnmount detach cleanly
+sudo systemctl reset-failed home-kjdragan.mount home-kjdragan.automount
+sudo systemctl start home-kjdragan.automount                   # re-ARM; next access remounts
+```
+
+Two unit settings are load-bearing and must not be "tidied": `TimeoutIdleSec=0` on the automount (a periodic idle unmount of a possibly-wedged FUSE mount is exactly what killed the bridge twice), and `reconnect` in the mount options (the only reason the bridge has ever healed itself in place — observed 2026-08-01T17:53:18Z).
 
 ### 3.2 Remote workspace mirror (rsync over Tailscale SSH)
 
@@ -338,7 +367,8 @@ It copies `deploy/nginx/universal-agent-app` → `sites-available`, (re)creates 
 
 - **No automatic provider failover.** Provider is fixed per `PROXY_PROVIDER` per run; "Webshare failover" = an operator env flip, not a runtime fallback.
 - **Legacy Webshare host trap.** Use `p.webshare.io` (rotating residential), not `proxy.webshare.io` (legacy static). `check_proxy.py` warns on the legacy host.
-- **SSHFS is not in this repo.** The mount is an OS-level substrate. The repo's `sync_remote_workspaces.sh` is rsync, a different thing — debugging mirror, not the live path bridge.
+- **SSHFS is repo-managed as of 2026-08-02.** `deployment/systemd/home-kjdragan.{mount,automount}` + `scripts/install_vps_desktop_bridge.sh`. (Before that it was an untracked `/etc/fstab` line — see §3.1 for why that cost three production deploys.) The repo's `sync_remote_workspaces.sh` is rsync, a different thing — debugging mirror, not the live path bridge.
+- **A wedged bridge is invisible to `stat`.** `timeout 5 stat -t /home/kjdragan/.` returns in 2 ms when the automount is *dead* and hangs forever when the mount is *wedged* — it never reports "unhealthy". Use `/sys/fs/fuse/connections/<minor>/waiting`.
 - **`uaonvps` requires MagicDNS.** If a machine isn't on the tailnet with MagicDNS, `uaonvps` won't resolve; the device's real name is `srv1360701`.
 - **Tailscale "check mode" can block SSH.** Preflight's `interactive_check_required` hint means you must open the `login.tailscale.com` approval URL — automated retry won't fix it.
 - **`runtime_state.db` excluded from mirror by default.** Use `--include-runtime-db` if you actually need it; otherwise you're looking at a workspace without its runtime DB.

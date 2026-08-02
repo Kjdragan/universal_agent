@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the desktop-bridge wedge watchdog every 5 minutes
+Documentation=https://github.com/Kjdragan/universal_agent/blob/main/project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md
+
+[Timer]
+# Infrastructure-event handler, not content generation: runs 24/7 and is NOT
+# subject to the 6am-10pm dormancy window (project_docs/08_operations/
+# 03_dormancy_and_operating_hours.md). A bridge that wedges at 2am must not
+# stay wedged until 6am — deploys and agent file access both depend on it.
+OnBootSec=5min
+OnUnitActiveSec=5min
+# OnCalendar/Persistent are unnecessary here (monotonic is fine for a pure
+# liveness probe), but AccuracySec keeps it off the top-of-minute stampede.
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
