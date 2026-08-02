@@ -381,6 +381,88 @@ class TestUtilizationTracking:
         assert stats["avg_occupancy_pct"] == 0
         assert stats["peak_occupancy_slots"] == 0
 
+    def test_active_slots_counts_running_vp_missions_and_in_progress_tasks(
+        self, tmp_path, monkeypatch
+    ):
+        """T17: active_slots must reflect REAL running state, not
+        CapacityGovernor.snapshot().active_slots — that counter is
+        permanently 0 in production because nothing calls
+        CapacityGovernor.acquire_slot(). count_active_agent_slots() sources
+        it from running vp_missions + in-progress task_hub_items instead."""
+        from universal_agent.durable.migrations import ensure_schema as ensure_vp_schema
+        from universal_agent.services.proactive_activity_report import (
+            count_active_agent_slots,
+        )
+
+        vp_db_path = tmp_path / "vp_state.db"
+        vp_conn = sqlite3.connect(str(vp_db_path))
+        vp_conn.row_factory = sqlite3.Row
+        ensure_vp_schema(vp_conn)
+        now = datetime.now(timezone.utc).isoformat()
+        vp_conn.execute(
+            """
+            INSERT INTO vp_missions
+              (mission_id, vp_id, status, mission_type, objective, priority_tier,
+               created_at, updated_at)
+            VALUES ('t17-running-mission', 'vp.coder.primary', 'running', 'task',
+                    'test objective', 'background', ?, ?)
+            """,
+            (now, now),
+        )
+        vp_conn.commit()
+        vp_conn.close()
+        monkeypatch.setenv("UA_VP_DB_PATH", str(vp_db_path))
+
+        activity_db_path = tmp_path / "activity_state.db"
+        with _connect(activity_db_path) as conn:
+            task_hub.ensure_schema(conn)
+            task_hub.upsert_item(conn, {
+                "task_id": "t17-in-progress-task",
+                "title": "In-progress task",
+                "description": "T17 regression fixture",
+                "source_kind": "proactive_signal",
+                "source_ref": "t17-in-progress-task",
+                "priority": 3,
+                "status": task_hub.TASK_STATUS_IN_PROGRESS,
+            })
+
+            active_slots = count_active_agent_slots(conn)
+
+        # 1 running VP mission + 1 in-progress Task Hub item.
+        assert active_slots == 2
+
+    def test_active_slots_is_zero_when_nothing_is_running(self, tmp_path, monkeypatch):
+        """No running VP missions and no in-progress Task Hub items → 0,
+        not a fabricated placeholder."""
+        from universal_agent.durable.migrations import ensure_schema as ensure_vp_schema
+        from universal_agent.services.proactive_activity_report import (
+            count_active_agent_slots,
+        )
+
+        vp_db_path = tmp_path / "vp_state.db"
+        vp_conn = sqlite3.connect(str(vp_db_path))
+        ensure_vp_schema(vp_conn)
+        vp_conn.close()
+        monkeypatch.setenv("UA_VP_DB_PATH", str(vp_db_path))
+
+        activity_db_path = tmp_path / "activity_state.db"
+        with _connect(activity_db_path) as conn:
+            task_hub.ensure_schema(conn)
+            # Only an OPEN task — must not be counted as active.
+            task_hub.upsert_item(conn, {
+                "task_id": "t17-open-task",
+                "title": "Open task",
+                "description": "T17 regression fixture",
+                "source_kind": "proactive_signal",
+                "source_ref": "t17-open-task",
+                "priority": 3,
+                "status": task_hub.TASK_STATUS_OPEN,
+            })
+
+            active_slots = count_active_agent_slots(conn)
+
+        assert active_slots == 0
+
 
 # =========================================================================
 # 2A — Report Composition (Email Format)
