@@ -376,7 +376,17 @@ async def deliver_ideation_report(conn: sqlite3.Connection, mail_service: Any, r
     else:
         proposals = get_held_proposals(conn)
         banner = ""
-        stale = get_stale_proposals(conn, max_age_hours=DEFAULT_STALE_PROPOSAL_SURFACE_HOURS)
+        # get_held_proposals (newest 25, agent_ready=0) and get_stale_proposals
+        # (every OPEN reflection/brainstorm item >72h old, no agent_ready
+        # filter) query overlapping sets: a held proposal older than 72h
+        # matches BOTH. Without this filter it rendered twice -- once in the
+        # "new" section, again in "STALE PROPOSALS" -- inflating the reported
+        # total. Exclude anything already shown as a new proposal.
+        proposal_ids = {str(p.get("task_id")) for p in proposals}
+        stale = [
+            s for s in get_stale_proposals(conn, max_age_hours=DEFAULT_STALE_PROPOSAL_SURFACE_HOURS)
+            if str(s.get("task_id")) not in proposal_ids
+        ]
     now_ct = datetime.now(timezone.utc).astimezone(_CENTRAL)
     generated_ct = now_ct.strftime("%a %b %-d, %-I:%M %p %Z")
 

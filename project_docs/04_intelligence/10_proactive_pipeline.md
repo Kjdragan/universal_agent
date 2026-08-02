@@ -267,7 +267,18 @@ dismissed idea is gone rather than parked and never resurfaces in a later report
 > `work_products/stale_proposal_reaper/stale_proposal_reaper_<YYYYMMDD>.{md,json}` under
 > `artifacts.py::resolve_artifacts_dir` — one record per considered item (pruned AND skipped)
 > with `{id, title, source_kind, created_at, age, disposition, reason}` — so nothing vanishes
-> silently. *Still pending:* enriching
+> silently.
+>
+> **T19b (2026-08-02): held/stale double-count fixed.** `ideation_report.py::get_held_proposals`
+> (newest 25, `agent_ready=0`) and `get_stale_proposals` (every OPEN reflection/brainstorm item
+> >72h old, no `agent_ready` filter) query overlapping sets — a proposal that is both held and
+> older than 72h matched both, so `deliver_ideation_report` rendered it twice (once as a "new"
+> card, again in the stale section) and `total = len(proposals) + len(stale)` overcounted
+> distinct proposals. `deliver_ideation_report`'s non-backpressure branch now excludes any
+> `stale` row whose `task_id` already appears in `proposals` before rendering/counting; the
+> backpressure drain-view branch was already unaffected (`stale=[]` there by design).
+>
+> *Still pending:* enriching
 > `build_reflection_context` with real goals/CSI/preference signals (idea-quality lever, separate
 > from delivery).
 
@@ -927,6 +938,19 @@ implicit signals without understanding this loop.
   *counts* but no failure *reasons*. This closed a 2026-06-19 hallucination where
   the narrative fabricated "17 tutorial_build protocol violations" (a source kind
   the report never even sees) from a bare `failed` count.
+
+  **T19a (2026-08-02): "Promoted" signal-card stat fixed.**
+  `gather_pipeline_stats`'s "Signal Cards" section (the `═══ Signal Cards ═══` block
+  in `format_report_email`) counted `proactive_signal_cards` rows with
+  `status = 'promoted'` — but `proactive_signals.py`'s own writer inventory documents
+  `'promoted'` as a **legacy relic status with no current writer** (`apply_card_action`
+  sets `'actioned'` for any dashboard action button or `'tracking'` for `track_topic`;
+  `record_feedback` can set `'approved'` via the feedback endpoint). So the reported
+  count read ~0 regardless of real operator activity. `gather_pipeline_stats` now
+  counts `status IN ('actioned', 'tracking', 'approved')` — any card the operator
+  acted on positively — and the email label changed from "Promoted" to "Actioned" to
+  match. The JSON dict key (`signal_cards.promoted`) is unchanged for compatibility;
+  no other caller reads it.
 - **Proactive artifact digest** (`proactive_artifact_digest`, 8:35 AM Houston):
   `proactive_digest_agent.py::_run_digest` emails Kevin a digest of new CODIE
   PRs, tutorial builds, convergence insights via the real `AgentMailService`
