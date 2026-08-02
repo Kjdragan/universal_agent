@@ -182,7 +182,16 @@ special hook name `AgentMailInbound` flips `session_role`/`run_kind` to
 
 - `youtube-expert` (canonical) / `youtube-explainer-expert` (legacy alias) —
   artifact-path directives plus the **inline-execution preamble** (below).
-- `email-handler` — builds a two-phase triage→execute prompt.
+- `email-handler` — `HooksService._build_email_handler_prompt` builds a
+  two-phase triage→execute prompt. The prompt requires the model to open its
+  response with a fenced ```` ```json ```` envelope carrying the 5 routing
+  fields (`safety_status`, `routing_decision`, `classification`, `priority`,
+  `subject_summary`), followed by the full markdown brief as a
+  human-readable fallback. `email_task_bridge.py::parse_email_triage_brief`
+  parses the JSON envelope first and only falls back to markdown-tolerant
+  regexes when it's missing or malformed — see
+  [`05_channels/01_email_agentmail.md`](../05_channels/01_email_agentmail.md)
+  § "Triage routing" for the parsing contract and routing table.
 - everything else — the generic preamble that mandates
   `Task(subagent_type='<action.to>', ...)`.
 

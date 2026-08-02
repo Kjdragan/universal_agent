@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -88,25 +89,86 @@ def _build_email_execution_manifest(*, subject: str, body: str) -> dict[str, Any
     )
 
 
-_TRIAGE_FIELD_RE = {
-    "safety_status": re.compile(r"^\s*safety_status\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
-    "routing_decision": re.compile(r"^\s*routing_decision\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
-    "classification": re.compile(r"^\s*classification\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
-    "priority": re.compile(r"^\s*priority\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
-    "subject_summary": re.compile(r"^\s*subject_summary\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
-}
+_TRIAGE_FIELDS = (
+    "safety_status",
+    "routing_decision",
+    "classification",
+    "priority",
+    "subject_summary",
+)
+
+# The email-handler LLM emits triage fields wrapped in markdown decoration
+# (e.g. ``**safety_status:** clean`` or ``- **safety_status:** clean``).
+# The original patterns anchored on ``^\s*<field>\s*:`` and ``\s*`` cannot
+# cross the leading ``**``/``- **`` decoration, so they never matched real
+# briefs. This factory builds one pattern per field that tolerates an
+# optional leading bullet (``-``, ``*``, ``•``, ``+``) and up to 3
+# markdown decoration characters (``*``, ``_``, ``#``) on either side of
+# the field name and around the colon.
+_BULLET_RE = r"(?:[-*•+]\s+)?"
+_DECORATION_RE = r"[*_#]{0,3}"
+
+
+def _build_triage_field_pattern(field: str) -> "re.Pattern[str]":
+    """Compile a single triage-field regex tolerant of markdown decoration."""
+    return re.compile(
+        rf"^\s*{_BULLET_RE}{_DECORATION_RE}{re.escape(field)}{_DECORATION_RE}"
+        rf"\s*:\s*{_DECORATION_RE}\s*(.+?)\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+
+_TRIAGE_FIELD_RE = {field: _build_triage_field_pattern(field) for field in _TRIAGE_FIELDS}
+
+# Fenced ```json envelope the email-handler prompt requires up front
+# (see hooks_service.py::HooksService._build_email_handler_prompt). Parsed
+# first; the markdown regexes above are only a fallback for legacy/
+# malformed responses.
+_JSON_ENVELOPE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
+
+
+def _clean_triage_value(value: str) -> str:
+    """Strip residual markdown bold/italic/heading decoration from a value."""
+    cleaned = str(value or "").strip()
+    cleaned = re.sub(r"^[*_#]+", "", cleaned)
+    cleaned = re.sub(r"[*_#]+$", "", cleaned)
+    return cleaned.strip()
+
+
+def _extract_json_envelope(text: str) -> dict[str, Any]:
+    """Extract the fenced ```json triage envelope, if present and valid.
+
+    Returns an empty dict if no fenced JSON block is found, or the block
+    doesn't parse as a JSON object — callers fall back to the markdown
+    regexes in that case.
+    """
+    match = _JSON_ENVELOPE_RE.search(text)
+    if not match:
+        return {}
+    try:
+        payload = json.loads(match.group(1))
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def parse_email_triage_brief(raw: Any, *, sender_trusted: bool) -> dict[str, Any]:
     """Extract structured triage fields from a raw LLM triage brief.
 
     Parses safety_status, routing_decision, classification, priority,
-    and subject_summary from free-form text using regex.  Falls back to
-    defaults based on *sender_trusted* when the text is empty or fields
-    are missing.
+    and subject_summary — first from a fenced ```json envelope (the
+    root-cause fix: the prompt now requires the model to emit one), then
+    falling back to markdown-tolerant regexes for any field the envelope
+    didn't supply, then to defaults derived from *sender_trusted* for
+    anything still missing.
 
     Returns a dict with keys: raw_text, safety_status, routing_decision,
-    classification, priority, subject_summary.
+    classification, priority, subject_summary, and ``_fallback_fields``
+    — the list of field names that were NOT supplied by the model (JSON
+    envelope or regex match) and were instead defaulted. A non-empty
+    ``_fallback_fields`` means those values are manufactured, not a
+    model verdict, and callers should not treat them as trusted routing
+    signal.
     """
     text = str(raw or "").strip()
     parsed: dict[str, Any] = {
@@ -119,29 +181,46 @@ def parse_email_triage_brief(raw: Any, *, sender_trusted: bool) -> dict[str, Any
     }
     if not text:
         parsed["routing_decision"] = "trusted_execute" if sender_trusted else "review_required"
+        parsed["_fallback_fields"] = list(_TRIAGE_FIELDS)
         return parsed
 
-    for field, pattern in _TRIAGE_FIELD_RE.items():
-        match = pattern.search(text)
-        if not match:
+    envelope = _extract_json_envelope(text)
+
+    fallback_fields: list[str] = []
+    for field in _TRIAGE_FIELDS:
+        envelope_value = envelope.get(field) if envelope else None
+        if envelope_value not in (None, ""):
+            parsed[field] = _clean_triage_value(str(envelope_value))
             continue
-        parsed[field] = str(match.group(1) or "").strip()
+        match = _TRIAGE_FIELD_RE[field].search(text)
+        if match:
+            parsed[field] = _clean_triage_value(str(match.group(1) or ""))
+        else:
+            fallback_fields.append(field)
 
     safety_status = str(parsed.get("safety_status") or "").strip().lower()
     routing_decision = str(parsed.get("routing_decision") or "").strip().lower()
     if not safety_status:
+        if "safety_status" not in fallback_fields:
+            fallback_fields.append("safety_status")
         if "quarantine" in text.lower():
             safety_status = "quarantine"
         else:
             safety_status = "clean"
     if safety_status not in {"clean", "quarantine"}:
+        if "safety_status" not in fallback_fields:
+            fallback_fields.append("safety_status")
         safety_status = "quarantine" if "quarantine" in safety_status else "clean"
 
     if not routing_decision:
+        if "routing_decision" not in fallback_fields:
+            fallback_fields.append("routing_decision")
         routing_decision = "quarantine" if safety_status == "quarantine" else (
             "trusted_execute" if sender_trusted else "review_required"
         )
     if routing_decision not in {"trusted_execute", "review_required", "quarantine"}:
+        if "routing_decision" not in fallback_fields:
+            fallback_fields.append("routing_decision")
         if "quarantine" in routing_decision:
             routing_decision = "quarantine"
         elif "review" in routing_decision:
@@ -151,6 +230,7 @@ def parse_email_triage_brief(raw: Any, *, sender_trusted: bool) -> dict[str, Any
 
     parsed["safety_status"] = safety_status
     parsed["routing_decision"] = routing_decision
+    parsed["_fallback_fields"] = fallback_fields
     return parsed
 
 
