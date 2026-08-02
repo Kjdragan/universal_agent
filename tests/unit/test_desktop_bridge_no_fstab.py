@@ -118,6 +118,52 @@ def test_deploy_has_a_reload_canary() -> None:
     assert "::warning::" in deploy
 
 
+def test_deploy_preflight_self_heals_a_stalled_generator() -> None:
+    """If a reload is still slow after the fstab eviction, the deploy must
+    remediate rather than walk into ~63 slow reloads and exit 124.
+
+    Measured end-to-end on uaonvps 2026-08-02 with BOTH failure conditions
+    present (bridge line re-added to /etc/fstab AND the mount wedged):
+    90.41s before the eviction, 0.44s after it, same wedge.
+    """
+    deploy = (REPO_ROOT / "scripts" / "deploy" / "remote_deploy.sh").read_text()
+    assert "[reload-preflight]" in deploy
+
+    preflight_at = deploy.index("[reload-preflight]")
+    units_at = deploy.index("install_vps_systemd_units.sh")
+    assert preflight_at < units_at, (
+        "the preflight must run BEFORE the installer block, otherwise the block "
+        "has already paid the cost the preflight exists to avoid"
+    )
+
+    # It must actually remediate, using the script whose primitives are proven.
+    assert "vps_bridge_unwedge.sh" in deploy
+
+    # `sudo env VAR=...` is required — sudo resets the environment, so a bare
+    # export would silently never reach the script.
+    assert "sudo env UA_BRIDGE_SAMPLES=" in deploy
+
+
+def test_deploy_does_not_defer_installer_reloads() -> None:
+    """Batching the installers' daemon-reloads was built, adversarially
+    reviewed, and REJECTED on 2026-08-02.
+
+    Deferring the reload makes every in-installer `systemctl start`/`restart`
+    act on a STALE unit definition; install_vps_mission_control_sweeper.sh and
+    install_vps_autonomous_runtime.sh are long-running services with no timer to
+    re-fire, so they would keep stale config indefinitely. It also downgrades a
+    failed VP worker from a red deploy to a WARN line. The amplifier only bites
+    when a generator stalls, and after the fstab eviction /etc/fstab contains no
+    network filesystems at all.
+    """
+    deploy = (REPO_ROOT / "scripts" / "deploy" / "remote_deploy.sh").read_text()
+    assert "UA_SYSTEMD_DEFER_RELOAD" not in deploy, (
+        "deferred-reload batching was rejected — see the comment above the "
+        "preflight block in remote_deploy.sh before reintroducing it"
+    )
+    assert not (REPO_ROOT / "scripts" / "lib" / "systemd_batch.sh").exists()
+
+
 def test_unwedge_script_never_stats_the_bridge_path() -> None:
     """A hung FUSE stat is uninterruptible; `timeout` does not bound it.
 

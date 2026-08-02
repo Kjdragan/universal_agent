@@ -247,6 +247,45 @@ echo "--> Converging desktop SSHFS bridge to native systemd units (fstab evictio
 sudo bash "$PROD_DIR/scripts/install_vps_desktop_bridge.sh" \
   || echo "WARN: install_vps_desktop_bridge.sh failed (non-fatal)"
 
+# --- preflight: prove reloads are fast, and self-heal if they are not --------
+# Belt to the fstab-eviction braces. If a daemon-reload is STILL slow after the
+# bridge has left /etc/fstab, a systemd generator is stalled anyway — in practice
+# that means the bridge mount is wedged. vps_bridge_unwedge.sh is the ONLY
+# remediation that actually works: it aborts the FUSE connection, which is the
+# only thing that frees D-state waiters. (A `timeout N stat` probe would hang
+# uninterruptibly, and `umount -l` leaves waiting>0 plus a non-empty cgroup —
+# both were tried and both failed. See scripts/vps_bridge_unwedge.sh.)
+#
+# Worst case this costs ONE 90s reload here instead of ~63 of them across the
+# installer block, which is the difference between a slow deploy and exit 124.
+#
+# NOTE FOR FUTURE MAINTAINERS — do NOT "optimize" this by batching the
+# installers' daemon-reloads behind a deferred-reload flag. That was built and
+# adversarially reviewed on 2026-08-02 and REJECTED: deferring the reload makes
+# every in-installer `systemctl start`/`restart` act on a STALE unit definition
+# (install_vps_mission_control_sweeper.sh and install_vps_autonomous_runtime.sh
+# are long-running services with no timer to re-fire, so they would keep stale
+# config indefinitely), it downgrades a failed VP worker from a red deploy to a
+# WARN line, and it makes every installer's own status output report its timer
+# as inactive. The amplifier is only dangerous when a generator stalls, and
+# after the fstab eviction /etc/fstab contains no network filesystems at all.
+echo "--> Preflight: timing a systemd daemon-reload..."
+_pf_start=$(date +%s)
+sudo systemctl daemon-reload || true
+_pf_elapsed=$(( $(date +%s) - _pf_start ))
+echo "[reload-preflight] daemon-reload took ${_pf_elapsed}s"
+if [ "$_pf_elapsed" -ge 30 ]; then
+  echo "::warning::Slow daemon-reload (${_pf_elapsed}s) before the installer block — attempting bridge unwedge"
+  # Short sampling: the slow reload IS the evidence, so we do not need the
+  # watchdog's conservative 6x10s confirmation before acting.
+  sudo env UA_BRIDGE_SAMPLES=1 UA_BRIDGE_SAMPLE_INTERVAL=1 \
+    bash "$PROD_DIR/scripts/vps_bridge_unwedge.sh" \
+    || echo "WARN: vps_bridge_unwedge.sh failed (non-fatal)"
+  _pf2_start=$(date +%s)
+  sudo systemctl daemon-reload || true
+  echo "[reload-preflight] after unwedge, daemon-reload took $(( $(date +%s) - _pf2_start ))s"
+fi
+
 echo "--> Installing canonical production systemd units from repo templates..."
 sudo bash "$PROD_DIR/scripts/install_vps_systemd_units.sh" --lane production --app-root "$PROD_DIR"
 echo "--> Installing canonical VP worker unit template from repo..."

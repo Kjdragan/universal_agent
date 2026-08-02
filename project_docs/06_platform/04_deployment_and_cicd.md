@@ -295,6 +295,10 @@ ssh uaonvps 'bash -lc "grep -c fuse.sshfs /etc/fstab; \
 
 **Exit 124 ≠ exit 255.** 255 means the connection dropped and the deploy probably *succeeded* — run the Rule-A `/api/v1/version` SHA check. 124 means `timeout 30m` fired and the deploy genuinely did **not** finish, though services stay up on the prior code.
 
+**Defence in depth.** `remote_deploy.sh` runs `install_vps_desktop_bridge.sh` (which asserts the fstab entry is absent) and then a `[reload-preflight]` timed reload *before* the installer block. If that reload still exceeds 30 s, some generator is stalled anyway, and the deploy invokes `scripts/vps_bridge_unwedge.sh` to abort the wedged FUSE connection before continuing — bounding the damage to one 90 s reload instead of ~63.
+
+**Do NOT batch the installers' daemon-reloads.** A deferred-reload prelude (`UA_SYSTEMD_DEFER_RELOAD`) was built and adversarially reviewed on 2026-08-02, then **rejected**. Deferring the reload makes every in-installer `systemctl start`/`restart` act on a **stale unit definition** — `install_vps_mission_control_sweeper.sh` and `install_vps_autonomous_runtime.sh` are long-running services with no timer to re-fire, so they would hold stale config indefinitely — and it downgrades a failed VP worker from a red deploy to a `WARN` line. The ~63 reloads only matter when a generator stalls, and after the fstab eviction `/etc/fstab` contains no network filesystems at all. `tests/unit/test_desktop_bridge_no_fstab.py::test_deploy_does_not_defer_installer_reloads` guards this.
+
 ### How code gets shipped: `/ship`
 
 The operator/agent path is the `/ship` slash command: commit + push the current branch, open a PR to `main`, and self-enable auto-merge. It refuses to run from `main`. `gh pr create --base main` is the manual equivalent. After opening a PR, autonomous sessions **watch, don't poll** — `gh pr checks <pr> --watch` (backgrounded) — and rely on the Deploy Notify Telegram ping as the deploy-side signal rather than polling `/api/v1/version`.
