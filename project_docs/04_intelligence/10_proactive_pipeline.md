@@ -19,7 +19,7 @@ code_paths:
   - src/universal_agent/services/ideation_report.py
   - src/universal_agent/scripts/morning_ideation_report.py
   - src/universal_agent/scripts/stale_proposal_reaper.py
-last_verified: 2026-07-11
+last_verified: 2026-08-02
 ---
 
 # Proactive Pipeline
@@ -880,6 +880,16 @@ implicit signals without understanding this loop.
     (`durable.db.connect_runtime_db(get_activity_db_path())`). An earlier version
     read a stale `csi.db` copy and always reported this lane `🌑 dark` (fixed
     2026-06-22).
+
+  `proactive_activity_report.py::count_running_vp_missions` (the read-only
+  `SELECT COUNT(*) FROM vp_missions WHERE status='running'` query behind the
+  VP-missions lane above) is extracted out and reused by
+  `heartbeat_service.py`'s utilization sampler via
+  `proactive_activity_report.py::count_active_agent_slots` (= that count plus
+  in-progress `task_hub_items`, via `count_in_progress_task_hub_items`), so the
+  lane inventory and the 3x-daily report's occupancy metric can never drift
+  into two divergent counts of "how many agents are working right now" (T17,
+  2026-08-02).
 
   `::render_activity_section` emits the compact grouped LEAD text (one
   `✅/⚠️/⏸️/🌑` line per activity plus an `N healthy · M degraded · K paused ·

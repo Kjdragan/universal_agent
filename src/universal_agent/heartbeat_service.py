@@ -2504,7 +2504,18 @@ class HeartbeatService:
                     # ── Utilization Sampling (Phase 2) ────────────────
                     # Record a point-in-time sample of slot occupancy and
                     # queue depth for the 3x daily intelligence reports.
+                    #
+                    # active_slots is sourced from REAL runtime state (running
+                    # VP missions + in-progress Task Hub items), NOT from
+                    # CapacityGovernor.snapshot().active_slots — that counter
+                    # only increments inside CapacityGovernor.acquire_slot(),
+                    # which nothing in production calls, so it is permanently
+                    # 0 (T17: MAX(active_slots)=0 across 13,689 samples while
+                    # 3,122 VP missions completed in the same window).
                     try:
+                        from universal_agent.services.proactive_activity_report import (
+                            count_active_agent_slots,
+                        )
                         from universal_agent.services.proactive_intelligence_report import (
                             record_utilization_sample,
                         )
@@ -2515,7 +2526,7 @@ class HeartbeatService:
                             _q_depth = int((queue or {}).get("eligible_total", 0)) if isinstance(queue, dict) else 0
                             record_utilization_sample(
                                 conn,
-                                active_slots=_snap.active_slots,
+                                active_slots=count_active_agent_slots(conn),
                                 max_slots=_snap.max_concurrent,
                                 queue_depth=_q_depth,
                             )

@@ -623,6 +623,67 @@ def _lane_status(last_dt: datetime | None, fresh_window_secs: float, parked: boo
     return STATUS_DARK, f"stale — last produced {_humanize_age(last_dt)}"
 
 
+# ---------------------------------------------------------------------------
+# Shared "active agent slots" query — used by BOTH this module's lane
+# inventory (VP missions freshness/count) and the heartbeat utilization
+# sampler (``heartbeat_service.py``'s Phase-2 sampling block, T17). Extracted
+# so the two never hand-roll divergent copies of the same query.
+# ---------------------------------------------------------------------------
+
+def count_running_vp_missions() -> int:
+    """Count VP missions currently in ``running`` status (vp_state.db, read-only).
+
+    Never raises — returns 0 on any failure (missing DB, lock, etc.), matching
+    this module's "degrade, don't break the report" contract.
+    """
+    from universal_agent.durable.db import get_vp_db_path
+
+    try:
+        vp_conn = sqlite3.connect(f"file:{get_vp_db_path()}?mode=ro", uri=True, timeout=5)
+        vp_conn.row_factory = sqlite3.Row
+        try:
+            row = vp_conn.execute(
+                "SELECT COUNT(*) AS c FROM vp_missions WHERE status='running'"
+            ).fetchone()
+            return int(row["c"]) if row else 0
+        finally:
+            vp_conn.close()
+    except Exception:
+        logger.debug("count_running_vp_missions: query failed", exc_info=True)
+        return 0
+
+
+def count_in_progress_task_hub_items(conn: sqlite3.Connection) -> int:
+    """Count Task Hub items currently ``in_progress`` on the given connection.
+
+    Never raises — returns 0 on any failure.
+    """
+    from universal_agent import task_hub
+
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM task_hub_items WHERE status=?",
+            (task_hub.TASK_STATUS_IN_PROGRESS,),
+        ).fetchone()
+        return int(row["c"]) if row else 0
+    except Exception:
+        logger.debug("count_in_progress_task_hub_items: query failed", exc_info=True)
+        return 0
+
+
+def count_active_agent_slots(conn: sqlite3.Connection) -> int:
+    """Real count of currently-active agent execution slots.
+
+    ``active_slots`` = running VP missions + in-progress Task Hub items. This
+    is the ground-truth source for the heartbeat utilization sampler
+    (``heartbeat_service.py``, Phase-2 sampling block). It deliberately does
+    NOT read ``CapacityGovernor._active_slots`` — that counter is permanently
+    0 in production because nothing calls
+    ``CapacityGovernor.acquire_slot()`` outside its own docstring/tests (T17).
+    """
+    return count_running_vp_missions() + count_in_progress_task_hub_items(conn)
+
+
 def _collect_lane_activities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     activities: list[dict[str, Any]] = []
 
@@ -654,16 +715,13 @@ def _collect_lane_activities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         vp_conn = sqlite3.connect(f"file:{get_vp_db_path()}?mode=ro", uri=True, timeout=5)
         vp_conn.row_factory = sqlite3.Row
         try:
-            running = vp_conn.execute(
-                "SELECT COUNT(*) AS c FROM vp_missions WHERE status='running'"
-            ).fetchone()
             recent = vp_conn.execute(
                 "SELECT MAX(updated_at) AS m FROM vp_missions WHERE status IN ('running','completed')"
             ).fetchone()
         finally:
             vp_conn.close()
         last_dt = _parse_iso(recent["m"] if recent else None)
-        run_n = int(running["c"]) if running else 0
+        run_n = count_running_vp_missions()
         status, detail = _lane_status(last_dt, fresh_window_secs=12 * _SECONDS_PER_HOUR, parked=False)
         detail = f"{detail}; {run_n} running"
         activities.append(
