@@ -57,16 +57,49 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
             self._schedule_fetch_hours = [int(h) for h in raw_hours if isinstance(h, (int, float))]
         self._schedule_min_interval = max(0, int(config.get("schedule_min_interval_seconds", 0)))
         self._last_fetch_epoch: float = 0.0
+        # Dedicated state key for the schedule-gate epoch (distinct from the
+        # per-channel `youtube_channel_rss:<channel_id>` keys below). Loaded
+        # lazily on first `fetch_events()` call rather than eagerly in
+        # `set_state_backend` so a fake/synchronous backend wired in tests
+        # behaves identically to the production sqlite-backed one.
+        self._schedule_state_key = "youtube_channel_rss:__schedule__"
+        self._schedule_state_loaded: bool = False
 
     def set_state_backend(self, load_state_fn, save_state_fn) -> None:
         self._load_state_fn = load_state_fn
         self._save_state_fn = save_state_fn
+
+    # ── Public accessors (read by app.py for /livez and /metrics) ─────────
+    @property
+    def last_fetch_epoch(self) -> float:
+        """Unix epoch of the last completed poll cycle (persisted — see
+        `_persist_schedule_state`). 0.0 means "never observed a fetch"."""
+        return self._last_fetch_epoch
+
+    @property
+    def schedule_fetch_hours(self) -> list[int]:
+        return list(self._schedule_fetch_hours)
+
+    @property
+    def schedule_timezone(self) -> str:
+        return self._schedule_tz_name or "America/Chicago"
+
+    @property
+    def poll_interval_seconds(self) -> float:
+        return float(self.config.get("poll_interval_seconds", 60))
 
     def set_db_connection(self, conn: sqlite3.Connection) -> None:
         """Set the DB connection for source management queries."""
         self._db_conn = conn
 
     async def fetch_events(self) -> list[RawEvent]:
+        # Hydrate the persisted schedule-gate epoch before evaluating it —
+        # otherwise a fresh process (e.g. after a watchdog restart) starts
+        # from 0.0, believes it has never fetched, and skips the
+        # schedule_min_interval check below (0.0 is falsy), triggering an
+        # immediate full-watchlist sweep even when the real last fetch was
+        # seconds ago (the 2026-08-02 back-to-back-sweep incident).
+        self._hydrate_schedule_state()
         # ── Time-aware schedule gate ─────────────────────────────────
         # If schedule_fetch_hours is configured, only actually fetch RSS
         # when the current hour (in the configured timezone) is in the list
@@ -178,9 +211,11 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
             self._seeded_by_channel[channel_id] = True
             self._seen_by_channel[channel_id] = set(current_ids[: self._max_seen_cache])
             self._persist_channel_state(channel_id)
-        # Update last-fetch timestamp for schedule gating
+        # Update last-fetch timestamp for schedule gating, and persist it so
+        # a restart doesn't forget it happened (see fetch_events() top).
         import time
         self._last_fetch_epoch = time.time()
+        self._persist_schedule_state()
         return events
 
     def _resolve_watchlist(self) -> list[dict[str, str]]:
@@ -455,6 +490,21 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
             "last_modified": self._modified_by_channel.get(channel_id, ""),
         }
         self._save_state_fn(self._state_key(channel_id), state_payload)
+
+    def _hydrate_schedule_state(self) -> None:
+        """Load the persisted schedule-gate epoch once per adapter instance."""
+        if self._schedule_state_loaded:
+            return
+        self._schedule_state_loaded = True
+        raw = self._load_state_fn(self._schedule_state_key)
+        if not isinstance(raw, dict):
+            return
+        epoch = raw.get("last_fetch_epoch")
+        if isinstance(epoch, (int, float)) and epoch > 0:
+            self._last_fetch_epoch = float(epoch)
+
+    def _persist_schedule_state(self) -> None:
+        self._save_state_fn(self._schedule_state_key, {"last_fetch_epoch": self._last_fetch_epoch})
 
 
 def _safe_text(node: ET.Element | None) -> str:

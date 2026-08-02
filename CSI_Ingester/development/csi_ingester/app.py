@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
+from csi_ingester.adapters.youtube_channel_rss import YouTubeChannelRSSAdapter
 from csi_ingester.config import CSIConfig, load_config
+from csi_ingester.livez import compute_livez_status
 from csi_ingester.logging import configure_logging
 from csi_ingester.metrics import MetricsRegistry
 from csi_ingester.service import CSIService
@@ -84,8 +87,57 @@ async def readyz() -> dict[str, object]:
     return {"ready": True, "instance_id": _config.instance_id}
 
 
+def _youtube_rss_adapter() -> YouTubeChannelRSSAdapter | None:
+    if _service is None:
+        return None
+    adapter = _service.adapters.get("youtube_channel_rss")
+    return adapter if isinstance(adapter, YouTubeChannelRSSAdapter) else None
+
+
+@app.get("/livez")
+async def livez(response: Response) -> dict[str, object]:
+    """Schedule-aware liveness probe (T13).
+
+    Unlike `/healthz` (an unconditional stub — a live event loop, nothing
+    more), this checks whether the youtube_channel_rss poller is actually
+    making progress against its configured fetch schedule. Returns 503 only
+    when a fetch is genuinely overdue given the schedule; a deliberate quiet
+    window (an hour excluded from `schedule_fetch_hours`) is always healthy.
+    This is the intended watchdog restart trigger for csi-ingester —
+    `/healthz` stays untouched as the plain process-liveness stub.
+    """
+    _metrics.inc("csi.livez.calls")
+    adapter = _youtube_rss_adapter()
+    if adapter is None:
+        # No RSS adapter configured/started (e.g. disabled in config, or the
+        # service hasn't finished startup yet) — nothing to gate on. Report
+        # healthy so /livez never becomes a false watchdog trigger for a
+        # deployment that doesn't run this adapter, or during the brief
+        # startup window before `_service` is assigned.
+        return {"live": True, "reason": "adapter_not_configured"}
+    status = compute_livez_status(
+        schedule_fetch_hours=adapter.schedule_fetch_hours,
+        schedule_timezone=adapter.schedule_timezone,
+        poll_interval_seconds=adapter.poll_interval_seconds,
+        last_fetch_epoch=adapter.last_fetch_epoch,
+        now_epoch=time.time(),
+    )
+    if not status.healthy:
+        response.status_code = 503
+    return {
+        "live": status.healthy,
+        "reason": status.reason,
+        "in_quiet_window": status.in_quiet_window,
+        "seconds_since_fetch": status.seconds_since_fetch,
+        "grace_seconds": status.grace_seconds,
+    }
+
+
 @app.get("/metrics", response_class=PlainTextResponse)
 async def metrics() -> str:
+    adapter = _youtube_rss_adapter()
+    if adapter is not None and adapter.last_fetch_epoch > 0:
+        _metrics.set_gauge("csi.rss.seconds_since_fetch", time.time() - adapter.last_fetch_epoch)
     return _metrics.render_prometheus()
 
 

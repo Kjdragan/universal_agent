@@ -124,6 +124,95 @@ async def test_rss_adapter_persists_seed_state_across_restart(monkeypatch):
     assert events[0].payload["video_id"] == "v_new"
 
 
+async def test_rss_adapter_persists_last_fetch_epoch_across_restart(monkeypatch):
+    """T13: `_last_fetch_epoch` must survive a process restart via the
+    already-wired state backend, not just live in adapter memory. Before
+    this fix, a fresh process always started from 0.0 — which, combined with
+    `schedule_min_interval_seconds` gating on truthiness (`if ... and
+    self._last_fetch_epoch:`), meant a tight restart loop re-triggered a
+    full-watchlist sweep every single time (the 2026-08-02 incident)."""
+    state_store: dict[str, dict] = {}
+
+    def _load_state(key: str):
+        return state_store.get(key)
+
+    def _save_state(key: str, state: dict):
+        state_store[key] = state
+
+    cfg = _cfg()
+    first_adapter = YouTubeChannelRSSAdapter(cfg)
+    first_adapter.set_state_backend(_load_state, _save_state)
+    assert first_adapter.last_fetch_epoch == 0.0
+
+    async def _fake_fetch(client, *, channel_id):
+        return []
+
+    monkeypatch.setattr(first_adapter, "_fetch_channel_entries", _fake_fetch)
+    await first_adapter.fetch_events()
+    assert first_adapter.last_fetch_epoch > 0.0
+    persisted_epoch = first_adapter.last_fetch_epoch
+    assert state_store["youtube_channel_rss:__schedule__"]["last_fetch_epoch"] == persisted_epoch
+
+    # Simulate a restart: brand-new adapter instance, same state backend.
+    second_adapter = YouTubeChannelRSSAdapter(cfg)
+    second_adapter.set_state_backend(_load_state, _save_state)
+    assert second_adapter.last_fetch_epoch == 0.0  # not hydrated yet — lazy on first fetch_events()
+
+    async def _fake_fetch_second(client, *, channel_id):
+        return []
+
+    monkeypatch.setattr(second_adapter, "_fetch_channel_entries", _fake_fetch_second)
+    await second_adapter.fetch_events()
+    # The restarted adapter picked up the persisted epoch as its baseline
+    # rather than starting cold from 0.0 — its post-fetch epoch must be >=
+    # the epoch the first instance persisted (monotonic, same clock).
+    assert second_adapter.last_fetch_epoch >= persisted_epoch
+
+
+async def test_rss_adapter_schedule_gate_min_interval_respects_persisted_epoch(monkeypatch):
+    """Without persistence, a fresh adapter's `_last_fetch_epoch` is 0.0 —
+    falsy — so `schedule_min_interval_seconds` gating (`if ... and
+    self._last_fetch_epoch:`) is skipped entirely and a restart always
+    triggers an immediate fetch. With persistence + hydration, a restart
+    inside the min-interval window must skip the fetch, exactly like an
+    un-restarted process would."""
+    state_store: dict[str, dict] = {}
+
+    def _load_state(key: str):
+        return state_store.get(key)
+
+    def _save_state(key: str, state: dict):
+        state_store[key] = state
+
+    cfg = {
+        **_cfg(),
+        "schedule_fetch_hours": list(range(24)),  # always "in schedule"
+        "schedule_min_interval_seconds": 5400,
+    }
+    first_adapter = YouTubeChannelRSSAdapter(cfg)
+    first_adapter.set_state_backend(_load_state, _save_state)
+    fetch_calls = {"count": 0}
+
+    async def _fake_fetch(client, *, channel_id):
+        fetch_calls["count"] += 1
+        return []
+
+    monkeypatch.setattr(first_adapter, "_fetch_channel_entries", _fake_fetch)
+    await first_adapter.fetch_events()
+    assert fetch_calls["count"] == 1
+
+    # Restart: a fresh instance immediately re-polls (simulating the
+    # scheduler's first tick right after process start).
+    second_adapter = YouTubeChannelRSSAdapter(cfg)
+    second_adapter.set_state_backend(_load_state, _save_state)
+    monkeypatch.setattr(second_adapter, "_fetch_channel_entries", _fake_fetch)
+    events = await second_adapter.fetch_events()
+    # Still well inside schedule_min_interval_seconds (5400s) of the first
+    # fetch -> gated out, no new RSS request issued, no events.
+    assert events == []
+    assert fetch_calls["count"] == 1
+
+
 async def test_rss_adapter_channel_failure_does_not_abort_other_channels(monkeypatch):
     adapter = YouTubeChannelRSSAdapter(
         {
