@@ -1,0 +1,30 @@
+[Unit]
+Description=Universal Agent nightly golden-nuggets health report (reads the previous run's journal + CGPM cgroup post-mortem)
+After=network-online.target universal-agent-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets bootstrap: as a standalone oneshot this has no gateway parent to
+# inherit UA_OPS_TOKEN from, and without it the notification POST 401s and the
+# report silently never reaches the operator (same failure mode the OOM notifier
+# was hardened against).
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# `journalctl -u <unit>` for another unit's logs needs group access; ua is in
+# systemd-journal via the deploy. Read-only either way — this unit never mutates.
+ExecStart=/opt/universal_agent/.venv/bin/python3 /opt/universal_agent/scripts/nuggets_health_report.py
+# Bounded: one journal read, one file read, one HTTP POST.
+TimeoutStartSec=300
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

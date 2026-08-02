@@ -1,0 +1,23 @@
+[Unit]
+Description=Run the golden-nuggets health report each morning at 08:05 America/Chicago
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic (a monotonic-only timer goes
+# NextElapse=infinity after a deploy daemon-reload; that killed the OOM alert
+# for ~19 days in 2026-05/06).
+#
+# 08:05 Chicago, deliberately:
+#   - The nuggets run starts 23:50 Chicago and its worst case is
+#     TimeoutStartSec=12000 (3h20m), i.e. it can still be running until ~03:10
+#     Chicago. 08:05 is comfortably after any possible finish.
+#   - It reports at an hour the operator is awake. A fixed-time cron is exempt
+#     from the dormancy window by policy, but firing a phone notification at
+#     03:30 would be user-hostile, so we wait for morning instead.
+OnCalendar=*-*-* 08:05:00 America/Chicago
+RandomizedDelaySec=180
+AccuracySec=1min
+Persistent=true
+Unit=universal-agent-nuggets-health-report.service
+
+[Install]
+WantedBy=timers.target
