@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "title": "HANDOFF \u2014 Fleet triage fixes (2026-08-02)",
+  "description": "19 tickets for a Fable session: verified fixes, sequencing, 12 verified non-issues not to touch, and what's blocked on Kevin.",
+  "kind": "markdown",
+  "entry": "report.html",
+  "created_at": "2026-08-02T18:37:07+00:00"
+}

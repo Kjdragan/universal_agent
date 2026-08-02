@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>HANDOFF — Fleet triage fixes (2026-08-02)</title>
+<style>
+:root{color-scheme:light;--fg:#1f2328;--muted:#656d76;--bg:#ffffff;--soft:#f6f8fa;--border:#d0d7de;--accent:#0969da;--accent-soft:#ddf4ff}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:#ffffff;color:#1f2328;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6;font-size:16px}
+nav.docset{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--border);padding:.55rem 1rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+nav.docset .brand{font-weight:700;margin-right:.6rem;font-size:.9rem;color:var(--muted)}
+nav.docset a{font-size:.82rem;text-decoration:none;color:var(--accent);padding:.2rem .55rem;border-radius:6px;white-space:nowrap}
+nav.docset a:hover{background:var(--accent-soft)}
+nav.docset a.current{background:var(--fg);color:#fff;font-weight:600}
+nav.docset .sep{width:1px;height:1.1rem;background:var(--border);margin:0 .2rem}
+nav.docset a.file{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem}
+.scratch-back{padding:.5rem 1rem;font-size:.82rem;background:var(--soft);border-bottom:1px solid var(--border)}
+.scratch-back a{color:var(--accent);text-decoration:none}
+.scratch-back a:hover{text-decoration:underline}
+main{max-width:880px;margin:0 auto;padding:2.2rem 1.3rem 5rem}
+h1,h2,h3,h4{line-height:1.25;margin-top:1.8em;margin-bottom:.6em;font-weight:650}
+h1{font-size:1.9rem;border-bottom:1px solid var(--border);padding-bottom:.3em;margin-top:.2em}
+h2{font-size:1.45rem;border-bottom:1px solid var(--border);padding-bottom:.25em}
+h3{font-size:1.18rem}
+a{color:var(--accent)}
+p,li{overflow-wrap:break-word}
+code{background:var(--soft);padding:.15em .4em;border-radius:6px;font-size:.86em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--soft);border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;line-height:1.45}
+pre code{background:none;padding:0;font-size:.82rem}
+blockquote{margin:1em 0;padding:.2em 1em;color:var(--muted);border-left:4px solid var(--border)}
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:.92rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--border);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:650}
+tr:nth-child(even) td{background:#fbfcfd}
+hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+.srcmeta{color:var(--muted);font-size:.85rem;margin:.4rem 0 1rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+footer{max-width:880px;margin:0 auto;padding:1.5rem 1.3rem;color:var(--muted);font-size:.78rem;border-top:1px solid var(--border)}
+
+.sr-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#0969da;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer}
+.sr-fab:hover{background:#0a5fd0}
+.sr-panel{position:fixed;right:16px;bottom:64px;z-index:2147483000;width:340px;max-width:92vw;max-height:70vh;background:#fff;color:#1f2328;border:1px solid #d0d7de;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);display:none;flex-direction:column;overflow:hidden;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.sr-panel.sr-open{display:flex}
+.sr-head{display:flex;justify-content:space-between;align-items:center;padding:.6rem .8rem;border-bottom:1px solid #eaecef}
+.sr-x,.sr-del{background:none;border:none;color:#656d76;cursor:pointer;font-size:13px}
+.sr-headbtns{display:flex;gap:.4rem;align-items:center}
+.sr-clear{background:none;border:1px solid #d0d7de;border-radius:5px;color:#656d76;cursor:pointer;font-size:11px;padding:.1rem .45rem}
+.sr-clear:hover{background:#f6f8fa}
+.sr-hint{font-size:.74rem;line-height:1.45;color:#57606a;padding:.5rem .8rem;border-bottom:1px solid #eaecef;background:#f6f8fa}
+.sr-list{overflow:auto;padding:.5rem .8rem;flex:1}
+.sr-empty{color:#656d76;font-size:.85rem;padding:.5rem 0}
+.sr-item{border:1px solid #eaecef;border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem}
+.sr-loc{display:flex;justify-content:space-between;font-size:.72rem;color:#656d76;font-family:ui-monospace,Menlo,monospace;margin-bottom:.25rem}
+.sr-quote{font-size:.8rem;color:#3b4148;background:#f6f8fa;border-left:3px solid #d0d7de;padding:.2rem .5rem;margin-bottom:.3rem}
+.sr-body{width:100%;border:1px solid #d0d7de;border-radius:6px;padding:.35rem .45rem;font:inherit;resize:vertical}
+.sr-actions{display:flex;gap:.4rem;padding:.6rem .8rem;border-top:1px solid #eaecef}
+.sr-note{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:inherit}
+.sr-submit{flex:1;background:#1f883d;color:#fff;border:none;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:600 13px/1 inherit}
+.sr-submit:hover{background:#1a7332}
+.sr-chip{position:absolute;z-index:2147483001;background:#1f2328;color:#fff;border:none;border-radius:6px;padding:.25rem .5rem;font:600 12px/1 sans-serif;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sr-mark{background:#fff3c4;box-shadow:inset 0 -2px 0 #e3b341;border-radius:2px;cursor:pointer}
+.sr-mark:hover{background:#ffe98a}
+.sr-round{border:1px solid #eaecef;border-radius:8px;margin-bottom:.6rem;overflow:hidden}
+.sr-rhead{display:flex;justify-content:space-between;align-items:center;gap:.4rem;background:#f6f8fa;border-bottom:1px solid #eaecef;padding:.35rem .55rem;font-size:.72rem;color:#57606a;font-family:ui-monospace,Menlo,monospace}
+.sr-recopy{background:#fff;border:1px solid #d0d7de;border-radius:5px;padding:.1rem .4rem;cursor:pointer;font:inherit;color:#0969da;white-space:nowrap}
+.sr-hitem{padding:.35rem .55rem;border-top:1px solid #f0f1f3}
+.sr-hbody{font-size:.85rem;white-space:pre-wrap;color:#1f2328}
+.sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast{display:none!important}}
+</style>
+</head>
+<body><div class="scratch-back"><a href="/scratch/">← Scratchpad index</a></div><main><h1 id="handoff-fleet-triage-fixes-2026-08-02">HANDOFF — Fleet triage fixes (2026-08-02)</h1>
+<p><strong>For:</strong> a fresh Claude Fable session in <code>~/lrepos/universal_agent</code>.
+<strong>Produced by:</strong> a 24-agent verification sweep of 14h of fleet-alert email (2026-08-02 03:22Z–17:22Z). 59 issue candidates extracted, 42 verified against live VPS / DB / <code>gh</code> state. <strong>Read-only</strong> — nothing on the fleet was changed.
+<strong>Full exhibit (rendered, with all evidence):</strong> https://uaonvps.taildcc090.ts.net/scratch/fleet-triage-2026-08-02/report.html
+<strong>Archived copy:</strong> <code>scratch_archive/2026-08-02/132719__fleet-triage-2026-08-02/report.html</code></p>
+<hr />
+<h2 id="the-prompt-to-run">The prompt to run</h2>
+<blockquote>
+<p>You are picking up a verified fix backlog. Read <code>HANDOFF_Fleet_Triage_Fixes_2026-08-02.md</code> in full before touching anything — it contains the evidence, the sequencing constraints, and an explicit list of things that look like bugs but are <strong>not</strong>. Every finding below was already proven against live production; you do not need to re-verify them, and re-verifying is the main way this work gets wasted. Work the tickets in the order given, ship each as its own PR under standing autonomy (branch from a freshly-fetched <code>origin/main</code>, PR, <code>gh pr merge --squash --auto --delete-branch</code>), and report what you shipped, what you deliberately skipped, and why.</p>
+</blockquote>
+<hr />
+<h2 id="1-ground-truth-you-can-rely-on-do-not-re-verify">1. Ground truth you can rely on (do not re-verify)</h2>
+<table>
+<thead>
+<tr>
+<th>Fact</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Prod SHA</td>
+<td><code>/opt/universal_agent</code> == <code>origin/main</code> == <code>7e396f54</code>, deployed 2026-08-02 11:59Z</td>
+</tr>
+<tr>
+<td>Deploy pipeline</td>
+<td>Healthy. Last 10 <code>deploy.yml</code> runs on <code>main</code> green.</td>
+</tr>
+<tr>
+<td>VPS</td>
+<td><code>ssh ua@uaonvps</code>, always wrap remote commands in <code>bash -lc "…"</code>. <code>ua</code> has passwordless sudo.</td>
+</tr>
+<tr>
+<td>VPS disk</td>
+<td><strong>90.0%</strong> — 173G/193G, 21 GiB free. CRITICAL threshold is 90%.</td>
+</tr>
+<tr>
+<td>Desktop checkout</td>
+<td>Stale and dirty, parked on a feature branch. <strong>Judge landed-ness only against <code>origin/main</code> after <code>git fetch</code>.</strong> Its <code>CLAUDE.md</code> is also stale and is injected into every desktop session — it manufactured one false finding already (see §5).</td>
+</tr>
+<tr>
+<td>ZAI</td>
+<td>Healthy: no pause, <code>consecutive_429s=0</code>. Sole provider, no failover (deliberate — see §4).</td>
+</tr>
+<tr>
+<td>Infisical</td>
+<td>Machine identity healthy; live universal-auth login returns 200, 359 secrets read cleanly.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Two repos are out of scope for this session:</strong>
+- <code>~/lrepos/demo_factory</code> — owned by another live session (<code>8f056529</code>). The nuggets build failure lives there. Do not touch it.
+- <code>~/lrepos/dragan-plugins</code> — ticket 6 below lands there, and it has its own deployment rules. Load the <code>dragan-plugins-workflow</code> skill before editing, and <strong>never</strong> edit under <code>~/.claude/plugins/cache/</code>.</p>
+<hr />
+<h2 id="2-tickets-ship-in-this-order">2. Tickets — ship in this order</h2>
+<p>Sequencing matters in exactly two places, both called out inline. Everything else is independent.</p>
+<h3 id="t1-email-triage-parse-is-markdown-blind-and-the-fallback-silently-upgrades-trust">T1 — Email triage parse is markdown-blind and the fallback silently upgrades trust</h3>
+<p><strong>File:</strong> <code>src/universal_agent/services/email_task_bridge.py</code>, <code>src/universal_agent/hooks_service.py</code>
+<strong>Ship first — T9 depends on it.</strong></p>
+<p><code>_TRIAGE_FIELD_RE</code> (5 hand-copied anchored regexes) cannot match what the model actually emits. The LLM's routing verdict is discarded and replaced by manufactured defaults.</p>
+<ul>
+<li><strong>Proven:</strong> 7 of 8 <code>hook_triage</code> rows in prod have <code>classification=''</code>, <code>priority=''</code>, <code>subject_summary=''</code>. 5 recorded <code>routing_decision='trusted_execute'</code> <strong>purely from the fallback</strong>. <code>auto_completed_non_action</code> has fired <strong>zero times ever</strong>.</li>
+<li><strong>Why it fails:</strong> stored briefs use <code>**safety_status:** clean</code> and <code>- **safety_status:** clean</code>. The regexes anchor <code>^\s*&lt;field&gt;\s*:</code> and <code>\s*</code> cannot cross <code>**</code>.</li>
+<li><strong>Fix:</strong>
+  1. Rebuild all 5 patterns from one factory allowing an optional bullet <code>[-*•+]</code> and <code>[*_#]{0,3}</code> decoration; strip residual <code>**</code> from captures.
+  2. <code>hooks_service.py</code> passes <code>sender_trusted=bool(metadata.get("sender_trusted", True))</code> — <strong>change that default to <code>False</code>.</strong> The key is absent in all 8 prod rows, so the default is doing real work.
+  3. <code>safety_status</code> falls back to <code>'clean'</code> unless the literal substring <code>quarantine</code> appears. Record a <code>_fallback_fields</code> marker so a default is never mistaken for a verdict.
+  4. Root-cause upgrade: make <code>_build_email_handler_prompt</code> require a fenced <code>```json</code> envelope for the 5 routing fields and parse that first, with the regex as fallback.
+  5. Tests using the two verbatim prod briefs recoverable from <code>activity_events.full_message</code>.</li>
+</ul>
+<h3 id="t2-youtube-tutorial-hook-loses-videos-the-retry-path-is-structurally-dead">T2 — YouTube tutorial hook loses videos; the retry path is structurally dead</h3>
+<p><strong>File:</strong> <code>src/universal_agent/hooks_service.py</code> (+ <code>agent_setup.py</code> if you take the env route)</p>
+<p>4 of the last 5 hook runs produced <strong>zero artifacts</strong>. Lost: <code>mi1flmYaLAk</code>, <code>ZFxh7sqbUZo</code>, <code>XwYPRLMLcNs</code>, <code>h5HLLIds53g</code>. The "retry attempt 2/3 has been queued" line in the alert is <strong>false</strong> — 0 of 4 retries ever acquired a session.</p>
+<ul>
+<li><strong>Proven:</strong> <code>runtime_state.db</code> — Jul 19–30 = 23/23 attempt-1 <code>completed</code>; 08-01 = 3/3 <code>failed</code>, 08-02 = 1/2 <code>failed</code>, all <code>failure_class=hook_dispatch_failed</code>. Every attempt-2 sat <code>queued</code> with <code>provider_session_id</code> NULL for 60 min until the stale-orphan reaper killed it; attempt 3 never queued. Only one <code>manifest.json</code> newer than 07-31 exists under <code>resolve_artifacts_dir()</code>.</li>
+<li><strong>Producer is <code>src/universal_agent/scripts/youtube_daily_digest.py</code></strong>, not the playlist poller (that timer has been disabled since 07-31 and logged nothing).</li>
+<li><strong>Two stacked root causes:</strong>
+  1. <code>CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1</code> makes <code>Task</code>/<code>Agent</code> <strong>fire-and-forget</strong>, but <code>_build_manual_youtube_hook_action</code> <em>mandates</em> delegating via <code>Task(subagent_type='youtube-expert')</code>. The coordinator delegates, ends its turn in ~12s, the post-turn gate <code>_validate_youtube_tutorial_artifacts</code> finds no manifest and raises <code>youtube_artifacts_missing_manifest</code>; the backgrounded subagent dies with the session. The one survivor only worked because the coordinator redundantly did the work inline (19 tool calls).
+  2. <code>_schedule_youtube_retry_attempt</code> fires <code>asyncio.create_task(self._dispatch_action(...))</code> <strong>before</strong> <code>_dispatch_action</code>'s <code>finally</code> pops <code>_youtube_video_dispatch_inflight</code>, so every retry is rejected by the video dedup guard (<code>inflight_age</code> 52–134s against a 3600s TTL). The guard <em>returns</em> <code>{"decision":"skipped"}</code> rather than raising, and the fire-and-forget call discards the return value, so nothing finalizes the attempt.</li>
+<li><strong>Fix:</strong></li>
+<li>For (1): change <code>_build_manual_youtube_hook_action</code> to instruct inline <code>Skill: youtube-transcript-metadata</code> → <code>Skill: youtube-tutorial-creation</code> (replicating the surviving run), <strong>or</strong> thread a per-session <code>CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0</code> override into <code>agent_setup.py</code>'s <code>ClaudeAgentOptions.env</code> for this lane only.</li>
+<li>For (2): add an explicit <code>skip_video_dedup: bool = False</code> parameter to <code>_dispatch_action</code> and short-circuit the video dedup guard on it; pass <code>True</code> from <code>_schedule_youtube_retry_attempt</code>. <strong>Do not overload <code>skip_workflow_admission</code></strong> — different concerns. Also pop the inflight marker before scheduling, and retain the task handle with an <code>add_done_callback</code> that finalizes via <code>mark_needs_review</code> both on exception <strong>and</strong> on <code>result.get("decision") not in {"completed","started"}</code> (an exception-only callback would not have caught this).</li>
+<li><strong>Do not weaken the artifact gate</strong> — it caught real total loss.</li>
+<li>Then re-POST the 4 lost video ids; their runs are terminal and the dedup keys are free.</li>
+<li><strong>Also:</strong> <code>_classify_dispatch_failure</code> labels <code>youtube_artifacts_missing_manifest</code> as <code>hook_dispatch_failed</code>, which is in the retryable set. A deterministic validation error should route to needs_review — give it its own reason code (<code>youtube_artifacts_invalid</code>).</li>
+<li><strong>Not knowable:</strong> what flipped this on 08-01. No <code>origin/main</code> change to <code>hooks_service.py</code> since 07-14, CLI unchanged since Jul 25. Best explanation is coordinator-LLM drift toward pure delegation. The fix is robust either way — don't spend time hunting it.</li>
+<li><strong>Dead code to delete while you're here:</strong> <code>hooks_service.py::HooksService.finalize_stale_youtube_runs</code>. It is a superseded predecessor of <code>services/stuck_run_reaper.py::finalize_stale_youtube_hook_runs</code> (live, wired via <code>utils/db_health_monitor.py::check_stale_runs</code>, working — it finalized the alert's own run at 12:10:25Z). The name collision already cost one false HIGH-severity escalation.</li>
+</ul>
+<h3 id="t3-alert-emails-silently-swallow-and-are-an-injection-surface">T3 — Alert emails silently swallow <code>&lt;…&gt;</code> and are an injection surface</h3>
+<p><strong>File:</strong> <code>src/universal_agent/services/notification_dispatcher.py</code></p>
+<ul>
+<li><strong>Proven:</strong> delivered HTML for the external-email <em>security</em> alert reads <code>- Sender: Descope ``` while the plaintext part has</code><a href="&#109;&#97;&#105;&#108;&#116;&#111;&#58;&#116;&#101;&#97;&#109;&#64;&#104;&#105;&#46;&#100;&#101;&#115;&#99;&#111;&#112;&#101;&#46;&#99;&#111;&#109;">&#116;&#101;&#97;&#109;&#64;&#104;&#105;&#46;&#100;&#101;&#115;&#99;&#111;&#112;&#101;&#46;&#99;&#111;&#109;</a>`. The sender address — the single most important field in that alert — was parsed as an unknown HTML tag and dropped. Reproduced in a second alert. Source text is intact in the DB, so the loss is purely rendering.</li>
+<li><strong>Root cause:</strong> <code>_format_email_html</code> imports <code>escape as _html_escape</code> and applies it to metadata, <code>final_response</code>, and <code>log_tail</code> — then returns <code>f"&lt;p&gt;{message}&lt;/p&gt;"</code> <strong>raw</strong> (as are <code>{title}</code> and <code>{kind}</code>). For <code>kind=agentmail_review_required</code>, <code>message</code> is LLM prose summarizing an <strong>untrusted external email</strong>. An external sender who gets the triage model to echo an <code>&lt;a href&gt;</code> or tracking <code>&lt;img&gt;</code> has it rendered in Kevin's inbox.</li>
+<li><strong>Fix:</strong> escape all three. <strong>Escape <em>then</em> convert newlines</strong> (<code>_html_escape(message).replace("\n","&lt;br&gt;")</code>, or wrap in <code>&lt;pre style="white-space:pre-wrap"&gt;</code>) or you collapse a multi-line body to one line. Add tests mirroring the existing <code>final_response</code> escaping test — the body has no coverage today, which is why this survived.</li>
+</ul>
+<h3 id="t4-alert-emails-strip-the-diagnostic-fields">T4 — Alert emails strip the diagnostic fields</h3>
+<p><strong>File:</strong> <code>src/universal_agent/services/notification_dispatcher.py</code>, <code>src/universal_agent/hooks_service.py</code></p>
+<p><code>_EMAIL_CONTEXT_KEYS</code> is a global hardcoded allowlist grown ad hoc. It omits <code>reason</code>, <code>video_id</code>, <code>attempt_number</code>, <code>retry_count</code>, <code>max_attempts</code>, <code>hook_name</code>, <code>tutorial_title</code> — so the 11:08:19Z email rendered exactly three rows (session_id, run_id, workspace_dir) while the stored record carried <code>reason=hook_dispatch_failed</code> and <code>video_id=h5HLLIds53g</code>. <code>reason</code> is the discriminator that decides whether a video retries or is abandoned.</p>
+<ul>
+<li><strong>Fix:</strong> (a) widen <code>_EMAIL_CONTEXT_KEYS</code> — safe, <code>_format_email_html</code> skips empty values; (b) more importantly, fold reason + video_id into the <code>message=</code> f-string in <code>hooks_service.py::_emit_youtube_retry_queued_notification</code> so they reach <code>summary</code>/<code>full_message</code> and survive Telegram, the plaintext part, the Gmail snippet, and the dashboard. Doesn't disturb dedup (<code>_scope_key_for_record</code> keys on run_id).</li>
+</ul>
+<h3 id="t5-alert-bodies-are-emailed-twice-verbatim">T5 — Alert bodies are emailed twice, verbatim</h3>
+<p><strong>File:</strong> <code>src/universal_agent/execution_engine.py</code>, <code>src/universal_agent/hooks_service.py</code></p>
+<ul>
+<li><strong>Proven:</strong> the stored <code>full_message</code> (3,693 chars) already contains <code>EMAIL TRIAGE BRIEF</code> twice — the doubling is upstream of the mailer, not a rendering bug. Reproduced in a second independent alert.</li>
+<li><strong>Root cause:</strong> <code>execution_engine.py</code> deliberately re-emits the complete final response as <code>data={"final": True}</code> for non-streaming consumers. <code>gateway_server.py</code> filters it when streaming was seen; <code>hooks_service.py::_consume_gateway_execute</code> iterates the raw stream and appends <strong>every</strong> TEXT event. The dedup invariant was implemented in one consumer and never extracted.</li>
+<li><strong>Fix:</strong> extract the predicate into a shared <code>execution_engine.py::is_redundant_final_text(event, saw_streaming_text)</code> and call it from <strong>both</strong> consumers, so a third consumer cannot repeat the bug.</li>
+<li><strong>Bonus:</strong> <code>response_preview</code> is a join of the last 8 text events, not a preview — the name lies. Rename or fix.</li>
+</ul>
+<h3 id="t6-daily-8-graph-8-briefs-destroy-numbers-in-bullets">T6 — Daily 8 / Graph 8 briefs destroy numbers in bullets</h3>
+<p><strong>Repo:</strong> <code>~/lrepos/dragan-plugins</code> — <strong>load the <code>dragan-plugins-workflow</code> skill first.</strong>
+<strong>File:</strong> <code>skills/daily-eight-research-loop/scripts/research_loop.py::_fmt_points</code></p>
+<p>Kevin reads these daily. Every brief since 2026-07-20 has 1–4 bullets with the leading number eaten.</p>
+<ul>
+<li><strong>Proven from on-disk VPS source markdown (not from email):</strong> <code>- % discounts</code>, <code>- + organisations</code>, <code>- ,000 scientists</code>, <code>- week validation period</code>, <code>- trillion parameters</code>. All five reproduced with the actual regex. <code>dragan-plugins</code> HEAD == <code>origin/main</code> == <code>fa314ac</code>, clean.</li>
+<li><strong>Root cause:</strong> <code>re.sub(r"^[-*•\d.\s]+", "", ln)</code> — the greedy class includes <code>\d</code> and <code>.</code>, so it eats the bullet's own numeral until the first character outside the class.</li>
+<li><strong>Fix:</strong> <code>re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", ln)</code>. The mandatory trailing <code>\s+</code> is what makes it safe. Fixes Graph 8 too (<code>graph_eight/loop.py</code> calls the same <code>de._append</code>).</li>
+<li><strong>Why this is worse than it looks:</strong> <code>10-week validation period</code> → <code>week validation period</code> and <code>2.8 trillion parameters</code> → <code>trillion parameters</code> both stay grammatical. A reader cannot tell the number was destroyed.</li>
+</ul>
+<h3 id="t7-graph-8-has-never-scraped-an-article-it-has-no-fetch-tool">T7 — Graph 8 has never scraped an article; it has no fetch tool</h3>
+<p><strong>Repo:</strong> <code>~/lrepos/dragan-plugins</code> · <strong>File:</strong> <code>graph_eight/loop.py::_finder</code></p>
+<p>8 highly specific claims per day rest entirely on search snippets, and the run reports success.</p>
+<ul>
+<li><strong>Proven:</strong> today's on-disk briefs — Graph 8 = 0 "Full article scraped" / 8 "Not scraped"; Daily 8 on the same host 32 min later = 5 scraped. Graph 8's <code>metrics.json</code>: <code>appended=8, stop_reason=target_reached, selfcheck=true</code>.</li>
+<li><strong>Root cause:</strong> <code>_finder</code> passes <code>allowed_tools=("WebSearch",)</code> — a one-tool surface. It never registers <code>research_loop::_tooling</code>, so <code>mcp__brief__read_page</code> does not exist in the node. The graph port inherited the coverage-<em>labelling</em> code without porting the coverage-<em>producing</em> stage. The label is truthful; the stage is missing.</li>
+<li><strong>Fix:</strong> (1) build <code>de._tooling(cfg.topic)</code> once per run, pass it to <code>run_node</code>, add <code>mcp__brief__read_page</code> to <code>allowed_tools</code>, and add the Daily-8 step-4 instruction to <code>_finder_prompt</code> — <strong>check first that <code>sdk_graphkit.run_node</code> accepts an <code>mcp_servers</code> arg.</strong> (2) Independently, make <code>_selfcheck</code> fail or warn loudly when zero entries have <code>coverage=='full'</code>. <strong>Ship (2) even if (1) slips</strong> — silent success is the dangerous half.</li>
+</ul>
+<h3 id="t8-watchdog-two-bugs-that-page-falsely-and-bounce-healthy-services">T8 — Watchdog: two bugs that page falsely and bounce healthy services</h3>
+<p><strong>File:</strong> <code>scripts/vps_service_watchdog.sh</code>, <code>src/universal_agent/services/watchdog_restart_notifier.py</code></p>
+<p>Both live on <code>origin/main</code>, both untested.</p>
+<ul>
+<li><strong>(a) An empty <code>is-active</code> result reads as "down."</strong> <code>check_service</code> does <code>active_state="$(systemctl is-active "$svc" 2&gt;/dev/null || true)"</code>, discarding both stderr and the exit status and leaving an empty string that <code>!= "active"</code> treats as stopped. <strong>Seven such restarts fired 08-01 19:41Z–08-02 00:05Z against services PID 1 proves were running continuously; one (api at 20:01) successfully bounced a healthy production service.</strong>
+  Fix: capture rc separately, add <code>timeout 10</code>, and on empty treat it as <code>probe_unavailable</code> → <strong>skip the restart</strong>, with a separate consecutive-probe-failure counter that escalates after N cycles so a genuinely wedged systemd still pages a human. No test in the suite exercises an empty result — add one.</li>
+<li><strong>(b) A failed restart command is reported as flapping.</strong> <code>restart_service</code>'s failure branch passes the <strong>literal <code>1</code></strong> for the escalation arg and the <strong>literal <code>"failed"</code></strong> for post-state, so <code>watchdog_restart_notifier.py::_build_payload</code> renders <code>severity=error</code>, <code>requires_action=True</code>, <code>"Watchdog restarted (flapping)"</code> — next to the self-contradicting body "1x in the last 60m". Four phantom ERRORs were sent; all four services were healthy.
+  Fix: pass <code>"$flapping"</code> and a real post-state probe (<code>restart_command_failed:${new_state:-probe_unavailable}</code>); give restart-command failure its own event branch in the notifier rather than borrowing the flap flag.</li>
+<li><strong>Already disproved — do not chase:</strong> the "ledger not persisting" theory. <code>/var/lib/universal-agent/watchdog/*.restarts</code> are all present with correct epochs and every log line reads <code>flapping=0 restarts_in_window=0</code>.</li>
+</ul>
+<h3 id="t9-two-warning-emails-per-untrusted-inbound-email-no-bulk-lane">T9 — Two warning emails per untrusted inbound email, no bulk lane</h3>
+<p><strong>Depends on T1 — the <code>classification</code> field this needs is currently empty.</strong></p>
+<p>Every untrusted inbound email fires two <code>severity=warning</code> operator emails 54s apart. Per-<code>kind</code> cooldown in <code>notification_dispatcher</code> structurally cannot merge them. There is no bulk/newsletter lane anywhere (<code>grep</code> for <code>List-Unsubscribe</code> / <code>Precedence</code> / <code>bulk</code> → zero hits). The classifier correctly said <code>fyi / p3 / "do not reply"</code> for a vendor newsletter and was ignored by a hard binary.</p>
+<ul>
+<li><strong>Volume reality check:</strong> 3 pairs in 31 days. The alert's "alert fatigue" urgency is <strong>not</strong> supported — so do the merge and the classification-aware downgrade, and leave the bigger question (should arrival notices reach Kevin's inbox at all) for him.</li>
+</ul>
+<h3 id="t10-tutorial-builds-never-get-marked-completed-so-the-funnel-cannot-see-output">T10 — Tutorial builds never get marked completed, so the funnel cannot see output</h3>
+<p><strong>File:</strong> <code>src/universal_agent/services/proactive_demo_nuggets.py</code></p>
+<p>The alert's "conversion stopped, 774 cancelled / 0 completed" is a <strong>measurement artifact.</strong> Tutorials did ship: 4 verified demos on disk Jul 29–Aug 1.</p>
+<ul>
+<li><strong>Root cause:</strong> <code>run_zero_backlog_swipe</code> → <code>sweep_unbuilt_pending_builds</code> only wires the <strong>negative</strong> terminal transition; <code>TASK_STATUS_COMPLETED</code> never appears on this path. A built row is spared for one night via <code>keep_task_ids</code>, then cancelled by the next run — indistinguishable from a rejected candidate. (A Jul 8 backup had <code>completed=127</code>; the mid-July nuggets rework dropped the positive transition.)</li>
+<li><strong>Fix:</strong> after <code>select_and_build_nuggets</code> returns and before the sweep, upsert each <code>built_summary['built']</code> row to <code>TASK_STATUS_COMPLETED</code> with the demo slug/path. <code>prune_settled_tasks(21d)</code> ages them out normally. Extend <code>tests/unit/test_proactive_tutorial_builds.py</code>.</li>
+<li><strong>Do NOT act on the alert's proposed remedy</strong> (pause auto-creation) — it would starve the judge's candidate pool. Creation is ~14.5/day, not 48; open is 14, not 22; the judge gate is a cached, batched Haiku call, so the ZAI-budget premise is unsupported by <code>csi.db token_usage</code>.</li>
+</ul>
+<h3 id="t11-the-end-of-day-swipe-discards-judge-selected-candidates-whose-builds-failed">T11 — The end-of-day swipe discards judge-selected candidates whose builds failed</h3>
+<p><strong>File:</strong> <code>src/universal_agent/services/proactive_demo_nuggets.py</code></p>
+<p><code>run_zero_backlog_swipe</code> builds <code>keep_task_ids</code> solely from <code>built_summary['built']</code> — successful builds. It has no concept of "attempted but failed," so on a total-failure night the candidates the judge rated highest are guaranteed to be swept.</p>
+<ul>
+<li><strong>Blast radius is smaller than the alert claimed:</strong> most swept rows <em>should</em> have been swept (the alert read the upstream CSI <code>score</code>, not the judge's verdict; the judge's own 08-02 scores were all under <code>_DEFAULT_MIN_SCORE = 7.0</code>). And it partly self-heals — <code>task_id</code> is a deterministic <code>sha256(video_id)</code> so CSI re-ingestion upserts rows back to <code>open</code> (5 of 13 came back the same day). <strong>Residual real bug:</strong> a build-worthy candidate whose source video ages out of the intel window is gone with no retry.</li>
+<li><strong>Fix:</strong> accumulate failed-build task_ids in <code>select_and_build_nuggets</code> as <code>attempted_failed</code>; in <code>run_zero_backlog_swipe</code> do <code>keep = built_ids | attempted_failed</code>. <code>sweep_unbuilt_pending_builds</code> already honors <code>keep_task_ids</code>.</li>
+<li><strong>Do NOT</strong> gate the whole swipe on <code>built != []</code> — a night where nothing clears 7.0 legitimately has empty <code>built</code> and should sweep.</li>
+</ul>
+<h3 id="t12-nuggets-health-report-cannot-see-zero-demos-landed">T12 — Nuggets health report cannot see "zero demos landed"</h3>
+<p><strong>File:</strong> <code>scripts/nuggets_health_report.py</code></p>
+<p>This is why the nuggets failure hid for three nights. Three separate defects:</p>
+<ol>
+<li><strong>No <code>builds_ok</code> rule.</strong> <code>build_report</code> has no severity rule keyed on builds landed. Add before the return: if <code>run["builds_attempted"]</code> and not <code>run["builds_ok"]</code> → <code>severity = "error"</code> with <code>f"ZERO DEMOS LANDED — {run['builds_attempted']} attempted, all failed"</code>. Highest-value single line in this handoff.</li>
+<li><strong><code>_parse_run</code> under-counts failures.</strong> It matches the literal <code>build FAILED rc=3</code>; the service emits <code>build FAILED rc=%d</code> for <em>any</em> nonzero rc, plus a <code>build subprocess raised</code> crash branch. Three rc=1 failures currently render as <code>builds_ok=3</code> — a perfect night. Generalize to <code>rc=(\d+)</code>, count the raised branch, keep an rc histogram in the body.</li>
+<li><strong><code>_land_history</code> is contaminated by manual builds.</strong> It globs every <code>/home/ua/lrepos/demo-*/eval_report.json</code>, so a manual controlled build reset <code>days_since</code> to 0 thirty-three minutes <em>after</em> the nightly had landed nothing. Scope to <code>demo-proactive-*/eval_report.json</code>, or carry <code>last_land_nightly</code> separately and gate on that.</li>
+</ol>
+<p><strong>Also — the alert is structurally guaranteed to fire again tomorrow for the wrong reason.</strong> <code>build_report</code> escalates to <code>severity="error"</code> on <code>memory.events max &gt; 0</code>. Under cgroup v2 that counter increments on <em>every successful reclaim</em> under a hard <code>memory.max</code>; with <code>MemoryHigh=infinity</code> and a 6 GiB cap on a job that peaks at 5.5 GiB, nonzero is the <strong>expected steady state</strong>, not a fault (<code>oom</code> and <code>oom_kill</code> were both 0). Split the loop: keep <code>error</code> for <code>oom</code>/<code>oom_kill</code>, demote <code>memory.events max</code> to informational (it is already in the rendered body). The honest throttling signal is <code>memory.events high</code>, already checked correctly.</p>
+<p><strong>Memory itself needs no config change.</strong> Peak 5.14 GiB against the new 6G ceiling looks alarming but <code>memory.events max</code> was 2706 at the 06:06Z mid-run sample and <strong>still 2706</strong> at teardown — zero limit hits after the ceiling was raised live. Worth adding while you're in the file: a headroom warning at <code>memory.peak/memory.max &gt; 0.85</code> — note <code>_parse_run</code>'s regex doesn't capture <code>memory.max</code> today, so there is no denominator yet.</p>
+<h3 id="t13-healthz-is-a-static-stub-and-is-the-ingesters-only-restart-signal">T13 — <code>/healthz</code> is a static stub and is the ingester's only restart signal</h3>
+<p><strong>File:</strong> CSI ingester <code>app.py::healthz</code>, <code>scripts/vps_service_watchdog.sh</code></p>
+<ul>
+<li><strong>The alert's triggering incident was a false positive</strong> — the "3.4h RSS stall" (07:30→11:00 UTC) is CT 02:30→06:00 and <code>schedule_fetch_hours</code> excludes CT 3/4/5. Ingest is healthy (122 events/24h, canary green).</li>
+<li><strong>But the structural claim holds:</strong> <code>healthz</code> returns <code>{"status":"ok"}</code> unconditionally, the watchdog wires it as the sole trigger (heartbeat-file field empty), and the transcript canary is green-on-quiet by design — so a poller wedged inside a live uvicorn is un-restartable and invisible to both monitors.</li>
+<li><strong>Fix:</strong> persist <code>_last_fetch_epoch</code> through the adapter's already-wired <code>set_state_backend</code> (this also kills a secondary bug: it is in-memory only, so 8 restarts on 08-02 caused back-to-back full 443-channel sweeps at 01:06/01:29/01:44); expose <code>csi.rss.seconds_since_fetch</code> via the existing <code>_metrics</code> Prometheus renderer; add a <strong>new</strong> <code>/livez</code> computed from the same schedule config and repoint the watchdog at it with generous grace. <strong>Never change <code>/healthz</code>'s contract under the watchdog.</strong></li>
+</ul>
+<h3 id="t14-ideation-budget-is-spent-on-prompts-not-tasks-dead-by-1005z-daily">T14 — Ideation budget is spent on prompts, not tasks; dead by 10:05Z daily</h3>
+<p><strong>File:</strong> <code>src/universal_agent/heartbeat_service.py</code>, <code>src/universal_agent/services/proactive_budget.py</code>, <code>reflection_engine.py</code></p>
+<ul>
+<li><strong>Proven:</strong> <code>proactive_daily_budget_counter = {"date":"2026-08-02","count":10}</code> at 10:05Z; every tick since ~10:16Z logs <code>daily_budget_exhausted</code>. <strong>Zero</strong> reflection/proactive_signal rows created 08-02.</li>
+<li><strong>Root cause:</strong> the reflection branch calls <code>_increment_nightly_task_count(..., increment=1)</code> <strong>unconditionally at prompt-injection time</strong>, before Simone does anything. <code>proactive_budget.py</code>'s docstring claims it counts tasks created; the only increment site in the tree is that call. <code>reflection_engine.py</code> imports <code>increment_daily_proactive_count</code> and never calls it (dead import). Compounding: the ~1h pacer drips all 10 into 00:00–10:05 <strong>UTC</strong> = 19:00–05:05 CDT — entirely inside dormancy hours.</li>
+<li><strong>Fix:</strong> split the keys — keep <code>proactive_daily_budget_counter</code> as a true task counter incremented from the task_hub insert path for <code>source_kind in ('proactive_signal','reflection')</code>, add <code>proactive_ideation_ticks</code> for pacing. Re-phase the pacer (<code>UA_PROACTIVE_IDEATION_MIN_INTERVAL_SECONDS</code> ≈ 8600s, or window to 06:00–22:00 <code>America/Chicago</code> per the dormancy policy in <code>project_docs/08_operations/03_dormancy_and_operating_hours.md</code>). Fix the lying docstring, drop the dead import, add a test asserting the counter only advances on an actual insert.</li>
+</ul>
+<h3 id="t15-proactive_signal-lane-3436-artifacts-zero-ever-surfaced-by-construction">T15 — <code>proactive_signal</code> lane: 3,436 artifacts, zero ever surfaced, by construction</h3>
+<p><strong>File:</strong> <code>src/universal_agent/services/intelligence_reporter.py</code></p>
+<ul>
+<li><strong>Proven:</strong> <code>SELECT status, delivery_state, COUNT(*) … WHERE source_kind='proactive_signal'</code> returns <strong>one row</strong>: <code>candidate / not_surfaced / 3436</code>, spanning 2026-04-15 → today. Not one surfaced in 3.5 months. Still writing hourly.</li>
+<li><strong>Root cause:</strong> <code>_rank_digest_artifacts</code> draws its pool via <code>list_artifacts(conn, limit=250)</code>, ordered <code>priority DESC, updated_at DESC</code>, with <strong>no delivery filter</strong>. There are 293 lifetime artifacts at <code>priority&gt;=4</code> and they are never archived, so they permanently saturate the 250-row window. Every <code>proactive_signal</code> artifact is <code>priority&lt;=3</code> → structurally unreachable.</li>
+<li><strong>Fix:</strong> call <code>list_artifacts(..., delivery_state=DELIVERY_NOT_SURFACED, limit=250)</code> (the filter already exists in the signature) and reorder to <code>updated_at DESC, priority DESC</code>. Archive artifacts past <code>_STALE_MAX_AGE_DAYS</code>. Pair with a per-lane cap — 264/week of low-priority YouTube transcript insights into a 20-slot digest is a lot of noise.</li>
+</ul>
+<h3 id="t16-vps-disk-the-cleanup-jobs-enumerate-the-big-directory-and-discard-it">T16 — VPS disk: the cleanup jobs enumerate the big directory and discard it</h3>
+<p><strong>File:</strong> <code>src/universal_agent/vp/worktree_utils.py</code>, <code>scripts/vp_coder_workspace_pruner.py</code>, <code>scripts/vp_coder_regenerable_reaper.py</code>
+<strong>Disk is at 90.0% — 0.6pp from CRITICAL.</strong></p>
+<ul>
+<li>The two <code>.venv</code>s the original alert named are already gone. <strong>The blind spot moved:</strong> <code>/opt/universal_agent/.claude/worktrees/fix-reflection-active-count-excludes-cron/.venv</code> = <strong>6.7G</strong> (torch + nvidia + triton, mtime 07-28), belonging to orphan commit <code>709db3ae</code> — on no remote branch, no PR. Both cleanup jobs enumerate it and discard it: <code>worktree_prune_roots()</code> defaults to <code>&lt;repo&gt;/.worktrees</code> only (<code>UA_WORKTREE_PRUNE_ROOTS</code> unset), and the reaper's root-2 is both disabled and excludes <code>.venv</code> by design. The daily reaper logged <code>Reaped 0 … 0.00 MiB</code> on all three of its last runs.</li>
+<li><strong>Fix (structural, yours):</strong> default <code>worktree_prune_roots</code> to <strong>both</strong> <code>.worktrees</code> and <code>.claude/worktrees</code>; teach <code>prune_merged_worktrees</code> to distinguish "PR open" from "<strong>no PR exists</strong>" and age out the latter (today both are skip-forever); add a narrow <code>.venv</code> rule to the regenerable reaper gated on idle + no-open-PR + <code>live_process_inside()</code>.</li>
+<li><strong>Do NOT delete the orphan worktree</strong> — that discards commit <code>709db3ae</code>. Deleting just its <code>.venv</code> is safe and regenerable but is <strong>Kevin's call</strong> (§4).</li>
+<li><strong>Worth flagging in your report:</strong> the alert's root cause is too narrow. <code>/home/ua/lrepos</code> 31G, <code>/var/lib/containerd</code> 16G, huggingface cache 9.4G, <code>.claude-science/conda</code> 12G — all larger, none in any reaper's scope.</li>
+</ul>
+<h3 id="t17-utilization-telemetry-is-a-hardcoded-0-telemetry-half-only">T17 — Utilization telemetry is a hardcoded 0 (telemetry half only)</h3>
+<p><strong>File:</strong> <code>src/universal_agent/heartbeat_service.py</code></p>
+<ul>
+<li><strong>Proven:</strong> <code>MAX(active_slots)=0</code> across <strong>13,689 samples</strong> since 2026-04-18, while 3,122 VP missions completed. <code>git grep acquire_slot</code> → <strong>zero production call sites</strong> for <code>CapacityGovernor.acquire_slot</code>. The sampler is healthy (141 samples/24h, <code>queue_depth</code> max 435 — that signal works); only its source is dead.</li>
+<li><strong>Fix (ship this half):</strong> in the utilization block, source <code>active_slots</code> from real state — running <code>vp_missions</code> + in-progress <code>task_hub_items</code> — using the same query <code>proactive_activity_report.py</code> already uses.</li>
+<li><strong>Do NOT wire <code>acquire_slot</code> into the dispatch paths.</strong> That activates a 2-slot cap that has silently never been enforced and would start throttling live dispatch. It is Kevin's call (§4). Note the second-order finding in your report: <code>can_dispatch()</code> Check 2 is unreachable, so <code>capacity_full</code> can never fire and <code>UA_CAPACITY_MAX_CONCURRENT</code> is an inert knob today.</li>
+</ul>
+<h3 id="t18-episode_ideas-build-failures-report-nothing-but-status-build_failed">T18 — episode_ideas build failures report nothing but "status: build_failed"</h3>
+<p><strong>Repo:</strong> wherever <code>showrunner/</code> lives (not <code>universal_agent</code> — locate it first)
+<strong>File:</strong> <code>showrunner/report.py::_fmt_candidate</code>, <code>showrunner/__main__.py</code></p>
+<p><code>showrunner/dispatch.py::collect_builds</code> persists exit code, log path, workspace, <code>manifest_status</code>, and verdict — and <code>_fmt_candidate</code> prints only <code>row['status']</code>. Two builds failed 08-01/08-02 and neither has been relaunched.</p>
+<ul>
+<li><strong>Fix:</strong> parse <code>row['dispatch']</code> in <code>_fmt_candidate</code> for <code>build_failed</code>/<code>dispatch_failed</code> and emit the token line, <code>manifest_status</code>, and both paths — the data needs zero new plumbing. Add a one-line notify in <code>__main__.py</code>'s <code>watch</code> branch reusing <code>greenlight.py::_notify</code>.</li>
+<li><strong>Related, but owned by the demo_factory session — do not fix here:</strong> both builds ran with the research stage skipped (<code>reason=no_auth</code>) because <code>build_demo.py</code> does no secret bootstrap.</li>
+</ul>
+<h3 id="t19-small-trivial-ship-as-one-pr">T19 — Small, trivial, ship as one PR</h3>
+<ul>
+<li><strong>"Promoted: 0" is a metric with no producer.</strong> <code>'promoted'</code> isn't in <code>VALID_CARD_STATUSES</code> and <code>record_feedback</code> would reject it — pinned at 0 forever. Change <code>proactive_intelligence_report.py::gather_pipeline_stats</code> to count <code>status IN ('actioned','tracking','approved')</code> and relabel. (The substantive half — that no card has ever reached any value-bearing state — is a lane-design question for Kevin, not a bug. Do <strong>not</strong> route it through the intel-auto-promoter: wrong lane, and that cron fires twice daily just to print <code>skipped:disabled_by_env</code>.)</li>
+<li><strong>Ideation report double-counts.</strong> Says 40 when the unique queue is 22 — <code>get_stale_proposals</code> is a strict superset of <code>get_held_proposals</code> and <code>deliver_ideation_report</code> sums both. Subtract the intersection by <code>task_id</code> before counting/rendering; relabel "new" → "held". The backpressure branch already does this (<code>stale = []</code>) — the bug is recognized in one branch and not the other.</li>
+<li><strong>episode_ideas morning email builds broken YouTube links.</strong> <code>showrunner/report.py::link_for</code> special-cases only <code>x:</code> and falls through to <code>youtube.com/watch?v={vid}</code>, so 21 <code>l30:&lt;url&gt;</code> rows render as <code>watch?v=l30:https://github.com/...</code>. <code>hotcards.py::_link</code> handles it correctly — two copies drifted. Hoist one <code>source_link(row)</code> resolver. Rendering-only; the dispatch seed carries the real URL. Same-root sibling: <code>report.py::calibration</code> miscounts every l30 candidate as YouTube.</li>
+<li><strong>Scout "4 sources dead" is a threshold bug, not dead sources.</strong> <code>EMPTY_THRESHOLD=120</code> is one global run-count applied to sources with 3-minute and 30-day natural cadences. <code>hn:whoishiring</code> is a <strong>permanent false positive by construction</strong> — it will exceed 120 empty polls for ~29 days of every 30. The run-side watchdog already solved this correctly with time-based quiet detection after a false-positive day on 07-31; that fix was never carried into <code>scout/digest.py::build_digest</code>. Carry it.</li>
+</ul>
+<hr />
+<h2 id="3-do-not-fix-these-verified-non-issues">3. Do NOT "fix" these — verified non-issues</h2>
+<p>Each of these was alerted on and each is wrong. Touching them makes things worse.</p>
+<table>
+<thead>
+<tr>
+<th>Claim</th>
+<th>Reality</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>leftover_procs=3</code> — orphan leak not closed</td>
+<td>The post-mortem script was counting itself. Fixed by <code>52baa888</code> (#1602); sha256-verified on the VPS; 14/14 guard tests pass; zero actual orphans.</td>
+</tr>
+<tr>
+<td><code>finalize_stale_youtube_runs</code> has no callers — "the safety net is fictional"</td>
+<td>False. The alert grepped a dead near-duplicate. <code>stuck_run_reaper.py::finalize_stale_youtube_hook_runs</code> is live, wired, and finalized the alert's own run at 12:10:25Z.</td>
+</tr>
+<tr>
+<td><code>universal-agent-api</code> / <code>csi-ingester</code> "restart left it failed"</td>
+<td>The units ran uninterrupted across both alerts (<code>NRestarts=0</code>). Fixed by <code>15da9ac7</code> (#1591) + <code>4e288960</code> (#1594).</td>
+</tr>
+<tr>
+<td>Deploy exit-124 on <code>27304f33</code></td>
+<td>Ten later <code>main</code> deploys all green; prod == <code>origin/main</code>. Same two commits.</td>
+</tr>
+<tr>
+<td>Infisical machine identity expired</td>
+<td>Live login returns 200 with a fresh 30-day token, 359 secrets read. Self-healed.</td>
+</tr>
+<tr>
+<td>Stale timers graded healthy</td>
+<td>The four flagged units are weekly/monthly with valid <code>NEXT</code>; <code>proactive_activity_report.py::_classify_systemd</code> is cadence-aware and <strong>was correct</strong>. Adding staleness there would create false degradeds.</td>
+</tr>
+<tr>
+<td>79 parked <code>vp_mission</code>s need triage</td>
+<td><code>parked</code> is a <strong>terminal</strong> status, the canonical retire verb. All 79 were bulk-dispositioned 2026-07-23; <code>prune_settled_tasks</code> deletes them ~2026-08-13. Documented recurring false positive.</td>
+</tr>
+<tr>
+<td>Cron spawn-timeout defect class unswept</td>
+<td><code>d48c6f8c</code> (#1515) bound a <em>code path</em>, not a job — the wrapper is in the generic <code>lightweight</code> branch of <code>_run_job</code>, so all 11 lightweight crons were already covered.</td>
+</tr>
+<tr>
+<td>4 scout sources dead</td>
+<td>None are. Two had already recovered with new rows; HN's August thread isn't posted yet; r/slavelabour matches the ledger to 3 minutes.</td>
+</tr>
+<tr>
+<td>Enrich-button signatures mangled</td>
+<td>False. <code>render_email.py::enrich_link</code> and <code>email_send.py</code> are correct. <strong>Do not touch the enrich gateway</strong> — see the next row.</td>
+</tr>
+<tr>
+<td>Cody mode doc divergence</td>
+<td>Code and <code>CLAUDE.md</code> have agreed on <code>zai</code> since <code>70e60732</code> (#1129), 2026-06-21. The "divergence" was the stale desktop checkout.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-one-that-will-mislead-you-if-you-dont-know-it">The one that will mislead you if you don't know it</h3>
+<p><strong>The Gmail MCP double-decodes quoted-printable on read.</strong> Decisive control on message <code>19fc29402b0f812c</code>: Gmail's server-generated <code>snippet</code> reads <code>peak=5516083200 swap_peak=79826944 swept=13</code>, while the MCP's <code>plaintextBody</code>/<code>htmlBody</code> for the <em>identical</em> message read <code>peakU16083200 swap_peaky826944 swept\x13</code>. <code>quopri.decodestring</code> reproduces the delta 5/5. Any <code>=</code> followed by two hex chars is destroyed — timestamps, byte counts, SHA-256 signatures, URL params.</p>
+<p><strong>Consequences:</strong> (a) do not file a bug with AgentMail and do not "fix" the encoders — they are correct; (b) treat any number read out of a Gmail-MCP body as untrusted, prefer <code>snippet</code> or re-derive from files on disk; (c) if you find the fleet-alert generator and it quotes MCP-decoded bodies, its numeric claims are subject to the same corruption. It was not located during triage — worth finding.</p>
+<hr />
+<h2 id="4-blocked-on-kevin-report-do-not-act">4. Blocked on Kevin — report, do not act</h2>
+<ul>
+<li><strong>Rotate the GitHub PAT embedded in the prod git remote URL.</strong> <code>git remote -v</code> in <code>/opt/universal_agent</code> prints <code>https://x-access-token:&lt;token&gt;@github.com/…</code> with no credential helper. Any agent or transcript that dumps remotes leaks a repo-write credential. After rotation the fix is a deploy key. Rotation touches an external account and can break the deploy mid-flight.</li>
+<li><strong>Turn off the Gmail → <code>kevin.dragan@outlook.com</code> forward</strong> (Settings → Forwarding and POP/IMAP; also check Filters for a "Forward to" action). Only Kevin can. Severity is lower than the alert framed it — 1 DSN in 24h, and the <strong>fleet-alert channel is unaffected</strong>. No UA code path targets that address.</li>
+<li><strong>Reclaim the 6.7 GB orphan <code>.venv</code></strong> (T16) — safe and regenerable, but it is a delete on prod.</li>
+<li><strong>The 3 open <code>codie/*</code> PRs.</strong> All clean and green; auto-merge exclusion is deliberate 2026-05-17 policy with a working disposition path (<code>codie-pr-review-queue.yml</code> → issue #986, 14-day auto-close). <strong>Do not add <code>codie/*</code> back to auto-merge.</strong> Either drain them or raise <code>UA_CODIE_PR_CLOSE_DAYS</code> — #1395 aged out on 07-27 and its work was discarded.</li>
+<li><strong>ZAI has no failover; on error 1310 the fleet stops.</strong> Confirmed in <code>zai_control.py::handle_weekly_exhaustion</code> → <code>set_global_pause</code>. This is an unmade cost decision, not an oversight — #795 left Anthropic on 2026-06-07 precisely because it API-bills the Max SDK path. Cheapest first move: a <code>notify-phone</code> push on a fresh <code>weekly_exhaustion</code> stamp. Note the weekly-budget meter already false-positived once in prod (2026-07-24), which argues against auto-escalation on that signal.</li>
+<li><strong>Wiring <code>acquire_slot</code></strong> (T17) — activates a never-enforced 2-slot cap.</li>
+<li><strong>Whether external-email arrival notices should reach his inbox at all</strong> (T9).</li>
+</ul>
+<hr />
+<h2 id="5-house-rules-for-this-session">5. House rules for this session</h2>
+<ul>
+<li><strong>Branch discipline:</strong> <code>git fetch origin</code> then branch from <code>origin/main</code> — never a bare <code>git checkout -b</code> off local <code>main</code>. The desktop checkout is dirty and parked; if <code>git status</code> is dirty, use <code>git worktree add &lt;tmp&gt; origin/main</code>, build there, remove the worktree after, and leave the original checkout on the branch and files you found it on. Before opening any PR, <code>git rev-list --count origin/main..HEAD</code> must equal the number of commits you actually made.</li>
+<li><strong>One PR per ticket</strong>, <code>claude/&lt;task&gt;</code> naming, then <code>gh pr merge &lt;n&gt; --squash --auto --delete-branch</code>. Never <code>--admin</code>, never a CI bypass. PRs are gated by <code>.github/workflows/pr-validate.yml</code>.</li>
+<li><strong>Docs ship in the same PR as the behavior change.</strong> Find the canonical docs that own the code you touched via their <code>code_paths:</code> frontmatter and update them now — do not defer to the nightly sweep:
+  <code>bash
+  git diff --name-only origin/main...HEAD | while read f; do
+    grep -rl -e "$f" -e "$(dirname "$f")" project_docs --include='*.md'
+  done | sort -u</code></li>
+<li><strong>Cite with symbols (<code>file.py::symbol</code>), never line numbers.</strong> CI enforces this.</li>
+<li><strong>Read before you propose.</strong> <code>CLAUDE.md</code>'s pre-implementation table maps verbs to the canonical service module. Task claiming, stale-run recovery, timeouts, cron registration, and artifact path resolution all have one canonical home — compose with it, don't hand-roll.</li>
+<li><strong>Timeouts:</strong> use the idle / no-progress watchdog (<code>timeout_policy.py::LivenessWatchdog</code>), never a bare wall-clock cap. A wall-clock cap killed live Simone work turns on 2026-06-14.</li>
+<li><strong>Nothing operational runs on the desktop.</strong> Anything recurring is a <code>deployment/systemd/</code> unit deployed to the VPS.</li>
+<li><strong>The desktop checkout's <code>CLAUDE.md</code> is stale</strong> and is injected into every desktop session — it already manufactured one false finding. Reconcile it via a worktree off <code>origin/main</code>; do not force anything over the dirty tree.</li>
+</ul>
+<hr />
+<h2 id="6-report-back">6. Report back</h2>
+<p>State plainly: what shipped (PR numbers + merge status), what you skipped and why, anything in §3 you believe was misjudged (with the evidence that changed your mind), and anything new you found. If a deploy goes red, fix forward or roll back yourself — don't leave it broken.</p></main>
+<footer>Rendered on the tailnet HTML scratchpad · private to your devices.</footer>
+<script>
+(function(){
+  "use strict";
+  var m = location.pathname.match(/\/scratch\/([^\/]+)\//);
+  var parts = location.pathname.split('/').filter(Boolean);
+  var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
+  var KEY = 'scratchReview:' + slug;
+  var comments = [];
+  var lastSel = null;  // most recent text selection inside <main>, kept so "+ Comment" works after the click clears it
+  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
+  var HKEY = 'scratchReviewHistory:' + slug;   // archive of all submitted rounds (never auto-cleared)
+  var history = [];
+  try { history = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch(e){}
+  function persistHistory(){ try{ localStorage.setItem(HKEY, JSON.stringify(history)); }catch(e){} }
+  var viewMode = 'review';  // 'review' (active round) | 'history' (Past comments)
+  function save(){ persist(); render(); applyMarks(); }
+
+  // In-page indicators: highlight the commented text so you can see what you've marked.
+  function clearMarks(){
+    var main=document.querySelector('main'); if(!main) return;
+    main.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+  }
+  function wrapQuote(quote, cid){
+    if(!quote) return; var main=document.querySelector('main'); if(!main) return;
+    var w=document.createTreeWalker(main, NodeFilter.SHOW_TEXT, null), n;
+    while((n=w.nextNode())){
+      if(n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark')) continue;
+      var idx=n.nodeValue.indexOf(quote);
+      if(idx>=0){ var r=document.createRange(); r.setStart(n,idx); r.setEnd(n,idx+quote.length); var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view'; try{ r.surroundContents(mk); }catch(e){} return; }
+    }
+  }
+  function applyMarks(){ clearMarks(); comments.forEach(function(c){ if(c.quote) wrapQuote(c.quote, c.id); }); }
+  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+
+  function headingFor(node){
+    var hs = document.querySelectorAll('main h1[id],main h2[id],main h3[id],main h4[id]');
+    var best=null;
+    for(var i=0;i<hs.length;i++){
+      if(hs[i]===node || (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING)) best=hs[i];
+    }
+    return best;
+  }
+
+  var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
+  var panel=document.createElement('div'); panel.className='sr-panel';
+  panel.innerHTML='<div class="sr-head"><b class="sr-title">Review</b><span class="sr-headbtns"><button type="button" class="sr-clear" data-act="clear">Clear</button><button type="button" class="sr-x" data-act="close">✕</button></span></div>'
+    +'<div class="sr-hint">Highlight text then <b>+ Comment</b>, or <b>+ Note</b> for a general remark. Comments save as you type — add as many as you want. <b>Submit → copy prompt</b> exports your round, archives it under <b>Past</b>, and clears the page for the next round.</div>'
+    +'<div class="sr-list"></div>'
+    +'<div class="sr-actions"></div>';
+  var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
+  var toast=document.createElement('div'); toast.className='sr-toast'; toast.style.display='none';
+  document.body.appendChild(btn); document.body.appendChild(panel); document.body.appendChild(chip); document.body.appendChild(toast);
+
+  function showToast(t){ toast.textContent=t; toast.style.display='block'; setTimeout(function(){toast.style.display='none';},4500); }
+  function openPanel(o){ panel.classList.toggle('sr-open', o!==false); }
+
+  function reviewActionsHTML(){
+    return '<button type="button" class="sr-note" data-act="comment">+ Comment</button>'
+      +'<button type="button" class="sr-note" data-act="note">+ Note</button>'
+      +'<button type="button" class="sr-note" data-act="history">Past'+(history.length?' ('+history.length+')':'')+'</button>'
+      +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button>';
+  }
+  function render(){
+    btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
+    var title=panel.querySelector('.sr-title'), list=panel.querySelector('.sr-list'),
+        actions=panel.querySelector('.sr-actions'), hint=panel.querySelector('.sr-hint');
+    var clr=panel.querySelector('.sr-clear');
+    if(viewMode==='history'){
+      title.textContent='Past comments'; hint.style.display='none'; if(clr) clr.style.display='none';
+      if(!history.length){ list.innerHTML='<div class="sr-empty">No submitted rounds yet.</div>'; }
+      else {
+        var html='';
+        for(var k=history.length-1;k>=0;k--){
+          var h=history[k]; var when=esc((h.submitted_at||'').replace('T',' ').slice(0,16));
+          html+='<div class="sr-round"><div class="sr-rhead"><span>Round '+(k+1)+' · '+when+' · '+h.comments.length+'</span>'
+            +'<button type="button" class="sr-recopy" data-r="'+k+'">copy prompt</button></div>'
+            +h.comments.map(function(c){
+              return '<div class="sr-hitem"><div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span></div>'
+                +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+                +'<div class="sr-hbody">'+esc(c.body||'(no text)')+'</div></div>';
+            }).join('')
+            +'</div>';
+        }
+        list.innerHTML=html;
+      }
+      actions.innerHTML='<button type="button" class="sr-note" data-act="back">← Back to review</button>';
+      return;
+    }
+    title.textContent='Review'; hint.style.display='';
+    if(clr) clr.style.display = comments.length ? '' : 'none';
+    actions.innerHTML=reviewActionsHTML();
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, or <b>+ Note</b>.</div>'; return; }
+    list.innerHTML='';
+    comments.forEach(function(c,i){
+      var row=document.createElement('div'); row.className='sr-item';
+      row.innerHTML='<div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
+        +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+        +'<textarea class="sr-body" data-i="'+i+'" rows="2" placeholder="Your comment…">'+esc(c.body||'')+'</textarea>';
+      list.appendChild(row);
+    });
+  }
+
+  function addComment(quote, heading){
+    comments.push({id:Date.now()+'-'+comments.length, quote:quote||'', heading:heading||'', body:''});
+    save(); openPanel(true);
+    var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus();
+  }
+
+  document.addEventListener('mouseup', function(){
+    setTimeout(function(){
+      var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var main=document.querySelector('main');
+      if(txt && txt.length>1 && sel.rangeCount && main && main.contains(sel.anchorNode)){
+        var r=sel.getRangeAt(0).getBoundingClientRect();
+        chip.style.top=(window.scrollY+r.bottom+6)+'px'; chip.style.left=(window.scrollX+r.left)+'px';
+        var h=headingFor(sel.anchorNode); var hd=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
+        chip.dataset.quote=txt.slice(0,280); chip.dataset.heading=hd;
+        lastSel={quote:txt.slice(0,280), heading:hd};
+        chip.style.display='block';
+      } else { chip.style.display='none'; }
+    },10);
+  });
+  chip.addEventListener('mousedown', function(e){ e.preventDefault(); addComment(chip.dataset.quote, chip.dataset.heading); chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); });
+  btn.addEventListener('click', function(){ openPanel(!panel.classList.contains('sr-open')); render(); });
+  panel.addEventListener('click', function(e){
+    var act=e.target.getAttribute('data-act');
+    if(act==='close') openPanel(false);
+    else if(act==='comment'){ if(lastSel && lastSel.quote){ addComment(lastSel.quote, lastSel.heading); lastSel=null; } else { showToast('Highlight some text on the page first, then “+ Comment”. (Use “+ Note” for a general remark.)'); } }
+    else if(act==='note') addComment('','');
+    else if(act==='submit') submit();
+    else if(act==='history'){ viewMode='history'; render(); }
+    else if(act==='back'){ viewMode='review'; render(); }
+    else if(act==='clear'){ if(comments.length && (typeof confirm!=='function' || confirm('Discard the '+comments.length+' unsubmitted comment(s)? Past history is kept.'))){ comments=[]; persist(); clearMarks(); render(); showToast('Cleared. Past history kept.'); } }
+    else if(e.target.classList.contains('sr-recopy')){ var r=+e.target.getAttribute('data-r'); if(history[r]) copyText(buildPrompt(history[r].comments)).then(function(){ showToast('Round '+(r+1)+' prompt re-copied to the clipboard.'); }).catch(function(){ showToast('Clipboard blocked.'); }); }
+    else if(e.target.classList.contains('sr-del')){ comments.splice(+e.target.getAttribute('data-i'),1); save(); }
+  });
+  panel.addEventListener('input', function(e){
+    if(e.target.classList.contains('sr-body')){ comments[+e.target.getAttribute('data-i')].body=e.target.value; persist(); btn.textContent='💬 Review ('+comments.length+')'; }
+  });
+
+  function buildPrompt(cs){
+    cs = cs || comments;
+    var title=document.title||slug; var L=[];
+    L.push('[scratch-review '+slug+']');
+    L.push('Review of "'+title+'"'); L.push(location.href);
+    L.push('I left '+cs.length+' comment(s); full JSON downloaded to ~/Downloads/scratch-comments-'+slug+'.json'); L.push('');
+    cs.forEach(function(c,i){
+      L.push((i+1)+'. ['+(c.heading?'§ '+c.heading:'note')+'] '+(c.body||'(no text)'));
+      if(c.quote) L.push('   ↳ re: "'+c.quote+'"');
+    });
+    L.push(''); L.push('Re-read the artifact and address each comment, then reply in our chat.');
+    return L.join('\n');
+  }
+  function downloadJSON(){
+    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='scratch-comments-'+slug+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},120);
+  }
+  function copyText(text){
+    if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function(res,rej){ try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res(); }catch(err){ rej(err); } });
+  }
+  function submit(){
+    if(!comments.length){ showToast('No comments yet — highlight text → + Comment, or + Note.'); return; }
+    var text=buildPrompt(comments); downloadJSON();
+    // Archive the round, then clean the slate so the next round starts fresh (no stale
+    // re-highlighting on a revised page). History is kept under "Past".
+    history.push({submitted_at:new Date().toISOString(), comments:comments.slice()}); persistHistory();
+    comments=[]; persist(); clearMarks(); viewMode='review'; render();
+    copyText(text).then(function(){ showToast('Copied — paste into Claude Code. Round archived under “Past”; page cleared for the next round.'); })
+                  .catch(function(){ showToast('JSON downloaded; round archived & cleared. Clipboard blocked — copy from the file.'); });
+  }
+
+  // Click a highlighted span on the page → open the panel and focus that comment.
+  var mainEl=document.querySelector('main');
+  if(mainEl) mainEl.addEventListener('click', function(e){
+    var mk=e.target.closest?e.target.closest('.sr-mark'):null; if(!mk) return;
+    openPanel(true); var idx=-1; comments.forEach(function(c,j){ if(c.id===mk.dataset.cid) idx=j; });
+    if(idx>=0){ var ta=panel.querySelectorAll('.sr-body')[idx]; if(ta){ ta.scrollIntoView({block:'center'}); ta.focus(); } }
+  });
+
+  render(); applyMarks();
+})();
+</script>
+</body></html>
