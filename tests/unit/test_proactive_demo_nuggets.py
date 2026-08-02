@@ -502,3 +502,51 @@ def test_build_runner_returns_completedprocess_on_success():
     assert proc.returncode == 7
     assert proc.stdout == "out"
     assert proc.stderr == "err"
+
+
+# ── a failed build must surface its STDOUT, not just stderr ──────────────────
+def test_build_failure_records_stdout_tail(conn):
+    """build_demo.py writes its stage tokens to stdout, so a failure that logs
+    only stderr throws away the one line that says WHY it degraded.
+
+    Regression for 2026-08-02: a build failed rc=3 in 6m with an empty
+    transcript. The cause -- a single flaked live-auth probe silently dry-ran
+    the whole build, emitting ``GOAL_BUILD: DRYRUN ... auth=<label>`` on stdout
+    -- was invisible in the journal and only recoverable by hand-inspecting the
+    workspace.
+    """
+    _seed_pending_candidate(conn, "tb-a", video_title="Build a RAG agent with the ADK")
+
+    def _failing_runner(argv):
+        return subprocess.CompletedProcess(
+            argv, 3,
+            stdout="GOAL_BUILD: DRYRUN reason=auth_probe_failed auth=oauth-env\n",
+            stderr="non-zero exit\n",
+        )
+
+    result = nuggets.select_and_build_nuggets(
+        dry_run=False,
+        conn=conn,
+        call_llm=_verdict_llm({0: (9.0, True, "specific + novel")}),
+        build_runner=_failing_runner,
+        notifier=_noop_notifier,
+    )
+
+    assert result["built"] == []
+    assert len(result["build_failures"]) == 1
+    failure = result["build_failures"][0]
+    assert failure["returncode"] == 3
+    # stderr is still carried (unchanged contract) ...
+    assert "non-zero exit" in failure["error"]
+    # ... and the stdout diagnosis is no longer discarded.
+    assert "GOAL_BUILD: DRYRUN" in failure["stdout_tail"]
+    assert "auth=oauth-env" in failure["stdout_tail"]
+
+
+def test_tail_helper_truncates_and_tolerates_none():
+    assert nuggets._tail(None) == ""
+    assert nuggets._tail("") == ""
+    assert nuggets._tail("abcdef", limit=3) == "def"
+    # The tail keeps the END of the stream — stage tokens are emitted late.
+    assert nuggets._tail("x" * 900 + "TOKEN").endswith("TOKEN")
+    assert len(nuggets._tail("x" * 2000)) == 800

@@ -456,6 +456,20 @@ def _default_build_runner(argv: list[str]) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
+def _tail(stream: Any, limit: int = 800) -> str:
+    """Last ``limit`` chars of a captured subprocess stream, or "".
+
+    LOAD BEARING — build failures used to log the stderr tail ONLY. ``build_demo.py``
+    writes its stage tokens to STDOUT (``GOAL_BUILD: DRYRUN … auth=<label>``,
+    ``DEMO_VERIFY: …``), so the one line that says *why* a build degraded was
+    captured and then discarded. A 2026-08-02 build failed rc=3 in 6m with an empty
+    transcript; the diagnosis (a single flaked live-auth probe silently dry-ran the
+    whole build) was only recoverable by inspecting the workspace by hand, because
+    the journal held stderr and nothing else.
+    """
+    return str(stream or "")[-limit:]
+
+
 def _register_and_email(
     conn,
     cand: dict[str, Any],
@@ -695,14 +709,16 @@ def select_and_build_nuggets(
                 proc = run_build(argv)
             except subprocess.TimeoutExpired as exc:
                 worker_exit = classify_worker_exit(return_code=None, was_timeout_killed=True)
+                out_tail = _tail(getattr(exc, "output", None))
                 logger.warning(
-                    "nuggets: build TIMEOUT for %s (%s): %s",
-                    e["video_slug"], worker_exit.outcome, exc,
+                    "nuggets: build TIMEOUT for %s (%s): %s || stdout=%s",
+                    e["video_slug"], worker_exit.outcome, exc, out_tail,
                 )
                 summary["build_failures"].append(
                     {"task_id": e["task_id"], "demo_id": f"proactive-{e['video_slug']}",
                      "returncode": None, "worker_exit": worker_exit.outcome,
-                     "error": f"timeout after {_build_timeout_seconds()}s"}
+                     "error": f"timeout after {_build_timeout_seconds()}s",
+                     "stdout_tail": out_tail}
                 )
                 continue
             except Exception as exc:  # noqa: BLE001 — a build crash drops that one, continue
@@ -720,14 +736,16 @@ def select_and_build_nuggets(
             rc = int(getattr(proc, "returncode", 1) or 0)
             worker_exit = classify_worker_exit(return_code=rc)
             if rc != 0:
-                tail = str(getattr(proc, "stderr", "") or "")[-800:]
+                tail = _tail(getattr(proc, "stderr", None))
+                out_tail = _tail(getattr(proc, "stdout", None))
                 logger.warning(
-                    "nuggets: build FAILED rc=%d (%s) for %s: %s",
-                    rc, worker_exit.outcome, e["video_slug"], tail,
+                    "nuggets: build FAILED rc=%d (%s) for %s: stderr=%s || stdout=%s",
+                    rc, worker_exit.outcome, e["video_slug"], tail, out_tail,
                 )
                 summary["build_failures"].append(
                     {"task_id": e["task_id"], "demo_id": f"proactive-{e['video_slug']}",
-                     "returncode": rc, "worker_exit": worker_exit.outcome, "error": tail}
+                     "returncode": rc, "worker_exit": worker_exit.outcome, "error": tail,
+                     "stdout_tail": out_tail}
                 )
                 continue
             built = _register_and_email(conn, e, root=root, notifier=notifier)
