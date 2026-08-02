@@ -307,12 +307,23 @@ def test_undemoable_rename_is_honored(conn, tmp_path):
 
 
 # ── already-built candidates are excluded from re-judging ─────────────────────
-def test_existing_demo_dir_excludes_candidate(conn, tmp_path):
+def test_landed_demo_dir_excludes_candidate(conn, tmp_path):
+    """A LANDED demo (manifest.json present) is not rebuilt.
+
+    This test previously created a bare directory with no manifest and asserted
+    exclusion — which codified the 2026-08-02 defect rather than the intent. A
+    failed build leaves exactly such a bare directory behind, so that assertion
+    made "a build crashed" indistinguishable from "a demo landed". The intent is
+    and always was "don't rebuild what already built"; the manifest is what makes
+    that true. See _demo_dir_exists.
+    """
     from universal_agent.services.tutorial_demo_finalize import proactive_demo_slug
 
     title = "Build a RAG agent with the ADK"
     slug = proactive_demo_slug(title)
-    (tmp_path / "lrepos" / f"demo-proactive-{slug}").mkdir(parents=True)
+    landed = tmp_path / "lrepos" / f"demo-proactive-{slug}"
+    landed.mkdir(parents=True)
+    (landed / "manifest.json").write_text('{"status": "passed"}', encoding="utf-8")
     _seed_pending_candidate(conn, "tb-a", video_title=title)
     calls: list[list[str]] = []
     result = nuggets.select_and_build_nuggets(
@@ -324,6 +335,39 @@ def test_existing_demo_dir_excludes_candidate(conn, tmp_path):
     )
     assert result["candidates_considered"] == 0
     assert calls == []
+
+
+def test_failed_build_debris_does_not_exclude_candidate(conn, tmp_path):
+    """The other half: a leftover dir with NO manifest is failed-build debris.
+
+    The candidate must be considered again, and the debris must be quarantined
+    out of the way first — build_demo.py hard-fails provision_demo on
+    "workspace already exists", so eligibility without quarantine would just
+    burn a build slot.
+    """
+    from universal_agent.services.tutorial_demo_finalize import proactive_demo_slug
+
+    title = "Build a RAG agent with the ADK"
+    slug = proactive_demo_slug(title)
+    root = tmp_path / "lrepos"
+    debris = root / f"demo-proactive-{slug}" / ".build"
+    debris.mkdir(parents=True)
+    (debris / "build_transcript.jsonl").write_text("evidence\n", encoding="utf-8")
+    _seed_pending_candidate(conn, "tb-a", video_title=title)
+    calls: list[list[str]] = []
+    result = nuggets.select_and_build_nuggets(
+        dry_run=False,
+        conn=conn,
+        call_llm=_verdict_llm({0: (9.0, True, "great")}),
+        build_runner=_make_build_runner(record=calls),
+        notifier=_noop_notifier,
+    )
+    assert result["candidates_considered"] == 1
+    assert len(calls) == 1  # it actually rebuilt
+    # The debris was moved aside (preserved, not deleted) so provision_demo can run.
+    quarantined = list(root.glob(f"failed-proactive-{slug}.*"))
+    assert len(quarantined) == 1
+    assert (quarantined[0] / ".build" / "build_transcript.jsonl").read_text() == "evidence\n"
 
 
 # ── new: judge chunking, zero-backlog swipe, tiebreak, default max ─────────────
@@ -550,3 +594,66 @@ def test_tail_helper_truncates_and_tolerates_none():
     # The tail keeps the END of the stream — stage tokens are emitted late.
     assert nuggets._tail("x" * 900 + "TOKEN").endswith("TOKEN")
     assert len(nuggets._tail("x" * 2000)) == 800
+
+
+# ── failed-build debris must not permanently disqualify a candidate ──────────
+def test_demo_dir_without_manifest_does_not_count_as_built(tmp_path):
+    """A dir with no manifest.json is FAILED-build debris, not a landed demo.
+
+    Regression for 2026-08-02: seven candidates going back to 07-20 were stuck
+    invisible this way, including the three highest-scored of that day's run
+    (8.4 / 8.0 / 7.8). They never landed, never errored, and never came back
+    through the deterministic-task_id re-ingest path.
+    """
+    root = tmp_path
+    # Landed: manifest present -> already built, stays skipped.
+    landed = root / "demo-proactive-landed"
+    landed.mkdir()
+    (landed / "manifest.json").write_text("{}", encoding="utf-8")
+    assert nuggets._demo_dir_exists(root, "landed") is True
+
+    # Debris: a build transcript but no manifest -> eligible again.
+    debris = root / "demo-proactive-debris"
+    (debris / ".build").mkdir(parents=True)
+    (debris / ".build" / "build_transcript.jsonl").write_text("{}\n", encoding="utf-8")
+    assert nuggets._demo_dir_exists(root, "debris") is False
+
+    # Un-demoable is a real verdict from a SUCCESSFUL build -> stays skipped.
+    (root / "demo-undemoable-judged").mkdir()
+    assert nuggets._demo_dir_exists(root, "judged") is True
+
+    # Nothing on disk at all -> eligible.
+    assert nuggets._demo_dir_exists(root, "never-seen") is False
+
+
+def test_quarantine_moves_debris_aside_and_preserves_the_transcript(tmp_path):
+    """build_demo.py fails provision_demo on 'workspace already exists', so the
+    debris must be moved before a rebuild — and never deleted, because the build
+    transcript is the forensic record of the previous failure."""
+    root = tmp_path
+    debris = root / "demo-proactive-stuck"
+    (debris / ".build").mkdir(parents=True)
+    (debris / ".build" / "build_transcript.jsonl").write_text("evidence\n", encoding="utf-8")
+
+    dest = nuggets._quarantine_failed_demo_dir(root, "stuck")
+
+    assert dest is not None
+    assert not debris.exists()                      # path is clear for the rebuild
+    assert dest.is_dir()                            # debris preserved, not deleted
+    assert (dest / ".build" / "build_transcript.jsonl").read_text() == "evidence\n"
+    # Must not match the demo-proactive-* glob that feeds _land_history().
+    assert not dest.name.startswith("demo-proactive-")
+    assert list(root.glob("demo-proactive-*/eval_report.json")) == []
+
+
+def test_quarantine_never_touches_a_landed_demo(tmp_path):
+    """A landed demo has a manifest; quarantining it would destroy a real build."""
+    root = tmp_path
+    landed = root / "demo-proactive-landed"
+    landed.mkdir()
+    (landed / "manifest.json").write_text("{}", encoding="utf-8")
+
+    assert nuggets._quarantine_failed_demo_dir(root, "landed") is None
+    assert landed.is_dir()
+    # Nothing on disk at all is also a no-op.
+    assert nuggets._quarantine_failed_demo_dir(root, "absent") is None
