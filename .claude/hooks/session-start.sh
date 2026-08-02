@@ -33,12 +33,27 @@
 
 set -uo pipefail
 
-# Web-only. Local dev manages its own env.
+cd "${CLAUDE_PROJECT_DIR:-$(pwd)}" || exit 0
+
+# --- git hygiene (ALL sessions, local and web) -------------------------------
+# Keeps local `main` at origin/main, prunes dead worktrees, and deletes branches
+# whose work already landed. Without this the desktop checkout drifts — it hit
+# 339 commits behind, 35 worktrees and 413 branches — and agents then read STALE
+# files and report stale conclusions from them.
+#
+# The rest of the tooling only ever DEFENDED against that drift (CLAUDE.md says
+# "branch from origin/main instead"; guard-fresh-branch.sh denies branching off a
+# stale base). Defending is not fixing. This actually removes the drift.
+# Safety contract and per-step guards: scripts/git_hygiene.sh.
+if [ -f scripts/git_hygiene.sh ]; then
+    timeout 60 bash scripts/git_hygiene.sh 2>&1 || \
+        echo "[session-start] git hygiene skipped (non-fatal)"
+fi
+
+# Web-only below this line. Local dev manages its own venv.
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
     exit 0
 fi
-
-cd "${CLAUDE_PROJECT_DIR:-$(pwd)}" || exit 0
 
 # Sanity: only run when we're actually inside this repo.
 if [ ! -f pyproject.toml ]; then
