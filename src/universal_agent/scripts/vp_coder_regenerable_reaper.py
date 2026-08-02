@@ -43,21 +43,26 @@ ACTIVE-MISSION PROTECTION — any direct child of the workspace root whose
 ``mtime`` is within ``UA_VP_CODER_ACTIVE_MISSION_SKIP_HOURS`` (default 6h)
 is skipped entirely. A mission mid-``uv sync`` is never raced.
 
-SECOND ROOT — ``<repo>/.worktrees`` (added 2026-07-25):
+SECOND ROOT — the registered git worktrees (added 2026-07-25):
 ``reap_worktree_regenerable_artifacts`` applies the same idea to the repo's
 registered git worktrees, which are a different tree entirely (created by
 ad-hoc Claude Code sessions running as ``ua``, outside the VP-coder profile
-root, so neither tier above has ever reached them). It is branch-state
-INDEPENDENT in the sense that matters — it does not require a merged PR — but
-it deliberately SKIPS merged trees, because
+root, so neither tier above has ever reached them). Scope comes from
+``vp/worktree_utils.py::worktree_prune_roots``, which as of 2026-08-02 defaults
+to BOTH ``<repo>/.worktrees`` and ``<repo>/.claude/worktrees`` — the harness's
+own worktree directory, previously out of scope, which is where a 6.7 GiB
+``.venv`` sat while this job logged "Reaped 0 … 0.00 MiB" three runs running.
+It is branch-state INDEPENDENT in the sense that matters — it does not require
+a merged PR — but it deliberately SKIPS merged trees, because
 ``vp_coder_workspace_pruner.py::prune_merged_worktrees`` (weekly) removes those
 whole and reclaims strictly more. The daily job's remit is therefore exactly
-"trees whose PR is still open", which is the space no merged-only rule can
-ever touch.
+"trees whose PR is still open, or that never had one".
 
 Its target set is NARROWER than the VP-mission one above and the narrowing is
-the safety story — see ``WORKTREE_REGENERABLE_ARTIFACT_NAMES``. Ships OFF and
-dry-run (``UA_WORKTREE_REGENERABLE_REAP_ENABLED=0``,
+the safety story — see ``WORKTREE_REGENERABLE_ARTIFACT_NAMES``, plus the single
+no-PR exception in ``WORKTREE_NO_PR_ARTIFACT_NAMES`` (``.venv``, and only for a
+tree that is idle, has nothing running inside it, and never had a pull request
+at all). Ships OFF and dry-run (``UA_WORKTREE_REGENERABLE_REAP_ENABLED=0``,
 ``UA_WORKTREE_REGENERABLE_REAP_DRY_RUN=1``).
 
 Registration: ``gateway_server._ensure_vp_coder_regenerable_reap_cron_job``
@@ -86,6 +91,7 @@ from universal_agent.utils.env_utils import env_flag, env_int
 from universal_agent.vp.profiles import get_vp_profile
 from universal_agent.vp.worktree_utils import (
     detect_repo_root,
+    gh_pr_exists,
     gh_pr_merged_at,
     list_registered_worktrees,
     live_process_inside,
@@ -148,6 +154,28 @@ _HARD_EXCLUDED_FILENAMES: frozenset[str] = frozenset({"activity_state.db"})
 WORKTREE_REGENERABLE_ARTIFACT_NAMES: frozenset[str] = frozenset(
     {"__pycache__", ".pytest_cache", ".ruff_cache"}
 )
+
+# The ONE name that the base allowlist above excludes but a worktree with NO
+# PULL REQUEST AT ALL may still give up (added 2026-08-02). Narrow on purpose:
+# ``.venv`` only, and only in that one branch state.
+#
+# The reasoning that keeps ``.venv`` out of the base set is a COST argument, not
+# a safety one: nothing in UA runs ``uv sync`` in a worktree, so a worktree
+# ``.venv`` exists because a human or an agent typed it, and reaping it bills
+# the next session in that tree a multi-minute, mostly-re-downloaded rebuild.
+# That cost is real when somebody is coming back — i.e. when a PR is open. It is
+# imaginary when no PR was ever opened, the tree has been untouched for days,
+# and no process has it mapped: nobody is coming back to pay it. That is exactly
+# the state of the orphan worktree measured on prod 2026-08-02, whose ``.venv``
+# held 6.7 GiB of torch + nvidia + triton while the box sat at 90.0% disk.
+#
+# This never widens on its own: the name enters scope per-worktree, only after
+# that tree has passed the idle, no-live-process and no-PR gates, and only while
+# ``UA_WORKTREE_REGENERABLE_REAP_NO_PR_VENV_ENABLED`` is on. Do NOT add other
+# names here — ``node_modules`` holds tracked content in this repo, and
+# ``dist`` / ``build`` / ``.next`` are plausible tracked directory names in a
+# full checkout.
+WORKTREE_NO_PR_ARTIFACT_NAMES: frozenset[str] = frozenset({".venv"})
 
 # Never descend into these while hunting for targets, in EITHER root: they are
 # either out of scope by policy (``.venv`` / ``node_modules`` in a worktree),
@@ -573,6 +601,8 @@ def reap_worktree_regenerable_artifacts(
     enabled: Optional[bool] = None,
     dry_run: Optional[bool] = None,
     merged_at: Optional[Callable[[str], Optional[datetime]]] = None,
+    pr_exists: Optional[Callable[[str], Optional[bool]]] = None,
+    no_pr_venv: Optional[bool] = None,
     now: Optional[float] = None,
 ) -> list[dict]:
     """Reap regenerable artifacts from registered git worktrees.
@@ -609,6 +639,22 @@ def reap_worktree_regenerable_artifacts(
          tracks nothing inside it.
       9. The existing hard excludes still apply: the live repo ``.venv`` and
          ``activity_state.db``.
+
+    ``.venv`` — the narrow no-PR exception (2026-08-02). A worktree ``.venv``
+    stays out of the allowlist above, because reaping one bills the next session
+    in that tree a multi-minute rebuild. It enters scope for ONE tree at a time,
+    and only when all three of these hold together:
+
+      * the tree passed gates 6 and 7 above (idle for ``idle_hours`` on both its
+        own mtime and the newest non-cache mtime beneath it; no process with a
+        cwd, exe, or mapping inside it), AND
+      * ``pr_exists(branch)`` answers a definite ``False`` — no pull request was
+        EVER opened for the branch (``None`` = unknown = ``.venv`` stays), AND
+      * the ``.venv`` directory's own mtime is older than the idle window too.
+
+    That is the state of an abandoned tree, not a paused one: no PR, days idle,
+    nothing running. Gated by ``UA_WORKTREE_REGENERABLE_REAP_NO_PR_VENV_ENABLED``
+    (default on, inside a job that itself ships off).
 
     Returns one record per candidate (``action`` in ``reaped`` / ``would-reap``
     / ``skipped``) for observability.
@@ -647,6 +693,12 @@ def reap_worktree_regenerable_artifacts(
     )
     now_ts = now if now is not None else time.time()
     merged_at = merged_at or gh_pr_merged_at
+    pr_exists = pr_exists or gh_pr_exists
+    no_pr_venv = (
+        env_flag("UA_WORKTREE_REGENERABLE_REAP_NO_PR_VENV_ENABLED", True)
+        if no_pr_venv is None
+        else no_pr_venv
+    )
     live_repo_venv = _live_repo_venv_path()
 
     if not reap_names:
@@ -746,14 +798,41 @@ def reap_worktree_regenerable_artifacts(
                      "a running process has its cwd/exe/mapping inside this worktree")
             continue
 
-        tracked_dirs = tracked_artifact_dirs(wt_path, reap_names)
+        # Only now — after idle AND no-live-process are both proven for this
+        # tree — do we ask whether a PR was ever opened, and let ``.venv`` into
+        # scope for this tree alone if the answer is a definite "never".
+        tree_names = reap_names
+        if no_pr_venv:
+            exists = pr_exists(branch)
+            if exists is None:
+                logger.info(
+                    "worktree-regenerable-reap %s (branch=%s): could not determine "
+                    "whether a PR exists; .venv stays (fail-closed).",
+                    wt_path, branch,
+                )
+            elif exists:
+                logger.debug(
+                    "worktree-regenerable-reap %s (branch=%s): a PR exists; "
+                    ".venv stays (somebody is coming back to it).",
+                    wt_path, branch,
+                )
+            else:
+                tree_names = reap_names | WORKTREE_NO_PR_ARTIFACT_NAMES
+                logger.warning(
+                    "worktree-regenerable-reap NO-PR %s (branch=%s): no pull request "
+                    "was ever opened and the tree is idle with nothing running in "
+                    "it — %s now in scope for this tree.",
+                    wt_path, branch, sorted(WORKTREE_NO_PR_ARTIFACT_NAMES),
+                )
+
+        tracked_dirs = tracked_artifact_dirs(wt_path, tree_names)
         if tracked_dirs is None:
             _wt_skip(records, wt_path, branch,
                      "could not determine git-tracked content (fail-closed)")
             continue
 
         for artifact_path in _find_regenerable_targets(
-            wt_path, cutoff, live_repo_venv, names=reap_names
+            wt_path, cutoff, live_repo_venv, names=tree_names
         ):
             try:
                 relative = artifact_path.relative_to(wt_path).as_posix()
@@ -777,6 +856,27 @@ def reap_worktree_regenerable_artifacts(
                 _wt_skip(records, wt_path, branch, "runtime DB (hard exclude)",
                          artifact=artifact_path)
                 continue
+
+            # The no-PR names carry one extra gate the free-to-rebuild caches do
+            # not: the artifact's OWN mtime must be past the idle window. The
+            # tree-level quiescence probe deliberately ignores ``.venv``, so a
+            # venv rebuilt yesterday inside an otherwise-still tree would
+            # otherwise qualify.
+            if artifact_path.name in WORKTREE_NO_PR_ARTIFACT_NAMES:
+                try:
+                    artifact_mtime = artifact_path.stat().st_mtime
+                except OSError as exc:
+                    _wt_skip(records, wt_path, branch,
+                             f"could not stat artifact (fail-closed): {exc}",
+                             artifact=artifact_path)
+                    continue
+                if artifact_mtime > cutoff:
+                    _wt_skip(records, wt_path, branch,
+                             f"{artifact_path.name} touched "
+                             f"{(now_ts - artifact_mtime) / 3600:.1f}h ago "
+                             f"(< {idle_seconds // 3600}h quiescence)",
+                             artifact=artifact_path)
+                    continue
 
             size_bytes: Optional[int] = None
             try:

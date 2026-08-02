@@ -490,6 +490,24 @@ def worktree_estate(tmp_path: Path) -> dict:
     return {"repo": repo, "origin": origin, "roots": roots, "wts": wts}
 
 
+def _pr_exists_stub(no_pr_branches: set[str] | None = None, unknown: bool = False):
+    """Injected stand-in for ``gh_pr_exists`` — no network in unit tests.
+
+    Default: every branch HAS a pull request, which is the pre-2026-08-02 world
+    and keeps ``.venv`` firmly out of scope. Only branches named in
+    ``no_pr_branches`` unlock the narrow no-PR ``.venv`` rule.
+    """
+
+    named = no_pr_branches or set()
+
+    def _lookup(branch: str):
+        if unknown:
+            return None
+        return branch not in named
+
+    return _lookup
+
+
 def _run_reap(estate: dict, **kwargs) -> dict:
     records = reaper_mod.reap_worktree_regenerable_artifacts(
         repo_root=estate["repo"],
@@ -497,6 +515,7 @@ def _run_reap(estate: dict, **kwargs) -> dict:
         enabled=kwargs.pop("enabled", True),
         dry_run=kwargs.pop("dry_run", False),
         merged_at=kwargs.pop("merged_at", _merged_at_stub({"claude/merged"})),
+        pr_exists=kwargs.pop("pr_exists", _pr_exists_stub()),
         idle_hours=kwargs.pop("idle_hours", 72),
         **kwargs,
     )
@@ -629,6 +648,118 @@ class TestWorktreeRegenerableReap:
             for entry in rec:
                 assert entry["reason"], f"{key} reported without a reason"
                 assert entry["action"] in {"reaped", "would-reap", "skipped"}
+
+
+class TestWorktreeNoPrVenvReap:
+    """The narrow ``.venv`` rule (2026-08-02).
+
+    A worktree ``.venv`` is not free to rebuild, so it stays out of the base
+    allowlist. It becomes reapable for ONE tree only when three things hold at
+    once — the tree is idle, nothing is running inside it, and no pull request
+    was EVER opened for its branch. That combination describes an abandoned
+    tree, which is what a 6.7 GiB ``.venv`` of torch + nvidia + triton was
+    sitting in while the VPS reported 90.0% disk.
+    """
+
+    def _venv_of(self, wt: Path) -> Path:
+        return wt / ".venv"
+
+    def test_venv_survives_when_a_pr_exists(self, worktree_estate):
+        """Two of three gates are not enough: idle + nothing running, but the
+        PR is open, so somebody is coming back to pay the rebuild."""
+        wt = worktree_estate["wts"]["idle"]
+        records = _run_reap(worktree_estate, pr_exists=_pr_exists_stub())
+        assert ".venv" not in {r["artifact_name"] for r in _for(records, wt)}
+        assert (self._venv_of(wt) / "lib" / "__pycache__" / "deep.pyc").exists()
+
+    def test_venv_is_reaped_when_no_pr_ever_existed(self, worktree_estate, caplog):
+        caplog.set_level("INFO")
+        wt = worktree_estate["wts"]["idle"]
+        records = _run_reap(
+            worktree_estate, pr_exists=_pr_exists_stub({"claude/idle"}),
+        )
+        reaped = {
+            r["artifact_name"] for r in _for(records, wt) if r["action"] == "reaped"
+        }
+        assert reaped == {"__pycache__", ".ruff_cache", ".venv"}
+        assert not self._venv_of(wt).exists()
+        # Source, git metadata and everything else still out of scope survive.
+        assert (wt / "idle.py").exists()
+        assert (wt / ".git").exists()
+        assert (wt / "node_modules" / "pkg" / "index.js").exists()
+        assert (wt / "dist" / "bundle.js").exists()
+        assert _git(wt, "status", "--porcelain") == ""
+        assert "worktree-regenerable-reap NO-PR" in caplog.text
+
+    def test_unknown_pr_state_leaves_the_venv_alone(self, worktree_estate):
+        wt = worktree_estate["wts"]["idle"]
+        records = _run_reap(
+            worktree_estate, pr_exists=_pr_exists_stub(unknown=True),
+        )
+        assert ".venv" not in {r["artifact_name"] for r in _for(records, wt)}
+        assert self._venv_of(wt).exists()
+
+    def test_a_freshly_touched_venv_is_not_reaped(self, worktree_estate):
+        """The tree-level quiescence probe deliberately ignores ``.venv``, so
+        the artifact carries its own mtime gate."""
+        wt = worktree_estate["wts"]["idle"]
+        os.utime(self._venv_of(wt), None)  # a `uv sync` an hour ago
+        records = _run_reap(
+            worktree_estate, pr_exists=_pr_exists_stub({"claude/idle"}),
+        )
+        venv_recs = [r for r in _for(records, wt) if r["artifact_name"] == ".venv"]
+        assert [r["action"] for r in venv_recs] == ["skipped"]
+        assert "quiescence" in venv_recs[0]["reason"]
+        assert self._venv_of(wt).exists()
+
+    def test_busy_tree_keeps_its_venv_even_with_no_pr(self, worktree_estate):
+        """Gate order: a non-quiescent tree never reaches the PR question."""
+        wt = worktree_estate["wts"]["busy"]
+        records = _run_reap(
+            worktree_estate, pr_exists=_pr_exists_stub({"claude/busy"}),
+        )
+        assert [r["action"] for r in _for(records, wt)] == ["skipped"]
+        assert self._venv_of(wt).exists()
+
+    def test_live_process_keeps_the_venv_even_with_no_pr(self, worktree_estate):
+        wt = worktree_estate["wts"]["idle"]
+        proc = subprocess.Popen(["sleep", "45"], cwd=str(wt))
+        try:
+            records = _run_reap(
+                worktree_estate, pr_exists=_pr_exists_stub({"claude/idle"}),
+            )
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+        assert [r["action"] for r in _for(records, wt)] == ["skipped"]
+        assert self._venv_of(wt).exists()
+
+    def test_rule_can_be_switched_off(self, worktree_estate):
+        wt = worktree_estate["wts"]["idle"]
+        records = _run_reap(
+            worktree_estate,
+            pr_exists=_pr_exists_stub({"claude/idle"}),
+            no_pr_venv=False,
+        )
+        assert ".venv" not in {r["artifact_name"] for r in _for(records, wt)}
+        assert self._venv_of(wt).exists()
+
+    def test_dry_run_reaps_no_venv(self, worktree_estate):
+        wt = worktree_estate["wts"]["idle"]
+        records = _run_reap(
+            worktree_estate,
+            pr_exists=_pr_exists_stub({"claude/idle"}),
+            dry_run=True,
+        )
+        venv_recs = [r for r in _for(records, wt) if r["artifact_name"] == ".venv"]
+        assert [r["action"] for r in venv_recs] == ["would-reap"]
+        assert self._venv_of(wt).exists()
+
+    def test_the_no_pr_set_is_venv_only(self):
+        """Pinned: this exception must never grow. ``node_modules`` holds
+        tracked content in this repo; ``dist`` / ``build`` / ``.next`` are
+        plausible tracked directory names in a full checkout."""
+        assert reaper_mod.WORKTREE_NO_PR_ARTIFACT_NAMES == frozenset({".venv"})
 
 
 class TestWorktreeReapNames:

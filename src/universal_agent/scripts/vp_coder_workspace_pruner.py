@@ -76,7 +76,21 @@ neither is skipped for convenience.
 This tier is the first code in the estate that deletes git-managed state
 on a timer, so it ships **disabled and dry-run by default**
 (``UA_WORKTREE_PRUNE_ENABLED=0``, ``UA_WORKTREE_PRUNE_DRY_RUN=1``) and
-every candidate is logged with its removal-or-skip reason.
+every candidate is logged with its removal-or-skip reason. Production arms it
+(``scripts/deploy/remote_deploy.sh`` writes ``=1`` / ``=0`` into the prod
+``.env``), so changes here reach live deletions on the next weekly run.
+
+**THE THIRD BRANCH STATE (2026-08-02).** ``gh_pr_merged_at`` answers ``None``
+both when a PR is open and when no PR was ever opened, and this tier used to
+skip both forever. Meanwhile ``worktree_prune_roots`` defaulted to
+``<repo>/.worktrees`` alone, so the harness's own ``<repo>/.claude/worktrees``
+was out of scope entirely. Together those two gaps let an orphan worktree —
+branch on no remote, no PR, holding a **6.7 GiB** ``.venv`` (torch + nvidia +
+triton) — be enumerated and discarded by BOTH cleanup jobs on every run while
+the VPS sat at 90.0% disk and the daily reaper logged "Reaped 0 … 0.00 MiB".
+Both are fixed: the default root list now covers both directories, and
+``prune_merged_worktrees`` distinguishes merged / PR-open / no-PR, aging out
+only the last of those and only behind four gates (see its docstring).
 """
 
 from __future__ import annotations
@@ -91,10 +105,14 @@ import sys
 import time
 from typing import Callable, Optional
 
-# Reuse the daily reaper's best-effort du rather than writing a second one.
-from universal_agent.scripts.vp_coder_regenerable_reaper import _dir_size_bytes
+# Reuse the daily reaper's best-effort du and its cache-blind quiescence probe
+# rather than writing a second one of either.
+from universal_agent.scripts.vp_coder_regenerable_reaper import (
+    _dir_size_bytes,
+    _newest_activity_mtime,
+)
 from universal_agent.session.reaper import cleanup_stale_workspaces
-from universal_agent.utils.env_utils import env_flag as _env_flag
+from universal_agent.utils.env_utils import env_flag as _env_flag, env_int
 from universal_agent.vp.profiles import get_vp_profile
 
 # Shared with the daily worktree reap — one copy in worktree_utils so the two
@@ -105,6 +123,7 @@ from universal_agent.vp.worktree_utils import (
     GIT_TIMEOUT_S as _GIT_TIMEOUT_S,
     RegisteredWorktree,
     detect_repo_root,
+    gh_pr_exists as _gh_pr_exists,
     gh_pr_merged_at as _gh_pr_merged_at,
     list_registered_worktrees,
     live_process_inside as _live_process_inside,
@@ -192,6 +211,21 @@ def _min_merge_age_hours(default: int = 24) -> int:
     return value if value > 0 else default
 
 
+def _no_pr_min_age_days(default: int = 7) -> int:
+    """Age-out window for a worktree whose branch has NO pull request at all.
+
+    Default 7 days, override via ``UA_WORKTREE_PRUNE_NO_PR_MIN_AGE_DAYS``.
+    Deliberately an order of magnitude more generous than the merged lane's 24h:
+    a merged PR is positive proof the work landed, whereas "no PR exists" is
+    only the ABSENCE of evidence, and the harness's own agent worktrees (under
+    ``.claude/worktrees``) legitimately live in that state while a session is
+    mid-flight. Age is not the whole safety story here — see
+    ``prune_merged_worktrees``'s no-PR gate list — it is the slowest of four.
+    """
+    days = env_int("UA_WORKTREE_PRUNE_NO_PR_MIN_AGE_DAYS", default, minimum=1)
+    return days
+
+
 def _fetch_base(repo_root: Path, base_ref: str) -> bool:
     """Freshen the base remote-tracking ref (e.g. ``origin/main``).
 
@@ -215,8 +249,17 @@ def _fetch_base(repo_root: Path, base_ref: str) -> bool:
     return True
 
 
-def _skip(records: list[dict], wt: RegisteredWorktree, reason: str) -> None:
-    logger.info("worktree-prune SKIP %s (branch=%s): %s", wt.path, wt.branch, reason)
+def _skip(
+    records: list[dict],
+    wt: RegisteredWorktree,
+    reason: str,
+    *,
+    lane: Optional[str] = None,
+) -> None:
+    logger.info(
+        "worktree-prune SKIP %s (branch=%s, lane=%s): %s",
+        wt.path, wt.branch, lane or "-", reason,
+    )
     records.append(
         {
             "worktree": str(wt.path),
@@ -224,6 +267,7 @@ def _skip(records: list[dict], wt: RegisteredWorktree, reason: str) -> None:
             "action": "skipped",
             "reason": reason,
             "size_bytes": None,
+            "lane": lane,
         }
     )
 
@@ -234,27 +278,48 @@ def prune_merged_worktrees(
     allowed_roots: Optional[list[Path]] = None,
     base_ref: Optional[str] = None,
     merged_at: Optional[Callable[[str], Optional[datetime]]] = None,
+    pr_exists: Optional[Callable[[str], Optional[bool]]] = None,
     min_merge_age_hours: Optional[int] = None,
+    no_pr_min_age_days: Optional[int] = None,
+    no_pr_enabled: Optional[bool] = None,
     enabled: Optional[bool] = None,
     dry_run: Optional[bool] = None,
     now: Optional[float] = None,
     fetch: bool = True,
 ) -> list[dict]:
-    """Remove registered git worktrees whose branch is provably merged.
+    """Remove registered git worktrees that are provably merged, or abandoned.
 
     Every I/O dependency is injectable so unit tests never touch the network
     (mirrors ``vp_coder_regenerable_reaper.reap_regenerable_artifacts``).
 
-    A candidate is removed only when ALL of these hold; anything that errors
-    or is unknown means SKIP (fail-closed), and every skip is logged with its
-    reason:
+    THREE branch states, not two (2026-08-02). ``gh_pr_merged_at`` alone
+    collapses "a PR is open" and "no PR was ever opened" into one ``None``, and
+    this job used to skip both forever. That is how an orphan worktree — branch
+    on no remote, no PR, holding a 6.7 GiB ``.venv`` — outlived every run of
+    both cleanup jobs while the VPS sat at 90.0% disk. The two states now take
+    different lanes:
+
+      * **PR merged** — the MERGED lane below (unchanged).
+      * **PR open (or closed unmerged)** — skip, unchanged and forever. Work in
+        flight is not ours to delete at any age.
+      * **No PR at all** — the NO-PR lane: age out, but only under gates
+        strictly stronger than the merged lane's, because "no PR" is the
+        absence of evidence rather than proof of anything.
+
+    Gates 1-6 apply to EVERY candidate; anything that errors or is unknown
+    means SKIP (fail-closed), and every skip is logged with its reason:
 
       1. It came from ``git worktree list --porcelain`` (never a filesystem walk).
       2. It is not the main working tree and not ``bare``.
       3. Its parent directory is in ``allowed_roots``.
       4. It is not ``detached`` (no branch => no PR to resolve).
       5. It is not ``locked`` (git's own do-not-touch marker).
-      6. ``git status --porcelain`` is empty.
+      6. ``git status --porcelain`` is empty. This is the gate that protects
+         uncommitted work in BOTH lanes, and ``teardown_worktree(force=False)``
+         makes git re-check it independently at the removal step.
+
+    MERGED lane (all unchanged):
+
       7. ``refs/remotes/origin/<branch>`` resolves AND nothing is unpushed.
       8. The branch is merged — ``git merge-base --is-ancestor`` against the
          freshly-fetched base ref, OR (because this repo squash-merges) a
@@ -266,8 +331,32 @@ def prune_merged_worktrees(
          identical instant, so *file* mtimes are not an idleness signal here.
      10. No running process has its cwd inside the tree.
 
+    NO-PR lane (``pr_exists`` must answer a definite ``False``; ``None`` skips):
+
+     N1. The worktree DIRECTORY's mtime is at least ``no_pr_min_age_days``
+         old (default 7d, ``UA_WORKTREE_PRUNE_NO_PR_MIN_AGE_DAYS``).
+     N2. The newest mtime ANYWHERE beneath it — caches, ``.git``, ``.venv`` and
+         ``node_modules`` excluded — is at least that old too. The directory's
+         own mtime does not move when a session edits a file three levels down,
+         and the harness's agent worktrees under ``.claude/worktrees`` can be
+         genuinely active while committed-and-clean; this is the gate that sees
+         them.
+     N3. The branch TIP COMMIT is at least that old. A fresh commit on an
+         abandoned-looking tree means somebody is working in it right now.
+     N4. No running process has its cwd, exe, or a mapped file inside the tree
+         (``deep=True`` — stricter than the merged lane's cwd-only check,
+         because a ``.venv`` in use is bound by exe/mmap, not by cwd).
+
+    Gate 7 is NOT applied in the no-PR lane and cannot be: a branch that never
+    opened a PR has by definition never been pushed, so demanding a
+    remote-tracking ref would make the lane unreachable. What keeps that safe is
+    that ``git worktree remove`` deletes the checkout and the admin files only —
+    the branch ref and every commit on it survive in the repo, so a mistaken
+    removal costs a ``git worktree add`` and no data.
+
     Returns one record per candidate (``action`` in ``removed`` /
-    ``would-remove`` / ``skipped`` / ``failed``) for observability.
+    ``would-remove`` / ``skipped`` / ``failed``, plus ``lane``) for
+    observability.
     """
 
     enabled = _env_flag("UA_WORKTREE_PRUNE_ENABLED", False) if enabled is None else enabled
@@ -280,8 +369,19 @@ def prune_merged_worktrees(
     dry_run = _env_flag("UA_WORKTREE_PRUNE_DRY_RUN", True) if dry_run is None else dry_run
     base_ref = base_ref or (os.getenv("UA_WORKTREE_PRUNE_BASE_REF") or "origin/main").strip()
     min_age_h = min_merge_age_hours if min_merge_age_hours is not None else _min_merge_age_hours()
+    no_pr_days = (
+        no_pr_min_age_days if no_pr_min_age_days is not None else _no_pr_min_age_days()
+    )
+    # Kill switch for the whole no-PR lane. Default ON: the lane's own four
+    # gates are the safety, and a lane that ships off is a fix that never fires.
+    no_pr_enabled = (
+        _env_flag("UA_WORKTREE_PRUNE_NO_PR_ENABLED", True)
+        if no_pr_enabled is None
+        else no_pr_enabled
+    )
     now_ts = now if now is not None else time.time()
     merged_at = merged_at or _gh_pr_merged_at
+    pr_exists = pr_exists or _gh_pr_exists
 
     try:
         repo = (repo_root or detect_repo_root()).resolve()
@@ -291,8 +391,10 @@ def prune_merged_worktrees(
 
     roots = [Path(r).resolve() for r in (allowed_roots or _prune_roots(repo))]
     logger.info(
-        "Merged-worktree prune: repo=%s roots=%s base_ref=%s min_merge_age=%dh dry_run=%s",
-        repo, [str(r) for r in roots], base_ref, min_age_h, dry_run,
+        "Merged-worktree prune: repo=%s roots=%s base_ref=%s min_merge_age=%dh "
+        "no_pr_lane=%s (min_age=%dd) dry_run=%s",
+        repo, [str(r) for r in roots], base_ref, min_age_h,
+        "on" if no_pr_enabled else "off", no_pr_days, dry_run,
     )
 
     # Free bonus: drops administrative metadata for worktrees whose directory
@@ -361,29 +463,38 @@ def prune_merged_worktrees(
             _skip(records, wt, f"dirty working tree ({n} changed/untracked entr(ies))")
             continue
 
-        # 7. nothing unpushed. A missing remote-tracking ref is ambiguous
-        # (never-pushed vs pruned-after-merge) => skip.
+        # 7. pushed-state evidence. HARD GATE for the merged lane (unchanged):
+        # a missing remote-tracking ref is ambiguous (never-pushed vs
+        # pruned-after-merge) and unpushed commits mean work that never landed.
+        # Evaluated here (before any network call, as before) but ENFORCED after
+        # the lane is known — a never-pushed branch is the defining trait of the
+        # no-PR lane, not a reason to skip it.
         tracking = f"refs/remotes/origin/{branch}"
+        push_ok = False
+        push_reason = ""
         have_ref = _run(
             ["git", "rev-parse", "--verify", "--quiet", tracking],
             cwd=repo, timeout=_GIT_TIMEOUT_S,
         )
         if have_ref is None or have_ref.returncode != 0:
-            _skip(records, wt, f"no remote-tracking ref {tracking} (cannot prove pushed)")
-            continue
-        ahead = _run(
-            ["git", "rev-list", "--count", f"{tracking}..{branch}"],
-            cwd=repo, timeout=_GIT_TIMEOUT_S,
-        )
-        if ahead is None or ahead.returncode != 0:
-            _skip(records, wt, "could not count unpushed commits")
-            continue
-        if (ahead.stdout.strip() or "0") != "0":
-            _skip(records, wt, f"{ahead.stdout.strip()} unpushed commit(s) vs {tracking}")
-            continue
+            push_reason = f"no remote-tracking ref {tracking} (cannot prove pushed)"
+        else:
+            ahead = _run(
+                ["git", "rev-list", "--count", f"{tracking}..{branch}"],
+                cwd=repo, timeout=_GIT_TIMEOUT_S,
+            )
+            if ahead is None or ahead.returncode != 0:
+                push_reason = "could not count unpushed commits"
+            elif (ahead.stdout.strip() or "0") != "0":
+                push_reason = f"{ahead.stdout.strip()} unpushed commit(s) vs {tracking}"
+            else:
+                push_ok = True
+                push_reason = f"nothing unpushed vs {tracking}"
 
-        # 8. merged? ancestry first (cheap, offline), then GitHub PR state.
+        # 8. which lane? merged (ancestry first — cheap and offline — then the
+        # GitHub PR state), else the three-state PR question.
         merged_ts: Optional[datetime] = None
+        lane = "merged"
         anc = _run(
             ["git", "merge-base", "--is-ancestor", wt.head or branch, base_ref],
             cwd=repo, timeout=_GIT_TIMEOUT_S,
@@ -393,53 +504,182 @@ def prune_merged_worktrees(
             proof = f"HEAD is an ancestor of {base_ref}"
         else:
             merged_ts = merged_at(branch)
-            if merged_ts is None:
+            if merged_ts is not None:
+                proof = f"merged PR (mergedAt={merged_ts.isoformat()})"
+            else:
+                not_merged = (
+                    f"not merged (not an ancestor of {base_ref}, and no merged PR found)"
+                )
+                if not no_pr_enabled:
+                    _skip(records, wt, f"{not_merged}; no-PR lane disabled")
+                    continue
+                exists = pr_exists(branch)
+                if exists is None:
+                    _skip(
+                        records, wt,
+                        f"{not_merged}; could not determine whether a PR exists "
+                        "(fail-closed)",
+                    )
+                    continue
+                if exists:
+                    _skip(
+                        records, wt,
+                        f"{not_merged}; a PR exists for this branch — work in "
+                        "flight is never aged out",
+                    )
+                    continue
+                lane = "no-pr"
+                proof = "no PR was ever opened for this branch"
+
+        if lane == "merged":
+            # 7 (enforced). Only the merged lane can demand a pushed branch.
+            if not push_ok:
+                _skip(records, wt, push_reason, lane=lane)
+                continue
+
+            # 9. quiescence. The GitHub mergedAt is authoritative when we have
+            # it; on the ancestry path we have no merge timestamp, so the branch
+            # tip's commit date stands in as a lower bound (you cannot merge
+            # work before you commit it).
+            if merged_ts is not None:
+                merge_epoch: Optional[float] = merged_ts.timestamp()
+                age_label = "merged"
+            else:
+                committed = _run(
+                    ["git", "log", "-1", "--format=%ct", wt.head or branch],
+                    cwd=repo, timeout=_GIT_TIMEOUT_S,
+                )
+                if committed is None or committed.returncode != 0:
+                    _skip(records, wt, "could not read branch tip commit date")
+                    continue
+                try:
+                    merge_epoch = float(committed.stdout.strip())
+                except ValueError:
+                    _skip(records, wt, "unparseable branch tip commit date")
+                    continue
+                age_label = "tip committed"
+            if merge_epoch > cutoff:
+                age_h = (now_ts - merge_epoch) / 3600
                 _skip(
                     records, wt,
-                    f"not merged (not an ancestor of {base_ref}, and no merged PR found)",
+                    f"{age_label} only {age_h:.1f}h ago (< {min_age_h}h quiescence)",
+                    lane=lane,
                 )
                 continue
-            proof = f"merged PR (mergedAt={merged_ts.isoformat()})"
-
-        # 9. quiescence. The GitHub mergedAt is authoritative when we have it;
-        # on the ancestry path we have no merge timestamp, so the branch tip's
-        # commit date stands in as a lower bound (you cannot merge work before
-        # you commit it).
-        if merged_ts is not None:
-            merge_epoch: Optional[float] = merged_ts.timestamp()
-            age_label = "merged"
+            try:
+                dir_mtime = wt_path.stat().st_mtime
+            except OSError as exc:
+                _skip(records, wt, f"could not stat worktree directory: {exc}", lane=lane)
+                continue
+            if dir_mtime > cutoff:
+                age_h = (now_ts - dir_mtime) / 3600
+                _skip(
+                    records, wt,
+                    f"directory touched {age_h:.1f}h ago (< {min_age_h}h quiescence)",
+                    lane=lane,
+                )
+                continue
         else:
+            # NO-PR lane. Four gates, every one of them stricter than the
+            # merged lane's equivalent, and each logged with its evidence.
+            no_pr_cutoff = now_ts - no_pr_days * 86400
+            sha = (wt.head or "")[:12] or "unknown"
+
+            # N1. the directory's own mtime
+            try:
+                dir_mtime = wt_path.stat().st_mtime
+            except OSError as exc:
+                _skip(records, wt, f"could not stat worktree directory: {exc}", lane=lane)
+                continue
+            if dir_mtime > no_pr_cutoff:
+                _skip(
+                    records, wt,
+                    f"no PR, but directory touched {(now_ts - dir_mtime) / 86400:.1f}d "
+                    f"ago (< {no_pr_days}d age-out window; tip={sha})",
+                    lane=lane,
+                )
+                continue
+
+            # N2. the newest mtime beneath it (caches / .git / .venv excluded) —
+            # the gate that sees a live agent session editing files three levels
+            # down without ever touching the worktree root's mtime.
+            newest = _newest_activity_mtime(wt_path)
+            if newest is None:
+                _skip(
+                    records, wt,
+                    f"no PR, but could not determine last activity (fail-closed; "
+                    f"tip={sha})",
+                    lane=lane,
+                )
+                continue
+            if newest > no_pr_cutoff:
+                _skip(
+                    records, wt,
+                    f"no PR, but content touched {(now_ts - newest) / 86400:.1f}d ago "
+                    f"(< {no_pr_days}d age-out window, caches excluded; tip={sha})",
+                    lane=lane,
+                )
+                continue
+
+            # N3. the branch tip commit date
             committed = _run(
                 ["git", "log", "-1", "--format=%ct", wt.head or branch],
                 cwd=repo, timeout=_GIT_TIMEOUT_S,
             )
             if committed is None or committed.returncode != 0:
-                _skip(records, wt, "could not read branch tip commit date")
+                _skip(
+                    records, wt,
+                    f"no PR, but could not read branch tip commit date (tip={sha})",
+                    lane=lane,
+                )
                 continue
             try:
-                merge_epoch = float(committed.stdout.strip())
+                tip_epoch = float(committed.stdout.strip())
             except ValueError:
-                _skip(records, wt, "unparseable branch tip commit date")
+                _skip(
+                    records, wt,
+                    f"no PR, and unparseable branch tip commit date (tip={sha})",
+                    lane=lane,
+                )
                 continue
-            age_label = "tip committed"
-        if merge_epoch > cutoff:
-            age_h = (now_ts - merge_epoch) / 3600
-            _skip(records, wt, f"{age_label} only {age_h:.1f}h ago (< {min_age_h}h quiescence)")
-            continue
-        try:
-            dir_mtime = wt_path.stat().st_mtime
-        except OSError as exc:
-            _skip(records, wt, f"could not stat worktree directory: {exc}")
-            continue
-        if dir_mtime > cutoff:
-            age_h = (now_ts - dir_mtime) / 3600
-            _skip(records, wt, f"directory touched {age_h:.1f}h ago (< {min_age_h}h quiescence)")
+            if tip_epoch > no_pr_cutoff:
+                _skip(
+                    records, wt,
+                    f"no PR, but branch tip committed {(now_ts - tip_epoch) / 86400:.1f}d "
+                    f"ago (< {no_pr_days}d age-out window; tip={sha})",
+                    lane=lane,
+                )
+                continue
+
+            proof = (
+                f"no PR ever opened for {branch} (tip={sha}, committed "
+                f"{(now_ts - tip_epoch) / 86400:.1f}d ago, dir idle "
+                f"{(now_ts - dir_mtime) / 86400:.1f}d, content idle "
+                f"{(now_ts - newest) / 86400:.1f}d, window {no_pr_days}d, "
+                f"push-state: {push_reason})"
+            )
+
+        # 10 / N4. live process. The no-PR lane looks deeper: it has no merged
+        # PR standing in for the missing "is anyone using this?" signal, and a
+        # `.venv` in use is bound by exe/mmap rather than by cwd.
+        deep = lane == "no-pr"
+        if _live_process_inside(wt_path, deep=deep):
+            _skip(
+                records, wt,
+                "a running process has its cwd"
+                + ("/exe/mapping" if deep else "")
+                + " inside this worktree",
+                lane=lane,
+            )
             continue
 
-        # 10. live process
-        if _live_process_inside(wt_path):
-            _skip(records, wt, "a running process has its cwd inside this worktree")
-            continue
+        if lane == "no-pr":
+            logger.warning(
+                "worktree-prune NO-PR AGE-OUT candidate %s: branch=%s sha=%s %s "
+                "(dry_run=%s). The branch ref and its commits survive "
+                "`git worktree remove`; only the checkout goes.",
+                wt_path, branch, (wt.head or "unknown"), proof, dry_run,
+            )
 
         size_bytes: Optional[int] = None
         try:
@@ -449,13 +689,15 @@ def prune_merged_worktrees(
 
         if dry_run:
             logger.info(
-                "worktree-prune [DRY-RUN] would remove %s (branch=%s, %.1f MiB): %s",
-                wt_path, branch, (size_bytes or 0) / (1024 * 1024), proof,
+                "worktree-prune [DRY-RUN] would remove %s (branch=%s, lane=%s, "
+                "%.1f MiB): %s",
+                wt_path, branch, lane, (size_bytes or 0) / (1024 * 1024), proof,
             )
             records.append(
                 {
                     "worktree": str(wt_path), "branch": branch,
                     "action": "would-remove", "reason": proof, "size_bytes": size_bytes,
+                    "lane": lane,
                 }
             )
             continue
@@ -465,25 +707,26 @@ def prune_merged_worktrees(
         removed = teardown_worktree(wt_path, repo_root=repo, force=False)
         if removed:
             logger.info(
-                "worktree-prune REMOVED %s (branch=%s, %.1f MiB reclaimed): %s",
-                wt_path, branch, (size_bytes or 0) / (1024 * 1024), proof,
+                "worktree-prune REMOVED %s (branch=%s, lane=%s, %.1f MiB reclaimed): %s",
+                wt_path, branch, lane, (size_bytes or 0) / (1024 * 1024), proof,
             )
             records.append(
                 {
                     "worktree": str(wt_path), "branch": branch,
                     "action": "removed", "reason": proof, "size_bytes": size_bytes,
+                    "lane": lane,
                 }
             )
         else:
             logger.warning(
-                "worktree-prune FAILED to remove %s (branch=%s); left in place.",
-                wt_path, branch,
+                "worktree-prune FAILED to remove %s (branch=%s, lane=%s); left in place.",
+                wt_path, branch, lane,
             )
             records.append(
                 {
                     "worktree": str(wt_path), "branch": branch,
                     "action": "failed", "reason": "git worktree remove refused",
-                    "size_bytes": size_bytes,
+                    "size_bytes": size_bytes, "lane": lane,
                 }
             )
 
@@ -494,7 +737,7 @@ def prune_merged_worktrees(
     )
     logger.info(
         "Merged-worktree prune finished: %d removed, %d would-remove, %d skipped, "
-        "%d failed, %d out-of-scope (%.1f MiB%s).",
+        "%d failed, %d out-of-scope (%.1f MiB%s). By lane: merged=%d, no-pr=%d.",
         sum(1 for r in records if r["action"] == "removed"),
         sum(1 for r in records if r["action"] == "would-remove"),
         sum(1 for r in records if r["action"] == "skipped"),
@@ -502,6 +745,14 @@ def prune_merged_worktrees(
         out_of_scope,
         reclaimed / (1024 * 1024),
         " identified" if dry_run else " reclaimed",
+        sum(
+            1 for r in records
+            if r.get("lane") == "merged" and r["action"] in {"removed", "would-remove"}
+        ),
+        sum(
+            1 for r in records
+            if r.get("lane") == "no-pr" and r["action"] in {"removed", "would-remove"}
+        ),
     )
     return records
 
