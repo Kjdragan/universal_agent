@@ -214,14 +214,38 @@ def test_daily_digest_ranks_candidates_with_preference_feedback(tmp_path):
         )
         record_artifact_feedback_signal(conn, artifact=updated, score=5, text="more like this")
 
+        # record_feedback() intentionally moves `second` to
+        # delivery_state=DELIVERY_REVIEWED (and status=ACCEPTED for a 1/5
+        # score) — Kevin already gave it explicit feedback, so T15's digest
+        # pool filter (delivery_state=DELIVERY_NOT_SURFACED) correctly keeps
+        # it from resurfacing in a later digest. That is the fix working as
+        # intended, not a regression: pre-T15 the pool had no delivery-state
+        # filter at all, so an already-reviewed artifact could leak back into
+        # every future digest forever. Prove the *preference model* still
+        # biases ranking by seeding a THIRD, still-not-surfaced artifact that
+        # shares `second`'s signal keys (type:signal_brief, source:csi,
+        # topic:mcp) and checking that it — not `second` — outranks `first`.
+        upsert_artifact(
+            conn,
+            artifact_type="signal_brief",
+            source_kind="csi",
+            source_ref="video-c",
+            title="MCP transport internals",
+            summary="Another concrete MCP walkthrough.",
+            priority=2,
+            topic_tags=["mcp"],
+        )
+
         digest = IntelligenceReporter(conn).compose_daily_digest(
             recipient="kevinjdragan@gmail.com",
             limit=2,
         )
 
-    assert "1. MCP implementation pattern" in digest.text
-    assert digest.text.index("MCP implementation pattern") < digest.text.index("Generic model news")
+    assert "1. MCP transport internals" in digest.text
+    assert digest.text.index("MCP transport internals") < digest.text.index("Generic model news")
     assert first["artifact_id"] in digest.text or "Generic model news" in digest.text
+    # The already-reviewed `second` must not reappear in a fresh digest.
+    assert "MCP implementation pattern" not in digest.text
 
 
 def test_daily_digest_includes_completed_proactive_task_recap_and_audit_link(tmp_path, monkeypatch):
