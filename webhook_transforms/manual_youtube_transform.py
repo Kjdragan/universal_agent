@@ -11,6 +11,25 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 YOUTUBE_LEARNING_SUBAGENT = "youtube-expert"
+# Mirror of ``hooks_service.py::YOUTUBE_INLINE_EXECUTION_DIRECTIVES``. This
+# module is loaded standalone by ``HooksService._load_transform`` (importlib,
+# outside the package), so it cannot import the constant — keep the two in sync.
+#
+# The transform's returned ``message`` OVERRIDES the base action's, so this is
+# the text the live ``/api/v1/hooks/youtube/manual`` lane actually sends. Under
+# Claude Code Agent Teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) ``Task`` /
+# ``Agent`` is fire-and-forget: a delegating coordinator ends its turn in
+# seconds, the post-turn gate finds no manifest, and the backgrounded subagent
+# dies with the session — total artifact loss.
+YOUTUBE_INLINE_EXECUTION_DIRECTIVES = (
+    "Execution mode: do ALL of this work INLINE in THIS session.",
+    f"Do NOT delegate with Task(subagent_type='{YOUTUBE_LEARNING_SUBAGENT}', ...) or Agent(...).",
+    "Delegation is fire-and-forget here: the subagent is backgrounded, this turn ends "
+    "immediately, and every tutorial artifact is lost when the session closes.",
+    "Step 1 (inline): Skill: youtube-transcript-metadata - fetch transcript + metadata.",
+    "Step 2 (inline): Skill: youtube-tutorial-creation - write the durable tutorial artifacts.",
+    "Do not end your turn until manifest.json exists on disk under the durable base path below.",
+)
 MODE_EXPLAINER_ONLY = "explainer_only"
 MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
 MODE_AUTO = "auto"
@@ -215,10 +234,7 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
 
     lines = [
         "Manual YouTube URL ingestion event received.",
-        "Route this run to the YouTube specialist.",
-        f"target_subagent: {YOUTUBE_LEARNING_SUBAGENT}",
-        "Ingestion first: use youtube-transcript-metadata skill for transcript+metadata.",
-        "Then use youtube-tutorial-creation for durable tutorial artifacts.",
+        *YOUTUBE_INLINE_EXECUTION_DIRECTIVES,
         "Produce durable learning artifacts in UA_ARTIFACTS_DIR.",
         f"resolved_artifacts_root: {artifacts_root}",
         "Path rule: do not use a literal UA_ARTIFACTS_DIR folder segment in file paths.",
