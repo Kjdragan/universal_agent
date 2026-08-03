@@ -89,6 +89,16 @@ Environment=DEMO_FACTORY_BUILD_MODEL_GENERIC=claude-opus-5
 # report watches `builds_timeout` and will say so if xhigh pushes builds over.
 # Set to `auto` to fall back to the model default.
 Environment=CLAUDE_CODE_EFFORT_LEVEL=xhigh
+# Where demo_factory finds publish_scratch.sh, so a landed demo's EXHIBIT.html
+# reaches the operator's scratchpad instead of dying on disk.
+# LOAD BEARING — publish_demo_exhibit.py defaults this to
+# ~/lrepos/universal_agent/scripts/publish_scratch.sh, which is DESKTOP-shaped. This
+# service runs as `ua`, whose home has no lrepos/universal_agent, so the default
+# resolves to a path that does not exist. publish_file() opens with
+# `if not PUBLISHER.is_file(): return ""` — so it never even attempted a publish, and
+# land_demo recorded an empty exhibit_url while printing only a local path. Every
+# unattended demo since the exhibit feature shipped has silently had no exhibit URL.
+Environment=UA_SCRATCH_PUBLISH=/opt/universal_agent/scripts/publish_scratch.sh
 EnvironmentFile=-/opt/universal_agent/.env
 ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.proactive_demo_nuggets_cron
 # Memory. CORRECTED 2026-08-02 after reading the kernel memcg records; the
