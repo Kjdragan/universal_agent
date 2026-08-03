@@ -681,6 +681,10 @@ def select_and_build_nuggets(
         # run_zero_backlog_swipe's keep-set — see its docstring for why a failed
         # attempt must survive the night rather than be swept with the rejects.
         "attempted_failed": [],
+        # Builds that LANDED and were then killed by the outer cap mid-post-land.
+        # Counted as built (the demo is real and gated), recorded separately so the
+        # truncated promote / Stage D stays visible instead of reading as a clean run.
+        "landed_after_timeout": [],
         "error": None,
     }
 
@@ -800,6 +804,35 @@ def select_and_build_nuggets(
             except subprocess.TimeoutExpired as exc:
                 worker_exit = classify_worker_exit(return_code=None, was_timeout_killed=True)
                 out_tail = _tail(getattr(exc, "output", None))
+                # A timeout kill is NOT proof the demo failed. build_demo.py keeps
+                # working after the demo has landed -- promote, then Stage D, which
+                # carries its OWN --stage-d-timeout (900s) that nothing reconciles
+                # against the outer cap. A build that lands with under 15 minutes
+                # left is therefore structurally guaranteed to be killed however
+                # well it went, and the landed, both-gates-passed demo on disk was
+                # being thrown away as a failure.
+                #
+                # 2026-08-03: google-okf-hermes landed at 06:34:50 with verify PASS,
+                # DEMO_EVAL PASS gating=8/8 votes=3/3 and manifest status=demoed --
+                # then was killed at 06:47:51 mid-post-land. It was recorded as a
+                # build failure and never registered, and builds_ok reported 1 on a
+                # night that landed 2.
+                if _demo_dir_exists(root, e["video_slug"]):
+                    logger.warning(
+                        "nuggets: build hit the %ss cap for %s AFTER landing -- the demo "
+                        "is on disk, so registering it rather than discarding it. "
+                        "Post-land stages (promote / Stage D) were truncated. || stdout=%s",
+                        _build_timeout_seconds(), e["video_slug"], out_tail,
+                    )
+                    summary["landed_after_timeout"].append(
+                        {"task_id": e["task_id"], "demo_id": f"proactive-{e['video_slug']}",
+                         "note": "landed before the cap; post-land stages truncated",
+                         "stdout_tail": out_tail}
+                    )
+                    built = _register_and_email(conn, e, root=root, notifier=notifier)
+                    summary["built"].append(built)
+                    built_this_run += 1
+                    continue
                 logger.warning(
                     "nuggets: build TIMEOUT for %s (%s): %s || stdout=%s",
                     e["video_slug"], worker_exit.outcome, exc, out_tail,
