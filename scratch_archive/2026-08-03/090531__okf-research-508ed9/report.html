@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Open Knowledge Format (OKF) - Research Survey</title>
+<style>
+:root{color-scheme:light;--fg:#1f2328;--muted:#656d76;--bg:#ffffff;--soft:#f6f8fa;--border:#d0d7de;--accent:#0969da;--accent-soft:#ddf4ff}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:#ffffff;color:#1f2328;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6;font-size:16px}
+nav.docset{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--border);padding:.55rem 1rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+nav.docset .brand{font-weight:700;margin-right:.6rem;font-size:.9rem;color:var(--muted)}
+nav.docset a{font-size:.82rem;text-decoration:none;color:var(--accent);padding:.2rem .55rem;border-radius:6px;white-space:nowrap}
+nav.docset a:hover{background:var(--accent-soft)}
+nav.docset a.current{background:var(--fg);color:#fff;font-weight:600}
+nav.docset .sep{width:1px;height:1.1rem;background:var(--border);margin:0 .2rem}
+nav.docset a.file{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem}
+.scratch-back{padding:.5rem 1rem;font-size:.82rem;background:var(--soft);border-bottom:1px solid var(--border)}
+.scratch-back a{color:var(--accent);text-decoration:none}
+.scratch-back a:hover{text-decoration:underline}
+main{max-width:880px;margin:0 auto;padding:2.2rem 1.3rem 5rem}
+h1,h2,h3,h4{line-height:1.25;margin-top:1.8em;margin-bottom:.6em;font-weight:650}
+h1{font-size:1.9rem;border-bottom:1px solid var(--border);padding-bottom:.3em;margin-top:.2em}
+h2{font-size:1.45rem;border-bottom:1px solid var(--border);padding-bottom:.25em}
+h3{font-size:1.18rem}
+a{color:var(--accent)}
+p,li{overflow-wrap:break-word}
+code{background:var(--soft);padding:.15em .4em;border-radius:6px;font-size:.86em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--soft);border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;line-height:1.45}
+pre code{background:none;padding:0;font-size:.82rem}
+blockquote{margin:1em 0;padding:.2em 1em;color:var(--muted);border-left:4px solid var(--border)}
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:.92rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--border);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:650}
+tr:nth-child(even) td{background:#fbfcfd}
+hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+.srcmeta{color:var(--muted);font-size:.85rem;margin:.4rem 0 1rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+footer{max-width:880px;margin:0 auto;padding:1.5rem 1.3rem;color:var(--muted);font-size:.78rem;border-top:1px solid var(--border)}
+
+.sr-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#0969da;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer}
+.sr-fab:hover{background:#0a5fd0}
+.sr-panel{position:fixed;right:16px;bottom:64px;z-index:2147483000;width:340px;max-width:92vw;max-height:70vh;background:#fff;color:#1f2328;border:1px solid #d0d7de;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);display:none;flex-direction:column;overflow:hidden;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.sr-panel.sr-open{display:flex}
+.sr-head{display:flex;justify-content:space-between;align-items:center;padding:.6rem .8rem;border-bottom:1px solid #eaecef}
+.sr-x,.sr-del{background:none;border:none;color:#656d76;cursor:pointer;font-size:13px}
+.sr-headbtns{display:flex;gap:.4rem;align-items:center}
+.sr-clear{background:none;border:1px solid #d0d7de;border-radius:5px;color:#656d76;cursor:pointer;font-size:11px;padding:.1rem .45rem}
+.sr-clear:hover{background:#f6f8fa}
+.sr-hint{font-size:.74rem;line-height:1.45;color:#57606a;padding:.5rem .8rem;border-bottom:1px solid #eaecef;background:#f6f8fa}
+.sr-list{overflow:auto;padding:.5rem .8rem;flex:1}
+.sr-empty{color:#656d76;font-size:.85rem;padding:.5rem 0}
+.sr-item{border:1px solid #eaecef;border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem}
+.sr-loc{display:flex;justify-content:space-between;font-size:.72rem;color:#656d76;font-family:ui-monospace,Menlo,monospace;margin-bottom:.25rem}
+.sr-quote{font-size:.8rem;color:#3b4148;background:#f6f8fa;border-left:3px solid #d0d7de;padding:.2rem .5rem;margin-bottom:.3rem}
+.sr-body{width:100%;border:1px solid #d0d7de;border-radius:6px;padding:.35rem .45rem;font:inherit;resize:vertical}
+.sr-actions{display:flex;gap:.4rem;padding:.6rem .8rem;border-top:1px solid #eaecef}
+.sr-note{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:inherit}
+.sr-submit{flex:1;background:#1f883d;color:#fff;border:none;border-radius:6px;padding:.4rem .6rem;cursor:pointer;font:600 13px/1 inherit}
+.sr-submit:hover{background:#1a7332}
+.sr-chip{position:absolute;z-index:2147483001;background:#1f2328;color:#fff;border:none;border-radius:6px;padding:.25rem .5rem;font:600 12px/1 sans-serif;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sr-mark{background:#fff3c4;box-shadow:inset 0 -2px 0 #e3b341;border-radius:2px;cursor:pointer}
+.sr-mark:hover{background:#ffe98a}
+.sr-round{border:1px solid #eaecef;border-radius:8px;margin-bottom:.6rem;overflow:hidden}
+.sr-rhead{display:flex;justify-content:space-between;align-items:center;gap:.4rem;background:#f6f8fa;border-bottom:1px solid #eaecef;padding:.35rem .55rem;font-size:.72rem;color:#57606a;font-family:ui-monospace,Menlo,monospace}
+.sr-recopy{background:#fff;border:1px solid #d0d7de;border-radius:5px;padding:.1rem .4rem;cursor:pointer;font:inherit;color:#0969da;white-space:nowrap}
+.sr-hitem{padding:.35rem .55rem;border-top:1px solid #f0f1f3}
+.sr-hbody{font-size:.85rem;white-space:pre-wrap;color:#1f2328}
+.sr-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:2147483002;background:#1f2328;color:#fff;padding:.55rem .9rem;border-radius:8px;font:13px/1.4 sans-serif;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+@media print{.sr-fab,.sr-panel,.sr-chip,.sr-toast{display:none!important}}
+</style>
+</head>
+<body><div class="scratch-back"><a href="/scratch/">← Scratchpad index</a></div><main><h1 id="open-knowledge-format-okf-research-survey">Open Knowledge Format (OKF) — Research Survey</h1>
+<p><strong>Date of survey:</strong> 2026-08-03
+<strong>Subject:</strong> Google Cloud's "Open Knowledge Format" (OKF), described to us as a Google framework competing with RAG, currently at v0.2.
+<strong>Verdict on identification:</strong> <strong>Confirmed.</strong> The project exists, is genuinely from Google Cloud, and "Open Knowledge Format" is its exact official name. v0.2 is real and is the current spec version.</p>
+<hr />
+<h2 id="executive-summary">Executive summary</h2>
+<p><strong>Open Knowledge Format (OKF)</strong> is an open, vendor-neutral <strong>specification</strong> — not a product, SDK, database, or serving system — published by <strong>Google Cloud's Data Cloud engineering organization</strong> for representing organizational knowledge as a directory tree of plain Markdown files with YAML frontmatter (<a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md">SPEC.md</a>, <a href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing">Google Cloud Blog, 2026-06-12</a>). The spec describes itself as "intentionally minimal: a directory of markdown files with YAML frontmatter. There is no schema registry, no central authority, and no required tooling. If you can <code>cat</code> a file, you can read OKF; if you can <code>git clone</code> a repo, you can ship it." (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md, preamble</a>). It ships under Apache 2.0 in the <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog">GoogleCloudPlatform/knowledge-catalog</a> repository, under the <code>okf/</code> directory (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/LICENSE.md">license file</a>; <a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog">GitHub API repo metadata</a>). v0.1 was announced 2026-06-12 and v0.2 on 2026-07-24, the latter adding first-class <strong>provenance, trust, freshness, lifecycle, and attestation</strong> signals to frontmatter (<a href="https://cloud.google.com/blog/products/data-analytics/okf-v0-2-adds-trust-signals">Google Cloud Blog, 2026-07-24</a>; <a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md §13</a>).</p>
+<p><strong>The single most important correction to the brief:</strong> the "competes with / replaces RAG" framing is <strong>not Google's</strong>. It comes entirely from third-party commentary. Google's own primary sources — the v0.1 announcement, the v0.2 announcement, <code>SPEC.md</code>, and <code>okf/README.md</code> — <strong>never mention RAG, retrieval-augmented generation, vector databases, embeddings, or chunking at all</strong>. See <a href="#3-the-rag-positioning--an-important-correction">§3</a> for the verification evidence.</p>
+<hr />
+<h2 id="1-official-name-creator-and-ownership">1. Official name, creator, and ownership</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Official name</td>
+<td><strong>Open Knowledge Format</strong>, abbreviated <strong>OKF</strong></td>
+<td><a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md title line</a></td>
+</tr>
+<tr>
+<td>Creator</td>
+<td><strong>Google Cloud</strong> — Data Cloud engineering org</td>
+<td><a href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing">Google Cloud Blog, 2026-06-12</a></td>
+</tr>
+<tr>
+<td>Named authors</td>
+<td><strong>Sam McVeety</strong>, Tech Lead, Data Analytics, Engineering, Data Cloud; <strong>Amir Hormati</strong>, Tech Lead, BigQuery, Engineering, Data Cloud</td>
+<td>Bylines on both the <a href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing">v0.1</a> and <a href="https://cloud.google.com/blog/products/data-analytics/okf-v0-2-adds-trust-signals">v0.2</a> blog posts</td>
+</tr>
+<tr>
+<td>Home repository</td>
+<td><code>github.com/GoogleCloudPlatform/knowledge-catalog</code>, subdirectory <code>okf/</code></td>
+<td><a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/contents/">Repo contents API</a></td>
+</tr>
+<tr>
+<td>License</td>
+<td>Apache License 2.0</td>
+<td><a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/LICENSE.md">okf/LICENSE.md</a>; <a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog">GitHub API <code>license.spdx_id: Apache-2.0</code></a></td>
+</tr>
+</tbody>
+</table>
+<p>"Google" is genuinely the creator and backer — this is not a community project with a Google-sounding name. It lives in the official <code>GoogleCloudPlatform</code> GitHub org, is announced on the official Google Cloud blog under the Data Analytics product category, and is authored by named Google Cloud engineering tech leads (<a href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing">v0.1 blog</a>; <a href="https://cloud.google.com/blog/products/data-analytics/okf-v0-2-adds-trust-signals">v0.2 blog</a>).</p>
+<p>Note the repository is broader than OKF: its GitHub description is "Google Cloud Knowledge Catalog Tools and Samples" and its homepage points at <code>cloud.google.com/products/knowledge-catalog</code> (<a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog">GitHub API repo metadata</a>). The <code>okf/README.md</code> nonetheless states: "<strong>This repository is primarily about the Open Knowledge Format (OKF)</strong>" (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/README.md">okf/README.md</a>).</p>
+<hr />
+<h2 id="2-what-it-is-and-how-it-works">2. What it is and how it works</h2>
+<h3 id="21-the-core-idea">2.1 The core idea</h3>
+<p>OKF is a <strong>data format / specification</strong>, not a storage engine, index, protocol, or SDK. The spec is explicit that prescribing infrastructure is a <strong>non-goal</strong>: its stated non-goals include "Prescribing storage, serving, or query infrastructure" and "Defining a fixed taxonomy of concept types" (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md §1, Non-goals</a>).</p>
+<p>The motivating problem, per the v0.1 announcement, is fragmented enterprise context: "As foundation models continue to improve, the lack of relevant context often limits what they can do, especially as they are used to build agentic systems." Knowledge sits scattered across metadata catalogs with proprietary APIs, wikis, shared drives, code comments, and engineers' heads, so "When an AI agent needs to answer 'How do I compute weekly active users from our event stream?' it has to assemble the answer from these scattered, mutually incompatible surfaces." (<a href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing">Google Cloud Blog, 2026-06-12</a>).</p>
+<p>Google frames v0.1 as "an open specification that formalizes the LLM-wiki pattern into a portable, interoperable format. This is a vendor-neutral, agent- and human-friendly standard for representing the metadata, context, and curated knowledge that modern AI systems need." (<a href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing">same source</a>).</p>
+<p>The design criteria in the spec are that knowledge representation should be <strong>Readable</strong> by humans without tooling, <strong>Parseable</strong> by agents without bespoke SDKs, <strong>Diffable</strong> in version control, and <strong>Portable</strong> across tools, organizations, and time (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md §1</a>).</p>
+<p>The v0.2 motivation adds a second concern — agent-authored corpora need trust signals: "Increasingly, a knowledge corpus is not authored once and then read: it is <strong>continuously written and maintained by agents</strong>." The spec enumerates the five questions a consumer needs answered: provenance ("What was this created from, and how was it verified?"), trust ("How much should I trust it?"), freshness ("Is it still true?"), lifecycle ("Is it the current version?"), and attestation ("Was this number produced the way we said it must be?") (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md §1</a>).</p>
+<h3 id="22-stated-benefits">2.2 Stated benefits</h3>
+<p>From <code>okf/README.md</code> (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/README.md">source</a>), OKF's plain-files choice is claimed to unlock:</p>
+<ul>
+<li><strong>Human- and agent-readable</strong> — "No SDK or query language stands between a reader and the content. An engineer can <code>cat</code> a concept; an LLM can ingest it verbatim into context."</li>
+<li><strong>Version-controllable out of the box</strong> — "Bundles live in git. Pull requests, line-by-line diffs, blame, and review workflows just work."</li>
+<li><strong>Portable and lock-in free</strong> — "A bundle is a directory. Ship it as a tarball, host it in any repo, mount it from any filesystem."</li>
+<li><strong>Mixes structured and unstructured data deliberately</strong> — frontmatter for queryable/filterable fields, markdown body for prose, schemas, and example queries.</li>
+<li><strong>Trust, provenance, and freshness are first-class</strong> (new in v0.2).</li>
+<li><strong>Minimally opinionated, freely extensible</strong> — bundles may carry arbitrary extra frontmatter keys and body sections without breaking consumers.</li>
+<li><strong>Composes with existing tooling</strong> — "Notion, Obsidian, MkDocs, Hugo, Jekyll — already speak markdown plus YAML frontmatter."</li>
+<li><strong>Progressive disclosure built in</strong> — auto-generated <code>index.md</code> files let an agent navigate one level at a time "instead of loading the entire bundle into context."</li>
+<li><strong>Graph-shaped, not just tree-shaped</strong> — concepts cross-link via normal markdown links.</li>
+</ul>
+<p>The README's stated interoperability goal: "<strong>Anyone can produce</strong> OKF — humans authoring by hand, agents built on any framework (Google ADK, LangChain, custom), export pipelines from existing catalogs (Dataplex, Unity Catalog, Collibra, …), or scripts walking a database. <strong>Anyone can serve and consume</strong> OKF — a static file server, a knowledge-management UI (Obsidian, Notion, MkDocs), an LLM loading files into context, a search index, or a graph viewer." (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/README.md">okf/README.md</a>).</p>
+<p>Google's positioning statement on ownership: "Format, not platform. OKF is not tied to any specific cloud, database, model provider, or agent framework. It will never require a proprietary account or SDK to read, write, or serve. We're publishing it as an open standard because the value of a knowledge format comes from how many parties speak it, not from who owns it." (<a href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing">Google Cloud Blog, 2026-06-12</a>).</p>
+<hr />
+<h2 id="3-the-rag-positioning-an-important-correction">3. The RAG positioning — an important correction</h2>
+<p><strong>Kevin's description ("competing with / an alternative to RAG") reflects how the tech press covered OKF, not how Google positioned it.</strong></p>
+<h3 id="31-verification-googles-own-sources-never-mention-rag">3.1 Verification: Google's own sources never mention RAG</h3>
+<p>I grepped the two authoritative repository documents for RAG-adjacent terminology:</p>
+<pre><code>grep -inE 'RAG|retrieval|vector|embedding|chunk'  okf/SPEC.md   okf/README.md
+</code></pre>
+<ul>
+<li><code>okf/SPEC.md</code> (1,003 lines): only two hits, neither about RAG — line 63 "Prescribing storage, serving, or query infrastructure" (a non-goal) and line 213 "structure aids both human reading and agent retrieval" (generic use of the word). <strong>No occurrence of "RAG", "vector", "embedding", or "chunk".</strong> (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md raw</a>)</li>
+<li><code>okf/README.md</code>: <strong>zero hits</strong> for any of those terms. (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/README.md">okf/README.md raw</a>)</li>
+</ul>
+<p>Fetching the two Google Cloud blog announcements produced the same result:</p>
+<ul>
+<li>v0.1 announcement (2026-06-12): does not reference RAG, vector search, or embeddings. (<a href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing">source</a>)</li>
+<li>v0.2 announcement (2026-07-24): does not mention retrieval-augmented generation. (<a href="https://cloud.google.com/blog/products/data-analytics/okf-v0-2-adds-trust-signals">source</a>)</li>
+<li>The related Google Cloud Knowledge Catalog product announcement (2026-04-22) likewise does not mention RAG, vector search, embeddings, or grounding; it describes "high-precision semantic search" using a "hybrid search stack" and "advanced query-rewriting and machine-learning technologies." (<a href="https://cloud.google.com/blog/products/data-analytics/introducing-the-google-cloud-knowledge-catalog">source</a>)</li>
+</ul>
+<h3 id="32-where-the-rag-framing-actually-comes-from">3.2 Where the RAG framing actually comes from</h3>
+<p>The RAG-competitor framing originates with third-party analysts and content marketers, and it is not uniform:</p>
+<ul>
+<li><strong>Strong "replacement" framing</strong> appears in headlines like "Beyond RAG: How Google's Open Knowledge Format (OKF) is Replacing the Vector Database" (<a href="https://secret-dev.medium.com/beyond-rag-how-googles-open-knowledge-format-okf-is-replacing-the-vector-database-2ffb5bc2f8eb">Medium</a>) and "Google Just Open-Sourced a Format That Makes RAG Optional" (<a href="https://medium.com/@patriwala/google-just-open-sourced-a-format-that-makes-rag-optional-inside-okf-396d28865e6e">Medium</a>).</li>
+<li><strong>Complementary framing</strong> is the more careful reading. Analytics Vidhya states outright: "The future is not OKF versus RAG. It is OKF plus RAG, working together as complementary layers in a single knowledge architecture" — and this is presented as the author's own analysis, not attributed to Google. (<a href="https://www.analyticsvidhya.com/blog/2026/07/open-knowledge-format-okf/">Analytics Vidhya</a>)</li>
+<li>Google's own framing, when described neutrally by coverage, is a <strong>spec for curated context</strong>, e.g. MarkTechPost's headline: "Google Cloud Introduces Open Knowledge Format (OKF): A Vendor-Neutral Markdown Spec for Giving AI Agents Curated Context." (<a href="https://www.marktechpost.com/2026/06/16/google-cloud-introduces-open-knowledge-format-okf-a-vendor-neutral-markdown-spec-for-giving-ai-agents-curated-context/">MarkTechPost</a>) <em>(Note: this URL returned HTTP 503 when I attempted a direct fetch; the title is from search-result metadata, and I have not verified its body text.)</em></li>
+</ul>
+<h3 id="33-the-substantive-technical-contrast-as-argued-by-third-parties">3.3 The substantive technical contrast (as argued by third parties)</h3>
+<p>The comparison analysts draw, which is a fair <em>reading</em> of the format even though Google does not make it:</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>OKF</th>
+<th>RAG</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Best for</td>
+<td>Curated organizational knowledge</td>
+<td>Large unstructured document collections</td>
+</tr>
+<tr>
+<td>Retrieval</td>
+<td>Deterministic navigation via explicit links</td>
+<td>Semantic similarity search</td>
+</tr>
+<tr>
+<td>Infrastructure</td>
+<td>File system + Git</td>
+<td>Embeddings + vector database</td>
+</tr>
+<tr>
+<td>Scalability</td>
+<td>Moderate</td>
+<td>Excellent</td>
+</tr>
+<tr>
+<td>Explainability</td>
+<td>High</td>
+<td>Moderate</td>
+</tr>
+<tr>
+<td>Version control</td>
+<td>Native Git support</td>
+<td>Requires re-indexing</td>
+</tr>
+</tbody>
+</table>
+<p>(Table as published by <a href="https://www.analyticsvidhya.com/blog/2026/07/open-knowledge-format-okf/">Analytics Vidhya</a>.)</p>
+<p>The mechanism behind the contrast is real and traceable to the spec: because a bundle is a link-connected tree of small markdown files with <code>index.md</code> progressive disclosure, an agent can <strong>navigate deterministically</strong> to the right concept and load it verbatim into context, rather than embedding a corpus and retrieving probabilistically-ranked chunks (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/README.md">SPEC.md §3 and okf/README.md "Progressive disclosure built in"</a>). But the spec never claims this displaces RAG, and it explicitly declines to prescribe any retrieval infrastructure at all (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md §1, Non-goals</a>).</p>
+<h3 id="34-the-llm-wiki-lineage">3.4 The "LLM wiki" lineage</h3>
+<p>Google's v0.1 blog says OKF "formalizes the LLM-wiki pattern" (<a href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing">source</a>). Third-party coverage attributes that pattern to Andrej Karpathy, citing his analogy "Obsidian is the IDE. The LLM is the programmer. The wiki is the codebase." (<a href="https://www.analyticsvidhya.com/blog/2026/07/open-knowledge-format-okf/">Analytics Vidhya</a>). <strong>I did not find a Karpathy attribution in any Google primary source I fetched</strong> — <code>SPEC.md</code> contains no occurrence of "Karpathy" (grep confirmed; the only "wiki" hits are <code>wiki.acme</code> placeholder URLs in the worked example). Treat the Karpathy credit as third-party attribution.</p>
+<hr />
+<h2 id="4-version-history">4. Version history</h2>
+<table>
+<thead>
+<tr>
+<th>Version</th>
+<th>Date</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>v0.1</strong></td>
+<td>2026-06-12</td>
+<td>Announcement blog published 2026-06-12 (<a href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing">source</a>); first <code>okf/SPEC.md</code> commit dated <code>2026-06-12T05:02:31Z</code>, message "Import Open Knowledge Format reference enrichment agent (#28)" (<a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/commits?path=okf/SPEC.md">commit history API</a>)</td>
+</tr>
+<tr>
+<td><strong>v0.2</strong></td>
+<td>2026-07-24</td>
+<td>Announcement blog published 2026-07-24 (<a href="https://cloud.google.com/blog/products/data-analytics/okf-v0-2-adds-trust-signals">source</a>); commit <code>2026-07-24T16:45:07Z</code> "okf: migrate format and tooling to Open Knowledge Format v0.2 (#227)", followed by <code>2026-07-24T16:45:43Z</code> "Update SPEC.md" (<a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/commits?path=okf/SPEC.md">commit history API</a>)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>v0.2 is confirmed current as of 2026-08-03.</strong> <code>SPEC.md</code> line 3 reads "<strong>Version 0.2</strong>", and the <code>okf/README.md</code> links to "Read the Open Knowledge Format v0.2 specification" (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md</a>; <a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/README.md">okf/README.md</a>). The <code>okf/SPEC.md</code> file has had only three commits total, the last on 2026-07-24 — no v0.3 work has landed.</p>
+<p><strong>Caveat on release mechanics:</strong> the repository publishes <strong>no GitHub Releases and no git tags</strong> (<a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/releases">releases API</a> and <a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/tags">tags API</a> both return empty). Versioning is expressed only inside the spec text and in bundle frontmatter. There is no machine-readable release channel to subscribe to.</p>
+<h3 id="41-what-changed-in-v02">4.1 What changed in v0.2</h3>
+<p>Per <a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md §13</a>, v0.2 "supersedes OKF v0.1 and is a minor version bump … except for two deliberate breaking changes."</p>
+<p><strong>Breaking changes (§13.1):</strong>
+1. <strong><code>timestamp</code> is superseded by <code>generated.at</code>.</strong> Last content change is now recorded as <code>generated: { by, at }</code>. "Consumers MAY fall back to a legacy <code>timestamp</code> when <code>generated</code> is absent."
+2. <strong>The body <code># Citations</code> list is superseded by <code>sources</code>.</strong> Provenance moves from the markdown body into frontmatter. "Consumers SHOULD read <code>sources</code> and MAY still parse a legacy <code># Citations</code> body list for v0.1 documents."</p>
+<p><strong>Additive changes (§13.2):</strong>
+- New frontmatter families: <code>sources</code> (with per-source credibility signals <code>author</code>, <code>usage_count</code>, <code>last_modified</code>, plus the <code>usage_window</code> sibling); <code>generated</code>; <code>verified</code>; <code>status</code>; <code>stale_after</code>.
+- New concept type <code>Attested Computation</code> and its keys <code>runtime</code>, <code>parameters</code>, <code>computation</code>, <code>executor</code>, <code>attester</code>.
+- New conventional body heading <code># Computation</code>.
+- The actor convention for <code>generated.by</code> and <code>verified[].by</code>.</p>
+<p>Everything else — bundle structure, reserved filenames, the required <code>type</code>, recommended <code>title</code>/<code>description</code>/<code>resource</code>/<code>tags</code>, cross-linking, index files, log files, permissive conformance — "is carried forward unchanged" (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md §13.2</a>).</p>
+<p>Google's own summary of the shift: "v0.1 already kept metadata in frontmatter: <code>type</code>, <code>title</code>, <code>description</code>, <code>resource</code>, <code>tags</code>. Those fields describe a concept: what it is and what it points at. v0.2 adds a second kind of frontmatter field, the kind you use to decide something about a concept before you read it." (<a href="https://cloud.google.com/blog/products/data-analytics/okf-v0-2-adds-trust-signals">Google Cloud Blog, 2026-07-24</a>). The same post stresses compatibility: "every new field is opt-in, custom keys are still preserved rather than rejected, and a bundle that adopts none of the additions is exactly as valid as it was under v0.1."</p>
+<hr />
+<h2 id="5-format-and-architecture-details">5. Format and architecture details</h2>
+<p>All content in this section is from <a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md">SPEC.md v0.2</a> unless otherwise noted.</p>
+<h3 id="51-terminology-2">5.1 Terminology (§2)</h3>
+<ul>
+<li><strong>Knowledge Bundle</strong> (or <strong>bundle</strong>): "A self-contained, hierarchical collection of knowledge documents. The unit of distribution."</li>
+<li><strong>Concept</strong>: "A single unit of knowledge within a bundle, represented as one markdown document." May describe a tangible asset (a table, an API), an abstract idea (a metric, a business process), or anything in between.</li>
+<li><strong>Concept ID</strong>: "The path of the concept's file within the bundle, with the <code>.md</code> suffix removed."</li>
+<li><strong>Frontmatter</strong>: A YAML metadata block delimited by <code>---</code> at the top of a markdown file. <strong>Body</strong>: everything after it.</li>
+<li><strong>Link</strong>: A standard markdown link from one concept to another, expressing relationships beyond the implicit parent/child hierarchy.</li>
+<li><strong>Source</strong>: A material a concept derives from, recorded in <code>sources</code>.</li>
+<li><strong>Credibility signal</strong>: "An objective, per-source fact (<code>author</code>, <code>usage_count</code>, <code>last_modified</code>) used to infer trust; OKF records the signals, not a verdict."</li>
+<li><strong>Trust tier</strong>: A level derived from <code>verified</code> — unverified, machine-confirmed, or human-reviewed.</li>
+<li><strong>Attested Computation</strong>: A concept "carrying a sanctioned way to compute a value, so a consumer can confirm the value was produced by running it."</li>
+<li><strong>Executor</strong> / <strong>Receipt</strong> / <strong>Attester</strong>: run instructions returning a receipt; the evidence a run returns (a runtime artifact, not stored in the bundle); and deterministic, no-LLM code that inspects a receipt and returns a verdict.</li>
+</ul>
+<h3 id="52-bundle-structure-3">5.2 Bundle structure (§3)</h3>
+<p>"A bundle is a directory tree of markdown files. The directory structure is independent of the domain: producers organize concepts however makes sense for the knowledge being captured."</p>
+<pre><code>path/to/bundle/
+  index.md                      # Optional. Directory listing for progressive disclosure.
+  log.md                        # Optional. Chronological history of updates.
+  &lt;concept&gt;.md                  # A concept at the bundle root.
+  &lt;subdirectory&gt;/               # Subdirectories organize concepts into groups.
+</code></pre>
+<p>Reserved filenames are <code>index.md</code> and <code>log.md</code>; all other <code>.md</code> files are concept documents. Distribution is via git repositories (recommended), tarballs, zip archives, or subdirectories within larger repositories.</p>
+<h3 id="53-frontmatter-fields">5.3 Frontmatter fields</h3>
+<p><strong>Required (the only universally mandatory field):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>type</code></td>
+<td>"A short string identifying the kind of concept." Examples given: <code>BigQuery Table</code>, <code>API Endpoint</code>, <code>Metric</code>, <code>Playbook</code>, <code>Attested Computation</code>.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Recommended:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>title</code></td>
+<td>Human-readable display name</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td>Single-sentence summary</td>
+</tr>
+<tr>
+<td><code>resource</code></td>
+<td>Canonical URI for the underlying asset</td>
+</tr>
+<tr>
+<td><code>tags</code></td>
+<td>YAML list for cross-cutting categorization</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Provenance — <code>sources</code> (§5.1).</strong> Each entry may carry:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>resource</code> (required within entry)</td>
+<td>Artifact URI or scope descriptor</td>
+</tr>
+<tr>
+<td><code>id</code></td>
+<td>Stable key for attribution</td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td>Human-readable label</td>
+</tr>
+<tr>
+<td><code>author</code></td>
+<td>Producer identity (authority signal)</td>
+</tr>
+<tr>
+<td><code>usage_count</code></td>
+<td>Exercise frequency (adoption signal)</td>
+</tr>
+<tr>
+<td><code>last_modified</code></td>
+<td>Source change date (recency signal)</td>
+</tr>
+<tr>
+<td><code>usage_window</code></td>
+<td>Sibling field; date range framing usage counts</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Trust — <code>generated</code> and <code>verified</code> (§5.2, §5.3).</strong></p>
+<ul>
+<li><code>generated: { by, at }</code> — <code>by</code> (required within) is an actor identifier; <code>at</code> is an ISO 8601 datetime of the last meaningful change.</li>
+<li><code>verified: [ { by, at } ]</code> — a list of verification events confirming content against <code>sources</code> or <code>resource</code>.</li>
+</ul>
+<p><strong>Lifecycle.</strong></p>
+<ul>
+<li><code>status</code> — <code>draft</code>, <code>stable</code> (default), or <code>deprecated</code>.</li>
+<li><code>stale_after</code> — absolute date (<code>YYYY-MM-DD</code>) after which content is considered stale.</li>
+</ul>
+<h3 id="54-actor-convention-7">5.4 Actor convention (§7)</h3>
+<p>Three formats for identity fields (<code>generated.by</code>, <code>verified[].by</code>):</p>
+<ul>
+<li><code>&lt;producer&gt;/&lt;version&gt;</code> for agents — e.g. <code>reference_agent/gemini-2.5-pro</code></li>
+<li><code>human:&lt;id&gt;</code> for people — e.g. <code>human:ahormati</code></li>
+<li><code>process:&lt;id&gt;</code> for automated processes — e.g. <code>process:finance-nightly</code></li>
+</ul>
+<h3 id="55-trust-tiers-53">5.5 Trust tiers (§5.3)</h3>
+<p>Derived, not declared:</p>
+<ol>
+<li>No <code>verified</code> key → <strong>unverified</strong></li>
+<li>Machine actors only → <strong>machine-confirmed</strong></li>
+<li>Any <code>human:&lt;id&gt;</code> actor → <strong>human-reviewed</strong></li>
+</ol>
+<p>Google's framing: "Tiers are advisory signals, not access control, but they let a consumer say 'only surface human-reviewed metrics in the executive dashboard' as a frontmatter filter." (<a href="https://cloud.google.com/blog/products/data-analytics/okf-v0-2-adds-trust-signals">Google Cloud Blog, 2026-07-24</a>)</p>
+<h3 id="56-cross-linking-model">5.6 Cross-linking model</h3>
+<ul>
+<li>Markdown links express relationships; the <em>kind</em> of relationship is conveyed by surrounding prose rather than a typed edge vocabulary.</li>
+<li>Two link forms: absolute bundle-relative (beginning with <code>/</code>, recommended) and relative paths.</li>
+<li>Path-valued fields accept absolute URLs, bundle-relative paths, or relative paths.</li>
+<li><strong>Broken links are tolerated</strong> — "they may represent not-yet-written knowledge."</li>
+</ul>
+<h3 id="57-attested-computation-10">5.7 Attested Computation (§10)</h3>
+<p>A concept type for computations a consumer can verify were produced the sanctioned way. Contract fields:</p>
+<ul>
+<li><code>runtime</code> (required for this type) — defines parameter semantics; documented values include <code>bigquery</code>, <code>postgres</code>, <code>dbt</code>, <code>python</code>, <code>Looker</code>.</li>
+<li><code>parameters</code> — list of typed, named holes: <code>{ name, type, required }</code>.</li>
+<li><code>computation</code> — optional path to a computation file; if absent, the body's <code># Computation</code> fence holds it.</li>
+<li><code>executor</code> — <code>{ resource, receipt }</code>: <code>resource</code> names run instructions, <code>receipt</code> declares the fields a run returns.</li>
+<li><code>attester</code> — <code>{ resource }</code>: deterministic (no-LLM) check code that inspects a receipt and returns a verdict.</li>
+</ul>
+<p>A worked example from the spec's Appendix A — a BigQuery revenue metric, human-verified, with credibility-signalled sources:</p>
+<pre><code class="language-markdown">---
+type: Attested Computation
+title: Revenue for fiscal year
+description: Recognized revenue for a fiscal year, per Finance's definition.
+tags: [finance, revenue]
+status: stable
+runtime: bigquery
+parameters:
+  - { name: year, type: integer, required: true }
+executor:
+  resource: references/skills/run-on-bq.md
+  receipt: [job_id, executed_sql, result]
+attester:
+  resource: references/attesters/sql-equality.py
+generated: { by: reference_agent/gemini-2.5-pro, at: 2026-06-28T14:00:00Z }
+verified: { by: human:ahormati, at: 2026-06-25T09:00:00Z }
+stale_after: 2026-12-31
+sources:
+  - id: rev-policy
+    resource: https://wiki.acme/finance/revenue-recognition
+    title: Revenue recognition policy
+    author: team:finance-fpa
+    last_modified: 2026-04-02
+usage_window: { from: 2026-06-01, to: 2026-06-30 }
+---
+
+# Computation
+
+    SELECT SUM(amount) AS revenue
+    FROM finance.recognized_revenue
+    WHERE fiscal_year = @year
+</code></pre>
+<h3 id="58-conformance-rules-conformance">5.8 Conformance rules (§ conformance)</h3>
+<p>A conformant bundle must satisfy three rules:</p>
+<ol>
+<li>Every non-reserved <code>.md</code> file contains parseable YAML frontmatter.</li>
+<li>Every frontmatter block contains a non-empty <code>type</code> field.</li>
+<li>Reserved filenames follow their specified structures when present.</li>
+</ol>
+<p>Crucially, the spec constrains <em>consumers</em> too — they <strong>must not reject</strong> documents for missing optional families, unknown types, unknown keys, broken links, or missing index files. This permissiveness is what makes v0.1 bundles readable by v0.2 consumers.</p>
+<h3 id="59-versioning-rules-12">5.9 Versioning rules (§12)</h3>
+<p>Versioning follows <code>&lt;major&gt;.&lt;minor&gt;</code>: minor bumps introduce backward-compatible additions, major bumps allow breaking changes. A bundle may declare its target version with <code>okf_version: "0.2"</code> — <strong>in the bundle-root <code>index.md</code> frontmatter only</strong>.</p>
+<h3 id="510-explicit-non-goals-1">5.10 Explicit non-goals (§1)</h3>
+<ul>
+<li>Defining a fixed taxonomy of concept types.</li>
+<li>Prescribing storage, serving, or query infrastructure.</li>
+<li>Replacing domain-specific schemas (Avro, Protobuf, OpenAPI, and so on) — "OKF <em>references</em> them; it does not subsume them."</li>
+<li>Specifying a packaging or invocation standard for executor/attester code — "OKF fixes the interface, not the packaging."</li>
+</ul>
+<hr />
+<h2 id="6-adoption-and-ecosystem-signals">6. Adoption and ecosystem signals</h2>
+<p><strong>Repository metrics</strong> (fetched from the <a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog">GitHub API</a> on 2026-08-03):</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Repository created</td>
+<td>2026-05-04</td>
+</tr>
+<tr>
+<td>Last push</td>
+<td>2026-08-01</td>
+</tr>
+<tr>
+<td>Stars</td>
+<td>8,225</td>
+</tr>
+<tr>
+<td>Forks</td>
+<td>697</td>
+</tr>
+<tr>
+<td>Open issues</td>
+<td>161</td>
+</tr>
+<tr>
+<td>License</td>
+<td>Apache-2.0</td>
+</tr>
+<tr>
+<td>Archived</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<p>That is substantial traction for a spec repository roughly three months old, and the open-issue count plus recent push activity indicate it is actively maintained rather than a drop-and-abandon publication.</p>
+<p><strong>Third-party ecosystem.</strong> A GitHub repository search for "okf open knowledge format" returns <strong>252 repositories</strong> (<a href="https://api.github.com/search/repositories?q=okf+open+knowledge+format&amp;sort=stars">search API</a>). The most-starred, as of 2026-08-03:</p>
+<table>
+<thead>
+<tr>
+<th>Stars</th>
+<th>Repository</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>224</td>
+<td><a href="https://github.com/scaccogatto/okf-skills"><code>scaccogatto/okf-skills</code></a></td>
+<td>"The OKF toolkit for Claude Code — author, maintain, validate &amp; visualize Open Knowledge Format bundles. Plugin, agent skills, and a GitHub Action." (MIT, created 2026-06-14, pushed 2026-08-03)</td>
+</tr>
+<tr>
+<td>117</td>
+<td><code>serradura/okf-gem</code></td>
+<td>"Open Knowledge Format for coding agents. Author, validate, lint, search, and visualize…"</td>
+</tr>
+<tr>
+<td>112</td>
+<td><code>coleam00/cole-medin-ai-coding</code></td>
+<td>"An Open Knowledge Format (OKF) bundle of Cole Medin's best AI-coding videos"</td>
+</tr>
+<tr>
+<td>86</td>
+<td><code>OWOX/models</code></td>
+<td>"OWOX Model Canvas — visual editor for data models in the Open Knowledge Format (OKF)"</td>
+</tr>
+<tr>
+<td>75</td>
+<td><code>coleam00/cole-medin-knowledge-base</code></td>
+<td>"An OKF knowledge base + Karpathy-style LLM wiki"</td>
+</tr>
+<tr>
+<td>62</td>
+<td><code>0dust/OKFy</code></td>
+<td>"Turn docs into agent-readable knowledge bundles using Open Knowledge Format (OKF)"</td>
+</tr>
+<tr>
+<td>56</td>
+<td><code>sniperunder123/okf-knowledge</code></td>
+<td>"A portable Claude Code skill (<code>/okf</code>) to create, read, maintain &amp; visualize OKF"</td>
+</tr>
+<tr>
+<td>43</td>
+<td><code>longsizhuo/okf-frontmatter</code></td>
+<td>"skill: maintain repo docs under the Open Knowledge Format"</td>
+</tr>
+<tr>
+<td>35</td>
+<td><code>openknowledge-sh/openknowledge</code></td>
+<td>"CLI tool for managing Open Knowledge Format (OKF) bundles."</td>
+</tr>
+<tr>
+<td>29</td>
+<td><code>xSAVIKx/okf-skills</code></td>
+<td>"Open Knowledge format agentic skills"</td>
+</tr>
+</tbody>
+</table>
+<p>(All rows from the same <a href="https://api.github.com/search/repositories?q=okf+open+knowledge+format&amp;sort=stars">search API result</a>; the <code>okf-skills</code> detail line is from its <a href="https://api.github.com/repos/scaccogatto/okf-skills">repo API record</a>.)</p>
+<p>Note how much of this ecosystem is <strong>agent-skill tooling</strong> rather than data-platform tooling — several of the top repos are Claude Code skills/plugins for authoring and validating bundles. That is a meaningful signal about where OKF is actually being picked up.</p>
+<p><strong>Google-side product context.</strong> The repository sits alongside Google Cloud Knowledge Catalog, announced 2026-04-22 as "an evolution of Dataplex into a dynamic, always-on context engine" providing "deep business semantics and data relationships," unified metadata, and "high-precision retrieval for agents" (<a href="https://cloud.google.com/blog/products/data-analytics/introducing-the-google-cloud-knowledge-catalog">Google Cloud Blog</a>). <strong>Unverified claim:</strong> search-result summaries stated that a "BigQuery Knowledge Catalog integration ingests OKF natively," but I could <strong>not</strong> confirm this on the Knowledge Catalog product blog page itself — that page does not directly mention OKF. Treat native Knowledge Catalog↔OKF ingestion as plausible but unconfirmed by a primary source I fetched.</p>
+<p><strong>Standards-body status:</strong> none observed. OKF is published unilaterally by Google Cloud under Apache 2.0; I found no evidence of submission to a neutral standards organization.</p>
+<hr />
+<h2 id="7-getting-started">7. Getting started</h2>
+<p>All commands from <a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/README.md"><code>okf/README.md</code></a>.</p>
+<p>Important framing from that README: the bundled agent is "a <strong>proof of concept</strong> demonstrating <em>one</em> way to produce OKF bundles automatically. The format itself is the contribution; this agent and the visualizer exist to make the format tangible at both ends — production and consumption." <strong>There is nothing to install to simply author OKF by hand</strong> — it is markdown files in a directory.</p>
+<h3 id="71-install-for-the-reference-tooling">7.1 Install (for the reference tooling)</h3>
+<pre><code class="language-bash">python3.13 -m venv .venv
+.venv/bin/pip install --index-url https://pypi.org/simple/ -e .[dev]
+</code></pre>
+<h3 id="72-credentials-reference-agent-only">7.2 Credentials (reference agent only)</h3>
+<ul>
+<li><strong>BigQuery:</strong> <code>gcloud auth application-default login</code> plus a billing project (<code>gcloud config set project &lt;id&gt;</code>). Public datasets are readable, but the caller's project is billed for query bytes.</li>
+<li><strong>Gemini:</strong> set <code>GEMINI_API_KEY</code> (AI Studio) <strong>or</strong> use Vertex AI via <code>GOOGLE_GENAI_USE_VERTEXAI=true</code>, <code>GOOGLE_CLOUD_PROJECT=&lt;id&gt;</code>, <code>GOOGLE_CLOUD_LOCATION=&lt;region&gt;</code>.</li>
+</ul>
+<h3 id="73-produce-a-bundle">7.3 Produce a bundle</h3>
+<pre><code class="language-bash">.venv/bin/python -m reference_agent enrich \
+    --source bq \
+    --dataset &lt;project&gt;.&lt;dataset&gt; \
+    --web-seed-file &lt;path/to/seeds.txt&gt; \
+    --out ./bundles/&lt;name&gt;
+</code></pre>
+<p>The reference agent runs two passes. The <strong>BQ pass</strong> writes one OKF doc per concept the source advertises, from BigQuery metadata alone. The <strong>web pass</strong> runs the LLM as its own crawler: it fetches seed URLs via a <code>fetch_url</code> tool and decides which outbound links to follow based on whether they look like authoritative documentation for existing concepts. For each page it either (a) enriches existing concept docs, (b) mints a standalone <code>references/&lt;slug&gt;</code> doc, or (c) skips. A hard <code>--web-max-pages</code> cap and a same-domain allowed-hosts filter (<code>--web-allowed-host</code>) are enforced inside the tool "so the agent cannot overrun." Use <code>--no-web</code> to skip the web pass, and <code>--concept &lt;type&gt;/&lt;name&gt;</code> to iterate on one concept.</p>
+<h3 id="74-visualize-a-bundle">7.4 Visualize a bundle</h3>
+<pre><code class="language-bash">.venv/bin/python -m reference_agent visualize --bundle ./bundles/&lt;name&gt;
+</code></pre>
+<p>This writes a <strong>self-contained interactive HTML file</strong> (<code>viz.html</code>) — one file, no backend. It renders a force-directed graph of every concept (nodes colored by type, edges from markdown cross-links), a detail panel showing frontmatter plus rendered body with internal links rewired to navigate in-viewer, a "Cited by" backlinks list computed from the reverse link graph, a search box matching title/concept id/tags, a type filter, and switchable layouts (cose / concentric / breadth-first / circle / grid). Flags: <code>--bundle</code> (required), <code>--out</code> (default <code>&lt;bundle&gt;/viz.html</code>), <code>--name</code>.</p>
+<p>Implementation note from the README: the HTML embeds the bundle as a JSON blob and uses <a href="https://js.cytoscape.org/">Cytoscape.js</a> for the graph and <a href="https://marked.js.org/">marked</a> for markdown rendering, "both loaded from a CDN." (Relevant if you need a genuinely offline artifact — the graph libs are not inlined.)</p>
+<h3 id="75-tests">7.5 Tests</h3>
+<pre><code class="language-bash">.venv/bin/pytest
+</code></pre>
+<h3 id="76-ready-made-example-bundles">7.6 Ready-made example bundles</h3>
+<p>Four bundles are checked into <code>bundles/</code> (<a href="https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/README.md">okf/README.md</a>); the <a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/contents/okf/samples"><code>okf/samples/</code></a> directory pairs each with a reproducible recipe (seed URLs plus the exact <code>enrich</code> command):</p>
+<ul>
+<li><code>bundles/ga4/</code> — GA4 Google Merchandise Store e-commerce dataset</li>
+<li><code>bundles/stackoverflow/</code> — Stack Overflow public dataset; exercises multi-concept enrichment from cross-cutting docs pages</li>
+<li><code>bundles/crypto_bitcoin/</code> — Bitcoin blocks/transactions from <code>bitcoin-etl</code>; exercises cross-table foreign-key relationships in prose</li>
+<li><code>bundles/acme_retail/</code> — Acme Retail</li>
+</ul>
+<p><em>(The <code>samples/</code> API listing returned three directories — <code>crypto_bitcoin</code>, <code>ga4_merch_store</code>, <code>stackoverflow</code> — so <code>acme_retail</code> appears as a bundle without a matching sample recipe.)</em></p>
+<hr />
+<h2 id="8-assessment-and-caveats">8. Assessment and caveats</h2>
+<ol>
+<li><strong>The name and creator check out exactly.</strong> "Open Knowledge Format" is the literal official name; Google Cloud is genuinely the creator.</li>
+<li><strong>v0.2 is real, current, and well-documented</strong>, but there are no git tags or GitHub Releases — versioning lives only in spec text (<a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/releases">releases API</a>, <a href="https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/tags">tags API</a>).</li>
+<li><strong>The RAG framing is media framing, not Google's.</strong> Anyone evaluating OKF on the premise that "Google says this replaces RAG" is working from a claim Google did not make. The spec explicitly declines to prescribe retrieval infrastructure.</li>
+<li><strong>It is a format, deliberately not a system.</strong> There is no index, no server, no query language, and no runtime in scope. Any "does it beat RAG" benchmark comparison is a category error unless you also specify the consumer that reads the bundle.</li>
+<li><strong>The interesting v0.2 idea is arguably attestation, not storage.</strong> <code>Attested Computation</code> — shipping the sanctioned SQL/dbt computation plus a deterministic, no-LLM attester that validates a run receipt — is a mechanism for making agent-reported numbers checkable. That has no RAG analogue at all and is underplayed in the popular coverage.</li>
+<li><strong>Unverified item flagged above:</strong> native Knowledge Catalog/BigQuery ingestion of OKF appeared in search summaries but not in any Google page I fetched.</li>
+</ol>
+<hr />
+<h2 id="sources">Sources</h2>
+<h3 id="primary-google">Primary — Google</h3>
+<ul>
+<li>Google Cloud Blog, "How the Open Knowledge Format can improve data sharing" (v0.1 announcement, 2026-06-12) — https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing</li>
+<li>Google Cloud Blog, OKF v0.2 trust signals announcement (2026-07-24) — https://cloud.google.com/blog/products/data-analytics/okf-v0-2-adds-trust-signals</li>
+<li>Google Cloud Blog, "Introducing the Google Cloud Knowledge Catalog" (2026-04-22) — https://cloud.google.com/blog/products/data-analytics/introducing-the-google-cloud-knowledge-catalog</li>
+<li>OKF v0.2 specification, <code>okf/SPEC.md</code> — https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md (raw: https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md)</li>
+<li><code>okf/README.md</code> — https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/README.md</li>
+<li><code>okf/LICENSE.md</code> (Apache 2.0) — https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/LICENSE.md</li>
+<li>OKF directory index — https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf</li>
+<li>Repository root — https://github.com/GoogleCloudPlatform/knowledge-catalog</li>
+</ul>
+<h3 id="primary-github-api-fetched-2026-08-03">Primary — GitHub API (fetched 2026-08-03)</h3>
+<ul>
+<li>Repo metadata (stars, forks, license, dates) — https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog</li>
+<li><code>okf/</code> directory contents — https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/contents/okf</li>
+<li>Repo root contents — https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/contents/</li>
+<li><code>okf/samples/</code> contents — https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/contents/okf/samples</li>
+<li><code>okf/SPEC.md</code> commit history — https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/commits?path=okf/SPEC.md</li>
+<li>Releases (empty) — https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/releases</li>
+<li>Tags (empty) — https://api.github.com/repos/GoogleCloudPlatform/knowledge-catalog/tags</li>
+<li>Ecosystem repository search — https://api.github.com/search/repositories?q=okf+open+knowledge+format&amp;sort=stars</li>
+<li><code>scaccogatto/okf-skills</code> metadata — https://api.github.com/repos/scaccogatto/okf-skills</li>
+</ul>
+<h3 id="secondary-used-only-to-characterize-third-party-rag-framing">Secondary — used only to characterize third-party RAG framing</h3>
+<ul>
+<li>Analytics Vidhya, "OKF: Redefining Knowledge Bases for AI Agents" — https://www.analyticsvidhya.com/blog/2026/07/open-knowledge-format-okf/</li>
+<li>MarkTechPost, "Google Cloud Introduces Open Knowledge Format (OKF)…" <em>(title from search metadata; direct fetch returned HTTP 503, body unverified)</em> — https://www.marktechpost.com/2026/06/16/google-cloud-introduces-open-knowledge-format-okf-a-vendor-neutral-markdown-spec-for-giving-ai-agents-curated-context/</li>
+<li>Medium (Secret Dev), "Beyond RAG: How Google's OKF is Replacing the Vector Database" <em>(cited as an example of replacement framing; not fetched)</em> — https://secret-dev.medium.com/beyond-rag-how-googles-open-knowledge-format-okf-is-replacing-the-vector-database-2ffb5bc2f8eb</li>
+<li>Medium (Amit Patriwala), "Google Just Open-Sourced a Format That Makes RAG Optional" <em>(cited as an example of replacement framing; not fetched)</em> — https://medium.com/@patriwala/google-just-open-sourced-a-format-that-makes-rag-optional-inside-okf-396d28865e6e</li>
+<li>HPE Community, "Open Knowledge Format vs. RAG" <em>(direct fetch returned HTTP 403; content unverified)</em> — https://community.hpe.com/t5/ai-unlocked/open-knowledge-format-vs-rag-rethinking-how-ai-agents-get-their/ba-p/7270244</li>
+</ul>
+<h3 id="third-party-tooling-referenced">Third-party tooling referenced</h3>
+<ul>
+<li><code>scaccogatto/okf-skills</code> — https://github.com/scaccogatto/okf-skills</li>
+</ul></main>
+<footer>Rendered on the tailnet HTML scratchpad · private to your devices.</footer>
+<script>
+(function(){
+  "use strict";
+  var m = location.pathname.match(/\/scratch\/([^\/]+)\//);
+  var parts = location.pathname.split('/').filter(Boolean);
+  var slug = m ? m[1] : (parts.length>1 ? parts[parts.length-2] : 'artifact');
+  var KEY = 'scratchReview:' + slug;
+  var comments = [];
+  var lastSel = null;  // most recent text selection inside <main>, kept so "+ Comment" works after the click clears it
+  try { comments = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){}
+  function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(comments)); }catch(e){} }
+  var HKEY = 'scratchReviewHistory:' + slug;   // archive of all submitted rounds (never auto-cleared)
+  var history = [];
+  try { history = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch(e){}
+  function persistHistory(){ try{ localStorage.setItem(HKEY, JSON.stringify(history)); }catch(e){} }
+  var viewMode = 'review';  // 'review' (active round) | 'history' (Past comments)
+  function save(){ persist(); render(); applyMarks(); }
+
+  // In-page indicators: highlight the commented text so you can see what you've marked.
+  function clearMarks(){
+    var main=document.querySelector('main'); if(!main) return;
+    main.querySelectorAll('.sr-mark').forEach(function(mk){ var p=mk.parentNode; while(mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
+  }
+  function wrapQuote(quote, cid){
+    if(!quote) return; var main=document.querySelector('main'); if(!main) return;
+    var w=document.createTreeWalker(main, NodeFilter.SHOW_TEXT, null), n;
+    while((n=w.nextNode())){
+      if(n.parentNode && n.parentNode.closest && n.parentNode.closest('.sr-mark')) continue;
+      var idx=n.nodeValue.indexOf(quote);
+      if(idx>=0){ var r=document.createRange(); r.setStart(n,idx); r.setEnd(n,idx+quote.length); var mk=document.createElement('mark'); mk.className='sr-mark'; mk.dataset.cid=cid; mk.title='Commented — click to view'; try{ r.surroundContents(mk); }catch(e){} return; }
+    }
+  }
+  function applyMarks(){ clearMarks(); comments.forEach(function(c){ if(c.quote) wrapQuote(c.quote, c.id); }); }
+  function esc(s){ return (s||'').replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
+
+  function headingFor(node){
+    var hs = document.querySelectorAll('main h1[id],main h2[id],main h3[id],main h4[id]');
+    var best=null;
+    for(var i=0;i<hs.length;i++){
+      if(hs[i]===node || (node.compareDocumentPosition(hs[i]) & Node.DOCUMENT_POSITION_PRECEDING)) best=hs[i];
+    }
+    return best;
+  }
+
+  var btn=document.createElement('button'); btn.className='sr-fab'; btn.type='button';
+  var panel=document.createElement('div'); panel.className='sr-panel';
+  panel.innerHTML='<div class="sr-head"><b class="sr-title">Review</b><span class="sr-headbtns"><button type="button" class="sr-clear" data-act="clear">Clear</button><button type="button" class="sr-x" data-act="close">✕</button></span></div>'
+    +'<div class="sr-hint">Highlight text then <b>+ Comment</b>, or <b>+ Note</b> for a general remark. Comments save as you type — add as many as you want. <b>Submit → copy prompt</b> exports your round, archives it under <b>Past</b>, and clears the page for the next round.</div>'
+    +'<div class="sr-list"></div>'
+    +'<div class="sr-actions"></div>';
+  var chip=document.createElement('button'); chip.type='button'; chip.className='sr-chip'; chip.textContent='💬 Comment'; chip.style.display='none';
+  var toast=document.createElement('div'); toast.className='sr-toast'; toast.style.display='none';
+  document.body.appendChild(btn); document.body.appendChild(panel); document.body.appendChild(chip); document.body.appendChild(toast);
+
+  function showToast(t){ toast.textContent=t; toast.style.display='block'; setTimeout(function(){toast.style.display='none';},4500); }
+  function openPanel(o){ panel.classList.toggle('sr-open', o!==false); }
+
+  function reviewActionsHTML(){
+    return '<button type="button" class="sr-note" data-act="comment">+ Comment</button>'
+      +'<button type="button" class="sr-note" data-act="note">+ Note</button>'
+      +'<button type="button" class="sr-note" data-act="history">Past'+(history.length?' ('+history.length+')':'')+'</button>'
+      +'<button type="button" class="sr-submit" data-act="submit">Submit → copy prompt</button>';
+  }
+  function render(){
+    btn.textContent='💬 Review'+(comments.length?' ('+comments.length+')':'');
+    var title=panel.querySelector('.sr-title'), list=panel.querySelector('.sr-list'),
+        actions=panel.querySelector('.sr-actions'), hint=panel.querySelector('.sr-hint');
+    var clr=panel.querySelector('.sr-clear');
+    if(viewMode==='history'){
+      title.textContent='Past comments'; hint.style.display='none'; if(clr) clr.style.display='none';
+      if(!history.length){ list.innerHTML='<div class="sr-empty">No submitted rounds yet.</div>'; }
+      else {
+        var html='';
+        for(var k=history.length-1;k>=0;k--){
+          var h=history[k]; var when=esc((h.submitted_at||'').replace('T',' ').slice(0,16));
+          html+='<div class="sr-round"><div class="sr-rhead"><span>Round '+(k+1)+' · '+when+' · '+h.comments.length+'</span>'
+            +'<button type="button" class="sr-recopy" data-r="'+k+'">copy prompt</button></div>'
+            +h.comments.map(function(c){
+              return '<div class="sr-hitem"><div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span></div>'
+                +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+                +'<div class="sr-hbody">'+esc(c.body||'(no text)')+'</div></div>';
+            }).join('')
+            +'</div>';
+        }
+        list.innerHTML=html;
+      }
+      actions.innerHTML='<button type="button" class="sr-note" data-act="back">← Back to review</button>';
+      return;
+    }
+    title.textContent='Review'; hint.style.display='';
+    if(clr) clr.style.display = comments.length ? '' : 'none';
+    actions.innerHTML=reviewActionsHTML();
+    if(!comments.length){ list.innerHTML='<div class="sr-empty">No comments yet. Highlight text → <b>+ Comment</b>, or <b>+ Note</b>.</div>'; return; }
+    list.innerHTML='';
+    comments.forEach(function(c,i){
+      var row=document.createElement('div'); row.className='sr-item';
+      row.innerHTML='<div class="sr-loc"><span>'+esc(c.heading?'§ '+c.heading:'note')+'</span><button type="button" class="sr-del" data-i="'+i+'">✕</button></div>'
+        +(c.quote?'<div class="sr-quote">'+esc(c.quote)+'</div>':'')
+        +'<textarea class="sr-body" data-i="'+i+'" rows="2" placeholder="Your comment…">'+esc(c.body||'')+'</textarea>';
+      list.appendChild(row);
+    });
+  }
+
+  function addComment(quote, heading){
+    comments.push({id:Date.now()+'-'+comments.length, quote:quote||'', heading:heading||'', body:''});
+    save(); openPanel(true);
+    var tas=panel.querySelectorAll('.sr-body'); if(tas.length) tas[tas.length-1].focus();
+  }
+
+  document.addEventListener('mouseup', function(){
+    setTimeout(function(){
+      var sel=window.getSelection(); var txt=sel && sel.toString().trim(); var main=document.querySelector('main');
+      if(txt && txt.length>1 && sel.rangeCount && main && main.contains(sel.anchorNode)){
+        var r=sel.getRangeAt(0).getBoundingClientRect();
+        chip.style.top=(window.scrollY+r.bottom+6)+'px'; chip.style.left=(window.scrollX+r.left)+'px';
+        var h=headingFor(sel.anchorNode); var hd=h?(h.textContent||'').replace(/¶|#/g,'').trim().slice(0,120):'';
+        chip.dataset.quote=txt.slice(0,280); chip.dataset.heading=hd;
+        lastSel={quote:txt.slice(0,280), heading:hd};
+        chip.style.display='block';
+      } else { chip.style.display='none'; }
+    },10);
+  });
+  chip.addEventListener('mousedown', function(e){ e.preventDefault(); addComment(chip.dataset.quote, chip.dataset.heading); chip.style.display='none'; var s=window.getSelection(); if(s) s.removeAllRanges(); });
+  btn.addEventListener('click', function(){ openPanel(!panel.classList.contains('sr-open')); render(); });
+  panel.addEventListener('click', function(e){
+    var act=e.target.getAttribute('data-act');
+    if(act==='close') openPanel(false);
+    else if(act==='comment'){ if(lastSel && lastSel.quote){ addComment(lastSel.quote, lastSel.heading); lastSel=null; } else { showToast('Highlight some text on the page first, then “+ Comment”. (Use “+ Note” for a general remark.)'); } }
+    else if(act==='note') addComment('','');
+    else if(act==='submit') submit();
+    else if(act==='history'){ viewMode='history'; render(); }
+    else if(act==='back'){ viewMode='review'; render(); }
+    else if(act==='clear'){ if(comments.length && (typeof confirm!=='function' || confirm('Discard the '+comments.length+' unsubmitted comment(s)? Past history is kept.'))){ comments=[]; persist(); clearMarks(); render(); showToast('Cleared. Past history kept.'); } }
+    else if(e.target.classList.contains('sr-recopy')){ var r=+e.target.getAttribute('data-r'); if(history[r]) copyText(buildPrompt(history[r].comments)).then(function(){ showToast('Round '+(r+1)+' prompt re-copied to the clipboard.'); }).catch(function(){ showToast('Clipboard blocked.'); }); }
+    else if(e.target.classList.contains('sr-del')){ comments.splice(+e.target.getAttribute('data-i'),1); save(); }
+  });
+  panel.addEventListener('input', function(e){
+    if(e.target.classList.contains('sr-body')){ comments[+e.target.getAttribute('data-i')].body=e.target.value; persist(); btn.textContent='💬 Review ('+comments.length+')'; }
+  });
+
+  function buildPrompt(cs){
+    cs = cs || comments;
+    var title=document.title||slug; var L=[];
+    L.push('[scratch-review '+slug+']');
+    L.push('Review of "'+title+'"'); L.push(location.href);
+    L.push('I left '+cs.length+' comment(s); full JSON downloaded to ~/Downloads/scratch-comments-'+slug+'.json'); L.push('');
+    cs.forEach(function(c,i){
+      L.push((i+1)+'. ['+(c.heading?'§ '+c.heading:'note')+'] '+(c.body||'(no text)'));
+      if(c.quote) L.push('   ↳ re: "'+c.quote+'"');
+    });
+    L.push(''); L.push('Re-read the artifact and address each comment, then reply in our chat.');
+    return L.join('\n');
+  }
+  function downloadJSON(){
+    var payload={slug:slug,title:document.title,url:location.href,submitted_at:new Date().toISOString(),comments:comments};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='scratch-comments-'+slug+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},120);
+  }
+  function copyText(text){
+    if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function(res,rej){ try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res(); }catch(err){ rej(err); } });
+  }
+  function submit(){
+    if(!comments.length){ showToast('No comments yet — highlight text → + Comment, or + Note.'); return; }
+    var text=buildPrompt(comments); downloadJSON();
+    // Archive the round, then clean the slate so the next round starts fresh (no stale
+    // re-highlighting on a revised page). History is kept under "Past".
+    history.push({submitted_at:new Date().toISOString(), comments:comments.slice()}); persistHistory();
+    comments=[]; persist(); clearMarks(); viewMode='review'; render();
+    copyText(text).then(function(){ showToast('Copied — paste into Claude Code. Round archived under “Past”; page cleared for the next round.'); })
+                  .catch(function(){ showToast('JSON downloaded; round archived & cleared. Clipboard blocked — copy from the file.'); });
+  }
+
+  // Click a highlighted span on the page → open the panel and focus that comment.
+  var mainEl=document.querySelector('main');
+  if(mainEl) mainEl.addEventListener('click', function(e){
+    var mk=e.target.closest?e.target.closest('.sr-mark'):null; if(!mk) return;
+    openPanel(true); var idx=-1; comments.forEach(function(c,j){ if(c.id===mk.dataset.cid) idx=j; });
+    if(idx>=0){ var ta=panel.querySelectorAll('.sr-body')[idx]; if(ta){ ta.scrollIntoView({block:'center'}); ta.focus(); } }
+  });
+
+  render(); applyMarks();
+})();
+</script>
+</body></html>
