@@ -22,7 +22,7 @@
 # Exit immediately on error
 set -euo pipefail
 PROD_DIR="/opt/universal_agent"
-REPO_URL="https://github.com/Kjdragan/universal_agent.git"
+REPO_URL="git@github.com:Kjdragan/universal_agent.git"
 
 if [ ! -d "$PROD_DIR/.git" ]; then
   echo "--> Production repository missing at $PROD_DIR; bootstrapping clone..."
