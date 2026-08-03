@@ -2,11 +2,12 @@
 
 > Durable, dated copy of every artifact published to the tailnet scratchpad.
 > Newest first. Auto-generated from `index.jsonl` — do not edit by hand.
-> 63 artifact(s) archived.
+> 64 artifact(s) archived.
 
 
 ## 2026-08-03
 
+- **11:42:18** — [Fleet Triage Handoff — Execution Report (2026-08-02)](2026-08-03/114218__fleet-fixes-execution-2026-08-02__fleet-fixes-report.html) · slug `fleet-fixes-execution-2026-08-02` · [live](https://uaonvps.taildcc090.ts.net/scratch/fleet-fixes-execution-2026-08-02/fleet-fixes-report.html)
 - **09:12:09** — [Fleet Triage Handoff — Execution Report (2026-08-02)](2026-08-03/091209__fleet-fixes-execution-2026-08-02__fleet-fixes-report.html) · slug `fleet-fixes-execution-2026-08-02` · [live](https://uaonvps.taildcc090.ts.net/scratch/fleet-fixes-execution-2026-08-02/fleet-fixes-report.html)
 - **08:10:04** — [Fleet Triage Handoff — Execution Report (2026-08-02)](2026-08-03/081004__fleet-fixes-execution-2026-08-02__fleet-fixes-report.html) · slug `fleet-fixes-execution-2026-08-02` · [live](https://uaonvps.taildcc090.ts.net/scratch/fleet-fixes-execution-2026-08-02/fleet-fixes-report.html)
 
