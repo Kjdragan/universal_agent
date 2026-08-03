@@ -34,8 +34,8 @@ import sqlite3
 from typing import Any, Optional
 
 from universal_agent import task_hub
-from universal_agent.wiki.core import _slugify as _base_slugify
 from universal_agent.feature_flags import directed_demo_enabled
+from universal_agent.wiki.core import _slugify as _base_slugify
 
 logger = logging.getLogger(__name__)
 
