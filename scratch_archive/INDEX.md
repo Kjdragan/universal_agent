@@ -2,8 +2,18 @@
 
 > Durable, dated copy of every artifact published to the tailnet scratchpad.
 > Newest first. Auto-generated from `index.jsonl` — do not edit by hand.
-> 59 artifact(s) archived.
+> 63 artifact(s) archived.
 
+
+## 2026-08-03
+
+- **09:12:09** — [Fleet Triage Handoff — Execution Report (2026-08-02)](2026-08-03/091209__fleet-fixes-execution-2026-08-02__fleet-fixes-report.html) · slug `fleet-fixes-execution-2026-08-02` · [live](https://uaonvps.taildcc090.ts.net/scratch/fleet-fixes-execution-2026-08-02/fleet-fixes-report.html)
+- **08:10:04** — [Fleet Triage Handoff — Execution Report (2026-08-02)](2026-08-03/081004__fleet-fixes-execution-2026-08-02__fleet-fixes-report.html) · slug `fleet-fixes-execution-2026-08-02` · [live](https://uaonvps.taildcc090.ts.net/scratch/fleet-fixes-execution-2026-08-02/fleet-fixes-report.html)
+
+## 2026-08-01
+
+- **22:58:15** — [Deploy exit 124 — root cause and durable fix](2026-08-01/225815__deploy-exit124-rootcause__deploy-124-exhibit.html) · slug `deploy-exit124-rootcause` · [live](https://uaonvps.taildcc090.ts.net/scratch/deploy-exit124-rootcause/deploy-124-exhibit.html)
+- **22:08:26** — [Deploy exit 124 — root cause and durable fix](2026-08-01/220826__deploy-exit124-rootcause__deploy-124-exhibit.html) · slug `deploy-exit124-rootcause` · [live](https://uaonvps.taildcc090.ts.net/scratch/deploy-exit124-rootcause/deploy-124-exhibit.html)
 
 ## 2026-07-31
 
