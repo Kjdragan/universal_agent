@@ -19,7 +19,13 @@ ZAI's weekly/monthly quota wall (error code 1310): callers in
 ``rate_limiter.py::with_rate_limit_retry`` and
 ``zai_observability.py::_capture`` invoke it on detection, and it applies a
 pause-only global pause (``set_global_pause`` — NOT the L4 tier-override
-preset) with a TTL parsed from the reset timestamp in the error body.
+preset) with a TTL parsed from the reset timestamp in the error body. On a
+FRESH transition into that pause (2026-08-03) it also fires a best-effort
+operator notification (kind ``zai_weekly_exhaustion``, severity ``error``)
+through ``gateway_server._add_notification`` -> ``notification_dispatcher.py``
+— the pause policy itself is unchanged (the fleet still stops); this only
+makes sure the operator hears about it instead of noticing by silence. See
+``_notify_weekly_exhaustion_transition``.
 
 **The one rule that makes this safe to deploy without live testing: every read
 FAILS OPEN.** A missing / corrupt / unreadable / permission-denied control file
@@ -350,6 +356,110 @@ def _parse_weekly_reset_epoch(error_text: str) -> Optional[float]:
         return None
 
 
+# ── Operator notification on a FRESH 1310 transition (2026-08-03) ──────────
+#
+# The auto-pause above is a deliberate, standing policy: ZAI reports weekly
+# exhaustion, the fleet stops. That does NOT change here. What was missing is
+# that the operator only found out by noticing silence — this section closes
+# that gap with a one-shot alert on the transition INTO a fresh pause, using
+# the SAME producer/delivery machinery every other operator-facing alert
+# uses, rather than inventing a new one:
+#   gateway_server._add_notification (writes an `activity_events` row) ->
+#   services/notification_dispatcher.py (polls that table, sends email +
+#   Telegram via plain AgentMail/Telegram API calls — no LLM inference on
+#   the delivery path, so it still works while ZAI itself is the thing that's
+#   down).
+# "Fresh" is exactly the transition `handle_weekly_exhaustion` already
+# computes below (no active zai_1310 pause, or a previous one that expired /
+# was cleared) — the idempotent early-return there is the ONLY guard needed
+# to keep every repeat 1310 seen while already paused from re-notifying.
+# No auto-escalation or auto-failover is attached: this function only calls
+# `_add_notification`, never a control-plane writer.
+_WEEKLY_EXHAUSTION_NOTIFICATION_KIND = "zai_weekly_exhaustion"
+
+
+def _notify_weekly_exhaustion_transition(
+    *,
+    error_text: str,
+    source: str,
+    last_seen_at: float,
+    reset_epoch: Optional[float],
+    reset_display: str,
+) -> None:
+    """Best-effort operator alert for a fresh 1310 auto-pause transition.
+
+    Deferred-imports ``gateway_server._add_notification`` rather than
+    duplicating its upsert / dashboard-cache / default-channel logic — that
+    import only happens on a real, at-most-weekly incident, never on the hot
+    per-request path this module also sits on. Swallows EVERY failure
+    (including ``gateway_server`` not being loaded in this process, e.g. a
+    Cody/VP CLI subprocess that never imported it): this module's contract is
+    "never raise", and a notification failure must never mask or block the
+    pause it is reporting on.
+    """
+    try:
+        from universal_agent.gateway_server import _add_notification
+    except Exception:  # noqa: BLE001 — no gateway loaded in this process; fail open
+        logger.info(
+            "zai_control: weekly_exhaustion operator notification skipped "
+            "(gateway_server not importable in this process)"
+        )
+        return
+
+    try:
+        written_at = datetime.fromtimestamp(last_seen_at, tz=ZoneInfo("UTC")).isoformat()
+        evidence = str(error_text or "").strip()[:1000]
+        reset_line = (
+            f"self-clears at {reset_display} UTC"
+            if reset_display != "unparsed"
+            else "reset time could not be parsed from the error body — a "
+            f"fallback TTL was applied (see reset_at_epoch={reset_epoch})"
+        )
+        message = (
+            "ZAI reports weekly exhaustion — fleet paused.\n\n"
+            "This is ZAI's own error response, not independently verified — "
+            "the ZAI weekly-budget LEADING meter has false-tripped before "
+            "(2026-07-24, an uncalibrated cap wrongly throttled prod), so "
+            "treat this as a report to investigate, not settled fact. It is "
+            "a DIFFERENT signal from that meter: this fired on an actual "
+            "1310 error ZAI returned, not an estimate.\n\n"
+            f"Stamp written: {written_at} (source={source}).\n"
+            f"Trigger evidence (raw, from ZAI): {evidence!r}\n\n"
+            "What 'paused' means operationally: ALL ZAI dispatch — direct "
+            "httpx callers and VP/Simone CLI-subprocess principals via the "
+            "capacity governor gate — is halted account-wide; "
+            f"{reset_line}, when the pause self-clears automatically. No "
+            "auto-escalation or auto-failover is attached to this pause — "
+            "the fleet simply stays stopped until then, by design.\n\n"
+            "Un-pause knob (manual clear is NOT recommended unless the reset "
+            "time above has already passed and traffic is still blocked): "
+            'POST /api/v1/ops/zai/control {"action": "clear"} (or the ZAI '
+            "control dashboard tile), which calls "
+            "services.zai_control.clear_all() — equivalently "
+            "set_global_pause(False, ...)."
+        )
+        _add_notification(
+            kind=_WEEKLY_EXHAUSTION_NOTIFICATION_KIND,
+            title="ZAI reports weekly exhaustion — fleet paused",
+            message=message,
+            severity="error",
+            requires_action=False,
+            channels=["dashboard", "email", "telegram"],
+            metadata={
+                "source": source,
+                "last_seen_at": last_seen_at,
+                "reset_at_epoch": reset_epoch,
+                "error": evidence,
+                "component": "zai_control.handle_weekly_exhaustion",
+            },
+        )
+    except Exception:  # noqa: BLE001 — never let a notification failure surface
+        logger.warning(
+            "zai_control: weekly_exhaustion operator notification failed",
+            exc_info=True,
+        )
+
+
 def handle_weekly_exhaustion(error_text: str, *, source: str) -> Optional[dict[str, Any]]:
     """Handle a ZAI weekly/monthly quota-exhaustion signal (error code 1310).
 
@@ -378,6 +488,16 @@ def handle_weekly_exhaustion(error_text: str, *, source: str) -> Optional[dict[s
     TTL) rather than ``None`` — the invariant's freshness condition requires
     a reset time in the future to fire, so a ``None`` stamp would silently
     never alert on an unparseable-body trip.
+
+    On a FRESH transition (the idempotent branch above did NOT short-circuit),
+    also fires a best-effort operator notification — see
+    ``_notify_weekly_exhaustion_transition`` — through the same
+    ``gateway_server._add_notification`` -> ``notification_dispatcher.py``
+    machinery every other operator alert uses (kind
+    ``zai_weekly_exhaustion``, severity ``error``). Never fires on the
+    repeat-1310-while-paused no-op path, so a flapping upstream can't spam
+    the operator. Notification failure is swallowed and never affects this
+    function's return value.
 
     Fail-open per the module-wide invariant: NEVER raises. Returns the
     resulting control state dict, or ``None`` on any internal failure.
@@ -425,6 +545,19 @@ def handle_weekly_exhaustion(error_text: str, *, source: str) -> Optional[dict[s
             "source": source,
         }
         write_control(data)
+
+        # Fresh transition ONLY (the idempotent early-return above already
+        # absorbs every repeat 1310 seen while a zai_1310 pause is active) —
+        # tell the operator now instead of leaving him to notice silence.
+        # Best-effort: never allowed to affect this function's return value.
+        _notify_weekly_exhaustion_transition(
+            error_text=error_text,
+            source=source,
+            last_seen_at=now,
+            reset_epoch=reset_epoch,
+            reset_display=reset_display,
+        )
+
         return read_control(use_cache=False)
     except Exception:  # noqa: BLE001 — fail-open, never raise (module invariant)
         logger.warning("zai_control: handle_weekly_exhaustion failed", exc_info=True)

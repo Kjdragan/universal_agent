@@ -462,3 +462,141 @@ def test_handle_weekly_exhaustion_fails_open_never_raises(isolated_control, monk
     monkeypatch.setattr(zai_control, "set_global_pause", boom)
     result = zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test")
     assert result is None
+
+
+# ── R1b: operator notification on a FRESH 1310 transition ──────────────────
+#
+# The auto-pause policy itself is unchanged (asserted above). These tests
+# cover the ADDITION: a best-effort operator alert fires exactly once per
+# fresh transition, through `gateway_server._add_notification` — the same
+# producer every other operator alert uses. `_notify_weekly_exhaustion_
+# transition` deferred-imports `universal_agent.gateway_server` (a ~37k-line
+# module real tests must never eagerly load — it is a documented cause of
+# hangs in broad `pytest -k` sweeps), so these tests install a lightweight
+# fake module under that name in `sys.modules` rather than importing the
+# real one.
+
+import sys  # noqa: E402
+import types  # noqa: E402
+
+
+@pytest.fixture
+def fake_add_notification(monkeypatch):
+    """Install a fake `universal_agent.gateway_server` module exposing only
+    `_add_notification`, capturing every call. Never imports the real
+    gateway_server module (heavy; a documented hang risk under broad test
+    sweeps) — the deferred `from universal_agent.gateway_server import
+    _add_notification` inside `_notify_weekly_exhaustion_transition`
+    resolves against this fake instead."""
+    calls: list[dict] = []
+
+    def _fake(**kwargs):
+        calls.append(kwargs)
+        return {"id": "fake-notification-id"}
+
+    fake_module = types.ModuleType("universal_agent.gateway_server")
+    fake_module._add_notification = _fake
+    monkeypatch.setitem(sys.modules, "universal_agent.gateway_server", fake_module)
+    return calls
+
+
+def test_fresh_transition_emits_exactly_one_notification(
+    isolated_control, fake_add_notification
+):
+    zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test:fresh")
+    assert len(fake_add_notification) == 1
+    record = fake_add_notification[0]
+    assert record["kind"] == "zai_weekly_exhaustion"
+    assert record["severity"] == "error"
+    assert "telegram" in record["channels"]
+    assert "email" in record["channels"]
+
+
+def test_repeated_1310_while_paused_emits_no_further_notifications(
+    isolated_control, fake_add_notification
+):
+    zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test:first")
+    assert len(fake_add_notification) == 1
+
+    # Several more 1310s arrive while the zai_1310 pause is still active —
+    # the idempotent early-return in handle_weekly_exhaustion means none of
+    # these should even reach the notifier.
+    for _ in range(3):
+        zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test:repeat")
+    assert len(fake_add_notification) == 1
+
+
+def test_fresh_stamp_after_cleared_pause_emits_again(
+    isolated_control, fake_add_notification
+):
+    zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test:week1")
+    assert len(fake_add_notification) == 1
+
+    # Operator (or the reset TTL) clears the pause — the next week's 1310 is
+    # a fresh transition again and must notify a second time.
+    zai_control.set_global_pause(False)
+    zai_control._invalidate_cache()
+
+    zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test:week2")
+    assert len(fake_add_notification) == 2
+
+
+def test_notification_message_contains_evidence_fields(
+    isolated_control, fake_add_notification
+):
+    body = _future_1310_body()
+    zai_control.handle_weekly_exhaustion(body, source="test:evidence-source")
+    record = fake_add_notification[0]
+    message = record["message"]
+
+    # Raw trigger evidence (the actual 1310 body ZAI returned) is present,
+    # not summarized away.
+    assert "1310" in message
+    assert body in message
+    # Hedged framing — not asserted as unquestionable fact, per the
+    # documented weekly-meter false-positive history (2026-07-24).
+    assert "not independently verified" in message or "not settled fact" in message
+    # What "paused" means operationally.
+    assert "halted account-wide" in message
+    # The real un-pause knob.
+    assert "/api/v1/ops/zai/control" in message
+    assert "clear_all" in message or '"action": "clear"' in message
+    # No auto-escalation/auto-failover implied.
+    assert "No auto-escalation or auto-failover" in message
+
+    metadata = record["metadata"]
+    assert metadata["source"] == "test:evidence-source"
+    assert isinstance(metadata["last_seen_at"], float)
+    assert isinstance(metadata["reset_at_epoch"], float)
+    assert body[:200] in metadata["error"]
+
+
+def test_notification_never_raises_when_add_notification_itself_fails(
+    isolated_control, monkeypatch
+):
+    """A broken/missing notification producer must never surface as a
+    `handle_weekly_exhaustion` failure — the pause it reports on must land
+    regardless."""
+    def boom(**kwargs):
+        raise RuntimeError("activity_events write failed")
+
+    fake_module = types.ModuleType("universal_agent.gateway_server")
+    fake_module._add_notification = boom
+    monkeypatch.setitem(sys.modules, "universal_agent.gateway_server", fake_module)
+
+    result = zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test")
+    assert result is not None
+    assert result["global_pause"]["active"] is True
+
+
+def test_notification_skipped_when_gateway_server_not_importable(
+    isolated_control, monkeypatch
+):
+    """A process that never loaded gateway_server (e.g. a Cody/VP CLI
+    subprocess) must still complete the pause — the notification is a
+    best-effort addition, not a dependency."""
+    monkeypatch.setitem(sys.modules, "universal_agent.gateway_server", None)
+
+    result = zai_control.handle_weekly_exhaustion(_future_1310_body(), source="test")
+    assert result is not None
+    assert result["global_pause"]["active"] is True

@@ -26,7 +26,7 @@ code_paths:
   - src/universal_agent/infisical_loader.py
   - src/universal_agent/services/batched_judge.py
   - web-ui/app/dashboard/zai-control/page.tsx
-last_verified: 2026-07-24
+last_verified: 2026-08-03
 ---
 
 # ZAI Rate Limiter & Inference Governance
@@ -1016,7 +1016,42 @@ clear until the reset.
   is within 48h (`UA_ZAI_WEEKLY_EXHAUSTION_FRESH_WINDOW_SECONDS`) AND `reset_at_epoch` is still in the
   future. `observed_value` carries the reset time in both UTC and America/Chicago so the digest email
   tells Kevin exactly when the pause self-clears. Reuses the existing proactive-health digest
-  fingerprint + 6h cooldown — no new alert plumbing.
+  fingerprint + 6h cooldown — no new alert plumbing. That digest path runs on a 6h-cooldown systemd
+  timer (`proactive_health_timer_main.py`), so it can be hours late to a fresh trip.
+- **Immediate operator notification on the FRESH transition (2026-08-03)** — `handle_weekly_exhaustion`
+  calls `zai_control.py::_notify_weekly_exhaustion_transition` right after the pause-only write above,
+  but ONLY on the branch that did NOT hit the idempotent early-return (i.e. exactly once per transition
+  into a fresh `zai_1310` pause — never on a repeat 1310 seen while already paused for that reason).
+  This closes the gap the §9.6 alerting above leaves: instead of waiting for the next proactive-health
+  digest tick (up to 6h away), the operator's phone/inbox gets it within the dispatcher's ~30s poll.
+  It does NOT change the pause policy itself — it is notify-only, no auto-escalation/auto-failover.
+  Mechanics:
+  - **Producer** — deferred-imports `gateway_server._add_notification` (the SAME producer every other
+    operator alert in the codebase uses) and writes one `activity_events` row: `kind=
+    "zai_weekly_exhaustion"`, `severity="error"` (matches `notification_dispatcher.py`'s
+    `_DELIVERABLE_SEVERITIES = {"error", "warning"}` — a `"critical"` severity, the vocabulary
+    `services/intelligence_emitter.py::emit_intelligence_event` uses, would silently NOT be picked up
+    by the dispatcher, which is why that lighter-weight producer was not reused here). Explicit
+    `channels=["dashboard", "email", "telegram"]`.
+  - **Message content** — phrased as "ZAI reports weekly exhaustion — fleet paused" and explicitly
+    hedged ("not independently verified... treat this as a report to investigate, not settled fact"),
+    per the documented 2026-07-24 false-positive precedent on the *separate* R3 weekly-budget meter
+    (§9.7) — not a claim that R1's own 1310 detection has false-tripped. Includes the stamp write time,
+    the raw 1310 error/body text (truncated to 1000 chars) as evidence, what "paused" means operationally
+    (mirrors the §9.6 dispatch-gating scope above), and the real un-pause knob (`POST
+    /api/v1/ops/zai/control {"action": "clear"}`, equivalently `zai_control.clear_all()` /
+    `set_global_pause(False, ...)`) — with an explicit caution that manually clearing before the reset
+    time doesn't actually restore ZAI (the account is still exhausted).
+  - **Delivery does not depend on ZAI/LLM inference** — `notification_dispatcher.py`'s email path is a
+    plain `AgentMailService.send_email` HTTP call and its Telegram path is a plain Telegram Bot API HTTP
+    call (`services/telegram_send.py`); neither touches the rate limiter or any LLM. The dispatcher's
+    polling loop (`_notification_dispatcher_enabled`, default ON in prod) is an independent asyncio
+    background task in the gateway process, unaffected by a ZAI global pause.
+  - **Fail-open** — wrapped in its own try/except so a broken/missing `_add_notification` (e.g. this
+    process never imported `gateway_server`, as in a Cody/VP CLI subprocess) never surfaces as a
+    `handle_weekly_exhaustion` failure; the pause it reports on is written regardless.
+  - Tests: `tests/unit/test_zai_control.py` (fresh-transition-emits-once, repeat-while-paused-emits-none,
+    re-clears-and-fires-again, message/evidence content, fail-open on a broken/missing producer).
 - **Out of scope for R1** (unverified / deferred): mid-turn abort of an in-flight CLI subprocess on a
   1310 (unconfirmed whether the SDK transport propagates it as a catchable exception at all); auto-restore
   of any `zai_activity_control`-disabled proactive units (the L4 TTL expiry self-clears only the
