@@ -770,3 +770,78 @@ def test_quarantine_never_touches_a_landed_demo(tmp_path):
     assert landed.is_dir()
     # Nothing on disk at all is also a no-op.
     assert nuggets._quarantine_failed_demo_dir(root, "absent") is None
+
+
+# ── a build that LANDED and then blew the cap is a success, not a failure ────
+def test_timeout_after_landing_registers_the_demo(conn, tmp_path):
+    """build_demo.py keeps working after the demo lands -- promote, then Stage D,
+    which carries its own 900s budget that nothing reconciles against the outer
+    3600s cap. A build that lands with under 15 minutes left is structurally
+    guaranteed to be killed however well it went.
+
+    Regression for 2026-08-03: google-okf-hermes landed at 06:34:50 with verify
+    PASS, DEMO_EVAL PASS gating=8/8 votes=3/3 and manifest status=demoed, then was
+    killed at 06:47:51 mid-post-land. It was recorded as a build failure and never
+    registered, and builds_ok reported 1 on a night that landed 2.
+    """
+    from universal_agent.services.tutorial_demo_finalize import proactive_demo_slug
+
+    title = "Build a RAG agent with the ADK"
+    slug = proactive_demo_slug(title)
+    root = tmp_path / "lrepos"
+
+    def _lands_then_times_out(argv):
+        # The build does its work -- the landed demo is on disk ...
+        demo_dir = root / f"demo-proactive-{slug}"
+        demo_dir.mkdir(parents=True, exist_ok=True)
+        (demo_dir / "manifest.json").write_text(
+            json.dumps({"demo_id": f"proactive-{slug}", "status": "demoed",
+                        "acceptance_passed": True}), encoding="utf-8")
+        (demo_dir / "README.md").write_text("## Run\nuv run python main.py\n", encoding="utf-8")
+        (demo_dir / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+        # ... and THEN the outer cap fires during post-land promote / Stage D.
+        raise subprocess.TimeoutExpired(
+            argv, 3600, output="[ok   ] land_demo: PASS\n", stderr="")
+
+    _seed_pending_candidate(conn, "tb-a", video_title=title)
+    result = nuggets.select_and_build_nuggets(
+        dry_run=False,
+        conn=conn,
+        call_llm=_verdict_llm({0: (9.0, True, "great")}),
+        build_runner=_lands_then_times_out,
+        notifier=_noop_notifier,
+    )
+
+    # The demo is real and gated -- it counts as built, not failed.
+    assert len(result["built"]) == 1
+    assert result["build_failures"] == []
+    assert result["attempted_failed"] == []
+    # ... but the truncated post-land work stays visible.
+    assert len(result["landed_after_timeout"]) == 1
+    assert result["landed_after_timeout"][0]["demo_id"] == f"proactive-{slug}"
+
+
+def test_timeout_without_landing_is_still_a_failure(conn, tmp_path):
+    """The inverse must not regress: a cap kill with nothing on disk is a real
+    failure and must stay in build_failures + attempted_failed (so the swipe
+    preserves it for retry)."""
+    title = "Build a RAG agent with the ADK"
+
+    def _times_out_with_nothing(argv):
+        raise subprocess.TimeoutExpired(argv, 3600, output="", stderr="")
+
+    _seed_pending_candidate(conn, "tb-a", video_title=title)
+    result = nuggets.select_and_build_nuggets(
+        dry_run=False,
+        conn=conn,
+        call_llm=_verdict_llm({0: (9.0, True, "great")}),
+        build_runner=_times_out_with_nothing,
+        notifier=_noop_notifier,
+    )
+
+    assert result["built"] == []
+    assert result["landed_after_timeout"] == []
+    assert len(result["build_failures"]) == 1
+    assert result["build_failures"][0]["worker_exit"]
+    # Preserved for retry by the swipe -- exactly one task id, the one we seeded.
+    assert result["attempted_failed"] == [result["build_failures"][0]["task_id"]]
