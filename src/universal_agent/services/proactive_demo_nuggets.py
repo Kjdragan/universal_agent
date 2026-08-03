@@ -491,12 +491,29 @@ def _default_build_runner(argv: list[str]) -> subprocess.CompletedProcess:
     Killing the process group on timeout reaps the tree and leaves the cgroup clean.
     """
     timeout = _build_timeout_seconds()
+    # Tell build_demo.py how much wall clock it actually has, so its post-land
+    # stages (promote, Stage D) budget against the REMAINING time instead of an
+    # independent constant. Contract (demo_factory #224): the value is TOTAL wall
+    # seconds for the build_demo process, anchored at Driver init, and the caller
+    # reserves NO slack -- demo_factory subtracts 60s per stage and skips below a
+    # 120s floor itself, so subtracting here would just shrink Stage D twice.
+    #
+    # Derived from _build_timeout_seconds() rather than pinned in the unit file on
+    # purpose: the cap is tunable via UA_PROACTIVE_DEMO_NUGGETS_BUILD_TIMEOUT_SECONDS,
+    # and a hardcoded unit constant would silently drift out of lockstep the moment
+    # anyone tuned it -- reintroducing the exact mismatch this fixes.
+    #
+    # Without this, Stage D's own 900s budget could exceed the time left: on
+    # 2026-08-03 a demo landed at 2819s into a 3600s cap with 781s remaining and was
+    # hard-killed mid-post-land, shipping an unvalidated skill and no explainer video.
+    env = {**os.environ, "DEMO_FACTORY_WALL_BUDGET_S": str(timeout)}
     proc = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        env=env,
     )
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
