@@ -11,6 +11,7 @@ Tests cover:
 import asyncio
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 import sqlite3
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -417,3 +418,56 @@ class TestQueueRun:
             Path("/tmp/worker-pool-run/attempts/001/attempt_meta.json").read_text(encoding="utf-8")
         )
         assert attempt_meta["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_process_loop_logs_traceback_when_run_handler_raises(self, caplog, tmp_path):
+        """A failing run handler must log the exception WITH its traceback.
+
+        Regression guard for the run-processing except block in
+        ``Worker._process_loop``: it previously logged ``f"...: {e}"`` with no
+        ``exc_info``, so the traceback — the only thing that shows *where* the
+        handler failed — was discarded. The error record must now carry
+        ``exc_info`` plus the worker_id / run_id context that identifies the run.
+        """
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON;")
+        ensure_schema(conn)
+
+        queue_run(
+            conn,
+            run_id="job_fail",
+            prompt="Process this job",
+            workspace_dir=str(tmp_path),
+        )
+
+        config = WorkerConfig(
+            worker_id="worker_exc_ctx",
+            poll_interval_seconds=0,
+            heartbeat_interval_seconds=60,
+        )
+        worker_holder: dict[str, Worker] = {}
+
+        async def run_handler(run_id: str, workspace_dir: str) -> bool:
+            worker_holder["worker"]._shutdown_event.set()
+            raise RuntimeError("handler boom")
+
+        worker = Worker(config, conn, run_handler)
+        worker_holder["worker"] = worker
+
+        with caplog.at_level(logging.ERROR, logger="universal_agent.durable.worker_pool"):
+            await asyncio.wait_for(worker._process_loop(), timeout=2)
+
+        # The except path should have marked the run failed.
+        run_row = get_run(conn, "job_fail")
+        assert run_row is not None
+        assert run_row["status"] == "failed"
+
+        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert error_records, "expected an error log for the failed run"
+        record = error_records[0]
+        assert "worker_exc_ctx" in record.getMessage()  # worker_id context preserved
+        assert "job_fail" in record.getMessage()  # run_id context preserved
+        # The traceback must be preserved (this is the fix under test).
+        assert record.exc_info is not None
+        assert record.exc_info[0] is RuntimeError
