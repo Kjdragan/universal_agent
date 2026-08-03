@@ -845,3 +845,35 @@ def test_timeout_without_landing_is_still_a_failure(conn, tmp_path):
     assert result["build_failures"][0]["worker_exit"]
     # Preserved for retry by the swipe -- exactly one task id, the one we seeded.
     assert result["attempted_failed"] == [result["build_failures"][0]["task_id"]]
+
+
+# ── the build's wall budget must reach build_demo, and stay in lockstep ──────
+@pytest.mark.timeout(60)
+def test_build_runner_passes_wall_budget_matching_the_cap(monkeypatch):
+    """demo_factory budgets its post-land stages (promote, Stage D) against
+    DEMO_FACTORY_WALL_BUDGET_S. If that value drifts from the cap this runner
+    actually enforces, Stage D can again be entitled to more time than exists --
+    the 2026-08-03 kill (landed at 2819s of 3600s, Stage D wanted 900s, 781s left).
+
+    Derived from _build_timeout_seconds() rather than pinned in the unit file, so
+    tuning UA_PROACTIVE_DEMO_NUGGETS_BUILD_TIMEOUT_SECONDS moves both together.
+    """
+    monkeypatch.setenv("UA_PROACTIVE_DEMO_NUGGETS_BUILD_TIMEOUT_SECONDS", "1234")
+    proc = nuggets._default_build_runner(
+        ["sh", "-c", 'printf "%s" "$DEMO_FACTORY_WALL_BUDGET_S"']
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == "1234"
+    assert proc.stdout == str(nuggets._build_timeout_seconds())
+
+
+@pytest.mark.timeout(60)
+def test_build_runner_still_inherits_the_rest_of_the_environment(monkeypatch):
+    """Passing env= must not scrub the environment build_demo needs (PATH, the
+    Anthropic/ZAI credentials the judge and land use). first-party child -- full
+    inherit is correct here, plus the one added var."""
+    monkeypatch.setenv("UA_SENTINEL_FOR_TEST", "kept")
+    proc = nuggets._default_build_runner(
+        ["sh", "-c", 'printf "%s|%s" "$UA_SENTINEL_FOR_TEST" "${PATH:+haspath}"']
+    )
+    assert proc.stdout == "kept|haspath"
