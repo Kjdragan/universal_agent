@@ -345,3 +345,48 @@ class TestGuardPolicyReflection:
         )
         assert policy["reflection_mode"] is False
         assert policy["skip_reason"] is None  # Still should run (has work)
+
+# ===========================================================================
+# _get_open_task_count — perpetual cron rows must not inflate the active count
+# ===========================================================================
+
+
+class TestGetOpenTaskCountExcludesCronRun:
+    """Perpetual cron tasks (``source_kind='cron_run'``) sit in ``open`` by
+    design between runs (``cron_task_hub_link`` lifecycle). They are
+    bookkeeping, not actionable backlog, so they must NOT inflate the
+    reflection prompt's "currently queued" count — counting them is what
+    seeded the recurring "2 zombie crons never close" misdiagnosis.
+    """
+
+    def test_cron_run_open_task_not_counted(self, db_conn):
+        from universal_agent.services.cron_task_hub_link import (
+            CRON_TASK_SOURCE_KIND,
+        )
+
+        now = datetime.now(timezone.utc).isoformat()
+        db_conn.execute(
+            "INSERT INTO task_hub_items (task_id, source_kind, title, description, "
+            "status, priority, project_key, labels_json, trigger_type, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "cron:paper_to_podcast_daily",
+                CRON_TASK_SOURCE_KIND,
+                "Cron: paper_to_podcast_daily",
+                "perpetual cron row",
+                "open",
+                5,
+                "immediate",
+                "[]",
+                "manual",
+                now,
+                now,
+            ),
+        )
+        db_conn.commit()
+        # A perpetual cron row in `open` must not count as actionable backlog.
+        assert _get_open_task_count(db_conn) == 0
+
+    def test_non_cron_open_task_still_counted(self, db_conn):
+        _insert_task(db_conn, title="Real open task", status="open")
+        assert _get_open_task_count(db_conn) == 1

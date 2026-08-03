@@ -150,10 +150,27 @@ def _get_stalled_brainstorms(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def _get_open_task_count(conn: sqlite3.Connection) -> int:
-    """Count tasks currently open or in progress."""
+    """Count actionable tasks currently open / in progress / needing review.
+
+    Excludes perpetual cron bookkeeping rows (``source_kind == 'cron_run'``):
+    auto-linked cron tasks sit in ``open`` BY DESIGN between runs (see
+    ``cron_task_hub_link.close_cron_task_link`` — the lifecycle is
+    in_progress -> completed -> open each tick). They are never operator-
+    actionable backlog, so counting them permanently inflated this context
+    number and seeded recurring "zombie cron never closes" misdiagnoses
+    from the reflection LLM. The held-proposal dedup path
+    (``_get_open_reflection_proposals``) already filters to reflection-only.
+    """
+    from universal_agent.services.cron_task_hub_link import (
+        CRON_TASK_SOURCE_KIND,
+    )
+
     task_hub.ensure_schema(conn)
     row = conn.execute(
-        "SELECT COUNT(*) as cnt FROM task_hub_items WHERE status IN ('open', 'in_progress', 'needs_review')"
+        "SELECT COUNT(*) as cnt FROM task_hub_items "
+        "WHERE status IN ('open', 'in_progress', 'needs_review') "
+        "AND source_kind != ?",
+        (CRON_TASK_SOURCE_KIND,),
     ).fetchone()
     return int(row["cnt"]) if row else 0
 
