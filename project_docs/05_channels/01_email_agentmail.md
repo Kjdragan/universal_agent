@@ -448,10 +448,14 @@ independent, cooperating fixes now apply:
   security-relevant alert.
 - **Out of scope (T9)**: a dedicated bulk/newsletter lane (`List-Unsubscribe`
   / `Precedence` header parsing) does not exist anywhere in the codebase —
-  possible future work, not built here. Whether arrival notices should reach
-  the operator's inbox at all remains an open, deliberately deferred
-  question; both notification kinds still fire (only the redundant SECOND
-  email is suppressed).
+  possible future work, not built here.
+- **Arrival notices stay on email — operator decision, 2026-08-03 (no longer
+  open).** `agentmail_external_arrived` deliberately keeps emailing the
+  operator: it is the pre-triage tripwire that still fires if the triage
+  pipeline itself breaks or wedges, and post-T9 volume is negligible (the
+  same-thread pair coalesces; genuine fyi/p3 verdicts downgrade the review
+  notice to info). Do not demote or remove it as "noise cleanup" — revisit
+  only if the operator reports real-world annoyance.
 
 ### 8. Startup recovery
 
