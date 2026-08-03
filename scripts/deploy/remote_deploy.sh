@@ -23,6 +23,10 @@
 set -euo pipefail
 PROD_DIR="/opt/universal_agent"
 REPO_URL="git@github.com:Kjdragan/universal_agent.git"
+# The prod remote authenticates via ua's deploy key. This script may run as
+# root (deploy SSH user), so pin git's SSH identity + known_hosts explicitly
+# rather than relying on the invoking user's ~/.ssh.
+export GIT_SSH_COMMAND="ssh -i /home/ua/.ssh/id_ed25519 -o UserKnownHostsFile=/home/ua/.ssh/known_hosts -o IdentitiesOnly=yes"
 
 if [ ! -d "$PROD_DIR/.git" ]; then
   echo "--> Production repository missing at $PROD_DIR; bootstrapping clone..."
