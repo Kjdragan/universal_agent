@@ -253,11 +253,6 @@ def memory_backend(default: str = "chromadb") -> str:
     return "chromadb"
 
 
-def memory_flush_on_exit(default: bool = True) -> bool:
-    """Compatibility helper retained while callsites are updated."""
-    return memory_flush_enabled(default=default)
-
-
 def memory_flush_max_chars(default: int = 4000) -> int:
     """Compatibility helper retained while callsites are updated."""
     return _read_int("UA_MEMORY_FLUSH_MAX_CHARS", default, minimum=0)

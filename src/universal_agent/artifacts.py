@@ -42,13 +42,6 @@ def resolve_artifacts_dir() -> Path:
     return default_root.resolve()
 
 
-def ensure_artifacts_dir() -> Path:
-    """Ensure the artifacts directory exists and return its path."""
-    root = resolve_artifacts_dir()
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
 def _safe_slug_component(value: str) -> str:
     """
     Make a directory-friendly slug component (lossy, but predictable).
