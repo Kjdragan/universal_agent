@@ -8,7 +8,7 @@ code_paths:
   - src/universal_agent/services/skill_triggering_eval.py
   - scripts/skill_desc_optimizer.py
   - .claude/skills/skill-creator/
-last_verified: 2026-06-22
+last_verified: 2026-08-04
 ---
 
 # Skill-Description Optimizer (and why description-tuning has a ceiling)
