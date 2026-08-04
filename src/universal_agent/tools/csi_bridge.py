@@ -57,7 +57,7 @@ def _loads_obj(value: Any, default: Any) -> Any:
         return default
     try:
         parsed = json.loads(text)
-    except Exception:
+    except json.JSONDecodeError:
         return default
     return parsed
 
@@ -74,7 +74,7 @@ def _read_watchlist(path_str: str, kind: str) -> Dict[str, Any]:
         return out
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
+    except (json.JSONDecodeError, OSError) as exc:
         out["error"] = f"parse_failed: {exc}"
         return out
 
@@ -139,10 +139,10 @@ def _parse_source_min_events(raw: str) -> Dict[str, int]:
                     continue
                 try:
                     out[cleaned] = max(0, int(value))
-                except Exception:
+                except (TypeError, ValueError):
                     continue
             return out
-    except Exception:
+    except json.JSONDecodeError:
         pass
     for token in text.split(","):
         item = token.strip()
@@ -154,7 +154,7 @@ def _parse_source_min_events(raw: str) -> Dict[str, int]:
             continue
         try:
             out[key] = max(0, int(raw_value.strip()))
-        except Exception:
+        except (TypeError, ValueError):
             continue
     return out
 
@@ -517,7 +517,7 @@ async def csi_watchlist_snapshot_wrapper(args: Dict[str, Any]) -> Dict[str, Any]
     health_resp = await csi_source_health_wrapper({"window_hours": window_hours, "stale_minutes": 240, "save_to_workspace": False})
     try:
         health_payload = json.loads(str(((health_resp.get("content") or [{}])[0]).get("text") or "{}"))
-    except Exception:
+    except json.JSONDecodeError:
         health_payload = {"status": "error", "sources": []}
 
     payload = {
