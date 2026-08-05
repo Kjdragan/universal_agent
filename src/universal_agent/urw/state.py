@@ -19,7 +19,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 
 class TaskStatus(Enum):
@@ -407,7 +407,7 @@ class URWStateManager:
         return task.title if task else task_id
 
     @contextmanager
-    def transaction(self):
+    def transaction(self) -> Iterator[None]:
         try:
             yield
             self.conn.commit()

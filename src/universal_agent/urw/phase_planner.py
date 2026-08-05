@@ -66,11 +66,15 @@ class Phase:
     def task_count(self) -> int:
         return len(self.task_ids)
     
-    def mark_started(self):
+    def mark_started(self) -> None:
         self.status = PhaseStatus.IN_PROGRESS
         self.started_at = datetime.utcnow().isoformat()
-    
-    def mark_complete(self, completed_ids: List[str], failed_ids: List[str] = None):
+
+    def mark_complete(
+        self,
+        completed_ids: List[str],
+        failed_ids: Optional[List[str]] = None,
+    ) -> None:
         self.completed_task_ids = completed_ids
         self.failed_task_ids = failed_ids or []
         self.completed_at = datetime.utcnow().isoformat()

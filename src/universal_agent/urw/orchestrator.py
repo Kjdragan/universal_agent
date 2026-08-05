@@ -79,7 +79,7 @@ class AgentLoopInterface(Protocol):
     ) -> "AgentExecutionResult":
         ...
 
-    async def cancel(self):
+    async def cancel(self) -> None:
         ...
 
 

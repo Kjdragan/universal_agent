@@ -69,7 +69,7 @@ class BaseAgentAdapter(AgentLoopInterface):
         finally:
             self._current_agent = None
 
-    async def cancel(self):
+    async def cancel(self) -> None:
         self._cancelled = True
 
     def _build_prompt(self, task: Task, context: str) -> str:

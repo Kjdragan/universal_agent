@@ -21,7 +21,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from .evaluation_policy import get_policy_summary, resolve_evaluation_policy
-from .state import Artifact, ArtifactType, CompletionConfidence, Task
+from .state import Artifact, ArtifactType, CompletionConfidence, Task, URWStateManager
 from universal_agent.utils.model_resolution import resolve_opus
 
 
@@ -641,7 +641,7 @@ class CompositeEvaluator(Evaluator):
 
 def create_default_evaluator(
     llm_client: Any,
-    state_manager=None,
+    state_manager: Optional[URWStateManager] = None,
     model: Optional[str] = None,
     evaluation_policy: Optional[Dict[str, Any]] = None,
 ) -> CompositeEvaluator:
