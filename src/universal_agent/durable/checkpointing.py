@@ -74,29 +74,3 @@ def load_last_checkpoint(conn: sqlite3.Connection, run_id: str) -> Optional[sqli
         """,
         (run_id,),
     ).fetchone()
-
-
-def load_corpus_cache(conn: sqlite3.Connection, run_id: str) -> Optional[str]:
-    """
-    Load the most recent corpus data for a run.
-    
-    This is used to restore sub-agent context after a restart without
-    requiring the agent to re-read all research files.
-    
-    Args:
-        conn: Database connection
-        run_id: The run ID to load corpus for
-        
-    Returns:
-        The cached corpus text, or None if no cache exists.
-    """
-    result = conn.execute(
-        """
-        SELECT corpus_data FROM checkpoints
-        WHERE run_id = ? AND corpus_data IS NOT NULL
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (run_id,),
-    ).fetchone()
-    return result[0] if result else None

@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/durable/db.py
   - src/universal_agent/durable/tool_policies.yaml
   - src/universal_agent/durable/worker_pool.py
-last_verified: 2026-07-01
+last_verified: 2026-08-05
 ---
 
 # Durable Execution
@@ -301,9 +301,10 @@ ASC, then `created_at` ASC. `finalize_vp_mission` best-effort surfaces failures 
 `save_checkpoint(conn, run_id, step_id, checkpoint_type, state_snapshot, cursor=, corpus_data=)`
 inserts a `checkpoints` row and points `runs.last_checkpoint_id` at it. `load_last_checkpoint`
 returns the newest by `created_at`. The distinctive feature is **`corpus_data`** — a pre-loaded
-research-corpus blob stored on the checkpoint so a restarted sub-agent can restore its context
-(`load_corpus_cache`) without re-reading all research files. Callers: `agent_core.py`,
-`urw/context_summarizer.py`, `main.py`.
+research-corpus blob stored on the checkpoint via `main.py` (`checkpoint_type="refined_corpus_cache"`).
+There is no reader for this column: both `main.py` call sites of `load_last_checkpoint` only read
+`checkpoint_id`/`created_at`/`checkpoint_type` off the row, so `corpus_data` is write-only today (a
+dedicated `load_corpus_cache` reader existed but had zero callers and was removed as dead code).
 
 A `checkpoints` row stores exactly three payloads: `state_snapshot_json`, `cursor_json`
 (pagination markers), and the optional `corpus_data` blob.
