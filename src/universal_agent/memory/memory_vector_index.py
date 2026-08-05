@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import dataclass
 import json
 import math
 import os
@@ -10,16 +9,6 @@ import sqlite3
 from typing import Iterable
 
 VECTOR_DIM = 128
-
-
-@dataclass
-class VectorEntry:
-    entry_id: str
-    content_hash: str
-    timestamp: str
-    summary: str
-    preview: str
-    vector: list[float]
 
 
 def _ensure_db(path: str) -> None:
