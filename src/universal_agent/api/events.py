@@ -162,48 +162,6 @@ def create_connected_event(session_info: SessionInfo) -> WebSocketEvent:
     )
 
 
-def create_text_event(text: str) -> WebSocketEvent:
-    """Create a text streaming event."""
-    return WebSocketEvent(
-        type=EventType.TEXT,
-        data={"text": text},
-    )
-
-
-def create_tool_call_event(name: str, tool_id: str, input_data: dict, time_offset: float) -> WebSocketEvent:
-    """Create a tool call event."""
-    return WebSocketEvent(
-        type=EventType.TOOL_CALL,
-        data={
-            "name": name,
-            "id": tool_id,
-            "input": input_data,
-            "time_offset": time_offset,
-        },
-    )
-
-
-def create_tool_result_event(tool_use_id: str, is_error: bool, content_preview: str, content_size: int) -> WebSocketEvent:
-    """Create a tool result event."""
-    return WebSocketEvent(
-        type=EventType.TOOL_RESULT,
-        data={
-            "tool_use_id": tool_use_id,
-            "is_error": is_error,
-            "content_preview": content_preview,
-            "content_size": content_size,
-        },
-    )
-
-
-def create_status_event(status: str, **extra_data) -> WebSocketEvent:
-    """Create a status update event."""
-    return WebSocketEvent(
-        type=EventType.STATUS,
-        data={"status": status, **extra_data},
-    )
-
-
 def create_error_event(error_message: str, error_details: Optional[dict] = None) -> WebSocketEvent:
     """Create an error event."""
     data = {"message": error_message}
@@ -212,50 +170,4 @@ def create_error_event(error_message: str, error_details: Optional[dict] = None)
     return WebSocketEvent(
         type=EventType.ERROR,
         data=data,
-    )
-
-
-def create_work_product_event(content_type: str, content: str, filename: str, path: str) -> WebSocketEvent:
-    """Create a work product event."""
-    return WebSocketEvent(
-        type=EventType.WORK_PRODUCT,
-        data={
-            "content_type": content_type,
-            "content": content,
-            "filename": filename,
-            "path": path,
-        },
-    )
-
-
-def create_approval_required_event(phase_id: str, phase_name: str, phase_description: str, tasks: list) -> WebSocketEvent:
-    """Create an approval request event for URW phases."""
-    return WebSocketEvent(
-        type=EventType.APPROVAL,
-        data={
-            "phase_id": phase_id,
-            "phase_name": phase_name,
-            "phase_description": phase_description,
-            "tasks": tasks,
-        },
-    )
-
-
-def create_input_required_event(question: str, category: str = "general", options: list = None) -> WebSocketEvent:
-    """Create an input request event."""
-    return WebSocketEvent(
-        type=EventType.INPUT_REQUIRED,
-        data={
-            "question": question,
-            "category": category,
-            "options": options or [],
-        },
-    )
-
-
-def create_input_response_event(response: str) -> WebSocketEvent:
-    """Create an input response event from client."""
-    return WebSocketEvent(
-        type=EventType.INPUT_RESPONSE,
-        data={"response": response},
     )
