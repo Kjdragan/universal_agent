@@ -877,3 +877,126 @@ def test_build_runner_still_inherits_the_rest_of_the_environment(monkeypatch):
         ["sh", "-c", 'printf "%s|%s" "$UA_SENTINEL_FOR_TEST" "${PATH:+haspath}"']
     )
     assert proc.stdout == "kept|haspath"
+
+
+# ── failure classification: harness-fault retry + goal-DEFER requeue ──────────
+def test_harness_fault_retries_once_via_into_and_registers(conn):
+    """A judge HARNESS_FAULT (land exit 4) records nothing — but the finished
+    build is on disk, so the cron resumes it ONCE via --into the same night
+    instead of throwing the whole build away (demo_factory #256 companion)."""
+    _seed_pending_candidate(conn, "t-hf", video_title="Harness Fault Video")
+    calls = []
+
+    def _runner(argv):
+        calls.append(list(argv))
+        slug = argv[argv.index("--slug") + 1].removeprefix("proactive-")
+        root = Path(argv[argv.index("--workspace-root") + 1])
+        demo_dir = root / f"demo-proactive-{slug}"
+        demo_dir.mkdir(parents=True, exist_ok=True)
+        if len(calls) == 1:
+            # Built fine, judge machinery broke: NO manifest was recorded.
+            return subprocess.CompletedProcess(
+                argv, 3,
+                stdout=("  warn  land_demo        HARNESS FAULT/exit=4 "
+                        "(not the demo's fault; nothing recorded): x\n"
+                        "BUILD_DEMO: FAIL demo_id=d exit=3\n"),
+                stderr="",
+            )
+        (demo_dir / "manifest.json").write_text(
+            json.dumps({"demo_id": f"proactive-{slug}", "status": "passed"}),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout="land_demo: PASS", stderr="")
+
+    summary = nuggets.select_and_build_nuggets(
+        dry_run=False, conn=conn,
+        call_llm=_verdict_llm({0: (9.0, True, "specific + novel")}),
+        build_runner=_runner, notifier=_noop_notifier,
+    )
+    assert len(calls) == 2
+    into_i = calls[1].index("--into")
+    assert calls[1][into_i + 1].endswith("demo-proactive-harness-fault-video")
+    assert [b["task_id"] for b in summary["built"]] == ["t-hf"]
+    assert summary["build_failures"] == []
+    assert summary["attempted_failed"] == []
+
+
+def test_goal_defer_requeues_seed_once_then_terminal(conn):
+    """A goal_build DEFER is a budget artifact, not a fidelity verdict: night 1
+    sets the manifest-bearing workspace aside and stamps the task for ONE more
+    night; a second DEFER is at the cap and files terminally (workspace kept)."""
+    from universal_agent.services.tutorial_demo_finalize import proactive_demo_slug
+
+    _seed_pending_candidate(conn, "t-defer", video_title="Kitchen Sink Workflow")
+    slug = proactive_demo_slug("Kitchen Sink Workflow")
+    root = nuggets._workspace_root()
+
+    def _defer_runner(argv):
+        r = Path(argv[argv.index("--workspace-root") + 1])
+        demo_dir = r / f"demo-proactive-{slug}"
+        demo_dir.mkdir(parents=True, exist_ok=True)
+        # land recorded un-demoable beneath the DEFER — the manifest that would
+        # otherwise delist the candidate forever.
+        (demo_dir / "manifest.json").write_text(
+            json.dumps({"status": "un-demoable"}), encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(
+            argv, 3,
+            stdout=("  warn  goal_build       DEFER model=claude-opus-5\n"
+                    "  warn  land_demo        un-demoable/exit=1: x\n"
+                    "BUILD_DEMO: FAIL exit=3\n"),
+            stderr="",
+        )
+
+    llm = _verdict_llm({0: (9.0, True, "focused enough")})
+    s1 = nuggets.select_and_build_nuggets(
+        dry_run=False, conn=conn, call_llm=llm,
+        build_runner=_defer_runner, notifier=_noop_notifier,
+    )
+    assert s1["defer_requeued"] == ["t-defer"]
+    assert s1["attempted_failed"] == ["t-defer"]
+    assert s1["build_failures"][0]["failure_kind"] == "goal_defer"
+    assert s1["build_failures"][0]["requeued"] is True
+    assert not (root / f"demo-proactive-{slug}").exists()
+    assert len(list(root.glob(f"failed-proactive-{slug}.defer1.*"))) == 1
+    meta = task_hub.get_item(conn, "t-defer")["metadata"]
+    assert meta["nugget_defer"]["count"] == 1
+
+    # Night 2: the seed is re-gathered (workspace moved aside, no nugget_build,
+    # still open) and DEFERs again — at the cap, so it files terminally and the
+    # manifest-bearing workspace stays to delist it from future nights.
+    s2 = nuggets.select_and_build_nuggets(
+        dry_run=False, conn=conn, call_llm=llm,
+        build_runner=_defer_runner, notifier=_noop_notifier,
+    )
+    assert s2["defer_requeued"] == []
+    assert s2["attempted_failed"] == ["t-defer"]
+    assert (root / f"demo-proactive-{slug}").is_dir()
+
+
+def test_plain_failure_is_not_retried_or_requeued(conn):
+    """rc!=0 with neither marker keeps the exact pre-classification behavior."""
+    _seed_pending_candidate(conn, "t-plain", video_title="Plain Failure Video")
+    calls = []
+
+    def _runner(argv):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom")
+
+    summary = nuggets.select_and_build_nuggets(
+        dry_run=False, conn=conn,
+        call_llm=_verdict_llm({0: (9.0, True, "specific + novel")}),
+        build_runner=_runner, notifier=_noop_notifier,
+    )
+    assert len(calls) == 1
+    assert summary["defer_requeued"] == []
+    assert summary["build_failures"][0]["failure_kind"] == "other"
+    assert summary["attempted_failed"] == ["t-plain"]
+
+
+def test_judge_prompt_screens_kitchen_sink_scope():
+    """The demo-ability criterion must stay in the judge prompt — a sprawling
+    multi-service tutorial burned a full nightly build on 2026-08-07."""
+    prompt = nuggets._JUDGE_SYSTEM_PROMPT
+    assert "kitchen-sink" in prompt
+    assert "ONE small, self-contained demo" in prompt
