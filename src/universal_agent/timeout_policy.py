@@ -11,6 +11,42 @@ import os
 import time
 from typing import Any, Callable, Optional
 
+# --- Named default constants ----------------------------------------------
+# Each tuning knob's default lives here as a single named literal so the
+# "magic numbers" are discoverable, greppable, and documented by name. Values
+# that coincide (e.g. several websocket knobs share 20.0) are kept as SEPARATE
+# per-role constants on purpose: they are independently tunable, not one shared
+# value, so changing one must never silently drag the others with it.
+#
+# Every reader below still takes an explicit ``default`` argument and still
+# honors its ``UA_*`` env-var override; these constants only name the default.
+
+# Agent-execution lane timeouts (seconds).
+DEFAULT_TELEGRAM_TASK_TIMEOUT_SECONDS = 1800.0
+# 0 keeps existing "no hard timeout" semantics (the legacy explicit hard-cap
+# escape hatch); the default control is the idle watchdog.
+DEFAULT_PROCESS_TURN_TIMEOUT_SECONDS = 0.0
+DEFAULT_PROCESS_TURN_IDLE_KILL_SECONDS = 600.0
+DEFAULT_PROCESS_TURN_ABSOLUTE_BACKSTOP_SECONDS = 7200.0
+
+# Cron liveness timeouts (seconds).
+DEFAULT_CRON_SCRIPT_IDLE_KILL_SECONDS = 60.0
+DEFAULT_CRON_PRE_SPAWN_TIMEOUT_SECONDS = 30.0
+
+# Gateway HTTP / websocket transport timeouts (seconds).
+DEFAULT_GATEWAY_HTTP_TIMEOUT_SECONDS = 60.0
+DEFAULT_GATEWAY_OWNER_LOOKUP_TIMEOUT_SECONDS = 20.0
+DEFAULT_GATEWAY_WS_HANDSHAKE_TIMEOUT_SECONDS = 20.0
+DEFAULT_GATEWAY_WS_SEND_TIMEOUT_SECONDS = 8.0
+DEFAULT_SESSION_CANCEL_WAIT_SECONDS = 10.0
+DEFAULT_GATEWAY_WS_OPEN_TIMEOUT_SECONDS = 20.0
+DEFAULT_GATEWAY_WS_CLOSE_TIMEOUT_SECONDS = 10.0
+DEFAULT_GATEWAY_WS_PING_INTERVAL_SECONDS = 20.0
+DEFAULT_GATEWAY_WS_PING_TIMEOUT_SECONDS = 20.0
+
+# Tokens that mean "disabled" for the positive-float-or-none readers.
+_DISABLE_SENTINELS = frozenset({"0", "off", "none", "disabled", "false"})
+
 
 def _read_float(
     name: str,
@@ -37,7 +73,7 @@ def _read_positive_float_or_none(name: str, default: float) -> float | None:
         value = float(default)
     else:
         text = raw.strip().lower()
-        if text in {"0", "off", "none", "disabled", "false"}:
+        if text in _DISABLE_SENTINELS:
             return None
         try:
             value = float(text)
@@ -48,7 +84,9 @@ def _read_positive_float_or_none(name: str, default: float) -> float | None:
     return value
 
 
-def telegram_task_timeout_seconds(default: float = 1800.0) -> float:
+def telegram_task_timeout_seconds(
+    default: float = DEFAULT_TELEGRAM_TASK_TIMEOUT_SECONDS,
+) -> float:
     return _read_float(
         "UA_TELEGRAM_TASK_TIMEOUT_SECONDS",
         default,
@@ -56,7 +94,9 @@ def telegram_task_timeout_seconds(default: float = 1800.0) -> float:
     )
 
 
-def process_turn_timeout_seconds(default: float = 0.0) -> float:
+def process_turn_timeout_seconds(
+    default: float = DEFAULT_PROCESS_TURN_TIMEOUT_SECONDS,
+) -> float:
     # 0 keeps existing "no hard timeout" semantics. This is the LEGACY explicit
     # hard-cap escape hatch; the default control is now the idle watchdog below.
     return _read_float(
@@ -66,7 +106,9 @@ def process_turn_timeout_seconds(default: float = 0.0) -> float:
     )
 
 
-def process_turn_idle_kill_seconds(default: float = 600.0) -> float:
+def process_turn_idle_kill_seconds(
+    default: float = DEFAULT_PROCESS_TURN_IDLE_KILL_SECONDS,
+) -> float:
     """Idle / no-progress kill threshold for the in-process ProcessTurnAdapter
     (Simone heartbeat / daemon + in-process VP coder).
 
@@ -79,7 +121,9 @@ def process_turn_idle_kill_seconds(default: float = 600.0) -> float:
     return _read_float("UA_PROCESS_TURN_IDLE_KILL_SECONDS", default, minimum=0.0)
 
 
-def process_turn_absolute_backstop_seconds(default: float = 7200.0) -> float:
+def process_turn_absolute_backstop_seconds(
+    default: float = DEFAULT_PROCESS_TURN_ABSOLUTE_BACKSTOP_SECONDS,
+) -> float:
     """Absolute last-resort ceiling for a fully-wedged in-process turn.
 
     Catches a turn whose tool never returns and whose own tool timeout also
@@ -93,7 +137,9 @@ def process_turn_absolute_backstop_seconds(default: float = 7200.0) -> float:
 
 
 
-def cron_script_idle_kill_seconds(default: float = 60.0) -> float:
+def cron_script_idle_kill_seconds(
+    default: float = DEFAULT_CRON_SCRIPT_IDLE_KILL_SECONDS,
+) -> float:
     """Idle / no-progress kill threshold for the cron ``!script`` spawn+drain
     (the lightweight path used by housekeeping crons such as
     ``simone_chat_auto_complete``).
@@ -118,7 +164,9 @@ def cron_script_idle_kill_seconds(default: float = 60.0) -> float:
     return _read_float("UA_CRON_SCRIPT_IDLE_KILL_SECONDS", default, minimum=0.0)
 
 
-def cron_pre_spawn_timeout_seconds(default: float = 30.0) -> float:
+def cron_pre_spawn_timeout_seconds(
+    default: float = DEFAULT_CRON_PRE_SPAWN_TIMEOUT_SECONDS,
+) -> float:
     """Bound on the lightweight cron claim→spawn window (the residual wedge).
 
     Covers the work between the scheduler's ``running_jobs`` claim and the
@@ -256,39 +304,53 @@ class LivenessWatchdog:
         return max(0.0, min(candidates))
 
 
-def gateway_http_timeout_seconds(default: float = 60.0) -> float:
+def gateway_http_timeout_seconds(
+    default: float = DEFAULT_GATEWAY_HTTP_TIMEOUT_SECONDS,
+) -> float:
     return _read_float("UA_GATEWAY_HTTP_TIMEOUT_SECONDS", default, minimum=1.0)
 
 
-def gateway_owner_lookup_timeout_seconds(default: float = 20.0) -> float:
+def gateway_owner_lookup_timeout_seconds(
+    default: float = DEFAULT_GATEWAY_OWNER_LOOKUP_TIMEOUT_SECONDS,
+) -> float:
     return _read_float("UA_API_GATEWAY_OWNER_TIMEOUT_SECONDS", default, minimum=1.0)
 
 
-def gateway_ws_handshake_timeout_seconds(default: float = 20.0) -> float:
+def gateway_ws_handshake_timeout_seconds(
+    default: float = DEFAULT_GATEWAY_WS_HANDSHAKE_TIMEOUT_SECONDS,
+) -> float:
     return _read_float("UA_GATEWAY_WS_HANDSHAKE_TIMEOUT_SECONDS", default, minimum=1.0)
 
 
-def gateway_ws_send_timeout_seconds(default: float = 8.0) -> float:
+def gateway_ws_send_timeout_seconds(
+    default: float = DEFAULT_GATEWAY_WS_SEND_TIMEOUT_SECONDS,
+) -> float:
     return _read_float("UA_WS_SEND_TIMEOUT_SECONDS", default, minimum=0.1)
 
 
-def session_cancel_wait_seconds(default: float = 10.0) -> float:
+def session_cancel_wait_seconds(
+    default: float = DEFAULT_SESSION_CANCEL_WAIT_SECONDS,
+) -> float:
     return _read_float("UA_SESSION_CANCEL_WAIT_SECONDS", default, minimum=0.1)
 
 
 def websocket_transport_tuning() -> dict[str, float | None]:
     return {
         "open_timeout": _read_positive_float_or_none(
-            "UA_GATEWAY_WS_OPEN_TIMEOUT_SECONDS", 20.0
+            "UA_GATEWAY_WS_OPEN_TIMEOUT_SECONDS",
+            DEFAULT_GATEWAY_WS_OPEN_TIMEOUT_SECONDS,
         ),
         "close_timeout": _read_positive_float_or_none(
-            "UA_GATEWAY_WS_CLOSE_TIMEOUT_SECONDS", 10.0
+            "UA_GATEWAY_WS_CLOSE_TIMEOUT_SECONDS",
+            DEFAULT_GATEWAY_WS_CLOSE_TIMEOUT_SECONDS,
         ),
         "ping_interval": _read_positive_float_or_none(
-            "UA_GATEWAY_WS_PING_INTERVAL_SECONDS", 20.0
+            "UA_GATEWAY_WS_PING_INTERVAL_SECONDS",
+            DEFAULT_GATEWAY_WS_PING_INTERVAL_SECONDS,
         ),
         "ping_timeout": _read_positive_float_or_none(
-            "UA_GATEWAY_WS_PING_TIMEOUT_SECONDS", 20.0
+            "UA_GATEWAY_WS_PING_TIMEOUT_SECONDS",
+            DEFAULT_GATEWAY_WS_PING_TIMEOUT_SECONDS,
         ),
     }
 
