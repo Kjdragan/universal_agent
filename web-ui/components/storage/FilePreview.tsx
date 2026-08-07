@@ -269,12 +269,13 @@ export function FilePreview({
                     </div>
                 ) : fileType === "markdown" && content ? (
                     <div className="h-full overflow-auto rounded-lg border border-border/50 bg-[#0d1117] p-8">
-                        <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            className="markdown-preview"
-                        >
-                            {content}
-                        </ReactMarkdown>
+                        <div className="markdown-preview">
+                            <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                            >
+                                {content}
+                            </ReactMarkdown>
+                        </div>
                     </div>
                 ) : fileType === "json" && content ? (
                     <JsonViewer content={content} />
