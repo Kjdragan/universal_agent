@@ -256,12 +256,6 @@ policy: `research_report`, `email_outreach`, `document_analysis`, `data_processi
 check. `TemplateDecomposer._match_template` scores templates by total matched-keyword
 length and picks the best.
 
-`SubAgentDecomposer` (defined but **not** the default decomposer) delegates decomposition
-to the `task-decomposer` sub-agent, expecting a `macro_tasks.json` with phases; its prompt
-encodes the Composio-anchored decomposition policy, browser-lane policy, available
-sub-agents/toolkits, and the task-capture boundary rules. It is not wired into
-`HybridDecomposer`; you'd have to construct it explicitly.
-
 ---
 
 ## Evaluation
@@ -366,7 +360,7 @@ means Anthropic Opus.
 |---|---|
 | `harness_orchestrator.py` | Operator-CLI `/harness` orchestrator (dormant on prod): interview→plan→phase sessions→evaluate→retry |
 | `orchestrator.py` | Classic `URWOrchestrator` outer loop (CLI `--urw-request`) |
-| `decomposer.py` | Templates + `TemplateDecomposer`/`LLMDecomposer`/`HybridDecomposer`/`SubAgentDecomposer`, `PlanManager` |
+| `decomposer.py` | Templates + `TemplateDecomposer`/`LLMDecomposer`/`HybridDecomposer`, `PlanManager` |
 | `phase_planner.py` | Groups atomic tasks into phases (heuristic + optional LLM) |
 | `evaluator.py` | Binary/constraint/LLM-judge/sub-agent + `CompositeEvaluator` |
 | `evaluation_policy.py` | 6-layer policy schema, defaults, resolver |
