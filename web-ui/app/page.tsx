@@ -699,13 +699,14 @@ function FileViewer() {
           />
         ) : isMarkdown && typeof viewingFile.content === "string" ? (
           <div className="h-full overflow-auto p-4 scrollbar-thin bg-background text-foreground file-viewer-markdown">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={markdownComponents}
-              className="markdown-preview max-w-none"
-            >
-              {viewingFile.content || "[Empty File]"}
-            </ReactMarkdown>
+            <div className="markdown-preview max-w-none">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={markdownComponents}
+                >
+                  {viewingFile.content || "[Empty File]"}
+                </ReactMarkdown>
+            </div>
           </div>
         ) : (
           <div className="h-full overflow-auto p-4 scrollbar-thin bg-background text-foreground">
@@ -1467,13 +1468,14 @@ function ChatMessage({ message }: { message: any }) {
             </div>
           </div>
           <div className="bg-primary/10 border border-primary/15 text-foreground rounded-xl p-4 shadow-sm text-sm">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={markdownComponents}
-              className="markdown-preview max-w-none"
-            >
-              {message.content}
-            </ReactMarkdown>
+            <div className="markdown-preview max-w-none">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={markdownComponents}
+                >
+                  {message.content}
+                </ReactMarkdown>
+            </div>
           </div>
         </div>
       </div>
@@ -1488,13 +1490,14 @@ function ChatMessage({ message }: { message: any }) {
           <span className="text-amber-200/70">{formattedDelta}</span>
         </div>
         <div className="mt-1 text-sm text-amber-100 leading-relaxed">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={markdownComponents}
-            className="markdown-preview max-w-none"
-          >
-            {message.content}
-          </ReactMarkdown>
+          <div className="markdown-preview max-w-none">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={markdownComponents}
+              >
+                {message.content}
+              </ReactMarkdown>
+          </div>
         </div>
       </div>
     );
@@ -1530,13 +1533,14 @@ function ChatMessage({ message }: { message: any }) {
               </div>
             </div>
             <div className={`bg-background/80 border border-border border-l-2 ${style.borderAccent} shadow-md rounded-xl p-4 text-sm leading-relaxed`}>
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={markdownComponents}
-                className="markdown-preview max-w-none"
-              >
-                {message.content}
-              </ReactMarkdown>
+              <div className="markdown-preview max-w-none">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={markdownComponents}
+                  >
+                    {message.content}
+                  </ReactMarkdown>
+              </div>
             </div>
           </div>
         </div>

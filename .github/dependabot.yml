@@ -84,3 +84,25 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+    # Majors that need a hand-written migration are held back here, because the
+    # deploy pipeline gives a breaking web-ui build nowhere to surface EXCEPT
+    # production: pr-validate runs py_compile/ruff/pytest and does NOT build
+    # web-ui, so an npm major passes the only pre-deploy gate green and then fails
+    # on the VPS inside deploy-production.
+    #
+    # tailwindcss 3 -> 4 (#1649, merged 2026-08-03) did exactly that. v4 moved its
+    # PostCSS plugin to `@tailwindcss/postcss`; this project loads `tailwindcss`
+    # directly in web-ui/postcss.config.mjs. Every deploy to production failed for
+    # the next THREE DAYS (runs 30836231632 through 31099494601) and the automated
+    # "Re-run transient deploy failure (once)" retry masked it, because a version
+    # mismatch re-runs identically and the retry job itself still reported success.
+    # Reverted to ^3.4.19 in this PR.
+    #
+    # A v4 migration is real work — CSS-first `@theme` config, `@import
+    # "tailwindcss"` replacing the three `@tailwind` directives, and re-checking
+    # every shadcn token in tailwind.config.ts — and it must be done deliberately,
+    # not merged as a dependency bump at 12:00 on a Monday. Remove this ignore in
+    # the same PR that does the migration.
+    ignore:
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major"]
