@@ -32,6 +32,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import signal
 import sqlite3
 import subprocess
@@ -61,6 +62,7 @@ Be highly critical and skeptical. MOST candidates should NOT clear the bar. A ca
 - It describes a SPECIFIC, concrete technical capability (a named SDK, API, feature, model, or technique) — not vague hype, news, opinion, or a talking-head take.
 - A coding agent could actually BUILD a small runnable demo that exercises that capability end-to-end TODAY, against a real endpoint.
 - The result would be a genuinely VALUABLE reference demo — novel enough to be worth the build, not a near-duplicate of an obvious existing capability.
+- Its HEADLINE capability fits ONE small, self-contained demo: a focused core loop against at most a couple of cooperating services. REJECT kitchen-sink tutorials — many tools/services wired into one sprawling workflow, or an end-to-end product build — even when each piece is individually demoable: an autonomous overnight build of the sprawl reliably exhausts its budget and lands nothing, and when the video's headline point IS the sprawl, a faithful small demo does not exist. Judge the video's actual scope, not whether some slice of it could be demoed.
 
 Reject anything promotional, speculative, a pure news/reaction/opinion piece, too broad to scope into one demo, or trivially derivative.
 
@@ -99,6 +101,106 @@ def _min_score() -> float:
         return float(raw)
     except (TypeError, ValueError):
         return _DEFAULT_MIN_SCORE
+
+
+def _defer_retries_max() -> int:
+    """How many EXTRA nights a goal-DEFER seed may be re-queued (default 1)."""
+    raw = (os.getenv("UA_PROACTIVE_DEMO_NUGGETS_DEFER_RETRIES") or "").strip()
+    if not raw:
+        return 1
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _harness_retry_enabled() -> bool:
+    return (os.getenv("UA_PROACTIVE_DEMO_NUGGETS_HARNESS_RETRY") or "").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+# build_demo.py exits 3 for a genuine fidelity rejection AND for a goal-loop DEFER,
+# and a judge HARNESS_FAULT surfaces under the same nonzero exit — the rc alone
+# cannot separate "the demo is bad" from "we never finished building it" from "our
+# own judge broke". The stage-summary lines build_demo prints at the end of stdout
+# can, and the runner captures stdout in full.
+_HARNESS_FAULT_MARKERS = ("HARNESS FAULT/exit=4", "DEMO_EVAL: HARNESS_FAULT")
+_GOAL_DEFER_RE = re.compile(r"goal_build\s+DEFER")
+
+
+def _classify_build_failure(stdout: str) -> str:
+    """``harness_fault`` | ``goal_defer`` | ``other`` — from build_demo's stage summary."""
+    text = stdout or ""
+    if any(marker in text for marker in _HARNESS_FAULT_MARKERS):
+        return "harness_fault"
+    if _GOAL_DEFER_RE.search(text):
+        return "goal_defer"
+    return "other"
+
+
+def _requeue_deferred_build(conn, entry: dict[str, Any], *, root: Path) -> bool:
+    """Give a goal-DEFER build one more night instead of filing it forever.
+
+    ``goal_build DEFER`` means the build budget ran out before the deterministic
+    gate ever passed: the un-demoable record land wrote beneath it is a BUDGET
+    artifact, not a fidelity verdict — nothing proved the capability un-demoable.
+    Left alone, that record's ``manifest.json`` satisfies ``_demo_dir_exists`` and
+    silently delists the candidate from every future run — the same permanent-spend
+    shape as the 2026-08-02 debris bug, but carrying a manifest, so
+    ``_quarantine_failed_demo_dir`` deliberately refuses it. (2026-08-07: the
+    Fable-Orchestrator seed spent its 3 rounds, DEFERred, and was filed un-demoable
+    on a night the fidelity judge never even ran.)
+
+    So: move the workspace aside (same ``failed-proactive-`` prefix as the
+    quarantine path — invisible to every demo glob, transcript preserved) and stamp
+    ``metadata.nugget_defer`` so tomorrow's run re-judges the seed fresh, capped at
+    ``_defer_retries_max()`` extra nights. Returns True when the seed was re-queued.
+    """
+    from universal_agent import task_hub
+
+    task_id = entry["task_id"]
+    item = task_hub.get_item(conn, task_id)
+    meta = item.get("metadata") if isinstance(item, dict) else {}
+    prior = meta.get("nugget_defer") if isinstance(meta, dict) else None
+    count = int(prior.get("count") or 0) if isinstance(prior, dict) else 0
+    if count >= _defer_retries_max():
+        return False
+
+    demo_dir = root / f"demo-proactive-{entry['video_slug']}"
+    if demo_dir.is_dir():
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        dest = root / f"failed-proactive-{entry['video_slug']}.defer{count + 1}.{stamp}"
+        try:
+            demo_dir.rename(dest)
+        except OSError:
+            logger.warning(
+                "nuggets: could not move DEFERred workspace %s aside — leaving the "
+                "candidate delisted rather than guaranteeing a provision failure on "
+                "the retry night", demo_dir, exc_info=True,
+            )
+            return False
+
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": task_id,
+                "metadata": {
+                    "nugget_defer": {
+                        "count": count + 1,
+                        "last_defer_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "demo_id": f"proactive-{entry['video_slug']}",
+                    }
+                },
+            },
+        )
+        conn.commit()
+    except Exception:  # noqa: BLE001 — the rename already made the seed eligible again;
+        # the stamp only enforces the retry cap, so a failed stamp risks one extra
+        # night of retry, never a lost candidate.
+        logger.warning("nuggets: nugget_defer stamp failed for %s", task_id, exc_info=True)
+    return True
 
 
 def _build_timeout_seconds() -> int:
@@ -698,6 +800,9 @@ def select_and_build_nuggets(
         # run_zero_backlog_swipe's keep-set — see its docstring for why a failed
         # attempt must survive the night rather than be swept with the rejects.
         "attempted_failed": [],
+        # goal-DEFER seeds whose workspace was set aside and whose task was stamped
+        # for ONE more night — see _requeue_deferred_build. Subset of attempted_failed.
+        "defer_requeued": [],
         # Builds that LANDED and were then killed by the outer cap mid-post-land.
         # Counted as built (the demo is real and gated), recorded separately so the
         # truncated promote / Stage D stays visible instead of reading as a clean run.
@@ -878,17 +983,56 @@ def select_and_build_nuggets(
             rc = int(getattr(proc, "returncode", 1) or 0)
             worker_exit = classify_worker_exit(return_code=rc)
             if rc != 0:
+                failure_kind = _classify_build_failure(str(getattr(proc, "stdout", "") or ""))
+                if failure_kind == "harness_fault" and _harness_retry_enabled():
+                    # The judge machinery broke (land exit 4): the demo was never
+                    # given a verdict and NOTHING was recorded — but the finished
+                    # build is on disk. One same-night --into resume re-runs the
+                    # gates without re-paying the build. (demo_factory #256 made
+                    # harness faults visible; this makes them recoverable.)
+                    retry_argv = argv + [
+                        "--into", str(root / f"demo-proactive-{e['video_slug']}"),
+                    ]
+                    logger.warning(
+                        "nuggets: HARNESS_FAULT for %s — retrying once via --into",
+                        e["video_slug"],
+                    )
+                    try:
+                        proc = run_build(retry_argv)
+                        rc = int(getattr(proc, "returncode", 1) or 0)
+                    except Exception as exc:  # noqa: BLE001 — incl. a retry timeout;
+                        # the rare double-fault files as an ordinary failure below.
+                        proc = subprocess.CompletedProcess(
+                            retry_argv, 1, stdout="", stderr=f"{type(exc).__name__}: {exc}",
+                        )
+                        rc = 1
+                    worker_exit = classify_worker_exit(return_code=rc)
+                    if rc == 0:
+                        built = _register_and_email(conn, e, root=root, notifier=notifier)
+                        summary["built"].append(built)
+                        built_this_run += 1
+                        continue
+                    failure_kind = _classify_build_failure(str(getattr(proc, "stdout", "") or ""))
                 tail = _tail(getattr(proc, "stderr", None))
                 out_tail = _tail(getattr(proc, "stdout", None))
+                failure = {
+                    "task_id": e["task_id"], "demo_id": f"proactive-{e['video_slug']}",
+                    "returncode": rc, "worker_exit": worker_exit.outcome,
+                    "failure_kind": failure_kind, "error": tail, "stdout_tail": out_tail,
+                }
+                if failure_kind == "goal_defer" and _requeue_deferred_build(conn, e, root=root):
+                    failure["requeued"] = True
+                    summary["defer_requeued"].append(e["task_id"])
+                    logger.warning(
+                        "nuggets: goal DEFER for %s — build budget exhausted before the "
+                        "deterministic gate; workspace set aside and seed re-queued for "
+                        "another night", e["video_slug"],
+                    )
                 logger.warning(
-                    "nuggets: build FAILED rc=%d (%s) for %s: stderr=%s || stdout=%s",
-                    rc, worker_exit.outcome, e["video_slug"], tail, out_tail,
+                    "nuggets: build FAILED rc=%d (%s, kind=%s) for %s: stderr=%s || stdout=%s",
+                    rc, worker_exit.outcome, failure_kind, e["video_slug"], tail, out_tail,
                 )
-                summary["build_failures"].append(
-                    {"task_id": e["task_id"], "demo_id": f"proactive-{e['video_slug']}",
-                     "returncode": rc, "worker_exit": worker_exit.outcome, "error": tail,
-                     "stdout_tail": out_tail}
-                )
+                summary["build_failures"].append(failure)
                 summary["attempted_failed"].append(e["task_id"])
                 continue
             built = _register_and_email(conn, e, root=root, notifier=notifier)
