@@ -32,10 +32,10 @@ from universal_agent.services.proactive_artifacts import (
     make_artifact_id,
     upsert_artifact,
 )
-from universal_agent.utils.model_resolution import resolve_opus
-from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.utils.anthropic_client import call_llm_text, has_llm_key
 from universal_agent.utils.env_utils import TRUTHY as _TRUTHY
+from universal_agent.utils.json_utils import extract_json_payload
+from universal_agent.utils.model_resolution import resolve_opus
 from universal_agent.utils.time_utils import now_iso as _now_iso
 
 DEFAULT_HANDLE = "ClaudeDevs"
