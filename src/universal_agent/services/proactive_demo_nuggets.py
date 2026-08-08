@@ -203,6 +203,16 @@ def _requeue_deferred_build(conn, entry: dict[str, Any], *, root: Path) -> bool:
     return True
 
 
+def _cody_mode() -> str:
+    """build_demo --cody-mode for nugget builds. Default hybrid (build on
+    Anthropic Max, demo-runtime inference on ZAI — operator decision 2026-07-02).
+    UA_PROACTIVE_DEMO_CODY_MODE overrides it — e.g. "anthropic" while the ZAI
+    plan is rate-limited (operator, 2026-08-08) so the whole build rides
+    official Anthropic instead of failing at the demo-runtime stage."""
+    v = (os.getenv("UA_PROACTIVE_DEMO_CODY_MODE") or "").strip().lower()
+    return v if v in ("hybrid", "anthropic", "zai") else "hybrid"
+
+
 def _build_timeout_seconds() -> int:
     raw = (os.getenv("UA_PROACTIVE_DEMO_NUGGETS_BUILD_TIMEOUT_SECONDS") or "").strip()
     if not raw:
@@ -540,7 +550,7 @@ def _build_argv(cand: dict[str, Any], *, root: Path) -> list[str]:
         argv += ["--seed-url", seed_url]
     argv += [
         "--endpoint-required", "any", "--promote", "--skill-tier", "library",
-        "--cody-mode", "hybrid", "--video",
+        "--cody-mode", _cody_mode(), "--video",
     ]
     return argv
 
