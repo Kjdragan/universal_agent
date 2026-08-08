@@ -1000,3 +1000,19 @@ def test_judge_prompt_screens_kitchen_sink_scope():
     prompt = nuggets._JUDGE_SYSTEM_PROMPT
     assert "kitchen-sink" in prompt
     assert "ONE small, self-contained demo" in prompt
+
+
+def test_cody_mode_env_override(monkeypatch):
+    """UA_PROACTIVE_DEMO_CODY_MODE reroutes nugget builds off ZAI (e.g. a
+    rate-limited plan window) without touching code; bad values fall back."""
+    cand = {"task_id": "t", "video_title": "T", "video_slug": "t", "video_url": ""}
+    root = Path("/tmp")
+    monkeypatch.delenv("UA_PROACTIVE_DEMO_CODY_MODE", raising=False)
+    argv = nuggets._build_argv(cand, root=root)
+    assert argv[argv.index("--cody-mode") + 1] == "hybrid"
+    monkeypatch.setenv("UA_PROACTIVE_DEMO_CODY_MODE", "anthropic")
+    argv = nuggets._build_argv(cand, root=root)
+    assert argv[argv.index("--cody-mode") + 1] == "anthropic"
+    monkeypatch.setenv("UA_PROACTIVE_DEMO_CODY_MODE", "bogus")
+    argv = nuggets._build_argv(cand, root=root)
+    assert argv[argv.index("--cody-mode") + 1] == "hybrid"
