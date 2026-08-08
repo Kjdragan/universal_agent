@@ -1,0 +1,26 @@
+[Unit]
+Description=Universal Agent weekly ZAI usage report (deterministic 5-lane consolidation -> operator email; standing follow-up to the 2026-08-08 ZAI audit)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Strict-vps Infisical backstop (mirrors backlog-triage): the module calls
+# initialize_runtime_secrets() with no profile arg; the deploy-written .env is
+# loaded LAST and carries the real machine-identity creds.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.zai_usage_weekly_report --to kevinjdragan@gmail.com
+MemoryMax=1G
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
