@@ -1016,3 +1016,12 @@ def test_cody_mode_env_override(monkeypatch):
     monkeypatch.setenv("UA_PROACTIVE_DEMO_CODY_MODE", "bogus")
     argv = nuggets._build_argv(cand, root=root)
     assert argv[argv.index("--cody-mode") + 1] == "hybrid"
+
+
+def test_build_argv_promotes_live():
+    """The factory stages promotion unless told otherwise; the nightly's policy
+    is real auto-promotion (audited 2026-08-08: the flag's absence meant no
+    nightly skill ever reached the marketplace)."""
+    cand = {"task_id": "t", "video_title": "T", "video_slug": "t", "video_url": ""}
+    argv = nuggets._build_argv(cand, root=Path("/tmp"))
+    assert "--promote-live" in argv and "--promote" in argv

@@ -550,6 +550,12 @@ def _build_argv(cand: dict[str, Any], *, root: Path) -> list[str]:
         argv += ["--seed-url", seed_url]
     argv += [
         "--endpoint-required", "any", "--promote", "--skill-tier", "library",
+        # --promote-live: demo_factory stages promotion (dry-run) by default; the
+        # factory's written policy is that every demo-born skill auto-promotes to
+        # the private marketplace ("capture now, curate later" — the notify email
+        # carries the DENY handle). Audited 2026-08-08: no nightly skill had EVER
+        # reached dragan-plugins because this flag was missing.
+        "--promote-live",
         "--cody-mode", _cody_mode(), "--video",
     ]
     return argv
