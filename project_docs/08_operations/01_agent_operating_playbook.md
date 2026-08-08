@@ -16,7 +16,7 @@ code_paths:
   - src/universal_agent/durable/state.py
   - src/universal_agent/services/proactive_health_notifier.py
   - src/universal_agent/durable/db.py
-last_verified: 2026-06-22
+last_verified: 2026-08-06
 ---
 
 # Agent Operating Playbook
