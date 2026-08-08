@@ -8281,6 +8281,7 @@ async def setup_session(
     session_prefix: str = "run_",
     attach_stdio: bool = True,
     extra_disallowed_tools: Optional[list[str]] = None,
+    model_tier_default: Optional[str] = None,
 ) -> tuple[ClaudeAgentOptions, Any, str, str, dict, Any]:
     """
     Initialize the agent session, tools, and options.
@@ -8708,11 +8709,14 @@ async def setup_session(
         resolve_model,
     )
     options = ClaudeAgentOptions(
-        # Global daemon model is OPUS (glm-5.1) per operator decision.
-        # haiku is operator-locked to glm-4.5-air; do not remap. There's
-        # no cost or reliability reason to hold the daemon at sonnet —
-        # opus is the right default for all task execution paths.
-        model=resolve_claude_code_model(default="opus"),
+        # Global daemon model is OPUS per operator decision, EXCEPT where a
+        # caller passes model_tier_default to right-size a specific session
+        # (2026-08-08 operator decision: the heartbeat daemon runs sonnet —
+        # it was the largest ZAI weekly-quota consumer at ~1.4M
+        # cache-inclusive tokens/turn on the opus tier; see
+        # daemon_sessions.heartbeat_model_tier_default). haiku is
+        # operator-locked to glm-4.5-air; do not remap.
+        model=resolve_claude_code_model(default=model_tier_default or "opus"),
         agents=__load_programmatic_agents(src_dir),
         add_dirs=[os.path.join(src_dir, ".claude")],
         setting_sources=["project"],  # Enable loading agents from .claude/agents/

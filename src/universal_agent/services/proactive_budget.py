@@ -68,9 +68,13 @@ _IDEATION_TICKS_KEY = "proactive_ideation_ticks"
 # active window (services.dormancy) -- ideation is exactly the class of
 # content-generation work that window exists for: proposals only sit in the
 # morning ideation report anyway, so firing overnight just burns quota to
-# produce intelligence nobody reads until morning. At the default ~1h base
-# interval, a 10-task budget naturally drips across the ~16h active window.
-DEFAULT_IDEATION_MIN_INTERVAL_SECONDS = 3600
+# produce intelligence nobody reads until morning. At the default ~2h base
+# interval, ideation fires ~8x across the ~16h active window — raised from
+# ~1h on 2026-08-08 after the ZAI usage audit measured idle ideation turns
+# as the dominant weekly-quota consumer (~1.4M cache-inclusive tokens per
+# heartbeat turn); halving the cadence halves that burn while the morning
+# report still gets a full slate of proposals.
+DEFAULT_IDEATION_MIN_INTERVAL_SECONDS = 7200
 DEFAULT_IDEATION_JITTER_FRAC = 0.25
 _LAST_IDEATION_KEY = "proactive_last_ideation_at"
 

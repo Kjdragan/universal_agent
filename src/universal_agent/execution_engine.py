@@ -443,6 +443,10 @@ class EngineConfig:
     max_iterations: int = 20
     run_id: Optional[str] = None
     extra_disallowed_tools: list[str] = field(default_factory=list)
+    # Model tier for this session's persistent SDK client ("haiku"/"sonnet"/
+    # "opus"). None keeps setup_session's opus default. Set to "sonnet" for
+    # the heartbeat daemon (ZAI audit 2026-08-08: right-size routine turns).
+    model_tier_default: Optional[str] = None
     
     def __post_init__(self):
         if not self.user_id:
@@ -609,6 +613,7 @@ class ProcessTurnAdapter:
             workspace_dir_override=self.config.workspace_dir,
             attach_stdio=False,
             extra_disallowed_tools=list(self.config.extra_disallowed_tools or []),
+            model_tier_default=self.config.model_tier_default,
         )
         
         # Update config with resolved values

@@ -199,6 +199,29 @@ def _extra_disallowed_tools_for_request(metadata: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(policy))
 
 
+def _model_tier_default_for_session(
+    session_id: str, metadata: dict[str, Any] | None
+) -> Optional[str]:
+    """Per-session model-tier override for the persistent SDK client.
+
+    Only the heartbeat daemon is right-sized (to sonnet by default, knob
+    ``UA_HEARTBEAT_MODEL_TIER``) — it was the largest ZAI weekly-quota
+    consumer on the opus tier (audit 2026-08-08). Every other session
+    returns None and keeps setup_session's opus default.
+    """
+    try:
+        from universal_agent.services.daemon_sessions import (
+            heartbeat_model_tier_default,
+            is_heartbeat_daemon_session,
+        )
+
+        if is_heartbeat_daemon_session(session_id, metadata):
+            return heartbeat_model_tier_default()
+    except Exception:  # pragma: no cover — never block session creation
+        logger.warning("model-tier resolution failed for %s", session_id, exc_info=True)
+    return None
+
+
 def _parse_iso_datetime(value: Any) -> Optional[datetime]:
     raw = str(value or "").strip()
     if not raw:
@@ -525,6 +548,7 @@ class InProcessGateway(Gateway):
             config = EngineConfig(
                 workspace_dir=str(workspace_path),
                 user_id=user_id,
+                model_tier_default=_model_tier_default_for_session(resolved_session_id, None),
             )
             adapter = ProcessTurnAdapter(config)
             
@@ -632,6 +656,7 @@ class InProcessGateway(Gateway):
         config = EngineConfig(
             workspace_dir=str(workspace_path),
             user_id=str(session.user_id or resolve_user_id() or "unknown"),
+            model_tier_default=_model_tier_default_for_session(session_id, session.metadata),
         )
         adapter = ProcessTurnAdapter(config)
         await adapter.initialize()
