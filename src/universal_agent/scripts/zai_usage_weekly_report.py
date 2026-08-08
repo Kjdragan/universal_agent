@@ -16,10 +16,57 @@ Run manually: ``python -m universal_agent.scripts.zai_usage_weekly_report
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import time
+from pathlib import Path
 from typing import Any
 
 WINDOW = 7 * 86400
+
+
+def _history_path() -> Path:
+    """Durable trend ledger: one JSON row per report/audit run, appended forever.
+
+    Lives in AGENT_RUN_WORKSPACES (outside git, survives deploys) so trends
+    accumulate across weeks — the operator's mandate (2026-08-08): every
+    snapshot must be SAVED, not just emailed, so "is the system actually
+    reducing token use" is answerable from data, not memory. The
+    zai-usage-audit skill reads and appends to the same file.
+    """
+    raw = os.getenv("UA_ZAI_USAGE_HISTORY_PATH", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    repo_root = Path(__file__).resolve().parents[3]
+    return repo_root / "AGENT_RUN_WORKSPACES" / "zai_usage_history.jsonl"
+
+
+def append_history_row(row: dict[str, Any]) -> None:
+    """Append one trend row (fail-open — telemetry never breaks the report)."""
+    try:
+        p = _history_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def read_history(limit: int = 26) -> list[dict[str, Any]]:
+    """Last `limit` trend rows, oldest first. Fail-open to []."""
+    try:
+        rows: list[dict[str, Any]] = []
+        for line in _history_path().read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+        return rows[-limit:]
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _fmt(n: float) -> str:
@@ -110,6 +157,19 @@ def build_report(now: float | None = None) -> str:
             f"  {p['caller'][:44]:<44} {_fmt(p['total_tokens']):>8}"
             f"  (prior {_fmt(prior)}, {p['requests']} calls)"
         )
+    history = read_history()
+    weekly_rows = [r for r in history if r.get("kind") == "weekly_report"][-8:]
+    if weekly_rows:
+        lines.append("")
+        lines.append("Trend (stored history, cache-inclusive per 7d window):")
+        prior_t = None
+        for r in weekly_rows:
+            t = int(r.get("total_tokens") or 0)
+            d = f" ({'+' if t >= (prior_t or t) else '-'}{_fmt(abs(t - prior_t))})" if prior_t else ""
+            lines.append(f"  {time.strftime('%Y-%m-%d', time.gmtime(float(r.get('ts') or 0)))}: {_fmt(t)}{d}")
+            prior_t = t
+        lines.append(f"  this run: {_fmt(cur_tot)}")
+
     lines.append("")
     lines.extend(_meter_lines())
     lines.append("")
@@ -147,10 +207,39 @@ def main() -> int:
     except Exception:  # noqa: BLE001 — report still prints without secrets
         pass
 
-    text = build_report()
+    now = time.time()
+    text = build_report(now)
     print(text)
     if a.dry_run:
         return 0
+
+    # Persist this run's aggregates BEFORE emailing, so the trend survives a
+    # failed send. Recomputed compactly from the same windows.
+    try:
+        cur = _window_view(now)
+        row: dict[str, Any] = {
+            "ts": now,
+            "kind": "weekly_report",
+            "window_days": 7,
+            "total_tokens": int(cur["totals"].get("total_tokens") or 0),
+            "fresh_tokens": int(cur["totals"].get("input_tokens") or 0)
+            + int(cur["totals"].get("output_tokens") or 0),
+            "flows": [
+                {
+                    "caller": p["caller"],
+                    "total_tokens": p["total_tokens"],
+                    "requests": p["requests"],
+                }
+                for p in cur.get("processes", [])[:12]
+            ],
+            "lanes": {
+                s.get("source", "?"): s.get("token_events_seen", 0)
+                for s in cur.get("_sources", [])
+            },
+        }
+        append_history_row(row)
+    except Exception:  # noqa: BLE001
+        pass
     from universal_agent.simone_mail import send_simone_email
 
     res = send_simone_email(

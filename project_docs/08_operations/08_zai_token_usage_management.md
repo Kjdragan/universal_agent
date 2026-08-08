@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/rate_limiter.py
   - src/universal_agent/scripts/zai_token_report.py
-last_verified: 2026-07-24
+last_verified: 2026-08-08
 ---
 
 # ZAI Token Usage Management
@@ -196,3 +196,34 @@ is itself unexplained and worth a look before it starts writing again.
   [`06_platform/10_zai_rate_limiter.md` §9.6](../06_platform/10_zai_rate_limiter.md#96-the-1310-weeklymonthly-quota-exhaustion-auto-pause-r1-2026-07-18)).
   It self-clears at the reset — no manual dashboard pause needed unless the auto-pause's
   fallback TTL undershot the real reset.
+
+## Cadence map & per-element pacing knobs (2026-08-08)
+
+The 2026-08-08 efficiency changes slowed exactly ONE thing: the heartbeat's
+**idle-ideation pivot** (1h → 2h minimum interval). Everything work-shaped
+kept its cadence, and every element has its own independent knob — pacing is
+per-element by construction, never one global dial:
+
+| Element | Cadence in prod | Knob | Changed 2026-08-08? |
+|---|---|---|---|
+| Task Hub EXECUTION (todo daemon) | ~60s poll + immediate nudge wake — deliberately decoupled from the heartbeat (`idle_dispatch_loop.py`) | `UA_IDLE_POLL_INTERVAL_SECONDS` (60), `UA_TODO_DISPATCH_MAX_PER_SWEEP` | no |
+| Heartbeat tick (supervision/triage) | **10 min** — Infisical sets `UA_HEARTBEAT_INTERVAL=10m` (the code default 30m is NOT what runs; an on-disk grep won't find this) | `UA_HEARTBEAT_INTERVAL` | no |
+| Actionable heartbeat turns (task claims, system events, exec completions, pending operator questions, demo reviews) | next tick, ≤10 min — guard policy NEVER idle-skips these wake signals | (same tick knob) | no — model tier only (sonnet) |
+| Idle ideation (brainstorm proposals for the morning report) | ≥2h jittered, Houston 06:00–22:00 window, daily budgets | `UA_PROACTIVE_IDEATION_MIN_INTERVAL_SECONDS` (7200), `UA_PROACTIVE_IDEATION_TICK_BUDGET` (20), `UA_PROACTIVE_DAILY_BUDGET` (10) | **yes: 3600 → 7200 default** |
+| Mission Control sweeper | 60s tick, delta-gated (LLM only on real state change) | `UA_MISSION_CONTROL_TIER1_FLOOR_S`/`_CEILING_S` | no |
+| Heartbeat daemon MODEL | sonnet (`glm-5-turbo`) | `UA_HEARTBEAT_MODEL_TIER` (revert to `opus` without a deploy) | **yes: opus → sonnet** |
+
+If a specific flow ever needs faster idle attention than 2h, the correct move
+is that flow's own knob (or promoting its signal into the guard policy's
+wake set) — never lowering the global ideation interval back for everyone.
+
+## Trend history (the "is it actually improving?" ledger)
+
+`universal-agent-zai-usage-report.timer` (Wed 09:00 CT) emails the weekly
+5-lane snapshot AND appends its aggregates to
+`AGENT_RUN_WORKSPACES/zai_usage_history.jsonl` (env
+`UA_ZAI_USAGE_HISTORY_PATH`; survives deploys). One JSON row per run:
+totals (cache-inclusive + fresh), top-12 flows, lane health. The report
+renders the stored trend; the `/dragan:zai-usage-audit` skill reads the same
+file first and appends its own `kind:"audit"` row with findings, so every
+assessment builds on recorded history instead of memory.
