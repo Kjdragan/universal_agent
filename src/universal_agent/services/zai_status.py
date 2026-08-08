@@ -394,6 +394,7 @@ def build_token_usage(window_seconds: int, top_n: int = 25) -> dict[str, Any]:
         tc.analyze_sink_token_usage,
         tc.analyze_cody_token_usage,
         tc.read_csi_token_usage,
+        tc.read_demo_factory_token_usage,  # ZAI rows only, filtered in the reader
     ):
         try:
             sources.append(reader(now, window_seconds, top_n=top_n))

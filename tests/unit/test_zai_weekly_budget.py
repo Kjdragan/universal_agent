@@ -58,6 +58,16 @@ def no_csi(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def no_demo_factory(tmp_path, monkeypatch):
+    """Same isolation for the demo-factory JSONL lane: a real ledger on the
+    test machine must never leak into deterministic weekly-budget sums."""
+    monkeypatch.setenv(
+        "UA_DEMO_FACTORY_TOKEN_LEDGER_PATH", str(tmp_path / "no_such_ledger.jsonl")
+    )
+    yield
+
+
 def _insert_sink(conn, *, principal, model, input_t, output_t, cache_read, ts):
     conn.execute(
         """INSERT INTO token_usage_events

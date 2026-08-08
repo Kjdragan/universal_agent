@@ -304,6 +304,7 @@ const TOKEN_SOURCES: { key: string; label: string }[] = [
   { key: "httpx-zai", label: "httpx" },
   { key: "cli-subprocess", label: "subprocess" },
   { key: "csi-ingester", label: "CSI" },
+  { key: "demo-factory", label: "demo_factory" },
 ];
 
 function fmtTok(n?: number | null): string {

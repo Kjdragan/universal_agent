@@ -114,8 +114,67 @@ def test_csi_reader_reads_rows(tmp_path, monkeypatch):
     assert src["processes"][0]["total_tokens"] == 5800
 
 
+def test_demo_factory_reader_failsoft_when_absent(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "UA_DEMO_FACTORY_TOKEN_LEDGER_PATH", str(tmp_path / "nope.jsonl")
+    )
+    from universal_agent.services.token_consolidation import (
+        read_demo_factory_token_usage,
+    )
+
+    src = read_demo_factory_token_usage(_now(), 3600)
+    assert src["available"] is False
+    assert src["processes"] == []
+
+
+def test_demo_factory_reader_counts_only_zai_rows(tmp_path, monkeypatch):
+    import json as _json
+
+    now = _now()
+    path = tmp_path / "token_usage.jsonl"
+    rows = [
+        # counted: explicit zai provider
+        {"ts": now - 30, "provider": "zai", "model": "glm-5-turbo",
+         "caller": "goal_build", "input_tokens": 1000, "output_tokens": 200,
+         "cache_read_input_tokens": 9000},
+        # counted: glm model id even without provider tag
+        {"ts": now - 20, "model": "glm-4.6", "caller": "ledger_weekly",
+         "input_tokens": 500, "output_tokens": 100},
+        # NOT counted: Anthropic row must never inflate the ZAI lane
+        {"ts": now - 10, "provider": "anthropic", "model": "claude-opus-5",
+         "caller": "goal_build", "input_tokens": 999_999, "output_tokens": 999},
+        # NOT counted: outside the window
+        {"ts": now - 999_999, "provider": "zai", "model": "glm-5-turbo",
+         "caller": "goal_build", "input_tokens": 777},
+        # NOT counted: garbage line survives without breaking the reader
+    ]
+    with open(path, "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(_json.dumps(r) + "\n")
+        fh.write("not json at all\n")
+    monkeypatch.setenv("UA_DEMO_FACTORY_TOKEN_LEDGER_PATH", str(path))
+
+    from universal_agent.services.token_consolidation import (
+        read_demo_factory_token_usage,
+    )
+
+    src = read_demo_factory_token_usage(now, 3600)
+    assert src["available"] is True
+    assert src["token_events_seen"] == 2
+    # cache-inclusive: 1000+200+9000 + 500+100
+    assert src["totals"]["total_tokens"] == 10_800
+    callers = {p["caller"] for p in src["processes"]}
+    assert callers == {"demo_factory:goal_build", "demo_factory:ledger_weekly"}
+    top = src["processes"][0]
+    assert top["caller"] == "demo_factory:goal_build"
+    assert top["total_tokens"] == 10_200
+
+
 def test_build_token_usage_legacy_aliases_equal_consolidated(activity_db, tmp_path, monkeypatch):
     monkeypatch.setenv("CSI_DB_PATH", str(tmp_path / "absent.db"))  # csi fail-soft
+    monkeypatch.setenv(
+        "UA_DEMO_FACTORY_TOKEN_LEDGER_PATH", str(tmp_path / "absent.jsonl")
+    )  # demo-factory fail-soft
     now = _now()
     _insert_sink(activity_db, principal="simone", model="glm-5.1",
                  input_t=200_000, output_t=18_000, cache_read=1_740_000, ts=now - 50)
@@ -126,7 +185,13 @@ def test_build_token_usage_legacy_aliases_equal_consolidated(activity_db, tmp_pa
     assert out["available"] is True
     # sources[] present with the in-process lane carrying the simone spend
     src_names = {s["source"] for s in out["sources"]}
-    assert {"httpx-zai", "cli-in-process", "cli-subprocess", "csi-ingester"} <= src_names
+    assert {
+        "httpx-zai",
+        "cli-in-process",
+        "cli-subprocess",
+        "csi-ingester",
+        "demo-factory",
+    } <= src_names
     # MANDATORY: legacy aliases == consolidated (backend-ahead-of-UI safety)
     assert out["totals"] == out["consolidated"]["totals"]
     assert out["processes"] == out["consolidated"]["processes"]

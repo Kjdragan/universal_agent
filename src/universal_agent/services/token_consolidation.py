@@ -33,6 +33,7 @@ source to ``available: false`` and never raises into the gateway.
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import os
 import sqlite3
@@ -48,6 +49,7 @@ SOURCE_LABELS: dict[str, str] = {
     "cli-in-process": "in-process SDK (Simone heartbeat/daemon, VP coder, ATLAS)",
     "cli-subprocess": "claude --print subprocess (Cody / VP missions)",
     "csi-ingester": "CSI ingester (separate process)",
+    "demo-factory": "demo_factory (factory + demo-runtime, ZAI rows only)",
 }
 
 
@@ -424,6 +426,113 @@ def read_csi_token_usage(
             fp["total_tokens"] = csi_total
     finalized.sort(key=lambda d: (-d["total_tokens"], -d["requests"]))
     src["processes"] = finalized
+    return src
+
+
+def read_demo_factory_token_usage(
+    now: float, window_seconds: int, top_n: int = 25
+) -> dict[str, Any]:
+    """``demo-factory`` source: the factory's own append-only JSONL ledger.
+
+    demo_factory (a separate repo/venv; its builds and demo-runtime inference
+    are invisible to every other lane) writes one JSON object per LLM call:
+    ``ts`` (epoch float), ``provider`` ("zai"/"anthropic"/"gemini"),
+    ``model``, ``caller``, and the four Anthropic-shaped token fields.
+
+    **Only ZAI rows are counted** (``provider == "zai"`` or a ``glm*`` model
+    id): every consumer of this lane — the weekly budget meter above all —
+    sums lanes with no per-row model filtering, so an unfiltered reader would
+    inflate the ZAI week-to-date with Anthropic/Gemini tokens and could force
+    a false auto-escalation. demo_factory's non-ZAI spend stays visible in
+    its own ledger; this lane is deliberately the ZAI slice.
+    """
+    src = _empty_source("demo-factory")
+    path = os.path.expanduser(
+        os.getenv(
+            "UA_DEMO_FACTORY_TOKEN_LEDGER_PATH",
+            "/home/ua/lrepos/demo_factory/token_usage.jsonl",
+        )
+    )
+    if not os.path.exists(path):
+        return src
+    cutoff = now - window_seconds
+    procs: dict[str, dict[str, Any]] = {}
+    tot = src["totals"]
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                ts = row.get("ts")
+                if not isinstance(ts, (int, float)) or ts < cutoff or ts > now + 60:
+                    continue
+                provider = str(row.get("provider") or "").strip().lower()
+                model = str(row.get("model") or "").strip().lower()
+                if provider != "zai" and not model.startswith("glm"):
+                    continue
+                caller = f"demo_factory:{str(row.get('caller') or 'unknown')}"
+                p = procs.setdefault(
+                    caller,
+                    {
+                        "caller": caller,
+                        "requests": 0,
+                        "r429": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "total_cost_usd": 0.0,
+                        "_stages": {},
+                    },
+                )
+                p["requests"] += 1
+                for field_name in (
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_creation_input_tokens",
+                    "cache_read_input_tokens",
+                ):
+                    v = _i(row.get(field_name))
+                    p[field_name] += v
+                    tot[field_name] += v
+                try:
+                    p["total_cost_usd"] += float(row.get("total_cost_usd") or 0.0)
+                except (TypeError, ValueError):
+                    pass
+                st = p["_stages"].setdefault(
+                    model or "unknown",
+                    {
+                        "caller_fn": model or "unknown",
+                        "requests": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "r429": 0,
+                    },
+                )
+                st["requests"] += 1
+                st["input_tokens"] += _i(row.get("input_tokens"))
+                st["output_tokens"] += _i(row.get("output_tokens"))
+                tot["requests"] += 1
+                src["token_events_seen"] += 1
+    except Exception as exc:  # noqa: BLE001 — fail-soft like every other lane
+        logger.debug("read_demo_factory_token_usage failed (fail-soft): %s", exc)
+        return src
+
+    src["available"] = True
+    tot["total_tokens"] = (
+        _i(tot["input_tokens"])
+        + _i(tot["output_tokens"])
+        + _i(tot["cache_creation_input_tokens"])
+        + _i(tot["cache_read_input_tokens"])
+    )
+    src["processes"] = _finalize_processes(procs, top_n)
     return src
 
 
