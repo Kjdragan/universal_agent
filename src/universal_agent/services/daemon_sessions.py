@@ -71,6 +71,36 @@ def is_daemon_session(session_id: str) -> bool:
     return str(session_id or "").startswith(DAEMON_SESSION_PREFIX)
 
 
+def is_heartbeat_daemon_session(session_id: str, metadata: dict | None = None) -> bool:
+    """Whether this session is a heartbeat-role daemon session.
+
+    Metadata (``daemon_role``) is authoritative when present; the stable id
+    shape (``daemon_<agent>_heartbeat``) covers sessions reconstructed from
+    disk with empty metadata.
+    """
+    role = str((metadata or {}).get("daemon_role") or "").strip().lower()
+    if role:
+        return role == DAEMON_ROLE_HEARTBEAT
+    sid = str(session_id or "")
+    return sid.startswith(DAEMON_SESSION_PREFIX) and sid.endswith(f"_{DAEMON_ROLE_HEARTBEAT}")
+
+
+def heartbeat_model_tier_default() -> str:
+    """Model tier for heartbeat daemon turns: ``UA_HEARTBEAT_MODEL_TIER``, default sonnet.
+
+    The heartbeat's routine cycle (dispatch triage, idle ideation) does not
+    need the opus tier; measured 2026-08-08 it was the single largest ZAI
+    weekly-quota consumer at ~1.4M cache-inclusive tokens/turn on glm-5.2.
+    Sonnet keeps it off the cap-1 opus concurrency lane. Task execution the
+    heartbeat *delegates* (todo daemon, VP missions) is unaffected — those
+    sessions keep the opus default.
+    """
+    tier = (os.getenv("UA_HEARTBEAT_MODEL_TIER") or "").strip().lower()
+    if tier in ("haiku", "sonnet", "opus"):
+        return tier
+    return "sonnet"
+
+
 # ── Lazy import to avoid circular deps ───────────────────────────────────────
 
 def _session_role_for_daemon_role(role: str) -> str:
