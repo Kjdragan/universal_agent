@@ -311,6 +311,7 @@ def compute_week_to_date(now: float, week_start: float, top_n: int = 5) -> dict[
         tc.analyze_sink_token_usage,
         tc.analyze_cody_token_usage,
         tc.read_csi_token_usage,
+        tc.read_demo_factory_token_usage,  # ZAI rows only, filtered in the reader
     ):
         try:
             sources.append(reader(now, window_seconds, top_n=top_n))
