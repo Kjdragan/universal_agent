@@ -8,7 +8,7 @@ emails the operator via ``simone_mail``. Scheduled by
 firing 2026-08-12, chosen by the operator as "four days after the audit,
 once the ZAI coding plan is back"). The email also carries the standing
 agenda: re-run ``/dragan:zai-usage-audit`` for the deep pass and advance the
-truncation-strategy program (``docs/TRUNCATION_STRATEGY.md``).
+truncation-strategy program (``project_docs/08_operations/09_truncation_strategy.md``).
 
 Run manually: ``python -m universal_agent.scripts.zai_usage_weekly_report
 [--dry-run] [--to addr]``.
@@ -125,7 +125,8 @@ def build_report(now: float | None = None) -> str:
         "  1. Deep pass: run /dragan:zai-usage-audit in a session — measures the",
         "     effect of the heartbeat sonnet-tier + 2h-ideation changes and the",
         "     new demo-factory lane against this deterministic snapshot.",
-        "  2. Truncation-strategy program: advance docs/TRUNCATION_STRATEGY.md —",
+        "  2. Truncation-strategy program: advance",
+        "     project_docs/08_operations/09_truncation_strategy.md —",
         "     classify truncation sites (noise-cut vs context-amputation) and move",
         "     high-value flows to structured-output contracts. Blind truncation",
         "     degrades assessment quality; delta-gating and schemas are the fix.",
