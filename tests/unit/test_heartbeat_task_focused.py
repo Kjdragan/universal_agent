@@ -193,6 +193,14 @@ async def test_heartbeat_gateway_request_always_carries_source_heartbeat(
         },
     )
     monkeypatch.setattr(hb, "_resolve_task_focused", lambda claims: force_task_focused)
+    # Pin the wall clock OUT of this test: with an empty dispatch queue the
+    # heartbeat falls through to the ideation branch, whose should_ideate_now
+    # refuses outside Houston 06:00-22:00 (services.dormancy pacing) — so this
+    # test passed all day and failed every night after 22:00 Houston (measured
+    # 2026-08-08: green at 21:25, red at 22:36, code identical). The invariant
+    # under test is the source=heartbeat label, not the pacing window.
+    from universal_agent.services import proactive_budget as _pb
+    monkeypatch.setattr(_pb, "should_ideate_now", lambda conn: True)
 
     gateway = _CapturingGateway()
     service = hb.HeartbeatService(gateway, _ConnMgr())
