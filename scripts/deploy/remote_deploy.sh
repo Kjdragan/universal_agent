@@ -466,6 +466,13 @@ sudo bash "$PROD_DIR/scripts/install_vps_proactive_signal_card_sync_timer.sh" \
 echo "--> Installing session-reaper timer (daily AGENT_RUN_WORKSPACES disk GC)..."
 sudo bash "$PROD_DIR/scripts/install_vps_session_reaper_timer.sh" \
   || echo "WARN: install_vps_session_reaper_timer.sh failed (non-fatal)"
+# Weekly ZAI usage report (Wed 09:00 CT): deterministic 5-lane token
+# consolidation -> operator email. Standing follow-up to the 2026-08-08 ZAI
+# audit; first firing 2026-08-12 per the operator's re-look-in-four-days
+# request. Pure read + one AgentMail send — no LLM. Non-fatal.
+echo "--> Installing weekly ZAI usage report timer..."
+sudo bash "$PROD_DIR/scripts/install_vps_zai_usage_report_timer.sh" \
+  || echo "WARN: install_vps_zai_usage_report_timer.sh failed (non-fatal)"
 # Daily arXiv local-index harvest (04:40 CT): keeps ~/.arxiv-local-index/
 # arxiv_index.db fresh via OAI-PMH so paper_to_podcast discovery makes zero
 # live arXiv API calls (2026-07-10 HTTP-429 RCA). Pure public HTTP + home-dir

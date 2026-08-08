@@ -84,6 +84,11 @@ EVENT_CATEGORY_CLIENT_ERROR = "client_error_4xx"
 
 
 def _events_max_lines() -> int:
+    # NOTE: production overrides the 10000 default — Infisical injects
+    # UA_ZAI_EVENTS_MAX_LINES=50000 into every UA process at secret load, so
+    # the VPS retains ~50k lines (~100 days). An on-disk grep of .env and
+    # systemd drop-ins will NOT find that override; check Infisical before
+    # concluding the trim is broken (2026-08-08 hygiene audit).
     try:
         return max(100, int(os.getenv("UA_ZAI_EVENTS_MAX_LINES", "10000")))
     except ValueError:
@@ -393,7 +398,11 @@ def _trim_events_file(path: Path, max_lines: int) -> None:
             f.writelines(keep)
         os.replace(tmp, path)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("zai_observability trim failed: %s", exc)
+        # WARNING, not debug: a silently failing trim is indistinguishable
+        # from a working one until the file is huge (2026-08-08 hygiene audit
+        # burned hours proving a "broken" trim was actually the Infisical
+        # override below working as configured).
+        logger.warning("zai_observability trim failed: %s", exc)
 
 
 def _append_event(event: dict) -> None:

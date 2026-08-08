@@ -1,0 +1,14 @@
+[Unit]
+Description=Weekly ZAI usage report, Wednesdays 09:00 America/Chicago (first firing 2026-08-12 — operator-chosen: four days after the 2026-08-08 audit, once the ZAI coding plan is back online)
+
+[Timer]
+# OnCalendar wall-clock anchor (NEVER monotonic); Persistent replays a missed
+# slot after a deploy/reboot so the report never silently skips a week.
+OnCalendar=Wed *-*-* 09:00:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=300
+AccuracySec=1min
+Unit=universal-agent-zai-usage-report.service
+
+[Install]
+WantedBy=timers.target
