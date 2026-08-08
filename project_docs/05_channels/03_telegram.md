@@ -9,7 +9,7 @@ code_paths:
   - src/universal_agent/runtime_role.py
   - src/universal_agent/timeout_policy.py
   - deployment/systemd/templates/universal-agent-telegram.service.template
-last_verified: 2026-07-09
+last_verified: 2026-08-08
 ---
 
 # Telegram Channel
@@ -103,7 +103,7 @@ Text-message commands (all case-insensitive on the prefix):
 
 Inline-button callbacks handled: `menu_status`, `menu_cancel`, `menu_briefing`, `menu_delegate`, and `vp_accept_<id>` / `vp_reject_<id>` (the VP-mission accept/reject buttons are currently **placeholders** — they edit the message but the comment notes `TODO: Integrate with VP Orchestration approval API`).
 
-Keyboard builders live in `bot/telegram_keyboards.py` (`make_vp_approval_keyboard`, `make_main_menu_keyboard`).
+The `/menu` keyboard is built inline in `bot/plugins/commands.py` (same `menu_status`/`menu_cancel`/`menu_briefing`/`menu_delegate`/`vp_accept_<id>`/`vp_reject_<id>` callback data as above).
 
 ### One active task per user
 
